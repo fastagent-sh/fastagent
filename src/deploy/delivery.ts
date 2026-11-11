@@ -10,13 +10,11 @@ import { INSTANCE_CONFIG_JSON_ENV, RELEASE_ID_ENV } from "../paths.ts";
 
 /**
  * The configuration a deploy delivers, as one line of JSON: the instance configuration `--config` names (none: the
- * program's defaults) with the model the deployed environment's value file names laid over it, since that variable
- * outranks the file's own `model` everywhere else. Rewritten whole by every deploy, so nothing an earlier one set
- * outlives it.
+ * program's defaults). Rewritten whole by every deploy, so nothing an earlier one set outlives it.
  */
-export function deliveredConfig(values: unknown, modelFromValueFile: string | undefined): string {
+export function deliveredConfig(values: unknown): string {
   const { $schema: _schema, ...rest } = (values ?? {}) as Record<string, unknown>;
-  return JSON.stringify(modelFromValueFile === undefined ? rest : { ...rest, model: modelFromValueFile });
+  return JSON.stringify(rest);
 }
 
 /**

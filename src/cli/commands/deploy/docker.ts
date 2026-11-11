@@ -1,11 +1,9 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
 import { ownPublicUrl } from "../../../deploy/delivery.ts";
 import {
   dockerComposeFile,
   isDockerComposePath,
-  DOCKER_VALUE_FILE,
+  composeValuesGate,
   ingressNotes,
   isGeneratedCompose,
   planDockerDeploy,
@@ -13,59 +11,48 @@ import {
 } from "../../../deploy/docker/plan.ts";
 import { deployDockerRun } from "../../../deploy/docker/run.ts";
 import { spawnRunner } from "../../../deploy/runner.ts";
-import { SECRET_FILE_MODE, exists } from "../../../paths.ts";
-import { fileStore } from "../../../deploy/file-store.ts";
-import { dotEnvPath } from "../../../value-file.ts";
-import { deploySecrets } from "./secrets-step.ts";
+import { API_KEY_VARIABLE } from "../../../http/server.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
-import type { ModelKey } from "../../../deploy/secrets.ts";
+import { type ModelKey, declaredNames, secretNeeds } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
+/**
+ * What Compose is given: this command's environment, which the file `--env-file` names is already laid into. It is
+ * Docker's only source, whatever `--from-env` says (that flag decides what `deploy` itself reads for a store), since
+ * Compose has no other place to take a value from.
+ */
+const COMPOSE_ENVIRONMENT = (): NodeJS.ProcessEnv => process.env;
+const COMPOSE_SOURCE = "the environment this command runs in (and --env-file)";
+
 export const dockerHost: HostDeploy = {
   isOurs: (path, content) => isDockerComposePath(path) && isGeneratedCompose(content),
   legacyManifest: { file: "fastagent.compose.yml", generated: isGeneratedCompose, renamed: dockerComposeFile },
   shell: async (agentDir, name) => composeShell(dockerComposeFile(name), agentDir),
-  validate({ opts, agentDir, pre }) {
-    if (resolve(agentDir, pre.valueFile) !== join(agentDir, DOCKER_VALUE_FILE)) {
-      const issue =
-        `FASTAGENT_SECRETS_DIR points this run's values at ${pre.valueFile}, but the generated Compose reads ` +
-        `${DOCKER_VALUE_FILE} (a committed artifact cannot carry this machine's path), so the ` +
-        `container would start with none of them. Unset FASTAGENT_SECRETS_DIR, or put the values in that file.`;
-      if (opts.run) failStartup(new Error(`deploy stopped: ${issue}`));
-      console.error(`[fastagent] warn: ${issue}`);
-    }
-  },
   async deploy(ctx) {
     const { opts, agentDir, name, channels, pre, write } = ctx;
-    const { modelAuth, boxLogin, container, port, declaredSecrets, values, valueFile } = pre;
-    // Compose requires its committed env_file to exist, even when no values are declared.
-    const composeValueFile = join(agentDir, DOCKER_VALUE_FILE);
-    await mkdir(dirname(composeValueFile), { recursive: true });
-    if (!(await exists(composeValueFile))) await writeFile(composeValueFile, "", { mode: SECRET_FILE_MODE });
-    // Compose interpolates `$VAR` INSIDE env_file values (`format: raw` needs Compose 2.30), so a credential
-    // containing `$` reaches the container rewritten — silently, and differently from what this pre-flight read.
-    // No escaping advice: this ONE file is also read literally by `dev`/`start` (`parseEnvContent`) and is the source
-    // `secrets push` sets every other host's values from, so `$$` would fix Docker by corrupting all of them.
-    const dollarValues = [...values].filter(([, value]) => value.includes("$")).map(([name]) => name);
-    if (dollarValues.length > 0) {
-      console.error(
-        `[fastagent] warn: ${dollarValues.join(", ")} contain "$", which Compose expands when reading ${valueFile} ` +
-          `(an undefined name becomes empty), so the container sees a different value. "$$" escapes it for Compose ` +
-          `ONLY — \`fastagent dev\`/\`start\` and the other hosts read this file literally and would keep the extra ` +
-          `"$". Prefer a value without "$".`,
-      );
-    }
+    const { modelAuth, boxLogin, container, port, declaredSecrets } = pre;
+    // What Compose is told to fill from its environment: the declared names, the model's key only when the deploy was
+    // given one (`modelAuth`) or the provider has no login to fall back on (a need), and the Agent API's key. Not every
+    // variable a provider reads: a key exported in the shell for other tools would otherwise ride into a container that
+    // is about to log in, and into `docker inspect`.
+    const secretNames = [
+      ...new Set([
+        ...declaredNames(modelAuth, declaredSecrets),
+        ...secretNeeds(modelAuth, declaredSecrets, pre.modelKey).map((need) => need.name),
+        ...(ctx.api.served ? [API_KEY_VARIABLE] : []),
+      ]),
+    ];
     const plan = planDockerDeploy({
       projectName: toDockerProjectName(name),
       port,
       boxLogin,
       channels,
       secrets: pre.secrets,
-      valueFile,
+      secretNames,
       ...container,
     });
     await write(plan.artifacts, { force: !!opts.force });
@@ -81,10 +68,9 @@ export const dockerHost: HostDeploy = {
         api: ctx.api,
         channels,
         declaredSecrets,
-        values,
-        valueFile,
         publicUrl: ownPublicUrl(container.config),
         config: opts.config,
+        envFile: opts.envFile,
       });
     }
     console.log(plan.runbook.join("\n"));
@@ -106,34 +92,21 @@ async function runDeployDocker(params: {
   api: DeploymentApi;
   channels: readonly DeclaredChannel[];
   declaredSecrets: readonly DeclaredSecret[];
-  values: ReadonlyMap<string, string>;
-  valueFile: string;
   /** The `http.publicUrl` the configuration names: where the agent points its own webhook channels. */
   publicUrl: string | undefined;
   /** The `--config` file, named by the commands a gate suggests. */
   config: string | undefined;
+  /** The `--env-file` the values come from, when one was named. */
+  envFile: string | undefined;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, channels } = params;
   const leave = leftToPerson(params.answerer);
-  const valueFile = dotEnvPath(agentDir);
-  const provide = deploySecrets({
-    host: "docker",
-    label: "Docker",
-    agentDir,
-    opts: { config: params.config },
-    answerer: params.answerer,
-    api: params.api,
-    modelAuth: params.modelAuth,
-    modelKey: params.modelKey,
-    declaredSecrets: params.declaredSecrets,
-    valueFile: params.valueFile,
-    values: params.values,
-  });
+  const needs = secretNeeds(params.modelAuth, params.declaredSecrets, params.modelKey);
   const outcome = await deployDockerRun(
     {
       composeFile,
       port,
-      provideSecrets: () => provide(fileStore(agentDir, valueFile)),
+      checkValues: () => composeValuesGate(needs, COMPOSE_ENVIRONMENT(), COMPOSE_SOURCE),
       ...boxLoginStep("docker", params, () => composeShell(composeFile, agentDir)),
     },
     spawnRunner("docker", agentDir),

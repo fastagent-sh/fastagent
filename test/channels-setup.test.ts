@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -261,14 +262,21 @@ describe("channels setup at a terminal", () => {
     expect((await read(file)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1]).toBe(secret);
   });
 
-  it("naming only a configuration is another instance: its values go where deploy reads them, apart from dev's", async () => {
+  it("naming a configuration is another instance, a deployment's, which has no default file: it asks for --env-file, and keeps its values there", async () => {
     const dir = await workspace("fa-setup-config-only-");
     platforms();
     const config = join(dir, "prod.json");
     await writeFile(config, "{}");
+    await ends(setup("telegram", dir, { config }), 2);
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain("pass --env-file <file>");
+    // Nothing was made: not the file `start` reads, and not the development one.
+    await expect(read(join(dir, ".secrets", "production", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+
+    const file = join(dir, "prod.env");
     prompts.answers.push(GOOD_BOT);
-    await ends(setup("telegram", dir, { config }));
-    const production = await read(join(dir, ".secrets", "production", ".env"));
+    await ends(setup("telegram", dir, { config, envFile: file }));
+    const production = await read(file);
     expect(production).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
     // Not dev's: a webhook's secret came with it, and the development file was not made.
     expect(production).toMatch(/^TELEGRAM_SECRET_TOKEN=/m);
@@ -288,13 +296,37 @@ describe("channels setup at a terminal", () => {
     ]);
   });
 
-  it("--env-file names a file that exists, as it does for every command: Node itself refuses one that does not", async () => {
+  it("says a value file in a git checkout is not ignored, once, and nothing when it is ignored or outside the directory", async () => {
+    const dir = await workspace("fa-setup-tracked-");
+    // What `init` scaffolds: a `.gitignore` of the author's own, whose rules name `.env` and not this file.
+    await writeFile(join(dir, ".gitignore"), ".env\n.env.*\n");
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    platforms();
+    const file = join(dir, "prod.env");
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: file }));
+    const said = vi.mocked(console.error).mock.calls.flat().map(String);
+    expect(said.filter((line) => line.includes("holds secrets and is not ignored by git"))).toHaveLength(1);
+
+    vi.mocked(console.error).mockClear();
+    await writeFile(join(dir, ".gitignore"), ".env\nprod.env\n");
+    await rm(file);
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: file }));
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).not.toContain("not ignored by git");
+  });
+
+  it("--env-file names the file its values are kept in, created when missing, and refused when it is not a file", async () => {
     const dir = await workspace("fa-setup-envfile-");
     platforms();
-    const missing = join(dir, "nope.env");
-    await ends(runChannelsSetup("telegram", dir, { recordUrl: false, json: false, envFile: missing }), 2);
-    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(`--env-file ${missing} is not a file`);
-    expect(existsSync(missing)).toBe(false);
+    const made = join(dir, "made.env");
+    prompts.answers.push(GOOD_BOT);
+    await ends(runChannelsSetup("telegram", dir, { recordUrl: false, json: false, envFile: made }));
+    expect(await read(made)).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
+
+    // A directory is not a file the values can be kept in.
+    await ends(runChannelsSetup("telegram", dir, { recordUrl: false, json: false, envFile: dir }), 2);
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(`--env-file ${dir} is not a file`);
   });
 
   it("--ingress is written to the configuration: the development instance's, or the one --config names", async () => {

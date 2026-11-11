@@ -9,6 +9,7 @@ import { definedValues } from "../../declared-secrets.ts";
 import type { AuthInteraction, AuthPrompt, Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
 import { dotEnvPath } from "../../value-file.ts";
+import { enterDeploymentEnv } from "../instance.ts";
 import {
   type FastagentCredentialStore,
   GLOBAL_AUTH_PATH,
@@ -72,6 +73,8 @@ export interface LoginOptions {
   deployment?: string;
   /** `--config <file>` (with `--deployment`): the configuration that names the instance to log in. */
   config?: string;
+  /** `--env-file <file>` (with `--deployment`): the host account's variables, over this command's environment. */
+  envFile?: string;
   /** `--stdio`: the box's half of `--deployment` — the flow speaks the relay wire on stdin/stdout. */
   stdio?: boolean;
   /** `--if-missing` (with `--stdio`): keep a credential already stored for the provider. */
@@ -88,6 +91,9 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   if (opts.stdio) return runStdioLogin(provider, opts);
   if (opts.config !== undefined && opts.deployment === undefined) {
     failUsage("--config names the deployment that --deployment logs in: pass --deployment <host> too");
+  }
+  if (opts.envFile !== undefined && opts.deployment === undefined && !opts.stdio) {
+    failUsage("--env-file here is the deployment's host account: pass --deployment <host> too");
   }
   if (opts.deployment !== undefined) return runDeploymentLogin(provider, opts);
   if (opts.check !== undefined) return runCheck(opts.check, opts);
@@ -458,7 +464,8 @@ export function signInInteraction(step: TicketStep, provider: string): AuthInter
 }
 
 /** ` --config <file>` for a command that names this instance again, or nothing. */
-const configArg = ({ config }: LoginOptions): string => (config === undefined ? "" : ` --config ${shellArg(config)}`);
+const configArg = ({ config, envFile }: LoginOptions): string =>
+  `${config === undefined ? "" : ` --config ${shellArg(config)}`}${envFile === undefined ? "" : ` --env-file ${shellArg(envFile)}`}`;
 
 /**
  * `--deployment <host>`: always named. The agent directory cannot answer which host it means: a Railway deploy leaves
@@ -475,7 +482,8 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
   }
   const agentDir = agentDirOrExit(process.cwd());
   selectAgentEnvironment("production");
-  enterAgentEnv(agentDir);
+  // A deployment has no default value file: only the environment this command runs in.
+  enterDeploymentEnv(agentDir, opts.envFile);
   if (!(DEPLOY_HOSTS as readonly string[]).includes(opts.deployment as string)) {
     failUsage(
       `--deployment takes a host (${DEPLOY_HOSTS.join(", ")}), not "${opts.deployment}" — to name a provider too: ` +
@@ -488,13 +496,14 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
   const method = opts.method === undefined ? undefined : methodOf(opts.method);
   if (opts.ticket !== undefined) {
     // The process `startTicket` started: it holds the box's shell while the person signs in.
-    const retry = deploymentLoginCommand(host, provider, opts.config);
+    const retry = deploymentLoginCommand(host, provider, { configFile: opts.config, envFile: opts.envFile });
     await runTicket(opts.ticket, async (step) => {
       const io = ticketLoginIO(step, retry);
       const failed = await loginOnBox({
         host,
         shell: await HOSTS[host].shell(agentDir, await nameOfInstance()),
         ...(opts.config === undefined ? {} : { configFile: opts.config }),
+        ...(opts.envFile === undefined ? {} : { envFile: opts.envFile }),
         provider: provider as string,
         method: "oauth",
         input: true,
@@ -513,6 +522,7 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
     host,
     shell: await HOSTS[host].shell(agentDir, await nameOfInstance()).catch(failStartup),
     ...(opts.config === undefined ? {} : { configFile: opts.config }),
+    ...(opts.envFile === undefined ? {} : { envFile: opts.envFile }),
     ...(provider ? { provider } : {}),
     ...(method ? { method } : {}),
     input: true,
@@ -525,7 +535,7 @@ async function runDeploymentLogin(provider: string | undefined, opts: LoginOptio
  * `login --deployment <host>` with no one at a terminal. The sign-in is chosen here, from the definition the box
  * serves; what this machine holds says nothing of the box, so no status is shown. An account sign-in runs on the box
  * through a ticket whose process holds the box's shell (box-login.ts `ticketLoginIO`). An API key reaches a box only
- * as a variable its deploy carries, so the person sets it in the production value file and the agent deploys again.
+ * as a variable of the target, so the person sets it there (`secrets set`) and the agent deploys again.
  */
 async function requestDeploymentLogin(
   agentDir: string,
@@ -547,9 +557,16 @@ async function requestDeploymentLogin(
     });
   }
   if (choice.method === "api_key") {
-    const valueFile = dotEnvPath(agentDir);
     const { variables, what } = await keyToSet(choice, providers);
+    // The key is a value of the target, put there by the person and never through this conversation: typed at a
+    // terminal for a store, and for Docker (which holds none) exported where Compose runs.
     const deploy = `fastagent deploy ${host}${configArg(opts)} --run`;
+    const setKey =
+      host === "docker" ? undefined : `fastagent secrets set ${host} ${variables[0] ?? "<KEY_NAME>"}${configArg(opts)}`;
+    const how =
+      setKey === undefined
+        ? `export ${variables.join(" or ")} in the environment that runs Compose (it takes the value from there)`
+        : `run set_command in a terminal, which asks for ${what} without echo`;
     printReport(
       opts.json,
       {
@@ -558,15 +575,14 @@ async function requestDeploymentLogin(
         method: "api-key",
         deployment: host,
         variables,
-        value_file: valueFile,
+        ...(setKey === undefined ? {} : { set_command: setKey }),
         check_command: deploy,
-        agent_next_steps:
-          `Ask the user to set ${what} in ${valueFile} themselves, not in this conversation. A key reaches the ` +
-          `${host} deployment with its next deploy: once they say they have, run check_command.`,
+        agent_next_steps: `Ask the user to ${how}, themselves: not in this conversation. Once they say they have, run check_command.`,
       },
       [
-        `need_user_action: set ${what} in ${valueFile}`,
-        `then run: ${deploy}   # the key reaches the deployment with its deploy`,
+        `need_user_action: set ${what} on ${host}`,
+        setKey === undefined ? how : `run: ${setKey}   # typed in a terminal`,
+        `then run: ${deploy}`,
       ],
     );
     process.exit(0);
@@ -593,6 +609,7 @@ async function requestDeploymentLogin(
         "--deployment",
         host,
         ...(opts.config === undefined ? [] : ["--config", opts.config]),
+        ...(opts.envFile === undefined ? [] : ["--env-file", opts.envFile]),
       ],
       cwd: process.cwd(),
     },

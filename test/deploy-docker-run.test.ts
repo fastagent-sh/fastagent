@@ -22,7 +22,7 @@ function fakeDocker(script: (args: string[]) => { code?: number; stdout?: string
 const plan = (override: Partial<DockerRunPlan> = {}): DockerRunPlan => ({
   composeFile: "fastagent.compose.yml",
   port: 8787,
-  provideSecrets: async () => undefined,
+  checkValues: () => undefined,
   ...override,
 });
 
@@ -151,7 +151,7 @@ describe("deploy/docker/run: local Compose journey", () => {
     expect(quiet.commands().some((c) => c.includes("exec"))).toBe(false);
   });
 
-  it("never puts a secret value in argv — the container reads the value file itself", async () => {
+  it("never puts a secret value in argv — Compose takes it from the environment it runs in", async () => {
     const { docker, calls } = fakeDocker((args) => {
       if (args.includes("--services")) return { stdout: "agent\n" };
       if (args.includes("port")) return { stdout: "127.0.0.1:8787\n" };
@@ -161,14 +161,15 @@ describe("deploy/docker/run: local Compose journey", () => {
 
     expect(calls.some((call) => call.args.join(" ").includes("sk-secret"))).toBe(false);
     const up = calls.find((call) => call.args.includes("up"))!;
-    // The declared key rides `env_file` in the generated Compose, so it does not travel through this process at all.
+    // The declared names are listed in the generated Compose and filled from the environment the child inherits: this
+    // process hands Compose nothing of its own.
     expect(up.env).toBeUndefined();
   });
 
-  it("asks for the values before the first side effect: a name it lacks stops the run with nothing built", async () => {
+  it("checks the values before the first side effect: a name it lacks stops the run with nothing built", async () => {
     const { docker, commands } = fakeDocker();
     const out = await deployDockerRun(
-      plan({ provideSecrets: async () => "Docker has no value for: BOT_TOKEN" }),
+      plan({ checkValues: () => "Docker has no value for: BOT_TOKEN" }),
       docker,
       () => {},
       healthy,

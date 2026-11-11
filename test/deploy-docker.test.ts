@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   MIN_DOCKER_COMPOSE_VERSION,
+  composeValuesGate,
   ingressNotes,
   planDockerDeploy,
   toDockerProjectName,
@@ -16,7 +17,7 @@ const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join
 const base = {
   config: "{}",
   agent: "bot",
-  valueFile: ".secrets/.env",
+  secretNames: [],
   projectName: "fastagent-bot",
   port: 8787,
   runtime: "node",
@@ -28,6 +29,16 @@ describe("deploy/docker: planDockerDeploy", () => {
     const out = runbook(planDockerDeploy({ ...base, channels: [], configFile: "/etc/acme prod.json" }));
     expect(out).toContain("run `fastagent deploy docker --config '/etc/acme prod.json' --force`");
     expect(runbook(planDockerDeploy({ ...base, channels: [] }))).toContain("run `fastagent deploy docker --force`");
+  });
+
+  it("names the box login with the files that name the instance and its host account, so it runs the same elsewhere", () => {
+    const out = runbook(
+      planDockerDeploy({ ...base, channels: [], boxLogin: "anthropic", configFile: "acme.json", envFile: "acct.env" }),
+    );
+    expect(out).toContain("fastagent login anthropic --deployment docker --config acme.json --env-file acct.env");
+    expect(runbook(planDockerDeploy({ ...base, channels: [], boxLogin: "anthropic" }))).toContain(
+      "fastagent login anthropic --deployment docker\n",
+    );
   });
 
   it("renders the instance's name, release and configuration into the Compose file, with `$` doubled for Compose", () => {
@@ -108,34 +119,46 @@ describe("deploy/docker: planDockerDeploy", () => {
     expect(runbook(plan)).not.toContain("https://<your-domain>/feishu");
   });
 
-  it("names the value file instead of interpolating each secret", () => {
-    // Interpolation resolves from the SHELL or the project `.env` — exactly the source a deployment must not have.
-    // `env_file` points Compose at the deployed environment's own declaration, so no declared name appears here at
-    // all, by hand or under `--run`.
+  it("lists each secret by name only: Compose fills it from the environment that runs it, and the file holds no value", () => {
     const yaml = compose(
       planDockerDeploy({
         ...base,
-        channels: declaredChannels(["telegram", "feishu"]),
+        channels: declaredChannels(["telegram"]),
         secrets: [{ name: "GH_TOKEN", hint: "required by tools/gh.ts" }],
+        secretNames: ["OPENAI_API_KEY", "GH_TOKEN", "FASTAGENT_API_KEY"],
       }),
     );
-    expect(yaml).toContain("env_file:\n      - .secrets/production/.env");
-    for (const name of ["OPENAI_API_KEY", "TELEGRAM_BOT_TOKEN", "FEISHU_APP_ID", "GH_TOKEN"]) {
-      expect(yaml).not.toContain(name);
+    const { environment } = parseYaml(yaml).services.agent as { environment: Record<string, string | null> };
+    // A key with no value: Compose resolves it from its own environment, and sets nothing when it has none.
+    for (const name of ["OPENAI_API_KEY", "GH_TOKEN", "FASTAGENT_API_KEY"]) {
+      expect(Object.hasOwn(environment, name), name).toBe(true);
+      expect(environment[name]).toBeNull();
     }
-    expect(yaml).not.toMatch(/: "\$\{/); // no value is interpolated from the shell
-    expect(yaml).not.toContain("<value>");
+    // No file of this machine is named, no value is interpolated from the shell, and none is written down.
+    expect(yaml).not.toContain("env_file");
+    expect(yaml).not.toContain(".secrets/production");
+    expect(yaml).not.toMatch(/: "\$\{/);
     expect(yaml).not.toContain("sk-");
-
-    // The path is FIXED, never the builder's FASTAGENT_SECRETS_DIR: this file is committed and must mean the same
-    // thing on every machine. `deploy` creates the file so the entry is never a missing path.
-    expect(compose(planDockerDeploy({ ...base, channels: [], valueFile: "somewhere/else/.env" }))).toContain(
-      "env_file:\n      - .secrets/production/.env",
-    );
-
-    // Machinery pinned AFTER env_file, so a local path in that file (the scaffold lists these) cannot send the
-    // container's sessions or credentials to a host path that does not exist inside it.
+    // Pinned machinery stays where it was: the container's sessions and credentials stay on the volume.
     expect(yaml).toContain('FASTAGENT_AUTH_PATH: "/data/.secrets/auth.json"');
+    // A deployment with no secret lists none.
+    expect(
+      Object.keys(parseYaml(compose(planDockerDeploy({ ...base, channels: [] }))).services.agent.environment),
+    ).not.toContain("OPENAI_API_KEY");
+  });
+
+  it("stops a run when a required name has no value in the environment, reading whether it is set and never what it is", () => {
+    const needs = [
+      { name: "OPENAI_API_KEY", hint: "your model provider key" },
+      { name: "GH_TOKEN", hint: "required by tools/gh.ts" },
+    ];
+    expect(composeValuesGate(needs, { OPENAI_API_KEY: "sk-x", GH_TOKEN: "t" }, "the environment")).toBeUndefined();
+    const gate = composeValuesGate(needs, { OPENAI_API_KEY: "sk-x", GH_TOKEN: "  " }, "the environment") as string;
+    // An empty value is no value, as for every other host; the secret that is there is not in what is said.
+    expect(gate).toContain("Docker has no value for: GH_TOKEN (required by tools/gh.ts)");
+    expect(gate).not.toContain("OPENAI_API_KEY");
+    expect(gate).not.toContain("sk-x");
+    expect(gate).toContain("pass --env-file <file>");
   });
 
   it("puts the Compose file beside the Dockerfile and builds the agent directory itself", () => {
@@ -149,7 +172,6 @@ describe("deploy/docker: planDockerDeploy", () => {
   it("prints lifecycle + operator-owned ingress guidance for detected webhook channels", () => {
     const out = runbook(planDockerDeploy({ ...base, channels: declaredChannels(["telegram", "slack"]) }));
     expect(out).toContain(`Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION}`);
-    // One spelling everywhere: the generated file names the value file itself, so no command needs a flag.
     for (const cmd of ["build --pull", "up -d", "logs -f agent", "ps", "down"]) {
       expect(out).toContain(`docker compose -f fastagent.bot.compose.yml ${cmd}`);
     }

@@ -16,7 +16,9 @@ describe("cli: deploy docker", () => {
     const file = dockerComposeFile(await deploymentName(dir));
     const first = await runInProcess(["deploy", "docker", dir]);
     expect(first.code).toBe(0);
-    expect(first.stderr).toContain("Agent API: http://127.0.0.1:8787/v1");
+    expect(first.stderr).toContain(
+      "Agent API: not served until FASTAGENT_API_KEY is in the environment that runs Compose",
+    );
     expect(first.stdout).toContain(
       // One spelling: the generated Compose names the value file itself.
       `docker compose -f ${file} build --pull\ndocker compose -f ${file} up -d\n`,
@@ -38,21 +40,107 @@ describe("cli: deploy docker", () => {
     expect(await readFile(join(dir, file), "utf8")).toBe(customCompose);
   });
 
-  it("deploy docker gates --run when FASTAGENT_SECRETS_DIR sends the values away from the committed env_file", async () => {
-    const dir = await agentWorkspace("fa-deploy-secrets-dir-", {
+  it("deploy docker lists the names a deployment needs and writes no value, wherever it came from: no default file, the shell, --env-file", async () => {
+    const dir = await agentWorkspace("fa-deploy-names-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "src/tools/gh.mjs": `export default {
+  kind: "fastagent.needs",
+  secrets: [{ name: "GH_TOKEN", optional: false }],
+  build: () => ({ name: "gh", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }),
+};\n`,
+      // What a deployment does not read: neither the development file nor the one `start` reads.
+      ".secrets/.env": "GH_TOKEN=from-dev\n",
+      ".secrets/production/.env": "GH_TOKEN=from-start\n",
+    });
+    const clean = { ...process.env };
+    delete clean.GH_TOKEN;
+    const file = join(dir, "values.env");
+    await writeFile(file, "GH_TOKEN=from-file\n");
+    const compose = async (args: string[], env: NodeJS.ProcessEnv) => {
+      const run = await runInProcess(["deploy", "docker", dir, "--force", ...args], undefined, env);
+      expect(run.code, run.stderr).toBe(0);
+      return readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8");
+    };
+    // The Compose file lists the name and holds no value, wherever it came from; neither project file is read.
+    for (const written of [
+      await compose([], clean),
+      await compose(["--env-file", file], clean),
+      await compose([], { ...clean, GH_TOKEN: "from-shell" }),
+    ]) {
+      expect(written).toMatch(/^ {6}GH_TOKEN:$/m);
+      for (const value of ["from-dev", "from-start", "from-file", "from-shell"]) expect(written).not.toContain(value);
+    }
+  });
+
+  it("says of the Agent API what Docker does: the key is the environment Compose runs in, not a store a deploy sets", async () => {
+    const dir = await agentWorkspace("fa-deploy-docker-api-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
-    const elsewhere = await mkdtemp(join(tmpdir(), "fa-secrets-elsewhere-"));
-    const env = { ...process.env, FASTAGENT_SECRETS_DIR: elsewhere };
+    const clean = { ...process.env } as NodeJS.ProcessEnv;
+    delete clean.FASTAGENT_API_KEY;
+    const without = await runInProcess(["deploy", "docker", dir], undefined, clean);
+    expect(without.stderr).toContain(
+      "Agent API: not served until FASTAGENT_API_KEY is in the environment that runs Compose",
+    );
+    expect(without.stderr).not.toContain("sets on the target");
+    // In the shell, with no --from-env: Compose uses it, so the report says it is served, and how to check.
+    const withKey = await runInProcess(["deploy", "docker", dir, "--force"], undefined, {
+      ...clean,
+      FASTAGENT_API_KEY: "k",
+    });
+    expect(withKey.stderr).toContain("which Compose takes from the environment that runs it");
+    expect(withKey.stderr).toContain("check it: fastagent invoke --url");
+  });
 
-    const planned = await runInProcess(["deploy", "docker", dir], undefined, env);
-    expect(planned.code).toBe(0);
-    expect(planned.stderr).toMatch(/warn: FASTAGENT_SECRETS_DIR points this run's values at/);
+  it("lists the model's key only when it travels: a key exported in the shell for other tools is not passed into a container that logs in", async () => {
+    const dir = await agentWorkspace("fa-deploy-modelkey-", {
+      "fastagent.config.ts": `export default { defaults: { model: "anthropic/claude-sonnet-4-5" } };\n`,
+    });
+    const shell = { ...process.env, ANTHROPIC_API_KEY: "sk-shell" } as NodeJS.ProcessEnv;
+    const compose = async (args: string[]) => {
+      const run = await runInProcess(["deploy", "docker", dir, "--force", ...args], undefined, shell);
+      expect(run.code, run.stderr).toBe(0);
+      return readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8");
+    };
+    const lists = (yaml: string) => /^ {6}ANTHROPIC_API_KEY:$/m.test(yaml);
+    // The box logs in (the shell is not a source), so Compose is not told to fill the key.
+    expect(lists(await compose([]))).toBe(false);
+    // Given the key, by the environment or by a file, it travels and Compose is told.
+    expect(lists(await compose(["--from-env"]))).toBe(true);
+    const file = join(dir, "given.env");
+    await writeFile(file, "ANTHROPIC_API_KEY=sk-file\n");
+    expect(lists(await compose(["--env-file", file]))).toBe(true);
+  });
 
-    const gated = await runInProcess(["deploy", "docker", dir, "--run"], undefined, env);
-    expect(gated.code).toBe(1);
-    expect(gated.stderr).toMatch(/deploy stopped: FASTAGENT_SECRETS_DIR points this run's values at/);
-    expect(gated.stderr).not.toMatch(/Docker CLI not found|Docker daemon/); // refused before any Docker work
+  it("deploy docker --run checks the names against the environment Compose will run in, with or without --from-env", async () => {
+    // Compose has no other place to take a value from, so the shell counts here whatever `--from-env` says: that flag is
+    // about what `deploy` reads for a store, and Docker keeps none.
+    const dir = await agentWorkspace("fa-deploy-compose-gate-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "src/tools/gh.mjs": `export default {
+  kind: "fastagent.needs",
+  secrets: [{ name: "GH_TOKEN", optional: false }],
+  build: () => ({ name: "gh", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }),
+};\n`,
+    });
+    // A `docker` that has Compose but no daemon: the run gets as far as the values check, then to the daemon check.
+    const bin = await mkdtemp(join(tmpdir(), "fa-fake-docker-gate-"));
+    await writeFile(join(bin, "docker"), `#!/bin/sh\n[ "$1" = compose ] && [ "$2" = version ] && exit 0\nexit 1\n`, {
+      mode: 0o755,
+    });
+    const clean: NodeJS.ProcessEnv = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    delete clean.GH_TOKEN;
+    const missing = await runInProcess(["deploy", "docker", dir, "--run"], undefined, clean);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("deploy stopped: Docker has no value for: GH_TOKEN");
+    expect(missing.stderr).not.toContain("Docker daemon is unavailable");
+    // Set in the shell, with no --from-env, the name passes and the run reaches the daemon check.
+    const given = await runInProcess(["deploy", "docker", dir, "--run", "--force"], undefined, {
+      ...clean,
+      GH_TOKEN: "x",
+    });
+    expect(given.stderr).toContain("Docker daemon is unavailable");
+    expect(given.stderr).not.toContain("Docker has no value for");
   });
 
   it("deploy docker refuses --run from a generated artifact that drifted from the definition", async () => {

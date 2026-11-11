@@ -170,7 +170,7 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
-      `${deploymentLoginCommand("fly", input.boxLogin, input.configFile)}`,
+      `${deploymentLoginCommand("fly", input.boxLogin, input)}`,
     );
   }
 

@@ -1,8 +1,9 @@
 /**
  * `fastagent secrets list|set|push <host>`: a deployment's values on the target that keeps them (agent-artifact.md
  * §6.2). `deploy` checks names and never carries a file; these are how the values get there. A value is never an
- * argument: it is typed without echo, read from standard input, taken from a value file, or from the environment of a
- * command that injected it (`op run -- fastagent secrets push fly --from-env`).
+ * argument: it is typed without echo, read from standard input, taken from the file `--env-file` names, or from the
+ * environment of a command that injected it (`op run -- fastagent secrets push fly --from-env`). A deployment has no
+ * default file, and Docker holds no values of its own: Compose takes them from the environment that runs it.
  */
 import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
@@ -11,7 +12,6 @@ import { isEnvName } from "../../declared-secrets.ts";
 import { agentcoreName, agentcoreSecretName } from "../../deploy/agentcore/plan.ts";
 import { agentcoreSecretStore } from "../../deploy/agentcore/store.ts";
 import { deploymentApi } from "../../deploy/api.ts";
-import { fileStore } from "../../deploy/file-store.ts";
 import { flyTomlFile, parseFlyAppName, toFlyAppName } from "../../deploy/fly/plan.ts";
 import { flyStore } from "../../deploy/fly/store.ts";
 import { toRailwayName } from "../../deploy/railway/plan.ts";
@@ -25,19 +25,20 @@ import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { API_KEY_VARIABLE } from "../../http/server.ts";
 import { readTextIfExists, selectAgentEnvironment } from "../../paths.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
+import { loadEnvValues } from "../../value-file.ts";
 import { deploymentName } from "../../deploy/deployment-name.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
+import { enterDeploymentEnv } from "../instance.ts";
 import { printReport } from "../ticket.ts";
 import { join } from "node:path";
 
 /** The targets that keep a deployment's values in a store of their own. */
-export type SecretsHost = "docker" | "fly" | "railway" | "agentcore";
+export type SecretsHost = "fly" | "railway" | "agentcore";
 
 export interface SecretsOptions {
   /** `--config <file>`: the instance configuration the deployment delivers; its channels decide which names it reads. */
   config?: string;
-  /** `--env-file <file>` (push): where the values come from. */
+  /** `--env-file <file>` (push): where the values come from; one of this and `fromEnv` is required. */
   envFile?: string;
   /** `--from-env` (push): the environment this command runs in. */
   fromEnv?: boolean;
@@ -47,7 +48,6 @@ export interface SecretsOptions {
 }
 
 const LABELS: Record<SecretsHost, string> = {
-  docker: "Docker",
   fly: "Fly",
   railway: "Railway",
   agentcore: "AWS Secrets Manager",
@@ -56,7 +56,6 @@ const LABELS: Record<SecretsHost, string> = {
 /** The store of `host` for the instance `name` of the agent in `agentDir`, its CLI signed in. */
 async function openStore(host: SecretsHost, agentDir: string, name: string): Promise<SecretStore> {
   const log = (message: string) => console.error(`[fastagent] ${message}`);
-  if (host === "docker") return fileStore(agentDir, dotEnvPath(agentDir));
   if (host === "agentcore")
     return agentcoreSecretStore(awsRunner(agentDir), agentcoreSecretName(agentcoreName(name)), log);
   if (host === "fly") {
@@ -83,7 +82,7 @@ async function openStore(host: SecretsHost, agentDir: string, name: string): Pro
   return railwayStore(railway, toRailwayName(name), log, { redeploy: true });
 }
 
-/** What the definition declares for the deployment, and the production value file it reads. */
+/** What the definition declares for the deployment. */
 async function declared(agentDir: string, configFile: string | undefined, host: SecretsHost) {
   const name = await deploymentName(agentDir, configFile);
   const instance = configFile === undefined ? undefined : await readInstanceConfigFile(resolve(configFile));
@@ -143,6 +142,8 @@ export async function runSecrets(
   // The deployment's own, never the development instance's: its channels receive the way the box will choose.
   selectAgentEnvironment("production");
   unmarkDevServe();
+  // A deployment has no default value file: its values are this command's environment.
+  enterDeploymentEnv(agentDir, undefined);
   try {
     const store = await openStore(host, agentDir, await deploymentName(agentDir, opts.config));
     if (action === "list") return await list(store, host, agentDir, opts);
@@ -153,13 +154,8 @@ export async function runSecrets(
   }
 }
 
-/** When a written value reaches what is running: a Docker container reads its file at start, an AgentCore session its secret. */
+/** When a written value reaches what is running: an AgentCore session reads its secret when it starts. */
 function noteWhenItTakesEffect(host: SecretsHost): void {
-  if (host === "docker") {
-    console.error(
-      "[fastagent] note: a running container reads it after `docker compose up -d`, or the next `deploy docker --run`",
-    );
-  }
   if (host === "agentcore") {
     console.error(
       "[fastagent] note: the runtime reads the secret when a session starts: a session already running keeps its values " +
@@ -229,17 +225,14 @@ async function push(store: SecretStore, host: SecretsHost, agentDir: string, opt
     source = new Map(Object.entries(process.env).flatMap(([n, v]) => (v === undefined ? [] : [[n, v] as const])));
     where = "the environment";
   } else {
-    if (host === "docker" && opts.envFile === undefined) {
+    if (opts.envFile === undefined) {
       throw new Error(
-        `${dotEnvPath(agentDir)} is Docker's own store, so there is nothing to push from it: pass --env-file <file> or --from-env`,
+        "a deployment has no default file to push from: pass --env-file <file>, or --from-env for the environment",
       );
     }
-    const file = opts.envFile === undefined ? dotEnvPath(agentDir) : resolve(opts.envFile);
+    const file = resolve(opts.envFile);
     source = loadEnvValues(file);
     where = file;
-    if (source.size === 0 && opts.envFile === undefined) {
-      throw new Error(`${file} holds no values: pass --env-file <file>, or --from-env for the environment`);
-    }
   }
   const toWrite: Record<string, string> = {};
   for (const [n, v] of source) if (known.has(n) && v.trim() !== "") toWrite[n] = v;

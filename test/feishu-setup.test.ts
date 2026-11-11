@@ -243,7 +243,7 @@ describe("a deploy that sets up the production app", () => {
   it("hands what is left, the publish, to the person a ticket gave it", async () => {
     platform.granted = AGENT_SCOPES;
     await holdPair();
-    await prepareChannelApps(dir, app, "fastagent deploy fly --run --json", person);
+    await prepareChannelApps(dir, file, app, "fastagent deploy fly --run --json", person);
     expect(afterwards).toEqual([
       { instructions: "CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_prod/version" },
     ]);
@@ -252,7 +252,7 @@ describe("a deploy that sets up the production app", () => {
   it("says it at a terminal, naming the scope a tenant withheld", async () => {
     platform.granted = AGENT_SCOPES.filter((scope) => scope !== "im:message.group_msg");
     await holdPair();
-    await prepareChannelApps(dir, app, "fastagent deploy fly --run");
+    await prepareChannelApps(dir, file, app, "fastagent deploy fly --run");
     const out = said.join("\n");
     expect(out).toContain("next: the feishu app is not granted:");
     expect(out).toContain("im:message.group_msg");

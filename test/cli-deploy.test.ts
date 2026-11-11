@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import ignore from "ignore";
 import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -185,20 +187,129 @@ describe("cli: deploy --idle-timeout", () => {
 });
 
 describe("cli: deploy", () => {
-  it("selects the production value file and Docker env_file without reading dev values", async () => {
+  it("keeps the file --env-file names out of the image when it is in the agent directory: excluded by its path, and a kept ignore file that lacks it stops --run", async () => {
+    const dir = await agentWorkspace("fa-deploy-valuefile-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    // `prod.env` is neither `.env` nor `.env.*`: no name rule of the generated files reaches it.
+    const file = join(dir, "prod.env");
+    await writeFile(file, "OPENAI_API_KEY=sk-in-the-directory\n");
+    for (const host of ["docker", "railway"]) {
+      const result = await runInProcess(["deploy", host, dir, "--env-file", file]);
+      expect(result.code, result.stderr).toBe(0);
+    }
+    const ships = (rules: string, path: string) => !ignore().add(rules).ignores(path);
+    expect(ships(await readFile(join(dir, ".dockerignore"), "utf8"), "prod.env")).toBe(false);
+    expect(ships(await readFile(join(dir, ".railwayignore"), "utf8"), "prod.env")).toBe(false);
+    // Without it, nothing is added: the files are the ones every deploy writes.
+    const plain = await agentWorkspace("fa-deploy-valuefile-none-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    await runInProcess(["deploy", "docker", plain]);
+    expect(await readFile(join(plain, ".dockerignore"), "utf8")).not.toContain("prod.env");
+
+    // The author's own ignore file is theirs: it is refused under --run when it would upload the secrets, and the
+    // line to add is named; it is only a warning when generating.
+    await writeFile(
+      join(dir, ".dockerignore"),
+      "**/node_modules\n**/.secrets/**\n**/.state\n**/.env\n/.fastagent\n!/.fastagent/deploy\n/content\n",
+    );
+    const gated = await runInProcess(["deploy", "docker", dir, "--env-file", file, "--run"]);
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toMatch(/does not exclude `prod\.env` — the build context would BAKE SECRETS INTO THE IMAGE/);
+    expect(gated.stderr).toContain("`/prod.env`");
+    const planned = await runInProcess(["deploy", "docker", dir, "--env-file", file]);
+    expect(planned.stderr).toMatch(/warn: your \.dockerignore \(kept\) does not exclude `prod\.env`/);
+  });
+
+  it("warns that git would track a value file in the agent directory, and says nothing when it is ignored, outside it, or there is no checkout", async () => {
+    const dir = await agentWorkspace("fa-deploy-tracked-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const file = join(dir, "prod.env");
+    await writeFile(file, "OPENAI_API_KEY=sk\n");
+    const tracked = /prod\.env holds secrets and is not ignored by git/;
+    // Not a checkout: nothing git could commit.
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file])).stderr).not.toMatch(tracked);
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    // The scaffold's rules are `.env` and `.env.*`: this name is matched by none of them.
+    const warned = await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"]);
+    expect(warned.code, warned.stderr).toBe(0);
+    expect(warned.stderr).toMatch(tracked);
+    // Ignored by the author's own rule: silent.
+    await writeFile(join(dir, ".gitignore"), "prod.env\n");
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"])).stderr).not.toMatch(tracked);
+    // Outside the directory: its own place to protect, and not the repository's.
+    await writeFile(join(dir, ".gitignore"), "");
+    const outside = join(await mkdtemp(join(tmpdir(), "fa-outside-values-")), "prod.env");
+    await writeFile(outside, "OPENAI_API_KEY=sk\n");
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", outside, "--force"])).stderr).not.toMatch(
+      tracked,
+    );
+  });
+
+  it("a token held only in the project's own files is not a value the deploy was given", async () => {
+    const dir = await agentWorkspace("fa-deploy-held-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "context.json": JSON.stringify({ content: { app: { github: "acme/app" } } }),
+      ".secrets/.env": "GITHUB_TOKEN=held-by-dev\n",
+      ".secrets/production/.env": "GITHUB_TOKEN=held-by-start\n",
+    });
+    const clean = { ...process.env };
+    delete clean.GITHUB_TOKEN;
+    const none = await runInProcess(["deploy", "docker", dir], undefined, clean);
+    expect(none.code, none.stderr).toBe(0);
+    expect(none.stderr).toContain("no GITHUB_TOKEN in the values given to this deploy");
+    // The environment is a source when asked, and the file named is one always; the shell alone is not.
+    const shell = { ...clean, GITHUB_TOKEN: "ghp" };
+    const unasked = await runInProcess(["deploy", "docker", dir, "--force"], undefined, shell);
+    expect(unasked.stderr).toContain("no GITHUB_TOKEN in the values given to this deploy");
+    const given = await runInProcess(["deploy", "docker", dir, "--force", "--from-env"], undefined, shell);
+    expect(given.stderr).not.toContain("no GITHUB_TOKEN");
+    const file = join(dir, "given.env");
+    await writeFile(file, "GITHUB_TOKEN=ghp\n");
+    const named = await runInProcess(["deploy", "docker", dir, "--force", "--env-file", file], undefined, clean);
+    expect(named.stderr).not.toContain("no GITHUB_TOKEN");
+    expect(named.stderr).not.toContain("held-by");
+  });
+
+  it("reads no default value file: the model is the configuration's, and no file of the project reaches the manifest", async () => {
     const dir = await agentWorkspace("fa-deploy-env-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
-      ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nDEV_ONLY=secret\n",
-      ".secrets/production/.env": "FASTAGENT_MODEL=openai/gpt-4o-mini\nPRODUCTION_ONLY=value\n",
+      // The development file and the one `start` reads: a deployment reads neither, and neither's model is the box's.
+      ".secrets/.env": "FASTAGENT_MODEL=not-a-model\nDEV_ONLY=dev-held-9f3\n",
+      ".secrets/production/.env": "FASTAGENT_MODEL=anthropic/other\nPRODUCTION_ONLY=start-held-7c1\n",
     });
-    const result = await runInProcess(["deploy", "docker", dir]);
-    expect(result.code).toBe(0);
-    expect(result.stderr).toContain("source: .secrets/production/.env");
+    const clean = { ...process.env };
+    delete clean.FASTAGENT_MODEL;
+    const result = await runInProcess(["deploy", "docker", dir], undefined, clean);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toContain("model openai/gpt-4o-mini (source: fastagent.config)");
     // `deploy` builds first, generate-only included: the image's `start` opens dist/.
     expect(await stat(join(dir, "dist", "index.js"))).toBeDefined();
     expect(result.stdout).not.toContain("DEV_ONLY");
-    expect(await readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8")).toContain(
-      ".secrets/production/.env",
+    const compose = await readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8");
+    expect(compose).not.toContain("env_file");
+    for (const leaked of [
+      "DEV_ONLY",
+      "PRODUCTION_ONLY",
+      "not-a-model",
+      "anthropic/other",
+      "dev-held-9f3",
+      "start-held-7c1",
+    ]) {
+      expect(compose, leaked).not.toContain(leaked);
+    }
+    expect(JSON.parse(/FASTAGENT_CONFIG_JSON: (".*")$/m.exec(compose)?.[1] as string)).not.toContain("anthropic");
+
+    // A FASTAGENT_MODEL in the shell or in a file names the machine it is on: the deployment's is its configuration.
+    const shell = await runInProcess(["deploy", "docker", dir, "--force"], undefined, {
+      ...process.env,
+      FASTAGENT_MODEL: "anthropic/shell-model",
+    });
+    expect(shell.stderr).toContain("model openai/gpt-4o-mini (source: fastagent.config)");
+    expect(await readFile(join(dir, dockerComposeFile(await deploymentName(dir))), "utf8")).not.toContain(
+      "shell-model",
     );
   });
 
@@ -215,11 +326,20 @@ describe("cli: deploy", () => {
     });
     const result = await runInProcess(["deploy", "fly", dir, "--run", "--no-input"]);
     expect(result.code).toBe(2);
+    // The dev app's values are not the deployment's: nothing in the environment, and no file to make one into.
     expect(result.stderr).toContain(
-      ".secrets/production/.env has no FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN",
+      "FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_VERIFICATION_TOKEN are not in the values given to this deploy (--env-file or --from-env), so a production feishu app has to be made",
     );
-    // Named so it runs from where this deploy ran: the agent is not the current directory here.
-    expect(result.stderr).toContain(`\`fastagent deploy fly ${dir} --run --json\`, which hands their part to its user`);
+    expect(result.stderr).toContain("`fastagent channels setup feishu --env-file <file>`");
+    // With a file to keep it in, the next refusal is the one for nobody to ask; it names the deploy that runs from where
+    // this one ran, with the file.
+    const file = join(dir, "prod.env");
+    await writeFile(file, "");
+    const named = await runInProcess(["deploy", "fly", dir, "--run", "--no-input", "--env-file", file]);
+    expect(named.code).toBe(2);
+    expect(named.stderr).toContain(
+      `\`fastagent deploy fly ${dir} --env-file ${file} --run --json\`, which hands their part to its user`,
+    );
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
     await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
   });
@@ -386,13 +506,15 @@ esac
     // Where the Agent API is reached, as Fly names the app, and how its key comes about: a generate-only deploy has
     // set nothing.
     expect(result.stderr).toMatch(
-      /Agent API: https:\/\/[\w-]+\.fly\.dev\/v1, behind FASTAGENT_API_KEY, which --run makes and sets on the target/,
+      /Agent API: https:\/\/[\w-]+\.fly\.dev\/v1, behind FASTAGENT_API_KEY, which --run sets on the target from the values given to this deploy \(--env-file or --from-env\), or makes at a terminal/,
     );
-    // With a key in the production value file, run from elsewhere the check names the agent: that is where
-    // `invoke --url` finds the key.
-    await mkdir(join(dir, ".secrets", "production"), { recursive: true });
-    await writeFile(join(dir, ".secrets", "production", ".env"), "FASTAGENT_API_KEY=k\n");
-    const keyed = await runInProcess(["deploy", "fly", dir]);
+    // With a key in this command's environment, run from elsewhere the check names the agent: `invoke --url` is run
+    // from there with the same key.
+    const shell = { ...process.env, FASTAGENT_API_KEY: "k" };
+    // The shell is not a source unless asked: a key exported there is not one the deploy was given.
+    const unasked = await runInProcess(["deploy", "fly", dir, "--force"], undefined, shell);
+    expect(unasked.stderr).not.toMatch(/check it: /);
+    const keyed = await runInProcess(["deploy", "fly", dir, "--from-env", "--force"], undefined, shell);
     expect(keyed.code, keyed.stderr).toBe(0);
     expect(/check it: .* "hello" (\S+)\n/.exec(keyed.stderr)?.[1]).toBe(dir);
     expect(result.stderr).not.toMatch(/not yet supported/); // no placement gate anywhere

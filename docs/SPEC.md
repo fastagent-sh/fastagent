@@ -889,18 +889,20 @@ streaming).
 
 ### 9.6 Keys and checks, from the CLI
 
-- **`fastagent deploy --run` gives a deployment a key.** When neither the target nor `.secrets/production/.env` holds a
-  `FASTAGENT_API_KEY`, it makes one, sets it on the target and keeps it in that file, so that what it deploys can be
-  called; a target that lacks the key the file holds (a deployment made again) gets that one. Its report names the
-  API's URL and the command that checks it; without `--run` it writes nothing. Replacing the key is setting
-  `FASTAGENT_API_KEY` again on the target (`fastagent secrets set <host> FASTAGENT_API_KEY`), with the new and the old
-  key separated by commas while the Callers move, and the same in the file for `invoke --url`. A definition that serves
+- **`fastagent deploy --run` at a terminal gives a deployment a key.** When neither the target nor the values the deploy
+  was given (its environment, or the file `--env-file` names) hold a `FASTAGENT_API_KEY`, it makes one, sets it on the
+  target and shows it once, so that what it deploys can be called; nothing on the machine keeps it. A CI job's or a coding
+  agent's run makes none, since a key nobody sees locks every Caller out: it stops naming `fastagent secrets set <host>
+  FASTAGENT_API_KEY --generate`. A target that lacks a key the values hold (a deployment made again) gets that one. Its
+  report names the API's URL and the command that checks it; without `--run` it writes nothing. Replacing the key is
+  setting `FASTAGENT_API_KEY` again on the target (`fastagent secrets set <host> FASTAGENT_API_KEY`), with the new and
+  the old key separated by commas while the Callers move. A definition that serves
   no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then makes no key, and no serve answers `/v1`,
   whatever key its environment holds, one an earlier deploy left on a host included. Not on AgentCore, which serves no
   API either way (§9.5).
 - **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
   output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
-  `FASTAGENT_API_KEY` in `.secrets/production/.env`. `--model` sets the session's model there; without it, the
+  `FASTAGENT_API_KEY` in the command's environment (or the file `--env-file` names). `--model` sets the session's model there; without it, the
   deployment's default answers. A coding agent that checked the agent before deploying it checks the deployment with
   the same command.
 

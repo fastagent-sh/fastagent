@@ -35,12 +35,13 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel: the channel file (if missing) and its tools, which is how an existing agent picks up a new tool. It changes the program only; the platform app is `channels setup`'s. |
 | `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
 | `channels setup <name> [agent]` | Set up one instance's platform app (`telegram`, `slack`): guide the person through creating it, check each pasted credential with the platform, and keep it in the instance's value file. `--ingress`, `--config` and `--env-file` say which instance it is and how it receives. |
-| `channels setup <name> --record-url --config <file> [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
-| `secrets list\|set\|push <host> [agent]` | A deployment's values on the target that keeps them (`docker`, `fly`, `railway`, `agentcore`): the declared names and which the target holds, one value typed without echo or generated, or every declared value a value file or the environment holds. |
+| `channels setup <name> --record-url --config <file> (--env-file <file> \| --from-env) [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
+| `secrets list\|set\|push <host> [agent]` | A deployment's values on the target that keeps them (`fly`, `railway`, `agentcore`; Docker holds none): the declared names and which the target holds, one value typed without echo or generated, or every declared value a file (`--env-file`) or the environment (`--from-env`) holds. |
 | `deploy docker [agent]` | Generate `fastagent.<name>.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
 | `deploy fly [agent]` | Generate `fly.<name>.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
 | `deploy agentcore [agent]` | Generate `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. `--idle-timeout <seconds>` (60–1209600) sets how long an idle session keeps its microVM, over the program's `defaults.deploy.agentcore.idleTimeoutSeconds`; the other hosts report it as ignored. |
+| `deploy <host> --env-file <file>`, `--from-env` | The values to give the target: the file, and the environment the command runs in only with `--from-env` (a CI job's variables, `op run -- fastagent deploy … --from-env`), as for `secrets push`. A deployment has **no default value file** (not `.secrets/.env`, not `.secrets/production/.env`), and the shell alone is not a source. Docker's Compose always takes the environment it runs in. `logs`, `destroy` and `login --deployment` take `--env-file` for the host account (`AWS_PROFILE`, `AWS_REGION`), which they read from their environment as before. |
 | `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, set on the host as the variable `FASTAGENT_CONFIG_JSON` ([deploy](deploy.md)); the image holds none of it. Its `name` is the deployment's name: the host's resources and the generated manifests carry it ([deploy](deploy.md#an-instance-of-its-own)), and `secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to address it. Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
@@ -386,8 +387,8 @@ unless the message completed. This is the check a coding agent runs: one message
 
 **`--url <base>`** sends the message to the agent served at `<base>` instead, over its
 [Agent API](SPEC.md#9-http): the same output, `--json`, `--session` and exit code, nothing opened here. It
-calls with `--key`, or the first key of `FASTAGENT_API_KEY` in the agent's `.secrets/production/.env`, which `deploy`
-writes; with neither, it exits 2 and says where a key comes from. `--model` sets that session's model on the
+calls with `--key`, or the first `FASTAGENT_API_KEY` of its own environment (or of the file `--env-file` names): it is the
+caller's own command, not a deploy, so its environment is the source; a deployment has no default file to read it from. With none, it exits 2 and says where a key comes from. `--model` sets that session's model on the
 deployment; without it, the deployment's default answers. A coding agent that checked the agent with `invoke` checks
 its deployment with `invoke --url`, the URL `deploy` reports.
 
@@ -472,13 +473,13 @@ or Telegram deployment needs its own app, from `channels setup <name> --config <
 ```bash
 fastagent secrets list <host> [agent] [--config file] [--json]
 fastagent secrets set <host> <NAME> [agent] [--config file] [--generate]
-fastagent secrets push <host> [agent] [--config file] [--env-file file | --from-env]
+fastagent secrets push <host> [agent] [--config file] (--env-file file | --from-env)
 ```
 
-`<host>` is `docker`, `fly`, `railway` or `agentcore`. A deployment's values are the target's state: Fly secrets, the Railway
-service's variables, `.secrets/production/.env` for Docker, one Secrets Manager secret (`fastagent/<name>`) for AgentCore
-(agent-artifact.md §6.2). `deploy` checks which names the target holds
-and never carries a file; these commands are how the values get there, and they create the Fly app, Railway service or AgentCore secret
+`<host>` is `fly`, `railway` or `agentcore`. Docker is not one: it holds no values, and Compose takes each from the
+environment that runs it. A deployment's values are the target's state: Fly secrets, the Railway service's variables, one
+Secrets Manager secret (`fastagent/<name>`) for AgentCore (agent-artifact.md §6.2). `deploy` checks which names the
+target holds and never carries a file; these commands are how the values get there, and they create the Fly app, Railway service or AgentCore secret
 when it does not exist yet, so a CI job can push before its first deploy.
 
 - **`list`** prints every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP
@@ -487,18 +488,17 @@ when it does not exist yet, so a CI job can push before its first deploy.
 - **`set`** sets one value: typed without echo at a terminal, else read from standard input. It is never an argument.
   `--generate` sets a random value and prints it once, on stdout alone, for what FastAgent makes itself
   (`FASTAGENT_API_KEY`). Use `push` for several names: on a running Fly app each `set` restarts its machines, and a `push` restarts them
-  once. Railway redeploys the service on the last value a `set` or `push` writes; Docker's values are a file that a running
-  container reads after `docker compose up -d`, and an AgentCore session reads its secret when it starts, so a running one
-  keeps its values until it ends or the next deploy; the command says both.
-- **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, else `--from-env`, else
-  `.secrets/production/.env` (Docker's own store, so for Docker one of the first two is required). `--from-env` takes the declared names from the environment of the command that injected
+  once. Railway redeploys the service on the last value a `set` or `push` writes, and an AgentCore session reads its secret when
+  it starts, so a running one keeps its values until it ends or the next deploy; the command says so.
+- **`push`** sets, in one batch, every declared name its source holds a value for: `--env-file`, or `--from-env`; there is
+  no default source, since a deployment has no default file, and naming both is a usage error. `--from-env` takes the declared names from the environment of the command that injected
   them, which is how a secret manager or CI joins in with no adapter: `op run --env-file=.env.tpl -- fastagent secrets push fly
   --from-env`, `doppler run -- …`, `infisical run -- …`, `dotenvx run -- …`, or a CI job's secrets. Names the definition does
   not declare are not pushed, and are said.
 
 Each value reaches the target over standard input (never a command line), and a run says names only. `deploy --run`
-does the same at a terminal for what the target lacks: one question to set the names the production file holds, then each
-missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
+does the same at a terminal for what the target lacks: one question to set the declared names the values it was given hold,
+then each missing value typed without echo. In a coding agent's deploy or in CI it stops naming these commands.
 
 ## `fastagent channels setup <name>`
 
@@ -507,7 +507,7 @@ fastagent channels setup telegram [agent]
 fastagent channels setup feishu [agent]                    # scan-to-create; lark: guided console
 fastagent channels setup slack [agent] [--ingress webhook|connection] [--config <file>] [--env-file <file>]
 fastagent channels setup slack --json                       # a coding agent: the person pastes on a page
-fastagent channels setup slack --record-url --config prod.json [--url <url>]
+fastagent channels setup slack --record-url --config prod.json (--env-file <file> | --from-env) [--url <url>]
 ```
 
 Sets up the platform app of **one instance** of a channel and keeps its credentials with that instance
@@ -532,8 +532,9 @@ a connection for the development instance and a webhook for any other. The devel
 configuration is the project's `fastagent.json` and its values `.secrets/.env`. `--config <file>` and `--env-file <file>`
 name another instance's (a deployment's): `--config` is read for the way it receives and its `http.publicUrl` (Slack's
 manifest names it as the Request URL; without one a placeholder stands, which Slack accepts) and is where `--ingress` is
-written; `--env-file` is where the values go, a file that must exist, like every `--env-file` (without it, `.secrets/production/.env`,
-the file `deploy` reads, created when missing). Naming either makes it another instance than dev. The
+written; `--env-file` is the file the values go in, created when missing. A deployment has no default one, so naming `--config`
+without it is refused, saying so. `deploy --env-file <that file>` then gives the target what it holds. Naming either makes
+it another instance than dev. The
 channel file must offer the way chosen (`byIngress`), else the command refuses before anything is asked.
 
 Without a terminal, or with `--json` or `--no-input`, the values are pasted on a page the setup serves on `127.0.0.1`
@@ -544,7 +545,7 @@ stands, `--timeout <seconds>` sets how long it stays open (default 900).
 
 `--record-url` records the URL a person set on a Slack or Lark app's page (§5 of the design), in the configuration a deploy
 delivers, once the deployment confirms the platform reaches it there; the app is named by its bot token (Slack) or
-`LARK_APP_ID` (Lark), in `--env-file` or the instance's values.
+`LARK_APP_ID` (Lark), in the file `--env-file` names, or in the environment with `--from-env`; a deployment has no default file, and without either the command refuses, so a token exported for the development app is not taken for the deployment's.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 
@@ -619,7 +620,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
-| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` reads `FASTAGENT_MODEL` from `.secrets/production/.env`, then `config.model`. |
+| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
 | `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
 
 ## Exit codes

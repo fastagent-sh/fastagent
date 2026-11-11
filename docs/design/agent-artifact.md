@@ -37,7 +37,7 @@ Acceptance:
 1. One artifact, opened locally and on a host, reports the same assembly in `fastagent info --json`, except for the
    explicit inputs.
 2. A cloud failure is reproduced locally by what differs: the artifact runs under the cloud's inputs on this machine
-   (`fastagent build`, then `fastagent start`, which reads the production value file, with the configuration and an empty root), and on
+   (`fastagent build`, then `fastagent start` with the same `--env-file` the deploy was given, the configuration and an empty root), and on
    the cloud's machine (`fastagent deploy docker --run` runs the deployment's image here). Differences between this
    machine's architecture and the host's are not reproduced (§8).
 3. An implicit dependency (a machine file, a shell variable, the author checkout) fails at preflight or open, not first
@@ -379,7 +379,7 @@ Where a static value lives depends on where the instance runs; it reaches the in
 |---|---|---|
 | `fastagent dev` | the project's `.secrets/.env`, never committed | the default env file |
 | `fastagent start`, the package's `bin` | an operator's owner-only file outside the configuration directory, or the process environment | `--env-file <path>` or the environment |
-| Docker | `.secrets/production/.env` on the machine running Compose, owner-only | Compose `env_file:`, §6.2 |
+| Docker | the environment that runs Compose (a shell, a CI job, `op run`) | Compose's `environment:`, each name listed without a value, §6.2 |
 | Fly, Railway | the platform's secrets | the platform's injected environment |
 | AgentCore | one JSON secret in Secrets Manager | its ARN in the environment, read on the first invocation |
 | An embedding app (Kage) | the app's own secure store (the macOS Keychain) | `openAgent({ secrets })` |
@@ -677,7 +677,7 @@ chunked carriers, Compose rewriting `$` in values, gates for a value that differ
 
 | Target | Its store | Lists names with |
 |---|---|---|
-| Docker | `.secrets/production/.env` on the machine running Compose (owner-only), which Compose reads by `env_file:` | the file |
+| Docker | none: the environment that runs Compose, which the Compose file names by key only (`OPENAI_API_KEY:`) | nothing: Compose says nothing of a name with no value, so `deploy --run` checks that each is set there |
 | Fly | Fly secrets | `fly secrets list --json` (names and digests, no values) |
 | Railway | the service's variables | `railway variable list --json`, of which only the names are read |
 | AgentCore | one JSON secret in Secrets Manager per deployment | the secret's keys |
@@ -690,9 +690,8 @@ only a name no source has is asked for.
 
 `fastagent secrets set <host> <NAME>` writes one value: at a terminal it asks without echoing, otherwise it reads
 standard input, never the command line. `fastagent secrets push <host>` writes, in one batch, every *declared* name its
-source holds (`wrangler` likewise loads only `secrets.required` from `.dev.vars`): `--env-file <file>`, else
-`--from-env`, else the production value file `.secrets/production/.env`, which exists for `start` and is Docker's store
-already. `--from-env` reads the environment of the command that injected the values, so a secret manager (`op run`,
+source holds (`wrangler` likewise loads only `secrets.required` from `.dev.vars`): `--env-file <file>` or `--from-env`,
+and neither is a default, since a deployment has no default file. `--from-env` reads the environment of the command that injected the values, so a secret manager (`op run`,
 `doppler run`, `infisical run`, `dotenvx run`) or a CI job joins in with no adapter of ours. `fastagent secrets list
 <host>` prints the declared names and which the target has. `--generate` sets a random value and prints it once.
 `set` and `push` create the Fly app or Railway service when it does not exist, so a CI job can push before its first
@@ -701,15 +700,19 @@ deploy (as `wrangler secret put` creates its Worker).
 `deploy --run` lists the target's names once the app or service it sets values on exists (on Fly and Railway, creating
 one is the first step and is repeatable), before it builds. For each missing name it reports what it is for, where it is
 declared and whether it is optional, and the commands that set it. At a terminal it asks one question to set the
-names the production file holds, then each remaining value typed without echo. In a coding agent's deploy, or with nobody
+declared names its environment (or `--env-file`) holds, then each remaining value typed without echo. In a coding agent's deploy, or with nobody
 to ask, it stops with the commands (the ticket fails with them; the person runs them in a terminal, the agent never asks
 for a value in the conversation, and the deploy is run again). A value FastAgent makes itself (the Agent API's key) is
-set on the target by the deploy when neither the target nor the file has one, and kept in the file for `invoke --url`.
+made and set on the target by a deploy **at a terminal** when neither the target nor the values it was given have one,
+and shown once, kept nowhere here: made for a CI job or a coding agent's run it would be a key nobody holds. Those
+runs stop naming `fastagent secrets set <host> FASTAGENT_API_KEY --generate`. `invoke --url` takes the key from
+`--key`, or the environment (or `--env-file`).
 
 What `deploy` read values for becomes a name or configuration:
 
 - **Required values** are checked by name, on the target.
-- **The model** is configuration (`defaults.model`, a delivered `--config`); the production value file's `FASTAGENT_MODEL` is laid over the delivered configuration's `model`.
+- **The model** is configuration (`defaults.model`, a delivered `--config`), and only that: a `FASTAGENT_MODEL` in the
+  shell or a file belongs to the machine it is on.
 - **The model's credential route** (a variable on the target, or a login on the box): whether the target has the
   provider's variable name.
 - **A channel's shape** (webhook or connection) is configuration, `channels.<name>.ingress`, which `deploy` reads as
@@ -723,8 +726,11 @@ What `deploy` read values for becomes a name or configuration:
   §2). Nothing refuses a production app that is the development one: two instances on one app are documented, as for
   Telegram and Slack.
 
-The production value file stays what local `start` reads and Docker's store; another host's values are set with
-`fastagent secrets`.
+`deploy` reads no value file. The values it gives a target are those of the file `--env-file` names, and of the environment it
+runs in only with `--from-env`, as for `secrets push`. The shell of whoever runs `deploy` holds what that person uses for
+other things, and a provider key there must not decide that the key travels instead of a login on the box, so without
+the flag it is not a source. Docker's Compose, which takes values from the environment it runs in and nowhere else, is
+checked against that environment whatever the flag says. The production value file stays what local `start` reads.
 
 OAuth is created on the deployment itself and never carried: a model provider's login through
 `fastagent login --deployment`, an MCP server's grant by signing in against the deployed instance (§4.1; no automatic
@@ -799,7 +805,7 @@ definition still speaks of an editable directory (#919).
 | `config.model`, `http`, `deploy` read as fixed values | Read as program defaults under instance overrides |
 | Hosts mount `/data` (`/mnt/data` on AgentCore) holding `definition/`, `.state/`, `.secrets/` | The configuration set on the host as `FASTAGENT_CONFIG_JSON` and `/data/` as the instance root, the agent's cwd (`/mnt/data/` on AgentCore); the definition stays in the image |
 | `needs()` and MCP references read `{ ...process.env, ...values }` at open | Secrets are an input: the CLI's environment and `--env-file`, or `openAgent`'s `secrets` |
-| `deploy --run` carries the production value file to the host, and reads values to plan | Values are the target's state, set with `fastagent secrets`; `deploy` checks names only (§6.2) |
+| `deploy --run` carries the production value file to the host, and reads values to plan | Values are the target's state, set with `fastagent secrets`; `deploy` reads no value file and checks names only (§6.2) |
 | `modelsOver` resolves a provider's variable as `environment[name] \|\| process.env[name]` | The model's auth reads only the `secrets` input |
 
 Disposable probes on 0.29.0 executed a source tarball after extraction on Node 26.11.1, Bun 1.4.4 and native Linux ARM64

@@ -90,7 +90,7 @@ export const agentcoreHost: HostDeploy = {
   },
   async deploy(ctx) {
     const { opts, agentDir, name: instance, config, channels, pre, write } = ctx;
-    const { modelAuth, boxLogin, container, declaredSecrets, values, valueFile } = pre;
+    const { modelAuth, boxLogin, container, declaredSecrets, values, valuesFrom } = pre;
     if (boxLogin) {
       console.error(
         `[fastagent] note: AgentCore resets the runtime's storage on every deploy AND after 14 idle days, and the ` +
@@ -147,10 +147,12 @@ export const agentcoreHost: HostDeploy = {
         modelKey: pre.modelKey,
         api: ctx.api,
         values,
-        valueFile,
+        valuesFrom,
         topology: plan.topology,
         publicUrl: ownPublicUrl(container.config),
         config: opts.config,
+        envFile: opts.envFile,
+        fromEnv: !!opts.fromEnv,
       });
       return undefined;
     }
@@ -177,25 +179,29 @@ async function runDeployAgentcore(params: {
   modelKey: ModelKey;
   api: DeploymentApi;
   values: ReadonlyMap<string, string>;
-  valueFile: string;
+  valuesFrom: string;
   topology: AgentcoreTopology;
   /** The `http.publicUrl` the configuration names, where the platforms reach the runtime instead of the forwarder. */
   publicUrl: string | undefined;
   /** The `--config` file, where a URL a person set is recorded once the runtime confirms it. */
   config: string | undefined;
+  /** The `--env-file` the values come from, when one was named. */
+  envFile: string | undefined;
+  /** `--from-env`: the environment is a source of them too. */
+  fromEnv: boolean;
 }): Promise<void> {
   const { agentDir, name, channels, topology } = params;
   const secretsStep = deploySecrets({
     host: "agentcore",
     label: "AWS Secrets Manager",
     agentDir,
-    opts: { config: params.config },
+    opts: { config: params.config, envFile: params.envFile, fromEnv: params.fromEnv },
     answerer: params.answerer,
     api: params.api,
     modelAuth: params.modelAuth,
     modelKey: params.modelKey,
     declaredSecrets: params.declaredSecrets,
-    valueFile: params.valueFile,
+    valuesFrom: params.valuesFrom,
     values: params.values,
   });
   // The model's key on the target is a credential like a key in the value file: the runtime has it from its first

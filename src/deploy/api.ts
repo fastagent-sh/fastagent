@@ -1,7 +1,7 @@
 /**
  * A deployment's Agent API (SPEC.md §9.5, §9.6): served under `/v1` on every host but AgentCore, unless the
  * definition turns it off (`http.api: false`), behind a key the deploy mints and sets on the target the first time
- * neither the target nor the production value file has one. And what a deploy reports of it.
+ * neither the target nor the values the deploy was given has one. And what a deploy reports of it.
  */
 import { randomBytes } from "node:crypto";
 import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
@@ -26,39 +26,65 @@ export function deploymentApi(input: {
   return { served: true };
 }
 
-/** A key for the Agent API, made here: FastAgent mints it, so no person holds it before the deploy. */
-export function mintApiKey(): { name: string; make(): string } {
-  return { name: API_KEY_VARIABLE, make: () => randomBytes(32).toString("base64url") };
+/**
+ * The Agent API's key, for a deploy to restore from its values or make. Made only where a person sees it (`canShow`, a
+ * terminal): a key made for a CI job or a coding agent's run would be one nobody holds, so there its absence is a gap
+ * the person fills with `fastagent secrets set <host> FASTAGENT_API_KEY --generate`.
+ */
+export function mintApiKey(canShow: boolean): { name: string; hint: string; make?: () => string } {
+  return {
+    name: API_KEY_VARIABLE,
+    hint: "the Agent API's key, made once and shown to the person who makes it",
+    ...(canShow ? { make: () => randomBytes(32).toString("base64url") } : {}),
+  };
 }
 
 /**
  * What a deploy says of the API, once the host has said where the deployment is reached (when it knows). The check
- * names the agent's directory when the command runs elsewhere, since that is where `invoke --url` finds the key.
- * `keyInFile`: this machine's production value file holds a key, which `invoke --url` then reads. `run`: the deploy
- * has set the key (or found one) on the target; without it, nothing was set.
+ * names the agent's directory when the command runs elsewhere, since that is where `invoke --url` is run from.
+ * `keyHere`: this command's values (its environment, or the file `--env-file` names) hold a key, which `invoke --url`
+ * then reads from its own. `run`: the deploy has set the key (or found one) on the target; without it, nothing was set.
  */
 export function apiReport(
   api: DeploymentApi,
-  where: { valueFile: string; agentArg: string | undefined; keyInFile: boolean; run: boolean },
+  where: {
+    valuesFrom: string;
+    agentArg: string | undefined;
+    keyHere: boolean;
+    run: boolean;
+    /** Docker keeps no store: Compose takes the key from the environment that runs it, and nothing is set on a target. */
+    compose?: boolean;
+  },
   reachedAt: string | undefined,
 ): string[] {
   if (!api.served) return [`Agent API: not served — ${api.why}`];
-  const { valueFile, agentArg, keyInFile, run } = where;
+  const { valuesFrom, agentArg, keyHere, run, compose } = where;
   const base = reachedAt ?? "<the deployment's URL>";
-  if (!keyInFile && !run) {
+  if (compose) {
+    return keyHere
+      ? [
+          `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE}, which Compose takes from the environment that runs it`,
+          `check it: fastagent invoke --url ${base} "hello"${agentArg === undefined ? "" : ` ${agentArg}`}`,
+        ]
+      : [
+          `Agent API: not served until ${API_KEY_VARIABLE} is in the environment that runs Compose ` +
+            `(\`export ${API_KEY_VARIABLE}=$(openssl rand -hex 32)\`); pass it to \`fastagent invoke --url\` with --key`,
+        ];
+  }
+  if (!keyHere && !run) {
     return [
-      `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE}, which --run makes and sets on the target when ` +
-        `neither it nor ${valueFile} has one`,
+      `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE}, which --run sets on the target from ${valuesFrom}, ` +
+        `or makes at a terminal when neither it nor the target has one`,
     ];
   }
-  if (!keyInFile) {
+  if (!keyHere) {
     return [
-      `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE} on the target; ${valueFile} holds none, so pass the key ` +
-        `to \`fastagent invoke --url\` with --key`,
+      `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE} on the target; ${valuesFrom} holds none, so pass the ` +
+        `key to \`fastagent invoke --url\` with --key`,
     ];
   }
   return [
-    `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE} (in ${valueFile})`,
+    `Agent API: ${base}${API_PREFIX}, behind ${API_KEY_VARIABLE} (from ${valuesFrom})`,
     `check it: fastagent invoke --url ${base} "hello"${agentArg === undefined ? "" : ` ${agentArg}`}`,
   ];
 }

@@ -131,6 +131,34 @@ it("scan-to-create requests webhook scopes, persists production credentials and 
   expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
 });
 
+it("excludes the file --env-file names by its path when it is in the build context, and adds nothing when it is not", async () => {
+  const auth = join(resolveSecretsDir(dir), "auth.json");
+  const inside = join(dir, "prod.env");
+  await writeFile(inside, "OPENAI_API_KEY=sk\n");
+  const within = await buildContextPaths(dir, auth, inside);
+  // Neither `.env` nor `.env.*`: only its path keeps it out of the image, and a kept ignore file that lacks it leaks.
+  expect(within.machineryPaths).toContain("prod.env");
+  expect(within.leakCandidates).toContain("prod.env");
+  const nested = join(dir, "ops", "keys.env");
+  await mkdir(join(dir, "ops"), { recursive: true });
+  await writeFile(nested, "K=v\n");
+  expect((await buildContextPaths(dir, auth, nested)).machineryPaths).toContain("ops/keys.env");
+  // Under the secrets dir the name rules already reach it; outside the directory it is not shipped at all.
+  const secret = join(dir, ".secrets", "production", ".env");
+  await mkdir(join(dir, ".secrets", "production"), { recursive: true });
+  await writeFile(secret, "K=v\n");
+  expect((await buildContextPaths(dir, auth, secret)).machineryPaths).not.toContain(".secrets/production/.env");
+  const outside = join(await mkdtemp(join(tmpdir(), "fa-outside-")), "prod.env");
+  await writeFile(outside, "K=v\n");
+  const away = await buildContextPaths(dir, auth, outside);
+  expect(away.machineryPaths).not.toContain(outside);
+  expect(away.leakCandidates).not.toContain("prod.env");
+  // A file that is not there cannot be baked: no leak candidate, but the exclude is still written.
+  const absent = await buildContextPaths(dir, auth, join(dir, "later.env"));
+  expect(absent.machineryPaths).toContain("later.env");
+  expect(absent.leakCandidates).not.toContain("later.env");
+});
+
 it("checks both environments for secrets leaked by a kept Docker ignore file", async () => {
   await mkdir(join(dir, ".secrets", "production"), { recursive: true });
   await writeFile(join(dir, ".secrets", ".env"), "FEISHU_APP_SECRET=dev\n");

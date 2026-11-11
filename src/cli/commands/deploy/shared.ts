@@ -33,6 +33,10 @@ export interface DeployOptions {
   idleTimeout?: string;
   /** `--config <file>`: the instance configuration the deployment delivers. */
   config?: string;
+  /** `--env-file <file>`: the values to give the target. */
+  envFile?: string;
+  /** `--from-env`: the environment this command runs in is a source of those values too. */
+  fromEnv?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */
@@ -144,13 +148,19 @@ export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Ans
  */
 export function boxLoginStep<Args extends unknown[]>(
   host: DeployHost,
-  params: { agentDir: string; boxLogin: string | undefined; answerer: Answerer; config?: string | undefined },
+  params: {
+    agentDir: string;
+    boxLogin: string | undefined;
+    answerer: Answerer;
+    config?: string | undefined;
+    envFile?: string | undefined;
+  },
   /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;
   if (provider === undefined) return {};
-  const command = deploymentLoginCommand(host, provider, params.config);
+  const command = deploymentLoginCommand(host, provider, { configFile: params.config, envFile: params.envFile });
   const { answerer } = params;
   return {
     boxLogin: {
@@ -162,6 +172,7 @@ export function boxLoginStep<Args extends unknown[]>(
           provider,
           ifMissing: true,
           ...(params.config === undefined ? {} : { configFile: params.config }),
+          ...(params.envFile === undefined ? {} : { envFile: params.envFile }),
         };
         if (answerer.kind !== "ticket") return loginOnBox({ ...request, input: answerer.kind === "terminal" });
         // An account sign-in: a key cannot be typed into a ticket.

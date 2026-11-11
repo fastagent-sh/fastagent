@@ -41,7 +41,7 @@ it("creates missing apps for either way and prepares an existing webhook app wit
   expect(unpreparedChannelApps(channels, values)).toEqual([{ kind: "feishu", way: "webhook" }]);
 });
 
-it("sets each app up as production, in the production value file, for the person it was given", async () => {
+it("sets each app up as production, in the file it was given, for the person it was given", async () => {
   const dir = await mkdtemp(join(tmpdir(), "fa-prepare-"));
   dirs.push(dir);
   await mkdir(join(dir, ".secrets"), { recursive: true });
@@ -51,8 +51,10 @@ it("sets each app up as production, in the production value file, for the person
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
   const printed = vi.spyOn(console, "error").mockImplementation(() => {});
   const person = { waitsOn: () => {}, carriesOn: () => {}, afterwards: () => {} };
+  const file = join(dir, "prod.env");
   await prepareChannelApps(
     dir,
+    file,
     [
       { kind: "feishu", way: "webhook" },
       { kind: "lark", way: "connection" },
@@ -60,7 +62,6 @@ it("sets each app up as production, in the production value file, for the person
     "fastagent deploy fly --run",
     person,
   );
-  const file = join(dir, ".secrets", "production", ".env");
   expect(vi.mocked(setUpChannel).mock.calls.map(([input]) => input)).toEqual([
     { kind: "feishu", agentDir: dir, file, way: "webhook", dev: false, rerun: "fastagent deploy fly --run", person },
     { kind: "lark", agentDir: dir, file, way: "connection", dev: false, rerun: "fastagent deploy fly --run", person },

@@ -38,7 +38,7 @@ import {
   relativeCommands,
 } from "../mcp/config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { dotEnvPath, loadEnvValues } from "../value-file.ts";
+import { loadEnvValues, namedValueFile, trackedValueFile, trackedValueFileNote } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
@@ -58,14 +58,15 @@ interface DeployFacts {
   /** `src/schedules/` declares at least one schedule. */
   hasCron: boolean;
   /**
-   * The deployed environment's declaration, read ONCE here so the plan side and the run side cannot disagree about
-   * what this deployment carries. The environment running `deploy` is deliberately absent from it (§9).
+   * The values this deploy has to give the target: the environment it runs in (what a CI job or `op run` injects, and
+   * the file `--env-file` names laid under it), read ONCE here so the plan side and the run side cannot disagree about
+   * what this deployment carries. A deployment has no default file.
    */
   values: ReadonlyMap<string, string>;
-  /** That file, agent-dir-relative — the name every "set it here" message must use. */
-  valueFile: string;
+  /** Where {@link values} come from, as a message names it: the `--env-file`'s path, agent-dir-relative, or "the environment". */
+  valuesFrom: string;
   /**
-   * The variable the value file carries the model's key in, or undefined when no key travels that way
+   * The variable the values carry the model's key in, or undefined when no key travels that way
    * ({@link credentialRoute}).
    */
   modelAuth: string | undefined;
@@ -243,7 +244,34 @@ interface PreflightInput {
   storageResets?: boolean;
   /** Does this deployment serve the Agent API under `/v1` (deploy/api.ts)? Then a Caller with its key reaches it. */
   servesApi?: boolean;
+  /** `--from-env`: the environment this command runs in is a source of values, beside the file `--env-file` names. */
+  fromEnv?: boolean;
 }
+
+/**
+ * The values a deploy was given, and how to name where they are from. The environment is a source only with
+ * `--from-env`, like `secrets push`: it is the shell of whoever runs `deploy`, which holds what that person uses for
+ * other things, and a provider key there would decide that the key travels instead of a login on the box. A file
+ * `--env-file` names is read as data, so the values are the file's whatever else the environment holds.
+ */
+function givenValues(
+  agentDir: string,
+  fromEnv: boolean,
+  file: string | undefined,
+): { values: Map<string, string>; valuesFrom: string } {
+  const fromFile = file === undefined ? undefined : relative(agentDir, file);
+  if (fromEnv) {
+    const values = new Map(
+      Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value] as const])),
+    );
+    return { values, valuesFrom: fromFile === undefined ? "the environment" : `the environment or ${fromFile}` };
+  }
+  if (file === undefined || fromFile === undefined) return { values: new Map(), valuesFrom: NO_VALUES_GIVEN };
+  return { values: loadEnvValues(file), valuesFrom: fromFile };
+}
+
+/** Where a deploy's values are from when it was given none: what messages call the source. */
+const NO_VALUES_GIVEN = "the values given to this deploy (--env-file or --from-env)";
 
 /** Run the host-neutral pre-flight. */
 export async function preflightDeploy(input: PreflightInput): Promise<DeployPreflight> {
@@ -300,18 +328,22 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
   // cannot disagree about it.
-  const valueFile = relative(agentDir, dotEnvPath(agentDir));
-  const values = loadEnvValues(dotEnvPath(agentDir));
+  // The values this deploy was given, and only those: the file `--env-file` names, and the environment when
+  // `--from-env` says so. A key exported in the shell for local tools is not one of them unless asked for.
+  const file = namedValueFile();
+  const { values, valuesFrom } = givenValues(agentDir, input.fromEnv === true, file);
+  if (file !== undefined && trackedValueFile(agentDir, file))
+    report.warn(trackedValueFileNote(relative(agentDir, file)));
   // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
-  // This reads this machine's file only, so a target that already holds one is told as much.
+  // This reads this machine's values only, so a target that already holds one is told as much.
   if (content.length > 0 && !values.get("GITHUB_TOKEN")) {
     report.note(
-      `no GITHUB_TOKEN in ${valueFile}: unless the target holds one, the host clones without a credential, which ` +
+      `no GITHUB_TOKEN in ${valuesFrom}: unless the target holds one, the host clones without a credential, which ` +
         `reaches public repositories only, and the agent cannot push from its clones. \`fastagent secrets set <host> ` +
         `GITHUB_TOKEN\` gives it access`,
     );
   }
-  const model = resolveDeployModel(config, values, valueFile);
+  const model = resolveDeployModel(config);
   if (model.invalid !== undefined) {
     // A gate rather than a warning even without `--run`: a spec the box cannot resolve is a crash loop that no
     // artifact can say otherwise.
@@ -322,7 +354,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`defaults: { model: "provider/id" }\` in fastagent.config.ts (it travels ` +
-      `in the image), \`model\` in the configuration --config delivers, or FASTAGENT_MODEL in ${valueFile} (deploy delivers that one in the configuration)` +
+      `in the image), or \`model\` in the configuration --config delivers` +
       // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
       // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
       // value: it may be the operator's shell, or the first-run picker's own pick a second earlier (which prints
@@ -391,7 +423,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   if (modelSpec && code) {
     await checkModelExists(agentDir, modelSpec, providers, report, {
       credentialShips: boxLogin === undefined,
-      valueFile,
+      valuesFrom,
     });
   }
   const modelProvider = modelSpec ? loginProviders(providers).find((p) => p.id === providerOf(modelSpec)) : undefined;
@@ -464,7 +496,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     );
   }
-  const paths = await buildContextPaths(agentDir, authPath);
+  const paths = await buildContextPaths(agentDir, authPath, namedValueFile());
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
   const environment = loadEnvironment(agentDir);
@@ -487,13 +519,14 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const container: ContainerInput = {
     agent: input.name,
     ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
+    ...(file === undefined ? {} : { envFile: file }),
     machineryPaths: paths.machineryPaths,
     runtime,
     bunVersion,
     hasLockfile,
     apt,
     ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
-    config: deliveredConfig(delivered?.source.values, model.fromValueFile),
+    config: deliveredConfig(delivered?.source.values),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
@@ -503,7 +536,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     channels,
     hasCron,
     values,
-    valueFile,
+    valuesFrom,
     modelAuth,
     modelKey,
     boxLogin,
@@ -550,7 +583,7 @@ async function checkModelExists(
   spec: string,
   providers: readonly Provider[],
   report: DeployReport,
-  box: { credentialShips: boolean; valueFile: string },
+  box: { credentialShips: boolean; valuesFrom: string },
 ): Promise<void> {
   const provider = providerOf(spec);
   const modelId = spec.slice(provider.length + 1);
@@ -562,7 +595,7 @@ async function checkModelExists(
         `provider "${provider}" fetches its own model list, which a box with no list kept, as on a first deploy, ` +
           `fetches as it starts, with a credential this deploy does not carry (a login on the box comes after the ` +
           `start): if "${spec}" is only in that list, the box refuses to start on it until ${provider}'s API key is ` +
-          `in ${box.valueFile}`,
+          `in ${box.valuesFrom}`,
       );
       return;
     }
@@ -654,29 +687,17 @@ function checkKeptDockerfile(dockerfileText: string, agentDir: string, report: D
 }
 
 /**
- * WHICH model this deployment runs on, and where that came from.
- *
- * There is ONE precedence chain — `flag > environment > config.model` — and this is it evaluated in the environment
- * BEING DEPLOYED rather than in this machine's. That environment is declared by the value file, so the operator's
- * `process.env` simply is not part of it (the same way `dev` never reads another machine's shell); it needs no rule
- * of its own. `deploy` has no flag layer: a flag would vanish on the next run that omits it, and a file does not.
- *
- * The value file's model travels as the delivered configuration's `model` (`deliveredConfig`), which every deploy
- * rewrites whole, so deleting the line and redeploying drops it: nothing stale outlives it on the host.
+ * WHICH model this deployment runs on, and where that came from: the delivered configuration's `model`, else the
+ * program's `defaults.model`. `deploy` has no flag and reads no variable for it: a `FASTAGENT_MODEL` in the shell or in a
+ * file belongs to the machine it is on, and what the box runs is what the configuration it is given says. Delivered
+ * rewritten whole by every deploy, so no stale variable outlives a change on a host.
  */
-function resolveDeployModel(
-  config: EffectiveConfig,
-  values: ReadonlyMap<string, string>,
-  /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
-  valueFile: string,
-): { spec?: string; source: string; fromValueFile?: string; invalid?: string } {
-  const fromEnv = values.get("FASTAGENT_MODEL");
-  const source = fromEnv ? valueFile : "fastagent.config";
-  // BOTH sources are checked, at the one point that reads them: a `provider`-less spec resolves to nothing on the
-  // box, so letting `config.model` through would ship exactly the crash-loop this resolution exists to prevent —
-  // the auth probe reports "unconfigured" for it here and the failure only appears after deployment.
-  const spec = fromEnv || config.model;
+function resolveDeployModel(config: EffectiveConfig): { spec?: string; source: string; invalid?: string } {
+  const source = "fastagent.config";
+  // Checked at the one point that reads it: a `provider`-less spec resolves to nothing on the box, so letting it through
+  // would ship exactly the crash-loop this resolution exists to prevent — the auth probe reports "unconfigured" for it
+  // here and the failure only appears after deployment.
+  const spec = config.model;
   if (spec && !isModelSpec(spec)) return { source, invalid: spec };
-  if (fromEnv) return { spec: fromEnv, source, fromValueFile: fromEnv };
-  return { spec: config.model, source };
+  return { spec, source };
 }

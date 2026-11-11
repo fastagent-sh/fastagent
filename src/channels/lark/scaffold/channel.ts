@@ -9,8 +9,8 @@ import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fas
 // connection). Unset, `fastagent dev` opens a long connection OUT (no public URL, no tunnel), and everything
 // else — `fastagent start`, every deployment — receives by webhook at POST /lark, the way a host that
 // wakes on a request is reached.
-// Dev reads .secrets/.env; production reads .secrets/production/.env. Interactive `deploy --run`
-// guides creation of a separate production app; if Lark refuses its config API, set the Request URL
+// Dev reads .secrets/.env. A deployment has no default file: its values are the environment `deploy` runs in, or
+// the file `--env-file` names. Interactive `deploy --run` guides creation of a separate production app; if Lark refuses its config API, set the Request URL
 // in the console once.
 //
 // `fastagent channels setup lark` guides the console setup and validates the credentials. In the developer

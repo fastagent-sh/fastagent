@@ -124,8 +124,9 @@ entry 是持久的，在哪里读到都一样。`delta`（回答正在写的部�
 - **发消息的 key 走 `Idempotency-Key` 头**，和 `by-key` 路径一样做百分号编码：头只能放 Latin-1、首尾空白会被裁掉，而 key 可以是
   任意 1 到 256 个字符。
 - **`connectAgent` 给没带 key 的发送自己生成一个**，这样回答丢失时能以 `unconfirmed` 带上这个 key，调用方用它查到消息。
-- **CLI。** `fastagent deploy --run` 在目标和 `.secrets/production/.env` 都没有 key 时生成一个，设置到目标上并记在该文件里；
-  目标缺少文件里已有的 key（重新创建的部署）时，用文件里的那个。报告里给出 API 地址和检查命令；`fastagent invoke --url <base>` 用和本地 `invoke` 一样的输出和退出码检查一个部署。
+- **CLI。** 在终端里运行的 `fastagent deploy --run`，在目标和这次部署拿到的值（运行它的环境，或 `--env-file` 指定的文件）都没有 key 时生成一个，
+  设置到目标上并只显示一次，本机不保存；CI 或 coding agent 的运行不生成，而是停下并给出 `fastagent secrets set <host> FASTAGENT_API_KEY --generate`。
+  目标缺少这些值里已有的 key（重新创建的部署）时，用已有的那个。报告里给出 API 地址和检查命令；`fastagent invoke --url <base>` 用和本地 `invoke` 一样的输出和退出码检查一个部署，key 来自 `--key` 或环境。
 - **AgentCore 上不提供。** 那里只能通过 `/invocations` 访问，HTTP API 要单独设计（经由 forwarder Lambda，加响应流）。
 
 ## 7. 安全模型

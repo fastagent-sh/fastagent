@@ -11,10 +11,10 @@ export interface DockerRunPlan {
   /** Container port from config; used to ask Compose for the effective published host port. */
   port: number;
   /**
-   * Make sure the value file Compose reads by `env_file:` holds a value for every name the deployment needs, asking for
-   * the ones it lacks: resolves a gate line, or undefined. Nothing travels through this process.
+   * Make sure the environment Compose will run in holds a value for every name the deployment needs: resolves a gate
+   * line, or undefined. Nothing travels through this process but the names it checks.
    */
-  provideSecrets: () => Promise<string | undefined>;
+  checkValues: () => string | undefined;
   /**
    * Log the box in (`fastagent login --deployment`) once it is up and before any webhook is pointed at it: a channel pointed at
    * a box with no model credential answers every message with a failure. Resolves a gate line, or undefined.
@@ -127,7 +127,7 @@ export async function deployDockerRun(
   }
 
   // The values come before the first side effect (build/create).
-  const secretsGate = await plan.provideSecrets();
+  const secretsGate = plan.checkValues();
   if (secretsGate !== undefined) return gate(secretsGate);
 
   if ((await docker(["info"], { capture: true })).code !== 0) {

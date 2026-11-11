@@ -31,7 +31,7 @@ vi.mock("../src/deploy/preflight.ts", () => ({
       ok: true,
       messages: [],
       values,
-      valueFile: dotEnvPath(agentDir),
+      valuesFrom: "the environment",
       container: { agent: "agent", config: "{}" },
       channels: [{ name: "feishu", ingress: webhook ? "webhook" : "long-connection" }],
       declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", ...(webhook ? ["FEISHU_VERIFICATION_TOKEN"] : [])].map(
@@ -75,10 +75,11 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function agent(name: string, content: string, relocated = false) {
+/** The file a deployment's credentials are kept in: a deployment has no default one, so each run names it. */
+let valueFile: string;
+
+async function agent(name: string, content: string) {
   const dir = join(root, name);
-  const secrets = relocated ? join(root, "relocated-secrets") : join(dir, ".secrets/production");
-  await mkdir(secrets, { recursive: true });
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, "fastagent.config.ts"), 'export default { defaults: { model: "openai/gpt-4o" } };\n');
   // A channel that receives either way, for a configuration to name; the pre-flight is this file's.
@@ -88,9 +89,9 @@ async function agent(name: string, content: string, relocated = false) {
     'export default { kind: "fastagent.by-ingress", webhook: () => ({}), connection: { name: "f", connect() {} } };\n',
   );
   await buildable(dir);
-  await writeFile(join(secrets, ".env"), content);
-  if (relocated) vi.stubEnv("FASTAGENT_SECRETS_DIR", secrets);
-  return { dir, file: join(secrets, ".env") };
+  valueFile = join(root, `${name}.env`);
+  await writeFile(valueFile, content);
+  return { dir, file: valueFile };
 }
 
 /** The configuration a deployment delivers that has the Feishu channel receive by WebSocket. */
@@ -106,30 +107,20 @@ it.each([
     name: "agent",
     content: "",
     connection: true,
-    relocated: false,
     error: "cannot run on AgentCore",
   },
   {
     host: "agentcore",
     name: "a".repeat(41),
     content: "",
-    relocated: false,
     error: "exceed their limits past 40 chars",
-  },
-  { host: "docker", name: "agent", content: "", relocated: true, error: "generated Compose reads" },
-  {
-    host: "docker",
-    name: "agent",
-    content: "FEISHU_APP_ID=cli_existing\nFEISHU_APP_SECRET=secret\n",
-    relocated: true,
-    error: "generated Compose reads",
   },
 ] as const)(
   "refuses $host ($error) before creating or configuring an app",
-  async ({ host, name, content, relocated, error, ...rest }) => {
-    const { dir, file } = await agent(name, content, relocated);
+  async ({ host, name, content, error, ...rest }) => {
+    const { dir, file } = await agent(name, content);
     const config = "connection" in rest ? { config: await connectionConfig() } : {};
-    await expect(runDeploy(host, dir, { run: true, ...config })).rejects.toBe(stopped);
+    await expect(runDeploy(host, dir, { run: true, envFile: file, ...config })).rejects.toBe(stopped);
     expect(registerFeishuApp).not.toHaveBeenCalled();
     expect(createFeishuApi).not.toHaveBeenCalled();
     expect(await readFile(file, "utf8")).toBe(content);
@@ -145,7 +136,7 @@ it("a valid AgentCore setup still onboards before deployment", async () => {
     expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
     expect(ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN")).toBe("production_token");
   });
-  await runDeploy(host, dir, { run: true });
+  await runDeploy(host, dir, { run: true, envFile: valueFile });
   expect(deploy).toHaveBeenCalledOnce();
 });
 
@@ -155,7 +146,7 @@ it("a valid Docker setup (a channel that connects out) onboards before deploymen
     expect(registerFeishuApp).toHaveBeenCalledOnce();
     expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
   });
-  await runDeploy("docker", dir, { run: true, config: await connectionConfig() });
+  await runDeploy("docker", dir, { run: true, envFile: valueFile, config: await connectionConfig() });
   expect(deploy).toHaveBeenCalledOnce();
 });
 
@@ -166,16 +157,16 @@ it("validates the refreshed channel facts after onboarding before handing off to
     return { appId: "cli_production", appSecret: "secret", tenantBrand: "feishu" };
   });
   const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue(undefined);
-  await expect(runDeploy("agentcore", dir, { run: true })).rejects.toBe(stopped);
+  await expect(runDeploy("agentcore", dir, { run: true, envFile: valueFile })).rejects.toBe(stopped);
   expect(registerFeishuApp).toHaveBeenCalledOnce();
   expect(deploy).not.toHaveBeenCalled();
   expect(said.join("\n")).toContain("cannot run on AgentCore");
 });
 
-it.each(["agentcore", "docker"] as const)("generate-only %s still warns without onboarding", async (host) => {
-  const { dir } = await agent("agent", "", host === "docker");
-  const deploy = vi.spyOn(HOSTS[host], "deploy").mockResolvedValue(undefined);
-  await runDeploy(host, dir, host === "agentcore" ? { config: await connectionConfig() } : {});
+it("generate-only agentcore still warns without onboarding", async () => {
+  const { dir } = await agent("agent", "");
+  const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue(undefined);
+  await runDeploy("agentcore", dir, { config: await connectionConfig() });
   expect(registerFeishuApp).not.toHaveBeenCalled();
   expect(createFeishuApi).not.toHaveBeenCalled();
   expect(deploy).toHaveBeenCalledOnce();

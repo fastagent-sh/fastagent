@@ -112,9 +112,9 @@ own. See [`fastagent deploy`](cli.md#commands).
 
 | Requirement | How |
 |---|---|
-| **A model resolves** | `FASTAGENT_MODEL` in `.secrets/production/.env`, else `config.model`. Your shell is not read and `deploy` has no `--model` flag. The value from `.secrets/production/.env` is delivered as the configuration's `model`. `deploy` prints the effective model and gates `--run` when none resolves. |
-| **The target holds the values** | On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on Docker in `.secrets/production/.env`, which Compose reads. `--run` checks names, never carries a file: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target, or `--run` stops before building. At a terminal it asks: the names `.secrets/production/.env` holds are set there from it after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. On AgentCore the values are one Secrets Manager secret, `fastagent/<name>`. See [Secrets](cli.md#fastagent-secrets). |
-| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your logins and your shell's variables stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
+| **A model resolves** | The configuration's `model` (`--config`), else the program's `defaults.model`. A `FASTAGENT_MODEL` in your shell or in a file belongs to the machine it is on, and `deploy` has no `--model` flag. `deploy` prints the effective model and gates `--run` when none resolves. |
+| **The target holds the values** | A deployment has **no default value file**. The values `deploy` gives the target are those of the file `--env-file <file>` names, and of the environment it runs in **only with `--from-env`** (a CI job's variables, `op run -- fastagent deploy … --from-env`, `doppler run -- …`), as for `secrets push`. Without the flag the shell is not a source, so a key exported there for other tools does not decide how the model's credential travels. On Fly and Railway the values live in the target's own store (Fly secrets, the service's variables), on AgentCore in one Secrets Manager secret, `fastagent/<name>`; Docker has no store, and Compose takes each from the environment that runs it. `--run` checks names, and carries only what you say: the names declared by code (`needs([...])`), the variables `context.json` declares and a model key with no login to fall back on must have a value on the target (Docker: in the environment that runs Compose, with or without the flag), or `--run` stops before building. At a terminal it asks: the declared names the given values hold are set from them after one question, the rest are typed without echo. In a coding agent's deploy, or in CI, it stops naming `fastagent secrets push <host>` with the flag for the source it has and `fastagent secrets set <host> <NAME>`; run them, then re-run. A variable the definition does not declare is not pushed. See [Secrets](cli.md#fastagent-secrets). |
+| **A model credential** | What `deploy` ships decides how it gets there, never what authenticates the model on this machine (your stored logins stay here). The provider's key variable is a name the target may hold (set it with `fastagent secrets`), and so is a key a provider in `fastagent.config.ts` reads through `needs`; a provider in code that resolves its own key needs nothing more. A key in the file `--env-file` names, or in the environment with `--from-env`, is a value `deploy` was given, so it is offered for the target and the box does not ask for a login. A key only exported in your shell is not: to deploy a box that logs in itself, leave `--from-env` off. Otherwise the box answers: it keeps what it already authenticates with, and logs in if it has nothing, see [Logging a deployment in](#logging-a-deployment-in). |
 | **Something reaches it** | A channel, a schedule, or the [Agent API](#the-agent-api). A deployment with none of them is reached by nothing but its health check, and `deploy` warns: an agent used only from an app is embedded in it, not deployed. |
 | **Durable storage** | Docker, Fly and Railway make a volume at `/data` the agent's working directory, holding `.state/`, `.secrets/`, `content/` and what the agent writes. AgentCore uses managed SessionStorage at `/mnt/data`, reset on every deploy. |
 | **Content that reaches a host** | A `github` [content entry](configuration.md#content) is cloned on the host, at its `ref`, and brought up to date in place at each start, as on your machine without a checkout. Preflight says so for each one; on AgentCore, whose storage every deploy starts over, it says what the agent did not push is lost. The host clones with `GITHUB_TOKEN` (set it like any other value, with `fastagent secrets`), needed for a private repository and for the agent to push; without it preflight notes that only public repositories are reachable. The image installs `git`. A directory in the configuration `--config` delivers is refused: the host has no such path. Copy what the agent only reads into the agent directory, outside `content/`, which every release ships; move what it works on and must keep to a repository. |
@@ -126,7 +126,7 @@ A deployment differs from your `dev` in three ways, and each has its own local c
 | What differs | Check it with |
 |---|---|
 | The artifact: the built `dist/`, not the source | `fastagent build && fastagent start` |
-| The inputs: the production values and configuration, and no state | `fastagent start --root $(mktemp -d)`: `start` reads `.secrets/production/.env`, and `--config <file>` gives it the deployment's configuration when there is one |
+| The inputs: the production values and configuration, and no state | `fastagent start --root $(mktemp -d) --env-file <the file you give deploy>`, and `--config <file>` gives it the deployment's configuration when there is one |
 | The machine: the image's operating system, commands and packages | `fastagent deploy docker --run`, which runs the deployment's image on this machine |
 
 The image is built for this machine's architecture, so a native dependency that fails only on another (an arm64 laptop,
@@ -135,15 +135,13 @@ an amd64 host) is not caught here.
 ## The Agent API
 
 Docker, Fly and Railway deployments serve the [Agent API](SPEC.md#9-http) under `/v1`, behind
-`FASTAGENT_API_KEY`. When neither the target nor `.secrets/production/.env` has one, `--run` makes one, sets it on the
-target and keeps it in that file, where `invoke --url` reads it; `fastagent secrets set <host> FASTAGENT_API_KEY
---generate` does the same by hand and prints the key once. The report names the API's URL and the check:
+`FASTAGENT_API_KEY`. When neither the target nor the values `deploy` was given (`--env-file`, and the environment with `--from-env`) has one, a `--run` **at a terminal** makes one, sets it on the target and prints it once: copy it, since nothing on this machine keeps it. A CI job or a coding agent's run makes none, because a key nobody sees would lock every Caller out; it stops naming `fastagent secrets set <host> FASTAGENT_API_KEY --generate`, which a person runs in a terminal and which prints the key once. Docker has no store: put the key in the environment that runs Compose, and the report says whether it is there (a Compose file names the model's key only when it travels, so a key exported in your shell for other tools is not passed into a container that logs in). The report names the API's URL and the check:
 
 ```bash
 fastagent invoke --url https://<app>.fly.dev "hello"
 ```
 
-`invoke --url` reads the key from the same file; a program calls the deployment with
+`invoke --url` takes the key from `--key`, or the first `FASTAGENT_API_KEY` of its own environment (or of `--env-file`); a program calls the deployment with
 `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`. To replace the key, list the new one first
 (`FASTAGENT_API_KEY=new,old`), deploy, move the Callers, then remove the old one and deploy again. A definition whose
 deployments should serve no API says `defaults: { http: { api: false } }` in `fastagent.config.ts`: `deploy` then writes no key,
@@ -160,7 +158,7 @@ Request URL, which no credential on the box can change, is the person's to set (
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. Each run prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --env-file <values> --url <its URL> --record-url` (`--from-env` instead takes the app's credentials from the environment). Each run prints the steps it could not do.
 
 On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
 when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
@@ -174,11 +172,12 @@ or have the channel receive by `connection` where it has one, which needs no pub
 named, `--run` ends by pointing at the agent's `/health` (each channel's outcome) and, for Slack, the Request URL to
 set; without it, it says which paths receive nothing yet. It reads no outcome itself.
 
-- **Independent dev and production apps.** `dev` reads `.secrets/.env`; `start` and `deploy` read
-  `.secrets/production/.env`. Production never falls back to dev values. A deployment's values live on its target and are
-  set with `fastagent secrets` (by default from that file; `--env-file` or `--from-env` name another source, and a prompt
-  needs none), and never falls back to the dev file on its own; use
-  `.secrets/.env.example` as a template, not the filled dev file.
+- **Independent dev and production apps.** `dev` reads `.secrets/.env` and `start` reads `.secrets/production/.env`; `deploy`
+  reads neither, only the file `--env-file` names and, with `--from-env`, the environment it runs in. A deployment's values live on its
+  target and are set with `fastagent secrets push` (from `--env-file` or `--from-env`; there is no default source) or
+  `set`, and a prompt needs none. Use `.secrets/.env.example` as a template, not the filled dev file. When a deploy has
+  to make the production Feishu/Lark app, its credentials are kept in the file `--env-file` names (make it with
+  `fastagent channels setup <kind> --env-file <file>`, then deploy with it).
 - **Feishu/Lark receive by webhook on every host** unless the configuration `--config` delivers sets
   `channels.feishu.ingress` (`channels.lark.ingress`) to `"connection"`, while `dev` keeps WebSocket
   ([design note](design/channel-environments.md)): a host that scales to zero wakes on an inbound request. Interactive
@@ -207,10 +206,10 @@ fastagent login openai --deployment fly --config acme.json   # the instance that
 The host is not inferred from the agent directory: a Railway deploy leaves no file of its own there, and one
 directory can hold several hosts' files.
 
-`login --deployment`, `logs agentcore`, and `destroy agentcore` select the same production environment as `deploy`:
-`.secrets/production/.env` supplies the host account, region, and proxy, and `--config` names the instance (see
-[An instance of its own](#an-instance-of-its-own)). `FASTAGENT_SECRETS_DIR` still overrides that
-location, and shell variables still outrank file values.
+`login --deployment`, `logs agentcore`, and `destroy agentcore` run as `deploy` does: they read no default file, the host
+account, region and proxy come from the environment they run in (`AWS_PROFILE`, `AWS_REGION`) or from the file
+`--env-file` names, a shell variable outranks the file, and `--config` names the instance (see
+[An instance of its own](#an-instance-of-its-own)).
 
 The login runs on the box, through the host's own authenticated shell (`docker compose exec`, `fly ssh console`,
 `railway ssh`, or AgentCore's `InvokeAgentRuntimeCommandShell` signed with your AWS CLI credentials). This terminal
@@ -239,7 +238,7 @@ a message that reaches it fails until the login), so when the agent has any, the
 the box is logged in.
 
 A login stored on the box outranks a key in its environment (pi lets a stored credential own its provider). So a key
-added to `.secrets/production/.env` after the box was logged in is not used; the box's startup log says so and names the
+set on the target after the box was logged in is not used; the box's startup log says so and names the
 command that switches it to the key (`fastagent login <provider> --deployment`, choosing "API key").
 
 Until it is logged in, the box is already running: a long-connection channel (a Feishu/Lark WebSocket) is connected
@@ -277,8 +276,9 @@ service:
 - the generated or your own Dockerfile,
 - `127.0.0.1:<port>` published on the host,
 - a named volume at `/data`,
-- `env_file: .secrets/production/.env` (a fixed path, created empty when missing), with `FASTAGENT_STATE_DIR`,
-  `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH` and `PORT` pinned after it,
+- `environment:` with the instance's variables (§ [An instance of its own](#an-instance-of-its-own)), `FASTAGENT_STATE_DIR`,
+  `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH` and `PORT`, and **each declared secret by name only** (`OPENAI_API_KEY:`),
+  which Compose fills from the environment that runs it, and leaves unset when it has none,
 - `restart: unless-stopped`.
 
 ```bash
@@ -290,18 +290,19 @@ docker compose -f fastagent.<name>.compose.yml down     # keeps the state volume
 docker compose -f fastagent.<name>.compose.yml down -v  # destructive: deletes all state
 ```
 
-`--run` checks Docker and the daemon, gates missing values before building, refuses when another process already
-serves the host port the agent publishes (a `/health` answered there would not be the agent's; a container this
-project already runs keeps its own port), builds with `--pull` (the base image is a floating tag) and runs `up -d`,
-checks the services, and waits for `/health`. Nothing passes through Compose's environment: the container reads
-`.secrets/production/.env` itself.
+`--run` checks Docker and the daemon, gates a missing value before building (it checks that each name the deployment
+needs is set in the environment of this command, which is the one that runs Compose; it never prints or stores a value),
+refuses when another process already serves the host port the agent publishes (a `/health` answered there would not be
+the agent's; a container this project already runs keeps its own port), builds with `--pull` (the base image is a
+floating tag) and runs `up -d`, checks the services, and waits for `/health`.
 
 Notes:
 
-- Compose expands `$VAR` inside `env_file` values, so a value containing `$` reaches the container changed.
-  `deploy` warns. `$$` fixes Compose but breaks every other reader of the file; prefer a value without `$`.
-- If `FASTAGENT_SECRETS_DIR` points this machine at a different value file than the committed Compose reads,
-  generating warns and `--run` gates.
+- The Compose file holds no value and means the same on every machine. Run Compose in the environment that has the
+  values: `op run -- docker compose -f fastagent.<name>.compose.yml up -d`, or a shell where they are exported. Compose
+  says nothing of a name with no value (the container simply lacks it), which is why `--run` checks the names itself,
+  and why a plain `docker compose up` without the values starts a container missing them.
+- A value is visible to `docker inspect` on the machine that runs the container, as for any environment variable.
 
 ### Owning the Docker files
 
@@ -316,7 +317,7 @@ Notes:
 
 Requires [flyctl](https://fly.io/docs/flyctl/install), signed in: `--run` runs `fly auth login` when it is not (at a
 terminal, or for a coding agent's person with `--json`). A token goes in your shell's or CI's environment
-(`FLY_API_TOKEN`), not in `.secrets/production/.env`, which holds the deployment's values.
+(`FLY_API_TOKEN`), never among the deployment's values.
 
 ```bash
 fastagent deploy fly
@@ -341,8 +342,8 @@ Idle behavior is **suspend** with `min_machines_running = 0`. Both lines are in 
 ## Railway
 
 Requires the [Railway CLI](https://docs.railway.com/guides/cli), signed in: `--run` runs `railway login` when it is
-not, as for Fly. A token (`RAILWAY_API_TOKEN`) goes in your shell's or CI's environment, never in
-`.secrets/production/.env`.
+not, as for Fly. A token (`RAILWAY_API_TOKEN`) goes in your shell's or CI's environment, never among the deployment's
+values.
 
 ```bash
 fastagent deploy railway
@@ -578,12 +579,12 @@ each with its description, and a deploy whose target has no value for one stops 
 
 **Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.<name>.compose.yml` / `fly.<name>.toml` /
 `agentcore.<name>.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
+`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`. The file `--env-file` names is excluded by its path when it is inside the agent directory: a name like `prod.env` matches none of the rules above, and without that line its secrets would be baked into the image. Git is told too: inside a checkout, a file the repository does not ignore draws a warning from `deploy` and from `channels setup` (fastagent edits no `.gitignore` it did not write), so add it to `.gitignore` or keep it outside the directory. A kept `.dockerignore` or `.railwayignore` that does not exclude it stops `--run` and names the line to add.
 
 - **Railway** uploads the directory with `railway up`, which follows `.gitignore` and only inside a git repository: a
   project without one would upload its credentials, and one with one would leave out `.fastagent/deploy/`, which
   `.gitignore` ignores and the image is built from. The generated `.railwayignore` (it outranks `.gitignore`) keeps
-  `.secrets`, `.state`, `content/` and `.env*` home and lets `.fastagent/deploy/` through. One you kept that, with
+  `.secrets`, `.state`, `content/`, `.env*` and the file `--env-file` names (when it is in the directory) home and lets `.fastagent/deploy/` through. One you kept that, with
   `.gitignore`, would drop that directory warns, and stops `--run`.
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.

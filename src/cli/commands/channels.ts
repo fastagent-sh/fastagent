@@ -17,7 +17,7 @@ import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-d
 import { setChannelConfig } from "../../authoring.ts";
 import { INSTANCE_CONFIG_FILE, selectAgentEnvironment } from "../../paths.ts";
 import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
-import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
+import { dotEnvPath, loadEnvValues, namedValueFile } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterEnvFile } from "../instance.ts";
 import type { Person } from "../person.ts";
@@ -41,6 +41,8 @@ export interface ChannelsSetupOptions {
   config?: string;
   /** The value file the credentials are kept in (created when missing). */
   envFile?: string;
+  /** `--record-url`: the environment is a source of the app's credentials too, beside `--env-file`. */
+  fromEnv?: boolean;
   ingress?: string;
   url?: string;
   json: boolean;
@@ -105,7 +107,14 @@ async function planSetup(kind: SetupKind, dirArg: string, opts: ChannelsSetupOpt
   selectAgentEnvironment(dev ? "dev" : "production");
   if (dev) markDevServe();
   else unmarkDevServe();
-  enterEnvFile(opts.envFile);
+  // A deployment's credentials are kept in a file the person names: it has no default one.
+  if (!dev && opts.envFile === undefined) {
+    failUsage(
+      `${kind} for a deployment keeps its credentials in a file you name, since a deployment has no default one: ` +
+        `pass --env-file <file> (it is created when missing)`,
+    );
+  }
+  enterEnvFile(opts.envFile, { defaultFile: dev, mayCreate: true });
   enterAgentEnv(agentDir);
   const file = dotEnvPath(agentDir);
   const config =
@@ -168,7 +177,7 @@ async function carryOut(
   }
   const serve = plan.dev
     ? "fastagent dev"
-    : `fastagent start --env-file ${shellArg(plan.file)}   # or, from .secrets/production/.env, fastagent deploy <host> --run`;
+    : `fastagent start --env-file ${shellArg(plan.file)}   # or: fastagent deploy <host> --run --env-file ${shellArg(plan.file)}`;
   return { written: outcome.written, kept: outcome.kept, next_steps: [serve, ...outcome.after] };
 }
 
@@ -245,7 +254,7 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
     failUsage("--record-url writes into the configuration a deploy delivers: pass --config <file>");
   const agentDir = agentDirOrExit(resolve(dirArg));
   selectAgentEnvironment("production");
-  enterEnvFile(opts.envFile);
+  enterEnvFile(opts.envFile, { defaultFile: false });
   // The deployment's /health and the platform are reached as the instance's values and environment say, a proxy included.
   enterAgentEnv(agentDir);
   const config = resolve(opts.config);
@@ -259,6 +268,14 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
   if (reach === undefined || base === undefined) {
     failUsage(`${config} names no http.publicUrl: pass --url <the deployment's public URL>`);
   }
+  // The app's credentials are the file `--env-file` names, and the environment only with `--from-env`, as for `deploy`:
+  // a bot token exported in the shell for the development app must not be the one a production URL is recorded against.
+  if (opts.envFile === undefined && !opts.fromEnv) {
+    failUsage(
+      "--record-url finds the app its URL belongs to by its credentials, and a deployment has no default file: pass " +
+        "--env-file <file> (the one `channels setup` kept them in), or --from-env for this command's environment",
+    );
+  }
   const kind = name as WebhookKind;
   const url = `${base}${webhookPath(kind)}`;
   const outcome = await healthOutcome(`${reach}/health`, kind).catch(failStartup);
@@ -270,7 +287,9 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
       ),
     );
   }
-  await recordChannelUrl(agentDir, config, kind, url, loadEnvValues(dotEnvPath(agentDir))).catch(failStartup);
+  const given = opts.fromEnv ? Object.entries(process.env) : [...loadEnvValues(namedValueFile() as string)];
+  const values = new Map(given.flatMap(([n, v]) => (v === undefined ? [] : [[n, v] as const])));
+  await recordChannelUrl(agentDir, config, kind, url, values).catch(failStartup);
   printReport(opts.json, { status: "done", channel: kind, url, config }, [`recorded ${url} for ${kind} in ${config}`]);
 }
 

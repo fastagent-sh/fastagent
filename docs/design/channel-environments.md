@@ -21,7 +21,8 @@ on one Feishu app split its events; changing its subscription mode affects every
 | Command | Value file | Local state | Feishu/Lark default |
 |---|---|---|---|
 | `dev`, `add <channel>` | `.secrets/.env` | `.state` | WebSocket |
-| `start`, `deploy <host>`, `add <channel> --env production` | `.secrets/production/.env` | `.state/production` | webhook |
+| `start`, `add <channel> --env production` | `.secrets/production/.env` | `.state/production` | webhook |
+| `deploy <host>` | none: the environment it runs in, and the file `--env-file` names | (the host's) | webhook |
 
 The files are complete environments, not overlays. A missing production file is empty; dev credentials,
 provider keys, proxy settings and other values are never copied or inherited from the dev file. Production keys
@@ -63,10 +64,11 @@ production App ID, Secret, or webhook Verification Token. A complete app is reus
 This also applies to a production environment explicitly configured for WebSocket.
 
 1. Run preflight and host validation before creating an app. AgentCore rejects long connections and names beyond
-   its resource-name limit; Docker refuses a value file that differs from the generated Compose path. Refuse
-   missing values that setup cannot supply.
-2. Refuse unattended setup (`--no-input` or no terminal), naming the missing production values and their file.
-   CI must write those values beforehand. Generate-only deployment creates no remote app.
+   its resource-name limit. Refuse missing values that setup cannot supply.
+2. Refuse unattended setup (`--no-input` or no terminal), naming the missing production values. A deployment has no
+   default file, so setup keeps its credentials in the file `--env-file` names: without one the deploy stops naming
+   `channels setup <kind> --env-file <file>`, and a deploy that is given the file makes the app there. CI supplies the
+   values in its environment beforehand. Generate-only deployment creates no remote app.
 3. **Feishu:** scan-to-create a separate production app. A webhook app requests the agent scopes plus
    `application:application:patch` at creation. Persist App ID and Secret immediately, before token capture;
    a tenant approval delay or interrupted setup resumes the same app on the next run.
@@ -81,15 +83,14 @@ Nothing refuses a production App ID that is the dev one: two instances on one ap
 Slack (an app is one receiver, so copying a complete dev file into production takes dev's events away). `channels setup`
 for another instance creates a new app (Feishu) or asks for another app's credentials (Lark).
 
-Docker's generated Compose reads `.secrets/production/.env`. It has no public URL of its own, so a deployment with a
-webhook channel is an operator with their own ingress: they supply app values and name the URL as `http.publicUrl`
-(or set the channel to `connection`). A relocated production
-value file is refused under Docker `--run` because the committed Compose names a fixed path.
+Docker's generated Compose lists the secrets by name, and Compose fills them from the environment that runs it. It has no
+public URL of its own, so a deployment with a webhook channel is an operator with their own ingress: they supply app
+values and name the URL as `http.publicUrl` (or set the channel to `connection`).
 
 ## 4. Other channels
 
 A production Slack app or Telegram bot is another instance's: `channels setup <name> --config prod.json --env-file
-.secrets/production/.env` creates it (a Slack app from the manifest link, a bot through BotFather) and keeps its
+prod.env` creates it (a Slack app from the manifest link, a bot through BotFather) and keeps its
 credentials in that file, with a webhook's secret made once. Neither channel is automatically provisioned by `deploy`,
 and no credential of the person's own (Slack's configuration token) is kept anywhere.
 

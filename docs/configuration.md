@@ -164,10 +164,10 @@ fastagent dev --model openai/gpt-5.5
 fastagent build && FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 ```
 
-`deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
-`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is delivered as the
-configuration's `model` (in `FASTAGENT_CONFIG_JSON`); a `FASTAGENT_MODEL` variable already set on the platform wins over it. `deploy` prints the
-effective model and its source.
+`deploy` has no flag and reads no `FASTAGENT_MODEL`: a deployment's model is its configuration's `model` (the file
+`--config` names), else the program's `defaults.model`, delivered in `FASTAGENT_CONFIG_JSON`. A `FASTAGENT_MODEL` in your
+shell or in a file belongs to the machine it is on. A `FASTAGENT_MODEL` variable set on the platform still wins on the
+box. `deploy` prints the effective model and its source.
 
 ### Model lists
 
@@ -370,8 +370,9 @@ needs, installed on every machine that runs it and in its image:
   FastAgent never runs apt itself, and elsewhere it says nothing.
 - **`variables`** are the environment variables the agent's commands read, declared by name with what each is for, as code
   declares the secrets it reads with `needs`. Their values come from the environment, never from `context.json`: `.secrets/.env` here,
-  and `.secrets/production/.env` for a deployment, the file `fastagent secrets push` reads to set them on the deployment's target (a variable
-  exported where you run `deploy` does not reach the deployment). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
+  and, for a deployment, the file `--env-file` names (or the environment, with `--from-env`), from which `deploy` and
+  `fastagent secrets push` set them on the deployment's target (only declared names are set; a variable the definition does
+  not declare never reaches it). Every declared variable is required: `dev`, `start`, `invoke` and an app's `openAgent` refuse to
   start without its value and name `context.json`, `deploy` refuses before it changes anything and lists each
   with its description, and `info` and `fastagent env list` say which have a value here. A value you would share across
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
@@ -432,7 +433,7 @@ to `openAgent`.
 | `fastagent login` | Writes credentials to `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`). `-g`, or running outside any agent, writes `~/.fastagent/.secrets/auth.json`. |
 | Provider env vars | Servers and CI, e.g. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. |
 | Dev `.env` | `<agent dir>/.secrets/.env`, loaded by local commands and `add <channel>`. Excluded from git by `.secrets/.gitignore`. |
-| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start`, `deploy` and `add <channel> --env production`. It is Docker's own store, and the source `fastagent secrets push` copies a deployment's declared names from; neither falls back to dev. |
+| Production `.env` | `<agent dir>/.secrets/production/.env`, loaded by `start` and `add <channel> --env production`, never by `deploy`: a deployment has no default file (`--env-file`, or the environment it runs in); neither falls back to dev. |
 
 For one provider, the agent uses the first of:
 
@@ -504,7 +505,7 @@ A serve answers its channels' routes, each of which verifies that a request come
 
 ## The Agent API over HTTP
 
-With `FASTAGENT_API_KEY` set (in `.secrets/.env` for `dev`, `.secrets/production/.env` for a deployment), a serve also
+With `FASTAGENT_API_KEY` set (in `.secrets/.env` for `dev`, on the target for a deployment), a serve also
 answers the [Agent API](SPEC.md#9-http) under `/v1`, to a request that presents one of its keys as
 `Authorization: Bearer <key>`; without it, `/v1` is not served, and the startup report says which. Several keys,
 separated by commas, let a key be replaced without a gap: add the new one, move the Callers, remove the old. The key is
@@ -516,9 +517,9 @@ FASTAGENT_API_KEY=$(openssl rand -hex 32)
 ```
 
 A program calls it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`, and
-`fastagent invoke --url <url> "hello"` checks it from a terminal. `deploy` writes a key into
-`.secrets/production/.env` when there is none, unless `fastagent.config.ts` says `http: { api: false }`, which also
-keeps a serve from answering the API with a key its environment still holds.
+`fastagent invoke --url <url> "hello"` checks it from a terminal. `deploy --run` at a terminal makes a key and sets it on the target when there is none (shown once, kept nowhere here),
+unless `fastagent.config.ts` says `http: { api: false }`, which also keeps a serve from answering the API with a key its
+environment still holds.
 
 ## Machinery: `.fastagent/`, `.secrets/` and `content/`
 

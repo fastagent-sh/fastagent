@@ -166,8 +166,8 @@ describe("environment: what context.json may declare", () => {
     );
     // A string where the description goes reads as a value, which context.json never holds.
     expect(refused({ variables: { GH_HOST: "github.example.com" } })).toThrow(
-      `environment: variable "GH_HOST" must be { "description": "what it is for" }: its value goes in the stage's ` +
-        `value file (.secrets/.env, .secrets/production/.env) or the host, never in context.json`,
+      `environment: variable "GH_HOST" must be { "description": "what it is for" }: its value goes in the value ` +
+        `file (.secrets/.env), the environment a deploy runs in, or the host, never in context.json`,
     );
     expect(refused({ variables: { GH_HOST: { description: "x", value: "y" } } })).toThrow(
       `variable "GH_HOST": unknown key "value" (valid keys: description)`,

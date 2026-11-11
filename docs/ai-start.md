@@ -270,9 +270,9 @@ Keep credentials out of chat transcripts, issue comments, source files, and logs
 
 Set `defaults: { model: "provider/model-id" }` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
-from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/production/.env`, which
-`deploy` reads from the file and delivers in the configuration it sets on the host. A `--model` flag is local to the run
-that passes it, and `deploy` has none. See [models and auth](configuration.md).
+from one source only — that config value (the program's `defaults.model`, or the `model` of the configuration `deploy
+--config` delivers). A `--model` flag is local to the run that passes it, and `deploy` has none, and reads no
+`FASTAGENT_MODEL`. See [models and auth](configuration.md).
 
 ```bash
 fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send anything."
@@ -445,9 +445,10 @@ the CloudFormation topology, forwarder, and clock wiring required by the definit
 and verifies it. Review [Deploy](deploy.md) before authorizing resource creation or cost.
 
 Put the model in config. The values the deployment needs live on its target: `fastagent secrets list <host>` shows
-which names are missing, and `fastagent secrets push <host>` sets the ones `.secrets/production/.env` holds (never the dev
-file); the owner types the others with `fastagent secrets set <host> <NAME>`, since you never ask for a value in the
-conversation. A
+which names are missing, and `fastagent secrets push <host> --env-file <file>` (or `--from-env`, under the owner's secret
+manager: `op run -- …`) sets the declared names that source holds; a deployment has no default file, and never the dev
+one. The owner types the others with `fastagent secrets set <host> <NAME>`, since you never ask for a value in the
+conversation. Docker holds no values: Compose takes each from the environment that runs it. A
 model without an API key there (an OAuth subscription) is logged in on the deployment by the owner. Deploy with
 `fastagent deploy <host> --run --json`: it returns a ticket, and `fastagent deploy <host> --check <ticket>` reports
 `working`, a `need_user_action` for each step only the owner can take (signing the host's CLI in, confirming a
@@ -456,7 +457,8 @@ deployment's URL ([Deploy](deploy.md), [Logging a deployment in](deploy.md#loggi
 registration is the instance's own where its credentials allow (Telegram, Feishu, Lark) and a printed step where only
 the owner can set it (Slack's Request URL). Finish any reported manual steps, then verify a real conversation and any scheduled/proactive delivery at that
 host. A deployed agent is reached through its channels and schedules, and on Docker, Fly and Railway through the
-Agent API under `/v1`, whose key `deploy` sets on the target and keeps in `.secrets/production/.env` ([The Agent API](deploy.md#the-agent-api)).
+Agent API under `/v1`, whose key the owner makes at a terminal (`deploy --run` there, or `fastagent secrets set <host>
+FASTAGENT_API_KEY --generate`) and keeps themselves: nothing here holds it ([The Agent API](deploy.md#the-agent-api)).
 A ticket that ends `failed` carries the last lines of its log as `log_tail`: read it for the cause, fix that, then run
 the deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why) lists the usual
 ones). Check the deployment the way you checked the agent: `fastagent invoke --url <the URL deploy reports> "..."`, with the

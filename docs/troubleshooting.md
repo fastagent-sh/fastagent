@@ -317,9 +317,9 @@ names it, and `dev` and `start` refuse to start.
 
 ## Deployed agent crash-loops with `missing model`
 
-`deploy` reads the model from `FASTAGENT_MODEL` in `.secrets/production/.env`, else `defaults.model` in `fastagent.config.ts`. A
-`FASTAGENT_MODEL` exported in your shell is not read, and `deploy` has no `--model` flag. Set one of the two and
-redeploy; `deploy` prints the effective model and its source. To switch models, change it here and redeploy. See
+`deploy` takes the model from the configuration `--config` delivers (`model`), else `defaults.model` in
+`fastagent.config.ts`. A `FASTAGENT_MODEL` in your shell or in a file is not read, and `deploy` has no `--model` flag.
+Set one of the two and redeploy; `deploy` prints the effective model and its source. To switch models, change it here and redeploy. See
 [Deploy](deploy.md).
 
 ## Webhooks stop working after a tunnel restart

@@ -129,23 +129,42 @@ export const ENV_FILE_FLAG: FlagSpec = {
  * `--env-file`, settled before the agent's values are entered: absolute, and a file that exists. Without the flag the
  * command's default file is used again, whatever an earlier command in this process chose.
  */
-export function enterEnvFile(given: string | undefined): void {
+export function enterEnvFile(
+  given: string | undefined,
+  /** `mayCreate`: the file is one this command writes, so a missing one is made by its first value. */
+  options: { defaultFile?: boolean; mayCreate?: boolean } = {},
+): void {
+  const { mayCreate = false, ...choice } = options;
   if (given === undefined) {
-    useValueFile(undefined);
+    useValueFile(undefined, choice);
     return;
   }
   if (given.trim() === "") failUsage("--env-file needs a path");
   const path = resolveOverridePath(given) as string;
-  if (!existsSync(path) || !statSync(path).isFile()) failUsage(`--env-file ${path} is not a file`);
-  useValueFile(path);
+  if (existsSync(path) ? !statSync(path).isFile() : !mayCreate) failUsage(`--env-file ${path} is not a file`);
+  useValueFile(path, choice);
+}
+
+/**
+ * Enter the environment of a command that runs a deployment: the file `--env-file` names when it does, and otherwise
+ * only the environment the command runs in, since a deployment has no default file. The proxy it declares is installed.
+ */
+export function enterDeploymentEnv(agentDir: string, envFile: string | undefined): void {
+  enterEnvFile(envFile, { defaultFile: false });
+  enterAgentEnv(agentDir);
 }
 
 /**
  * Enter the agent's directory as a command runs it: the value file, whose values become this process's environment
  * and so the instance's secrets, then where the instance is.
  */
-export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void {
-  enterEnvFile(flags.envFile);
+export function enterInstance(
+  agentDir: string,
+  flags: InstanceFlags = {},
+  /** `deployment`: the command runs a deployment, which has no default value file (`enterDeploymentEnv`). */
+  options: { deployment?: boolean } = {},
+): void {
+  enterEnvFile(flags.envFile, { defaultFile: !options.deployment });
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
   // The variables that lay over the configuration are settled here, once, with the flags entered into them, so a value

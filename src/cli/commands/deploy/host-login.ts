@@ -2,7 +2,7 @@
  * Signing a host's CLI in to the person's account, for a deploy that finds it signed out. At a terminal the host's own
  * login runs there and opens the browser. In a deploy's ticket it runs with no terminal, where both CLIs print the
  * address to approve at and finish on their own once approved; that address is the person's step. Never a token: one
- * set in .secrets/production/.env would travel to the box with every other variable there.
+ * among a deployment's values would travel to the box with every other.
  */
 import { spawn } from "node:child_process";
 import type { Answerer } from "./shared.ts";

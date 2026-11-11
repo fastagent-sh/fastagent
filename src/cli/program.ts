@@ -155,7 +155,7 @@ const invoke: CommandSpec = {
     "from the storage a serve holds, so it runs beside `dev`; one invoke of an agent runs at a time. Same model " +
     "resolution as dev, a continued session included. --url <base> sends it to a served agent instead, over its " +
     "Agent API, with the same output and exit code: a deployment checked as the agent was before it, with the " +
-    "key --key gives or the first FASTAGENT_API_KEY in .secrets/production/.env, which deploy writes. For CI " +
+    "key --key gives or the first FASTAGENT_API_KEY of this command's environment (or of the file --env-file names). For CI " +
     "smoke and quick checks, by a person or a coding agent.",
   args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
   flags: [
@@ -376,8 +376,9 @@ const deploy: CommandSpec = {
     "CloudFormation stack (AWS Bedrock AgentCore Runtime + forwarder Lambda for webhooks + " +
     "the alarms the container sets for schedules and wake-ups; linux/arm64 image built locally). Durable ingress " +
     "remains operator-owned (agentcore's forwarder URL is the exception — the stack owns it). " +
-    "Production values come from .secrets/production/.env, never the dev file. Interactive --run creates " +
-    "a separate Feishu/Lark production app when its credentials are missing.",
+    "The values given to the target (secrets, a model key) are the file --env-file names, and the environment this " +
+    "command runs in only with --from-env: a deployment has no default file, and never the dev one. Interactive --run creates " +
+    "a separate Feishu/Lark production app when its credentials are missing, its credentials kept in --env-file.",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
     {
@@ -397,6 +398,19 @@ const deploy: CommandSpec = {
         "the instance configuration (a fastagent.json) the deployment runs with, carried in the image; its `name` " +
         "names the deployment (default: the program's name). Without it, the program's defaults (the project's " +
         "fastagent.json is the development instance's)",
+    },
+    {
+      flags: "--env-file <file>",
+      description:
+        "the values to give the target (secrets, a model key), read from this file, which must exist. A deployment " +
+        "has no default file; a Docker deployment's Compose also takes what the file holds",
+    },
+    {
+      flags: "--from-env",
+      description:
+        "also take the values from the environment this command runs in (a CI job's variables, `op run -- fastagent " +
+        "deploy … --from-env`). Without it the shell is not a source, so a key exported for other tools does not " +
+        "decide how the model's credential travels",
     },
     {
       flags: "--into-linked",
@@ -445,6 +459,8 @@ const deploy: CommandSpec = {
       intoLinked: f.intoLinked === true,
       ...(typeof f.idleTimeout === "string" ? { idleTimeout: f.idleTimeout } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
+      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+      fromEnv: f.fromEnv === true,
       input: f.input !== false,
       json: f.json === true,
       ...(f.check !== undefined ? { check: f.check as string } : {}),
@@ -702,9 +718,15 @@ const channels: CommandSpec = {
         {
           flags: "--env-file <file>",
           description:
-            "the value file the credentials are kept in, which must exist; naming it or --config makes this " +
-            "another instance than the development one (default: .secrets/.env for dev, else " +
-            ".secrets/production/.env, created when missing)",
+            "the file the credentials are kept in, created when missing; naming it or --config makes this " +
+            "another instance than the development one, which a deployment's is: it has no default file " +
+            "(default for dev: .secrets/.env)",
+        },
+        {
+          flags: "--from-env",
+          description:
+            "with --record-url: also take the app's credentials from this command's environment (without it only " +
+            "--env-file is read, so a token exported for the development app is not mistaken for the deployment's)",
         },
         {
           flags: "--record-url",
@@ -728,6 +750,7 @@ const channels: CommandSpec = {
           ...(typeof f.ingress === "string" ? { ingress: f.ingress } : {}),
           ...(typeof f.config === "string" ? { config: f.config } : {}),
           ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+          fromEnv: f.fromEnv === true,
           ...(typeof f.url === "string" ? { url: f.url } : {}),
           json: f.json === true,
           input: f.input !== false,
@@ -741,8 +764,9 @@ const channels: CommandSpec = {
 
 const SECRETS_HOST = {
   name: "<host>",
-  description: "the target that keeps the values",
-  choices: ["docker", "fly", "railway", "agentcore"],
+  description:
+    "the target that keeps the values (docker holds none: Compose takes them from the environment that runs it)",
+  choices: ["fly", "railway", "agentcore"],
 };
 
 const secrets: CommandSpec = {
@@ -798,20 +822,20 @@ const secrets: CommandSpec = {
     },
     {
       name: "push",
-      summary: "set every declared value a value file or the environment holds",
+      summary: "set every declared value a file or the environment holds",
       description:
         "Set, in one batch, every declared name the source holds a value for, creating the app or service when it does " +
-        "not exist. The source is --env-file, else --from-env (the environment of a command that injected the values: " +
-        "`op run`, `doppler run`, `infisical run`, `dotenvx run`, a CI job), else the production value file " +
-        "(.secrets/production/.env). Names the definition does not declare are not pushed.",
+        "not exist. The source is --env-file, or --from-env (the environment of a command that injected the values: " +
+        "`op run`, `doppler run`, `infisical run`, `dotenvx run`, a CI job); a deployment has no default file, so one " +
+        "of the two is required. Names the definition does not declare are not pushed.",
       args: [SECRETS_HOST, AGENT_ARG],
       flags: [
         { flags: "--config <file>", description: "the configuration that names the instance (`deploy --config`)" },
-        { flags: "--env-file <file>", description: "the value file to push from, which must exist" },
+        { flags: "--env-file <file>", description: "the file to push from, which must exist" },
         { flags: "--from-env", description: "push from this command's environment" },
       ],
       examples: [
-        { cmd: "fastagent secrets push fly" },
+        { cmd: "fastagent secrets push fly --env-file prod.env" },
         { cmd: "doppler run -- fastagent secrets push fly --from-env", note: "a secret manager" },
       ],
       run: async (args, f) =>
@@ -830,6 +854,14 @@ const INSTANCE_CONFIG: FlagSpec = {
     "the instance configuration that names the deployment (its `name`; else the program's name), the file `deploy --config` was given",
 };
 
+/** The values a command that reaches a deployment's host account runs with: its environment, and no default file. */
+const DEPLOYMENT_ENV_FILE: FlagSpec = {
+  flags: "--env-file <file>",
+  description:
+    "the host account's variables (AWS_PROFILE, AWS_REGION), over the environment this command runs in; it must " +
+    "exist. A deployment has no default file",
+};
+
 const destroy: CommandSpec = {
   name: "destroy",
   summary: "delete every AWS resource `deploy agentcore` created for an agent",
@@ -844,6 +876,7 @@ const destroy: CommandSpec = {
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
   flags: [
     INSTANCE_CONFIG,
+    DEPLOYMENT_ENV_FILE,
     { flags: "--run", description: "actually delete. Without it, this is a read-only inventory" },
   ],
   // The other hosts need no command of their own, and saying which one to use belongs where it can be READ:
@@ -865,6 +898,7 @@ const destroy: CommandSpec = {
     (await import("./commands/destroy.ts")).runDestroy(args[0] as string, args[1] as string, {
       run: f.run === true,
       ...(typeof f.config === "string" ? { config: f.config } : {}),
+      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
     }),
 };
 
@@ -878,6 +912,7 @@ const logs: CommandSpec = {
   args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
   flags: [
     INSTANCE_CONFIG,
+    DEPLOYMENT_ENV_FILE,
     { flags: "--source <source>", description: "agentcore log source: runtime (default) or forwarder" },
     { flags: "--since <duration>", description: "history window accepted by AWS CLI (for example 30m or 2h)" },
     { flags: "--follow", description: "keep polling for new log events until interrupted" },
@@ -893,6 +928,7 @@ const logs: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/logs.ts")).runLogs(args[0] as string, args[1] as string, {
       ...(typeof f.config === "string" ? { config: f.config } : {}),
+      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
       source: f.source as string | undefined,
       since: f.since as string | undefined,
       follow: f.follow === true,
@@ -945,6 +981,10 @@ const login: CommandSpec = {
       description:
         "with --deployment: the instance configuration that names the deployment (the file `deploy --config` was given)",
     },
+    {
+      flags: "--env-file <file>",
+      description: "with --deployment: the host account's variables, over this command's environment (no default file)",
+    },
     { flags: "--stdio", description: "the box's half of --deployment", hidden: true },
     { flags: "--if-missing", description: "with --stdio: keep a stored credential for the provider", hidden: true },
     NO_INPUT,
@@ -965,7 +1005,7 @@ const login: CommandSpec = {
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
     "so it is the only holder of that grant, and logging in again replaces it there. Without a terminal, an " +
     "account's sign-in on the box returns a ticket as a local one does, its process holding the box's shell; an API " +
-    "key is named, for the person to set in .secrets/production/.env before the next deploy carries it.",
+    "key is named, for the person to set on the target themselves (`fastagent secrets set <host> <NAME>`).",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
@@ -978,6 +1018,7 @@ const login: CommandSpec = {
       ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
+      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
       stdio: f.stdio === true,
       ifMissing: f.ifMissing === true,
     }),

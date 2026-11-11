@@ -4,7 +4,7 @@
  */
 import { join, resolve } from "node:path";
 import type { DeployHost } from "../../deploy/hosts.ts";
-import { dotEnvPath, loadEnvValues } from "../../value-file.ts";
+import { loadDotEnv } from "../../env.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
 import { displayPath, readTextIfExists, selectAgentEnvironment } from "../../paths.ts";
@@ -162,7 +162,14 @@ async function deploy(
     definition: await loadSourceDefinition(dir),
     ...(delivered === undefined ? {} : { instance: delivered.source }),
   });
-  const { agentDir } = await enterAgentDirectory(dirArg, opts, undefined, deployed).catch(failStartup);
+  // A deployment has no default value file: its values are this command's environment, with the file `--env-file`
+  // names laid under it.
+  const { agentDir } = await enterAgentDirectory(
+    dirArg,
+    { ...opts, deployment: true, instance: opts.envFile === undefined ? {} : { envFile: opts.envFile } },
+    undefined,
+    deployed,
+  ).catch(failStartup);
   const name = await deploymentName(agentDir, opts.config).catch(failStartup);
   const config = await deployed(agentDir)
     .then(({ definition }) => resolveConfig(definition, delivered?.source))
@@ -184,6 +191,7 @@ async function deploy(
       // Every AgentCore deployment starts the storage over (core.md §9).
       storageResets: host === "agentcore",
       servesApi: api.served,
+      fromEnv: !!opts.fromEnv,
     }).catch(failStartup);
     if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
     target.validate?.({ opts, agentDir, name, pre: facts });
@@ -193,6 +201,9 @@ async function deploy(
   const agentArg = displayPath(process.cwd(), agentDir);
   const rerun =
     `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
+    `${opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`}` +
+    `${opts.envFile === undefined ? "" : ` --env-file ${shellArg(opts.envFile)}`}` +
+    `${opts.fromEnv ? " --from-env" : ""}` +
     `${opts.intoLinked ? " --into-linked" : ""}${opts.idleTimeout === undefined ? "" : ` --idle-timeout ${opts.idleTimeout}`} --run`;
   const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
 
@@ -220,6 +231,8 @@ async function deploy(
           agentDir,
           ...(opts.force ? ["--force"] : []),
           ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
+          ...(opts.envFile === undefined ? [] : ["--env-file", opts.envFile]),
+          ...(opts.fromEnv ? ["--from-env"] : []),
           ...(opts.intoLinked ? ["--into-linked"] : []),
           ...(opts.idleTimeout === undefined ? [] : ["--idle-timeout", opts.idleTimeout]),
           "--run",
@@ -243,15 +256,25 @@ async function deploy(
         failStartup(
           new Error(
             `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-              `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valueFile}, or ` +
+              `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valuesFrom}, or ` +
               `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
               `--config delivers`,
           ),
         );
       }
+      // The credentials of the app it makes are kept in a file, and a deployment has no default one.
+      if (opts.envFile === undefined) {
+        const config = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
+        failUsage(
+          `deploy stopped: ${absent.join(", ")} are not in ${pre.valuesFrom}, so a production ${kinds.join(" and ")} app ` +
+            `has to be made, and its credentials need a file to be kept in. Make it with ` +
+            `\`fastagent channels setup ${kinds[0]} --env-file <file>${config}\` (it creates the file), then deploy ` +
+            `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
+        );
+      }
       if (answerer.kind === "nobody") {
         failUsage(
-          `deploy stopped: ${pre.valueFile} has no ${absent.join(", ")}: setting up the separate production app ` +
+          `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: setting up the separate production app ` +
             `needs a person — run this deploy in a terminal; from a coding agent, run \`${rerun} --json\`, which ` +
             `hands their part to its user`,
         );
@@ -259,10 +282,13 @@ async function deploy(
       const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
       await prepareChannelApps(
         agentDir,
+        resolve(opts.envFile),
         unprepared,
         again,
         answerer.kind === "ticket" ? answerer.step.person : undefined,
       ).catch(failStartup);
+      // What the setup kept is this deploy's values from here on.
+      loadDotEnv(agentDir);
       pre = await preflight();
     }
     for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
@@ -306,8 +332,15 @@ async function deploy(
         await applyArtifactPlan(plan);
       },
     });
-    const keyInFile = apiKeysFrom(loadEnvValues(dotEnvPath(agentDir)).get(API_KEY_VARIABLE)).length > 0;
-    const notes = apiReport(api, { valueFile: pre.valueFile, agentArg, keyInFile, run: !!opts.run }, reachedAt);
+    // Docker's Compose takes the key from the environment it runs in, whatever `--from-env` says; every other host
+    // was given it by the values this deploy was handed.
+    const compose = host === "docker";
+    const keyHere = apiKeysFrom(compose ? process.env[API_KEY_VARIABLE] : pre.values.get(API_KEY_VARIABLE)).length > 0;
+    const notes = apiReport(
+      api,
+      { valuesFrom: pre.valuesFrom, agentArg, keyHere, run: !!opts.run, compose },
+      reachedAt,
+    );
     for (const line of notes) console.error(`[fastagent] ${line}`);
     return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
   };

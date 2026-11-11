@@ -135,7 +135,8 @@ src/
 ├── atomic-write.ts         # writeFileAtomic: the ONE "whole file or none of it" write
 ├── value-file.ts           # the selected environment's value file, READ as data (never entered: what it declares,
 │                           # what it adds to an agent's environment) and WRITTEN (a generated value — a channel's
-│                           # secret, the API's key — kept when set, its secrets dir gitignored)
+│                           # secret — kept when set, its secrets dir gitignored). A command that runs a deployment has
+│                           # no default file, only the one `--env-file` names (`useValueFile`, `valueFileOf`)
 ├── locked-file.ts          # the cross-process locked read-modify-write that REPLACES a file (credentials,
 │                           # context.json), pi's lock included, so every reader of those files reads without one
 ├── state-file.ts           # a Caller's durable JSON state under the state root (channels, schedules), read and
@@ -262,10 +263,11 @@ src/
 │   │                       # process lease, the release last started on it (the storage is the instance's root; the
 │   │                       # program is the image's)
 │   ├── secrets.ts          # the NAMES a deployment needs and declares (secretNeeds, declaredNames, ModelKey)
-│   ├── secret-store.ts, file-store.ts # where a deployment's values live and how a deploy fills the gaps; Docker's store
+│   ├── secret-store.ts     # where a deployment's values live (a store the host keeps; Docker keeps none) and how a deploy fills the gaps
 │   ├── runner.ts           # the shared host-CLI dispatcher seam (CliRunner + spawnRunner; faked in tests)
 │   ├── box-shell.ts        # a running box's owner-authenticated shell as a byte channel (`login --deployment`)
-│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's) + the compose driver
+│   ├── docker/    { plan.ts, run.ts } # Compose topology (agent + state volume, ingress is the operator's; secrets listed by name,
+│   │                       # which Compose fills from the environment that runs it) + the compose driver
 │   ├── fly/       { plan.ts, run.ts } # artifacts + runbook (pure) + the flyctl driver
 │   ├── railway/   { plan.ts, run.ts, ignore.ts } # same two roles — NOT a copy of Fly (thin config, minted URL); ignore.ts is
 │   │                       # what `railway up` uploads (`.railwayignore`, since it follows `.gitignore` only inside a repo)

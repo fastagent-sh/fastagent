@@ -69,7 +69,12 @@ export interface BuildContextPaths {
   depDirs: string[];
 }
 
-export async function buildContextPaths(agentDir: string, authPath: string): Promise<BuildContextPaths> {
+export async function buildContextPaths(
+  agentDir: string,
+  authPath: string,
+  /** The file `--env-file` names: its values are secrets, and inside the agent directory it is part of the build context. */
+  valueFile?: string,
+): Promise<BuildContextPaths> {
   const inContext = (p: string): string | undefined => {
     const rel = relative(agentDir, p);
     return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? undefined : rel.split(sep).join("/");
@@ -82,7 +87,12 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   if (secretsRel && secretsRel !== SECRETS_DIRNAME && !secretsRel.startsWith(`${SECRETS_DIRNAME}/`)) {
     secretsDirs.push(secretsRel);
   }
-  const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : [])];
+  // A value file the person chose carries no name the generated rules know (`prod.env` is neither `.env` nor
+  // `.env.*`), so it is excluded by its path, as a relocated secrets dir is.
+  const valueRel = valueFile === undefined ? undefined : inContext(valueFile);
+  const valueElsewhere =
+    valueRel !== undefined && !secretsDirs.some((dir) => valueRel === dir || valueRel.startsWith(`${dir}/`));
+  const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : []), ...(valueElsewhere ? [valueRel] : [])];
   // ONE rule for every checked path: a file that is not there cannot be baked, so gating on it would be a refusal
   // about a spelling rather than about what would ship (an agent that has never run `login` has no auth.json).
   const present = async (rels: string[]): Promise<string[]> => {
@@ -119,6 +129,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const leakCandidates = [
     ...(await Promise.all(secretsDirs.map(secretDirFiles))).flat(),
     ...(await present(authElsewhere && authRel !== undefined ? [authRel] : [])),
+    ...(await present(valueElsewhere ? [valueRel] : [])),
     ...envFiles,
   ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.

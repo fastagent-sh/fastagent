@@ -57,12 +57,12 @@ export interface EnteredAgent {
  */
 export async function enterAgentDirectory(
   dirArg: string,
-  opts: { model?: string; input?: boolean; instance?: InstanceFlags },
+  opts: { model?: string; input?: boolean; instance?: InstanceFlags; deployment?: boolean },
   before?: (agentDir: string) => Promise<void>,
   load?: LoadProject,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterInstance(agentDir, opts.instance);
+  enterInstance(agentDir, opts.instance, { deployment: opts.deployment === true });
   await before?.(agentDir);
   const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };

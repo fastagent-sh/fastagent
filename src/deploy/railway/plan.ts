@@ -60,7 +60,10 @@ export function toRailwayName(basename: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  const artifacts: Artifact[] = [...containerArtifacts(input), { path: RAILWAYIGNORE_FILE, content: railwayignore() }];
+  const artifacts: Artifact[] = [
+    ...containerArtifacts(input),
+    { path: RAILWAYIGNORE_FILE, content: railwayignore(input.machineryPaths) },
+  ];
 
   const secrets = input.secrets ?? [];
 
@@ -116,7 +119,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     runbook.push(
       ``,
       `# Model auth: once it is up, the deployment logs in to ${input.boxLogin} itself (from the agent directory):`,
-      `${deploymentLoginCommand("railway", input.boxLogin, input.configFile)}`,
+      `${deploymentLoginCommand("railway", input.boxLogin, input)}`,
     );
   }
   runbook.push(
