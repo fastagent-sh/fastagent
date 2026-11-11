@@ -3,9 +3,8 @@
  * branch (Docker / Fly / Railway).
  */
 import { readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { join, relative } from "node:path";
-import { isModelSpec } from "./workspace.ts";
+import { isModelSpec } from "../model-ref.ts";
 import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import {
@@ -29,8 +28,8 @@ import { loadContent, loadEnvironment } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { type ContainerInput, DELIVERED_CONFIG_DIR, isGeneratedDockerfile } from "./container.ts";
-import { deliveredTextProblem } from "./delivered-text.ts";
+import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { deliveredConfig, undeliverableText } from "./delivery.ts";
 import {
   type McpDeclaration,
   declareMcp,
@@ -113,10 +112,12 @@ const GITHUB_TOKEN_SECRET: DeclaredSecret = {
 
 /**
  * The MCP servers the box will open: the program's, in the image, and the delivered configuration's. A name both
- * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential is a warning,
- * since it ships in the image and FastAgent cannot tell a secret from a setting; a relative stdio command in the
- * delivered configuration is an issue, since nothing delivers the script it names. (The program's own is relative to
- * its package, and `build` refuses one that it does not copy.)
+ * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential in the
+ * program's is a warning, since it ships in the image; in the delivered configuration it is an issue, since a host
+ * renders that into a manifest meant to be committed and shows it on the platform (FastAgent cannot tell a secret from
+ * a setting, so each literal value is refused and `${VAR}` is the way out); a relative stdio command in the delivered
+ * configuration is an issue, since nothing delivers the script it names. (The program's own is relative to its
+ * package, and `build` refuses one that it does not copy.)
  * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
  */
 function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
@@ -128,11 +129,16 @@ function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined,
     return false;
   }
   for (const literal of literalCredentials(declarations)) {
-    report.warn(
-      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and this ` +
-        `deploy puts it in the image: ${literalCredentialAdvice(literal)} and set that name with ` +
-        `\`fastagent secrets set <host> <NAME>\``,
-    );
+    const where = `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key}`;
+    const advice = `${literalCredentialAdvice(literal)} and set that name with \`fastagent secrets set <host> <NAME>\``;
+    if (literal.origin === "instance") {
+      report.issue(
+        `${where} is a literal value, and this deploy writes the configuration into a manifest meant to be committed ` +
+          `and shows it on the platform: ${advice}`,
+      );
+    } else {
+      report.warn(`${where} is a literal value, and this deploy puts it in the image: ${advice}`);
+    }
   }
   for (const { name, file, command } of relativeCommands(declarations).filter(({ origin }) => origin === "instance")) {
     report.issue(
@@ -216,11 +222,11 @@ class DeployGate {
 
 interface PreflightInput {
   agentDir: string;
-  /** The instance's name (`deploymentName`): the agent the release manifest says the storage belongs to. */
+  /** The instance's name (`deploymentName`): the agent the box's storage will belong to. */
   name: string;
   config: EffectiveConfig;
-  /** The instance configuration this deployment delivers (`--config`): as read, and its file's text. */
-  delivered?: { source: InstanceConfigSource; text: string };
+  /** The instance configuration this deployment delivers (`--config`), as read. */
+  delivered?: { source: InstanceConfigSource };
   /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
@@ -271,7 +277,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
 
   const content = loadContent(agentDir, delivered?.source);
   checkContent(content, delivered?.source.label, storageResets, report);
-  const textProblem = delivered === undefined ? undefined : deliveredTextProblem(agentDir, delivered.source);
+  const textProblem = delivered === undefined ? undefined : undeliverableText(delivered.source);
   if (textProblem !== undefined) report.issue(textProblem);
   const mcpOpens = checkMcp(agentDir, delivered?.source, report);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
@@ -307,8 +313,8 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
   const model = resolveDeployModel(config, values, valueFile);
   if (model.invalid !== undefined) {
-    // A gate rather than a warning even without `--run`: the release manifest validates the spec on the way out, so
-    // there is no artifact to produce either. Same class as the agent-directory-name gate above.
+    // A gate rather than a warning even without `--run`: a spec the box cannot resolve is a crash loop that no
+    // artifact can say otherwise.
     throw new DeployGate(
       `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
     );
@@ -316,7 +322,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   if (!model.spec) {
     const issue =
       `no model resolves for this deployment — set \`defaults: { model: "provider/id" }\` in fastagent.config.ts (it travels ` +
-      `in the image), or FASTAGENT_MODEL in ${valueFile} (deploy records that one in the release manifest)` +
+      `in the image), \`model\` in the configuration --config delivers, or FASTAGENT_MODEL in ${valueFile} (deploy delivers that one in the configuration)` +
       // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
       // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
       // value: it may be the operator's shell, or the first-run picker's own pick a second earlier (which prints
@@ -479,7 +485,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     ]),
   ];
   const container: ContainerInput = {
-    releaseId: randomUUID(),
     agent: input.name,
     ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
     machineryPaths: paths.machineryPaths,
@@ -488,13 +493,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     hasLockfile,
     apt,
     ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
-    ...(model.envValue !== undefined ? { modelSpec: model.envValue } : {}),
-    ...(delivered !== undefined ? { config: delivered.text } : {}),
+    config: deliveredConfig(delivered?.source.values, model.fromValueFile),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  if (kept !== undefined)
-    checkKeptDockerfile(kept, agentDir, model.envValue, valueFile, delivered !== undefined, report);
+  if (kept !== undefined) checkKeptDockerfile(kept, agentDir, report);
 
   return {
     channels,
@@ -617,25 +620,10 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops. The environment (context.json's) is the obvious one; the resolved model is the one that
- * looks safe and is not: the manifest is always written, but only the generated Dockerfile sets
- * FASTAGENT_RELEASE_FILE, and without it `prepareStartWorkspace` never reads the manifest — so a model that lives
- * ONLY in the value file would be reported here and absent on the box.
- *
- * NOT conditioned on `!force`: `writeArtifacts` refuses a file it did not generate whatever the flag says, so a
- * hand-written Dockerfile survives `--force` and drops exactly the same things. Short-circuiting here let
- * `--run --force` ship the crash-loop this gate exists to stop.
+ * What a KEPT hand-written Dockerfile drops: the environment (context.json's) that the generated one installs, and the
+ * build `start` opens. (The instance's configuration and name are variables on the host, not part of any image.)
  */
-function checkKeptDockerfile(
-  dockerfileText: string,
-  agentDir: string,
-  /** The model the release manifest carries (set only when the value file named it). */
-  modelFromValueFile: string | undefined,
-  valueFile: string,
-  /** The release delivers an instance configuration, which the image must copy and name. */
-  deliversConfig: boolean,
-  report: DeployReport,
-): void {
+function checkKeptDockerfile(dockerfileText: string, agentDir: string, report: DeployReport): void {
   // What the image installs: the packages and apt packages. Variables are the target's, whatever the image.
   const environment = loadEnvironment(agentDir);
   if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
@@ -653,28 +641,6 @@ function checkKeptDockerfile(
         `.gitignore (Railway) leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
     );
   }
-  // The INSTRUCTION is the question, not the file's authorship: `prepareStartWorkspace` returns early without
-  // FASTAGENT_RELEASE_FILE, so a Dockerfile that sets it reads the manifest whoever wrote it. This gates rather
-  // than warns because it is about FastAgent's OWN delivery arriving — the model would be reported here and
-  // missing on the box.
-  // Anywhere in an `ENV` instruction, not just first: `ENV A=1 FASTAGENT_RELEASE_FILE=/app/x` is ordinary
-  // Dockerfile style and hard-refusing it would be a false gate. A backslash continuation still reads as absent
-  // (covering it means joining lines first) — the remaining over-strict edge.
-  const readsManifest = /^\s*ENV\s[^\n]*\bFASTAGENT_RELEASE_FILE[=\s]/m.test(dockerfileText);
-  if (modelFromValueFile !== undefined && !readsManifest) {
-    const issue =
-      `your Dockerfile does not set FASTAGENT_RELEASE_FILE, and the model comes from ${valueFile} — it travels ` +
-      `in the release manifest, which is only read when that ENV points at it. Add it (see a generated ` +
-      `Dockerfile), or set \`defaults.model\` in fastagent.config.ts so it ships in the config instead.`;
-    report.issue(issue);
-  }
-  if (deliversConfig && !/^\s*ENV\s[^\n]*\bFASTAGENT_CONFIG[=\s]/m.test(dockerfileText)) {
-    report.issue(
-      `your Dockerfile does not set FASTAGENT_CONFIG, and --config delivers the instance configuration in the ` +
-        `image, which \`start\` reads only where that ENV points: copy ${DELIVERED_CONFIG_DIR}/ into the image and set it ` +
-        `(see a generated Dockerfile).`,
-    );
-  }
 }
 
 /**
@@ -683,20 +649,17 @@ function checkKeptDockerfile(
  * There is ONE precedence chain — `flag > environment > config.model` — and this is it evaluated in the environment
  * BEING DEPLOYED rather than in this machine's. That environment is declared by the value file, so the operator's
  * `process.env` simply is not part of it (the same way `dev` never reads another machine's shell); it needs no rule
- * of its own. `deploy` has no flag layer either, and that follows from the same model rather than from policy: a
- * generated Dockerfile is rewritten on every deploy, so a flag baked into one would silently vanish on the next run
- * that omits it. A file does not.
+ * of its own. `deploy` has no flag layer: a flag would vanish on the next run that omits it, and a file does not.
  *
- * The value file is the half of the deployed environment we can DECLARE. The other half — variables the platform
- * already holds — is still on the box and still outranks the image's own `ENV`, which is exactly why the model is
- * baked rather than delivered as one more platform variable that nothing would ever clear.
+ * The value file's model travels as the delivered configuration's `model` (`deliveredConfig`), which every deploy
+ * rewrites whole, so deleting the line and redeploying drops it: nothing stale outlives it on the host.
  */
 function resolveDeployModel(
   config: EffectiveConfig,
   values: ReadonlyMap<string, string>,
   /** The value file AS READ (it follows `FASTAGENT_SECRETS_DIR`), so the reported source is the real one. */
   valueFile: string,
-): { spec?: string; source: string; envValue?: string; invalid?: string } {
+): { spec?: string; source: string; fromValueFile?: string; invalid?: string } {
   const fromEnv = values.get("FASTAGENT_MODEL");
   const source = fromEnv ? valueFile : "fastagent.config";
   // BOTH sources are checked, at the one point that reads them: a `provider`-less spec resolves to nothing on the
@@ -704,9 +667,6 @@ function resolveDeployModel(
   // the auth probe reports "unconfigured" for it here and the failure only appears after deployment.
   const spec = fromEnv || config.model;
   if (spec && !isModelSpec(spec)) return { source, invalid: spec };
-  // `envValue` is what the release manifest records (ContainerInput.modelSpec), so it is set only when the value file
-  // is the source: a `config.model` already travels in the config itself. The manifest is rewritten by every deploy,
-  // so deleting the line and redeploying simply drops it — nothing stale survives.
-  if (fromEnv) return { spec: fromEnv, source, envValue: fromEnv };
+  if (fromEnv) return { spec: fromEnv, source, fromValueFile: fromEnv };
   return { spec: config.model, source };
 }

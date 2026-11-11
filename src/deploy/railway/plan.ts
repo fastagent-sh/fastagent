@@ -1,7 +1,9 @@
 /** `fastagent deploy railway` — the Railway deploy PLAN, computed from the resolved definition. */
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote, imageHasGit } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts, imageHasGit } from "../container.ts";
+import { deliveredVariables } from "../delivery.ts";
+import { shellArg } from "../../shell-arg.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import { WAKEUPS_WHEN_ASLEEP, residencyFor } from "../residency.ts";
 import type { DeploymentSecret } from "../secrets.ts";
@@ -44,6 +46,9 @@ export interface RailwayPlan {
   runbook: string[];
 }
 
+/** What a Railway variable's value may hold, in characters (measured, configuration-layout.md §7). */
+export const RAILWAY_VARIABLE_LIMIT = 32768;
+
 /** State root = the volume mount path, kept in lockstep. */
 const MOUNT = "/data";
 
@@ -64,7 +69,6 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const runbook: string[] = [
     `# Deploy to Railway. Dockerfile(.dockerignore, .railwayignore) are generated above.`,
     `# Prereqs: the Railway CLI (https://docs.railway.com/guides/cli) and \`railway login\`.`,
-    ...deliveredDirNote(input, "railway"),
     ``,
     `# One-time setup (init → service → volume → variables). Skip it on redeploy: repeating it creates`,
     `# another project/service/volume, splitting the agent's state.`,
@@ -83,6 +87,11 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
     ``,
     `# Variables — set BEFORE the first deploy so the box boots with them. Railway injects PORT itself.`,
     `railway variables set FASTAGENT_STATE_DIR=${MOUNT}/.state FASTAGENT_SECRETS_DIR=${MOUNT}/.secrets`,
+    `# What varies per instance: its name, its release and its configuration. Set them again after a change to the`,
+    `# configuration, before \`railway up\`.`,
+    `railway variables set ${Object.entries(deliveredVariables(input))
+      .map(([name, value]) => shellArg(`${name}=${value}`))
+      .join(" ")}`,
   ];
 
   if (secrets.length > 0) {
@@ -96,7 +105,7 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
 
   runbook.push(
     ``,
-    `# Before a new definition release, run \`fastagent deploy railway\` to refresh the release manifest.`,
+    `# After a change to the definition or the configuration, run \`fastagent deploy railway\` again.`,
     `# Upload the agent directory and build on Railway (no local Docker needed): Railway builds the`,
     `# Dockerfile at its root. It marks the deploy live once the container starts, without waiting for`,
     `# /health: \`railway logs\` shows a box that crashes on boot.`,
@@ -129,7 +138,8 @@ export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
       `# the printed https URL and use it as <your-domain> in the webhook step(s) below:`,
       `railway domain`,
       `# Or, before \`railway up\`, set it as http.publicUrl in the configuration \`deploy --config\` delivers, and`,
-      `# re-run \`fastagent deploy railway\`: the box then points Telegram, Feishu and Lark there itself.`,
+      `# re-run \`fastagent deploy railway\` and its \`variables set\` above: the box then points Telegram, Feishu and`,
+      `# Lark there itself.`,
       ...steps,
     );
   }

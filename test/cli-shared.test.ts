@@ -142,7 +142,7 @@ describe("reportAuth (which layer the line names)", () => {
     async (override) => {
       const held = layers("fallback");
       vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
-      vi.stubEnv("FASTAGENT_RELEASE_FILE", undefined);
+      vi.stubEnv("FASTAGENT_RELEASE_ID", undefined);
       const authPath = override ? join(held.dir, "custom-auth.json") : join(held.dir, ".secrets/production/auth.json");
       if (override) vi.stubEnv("FASTAGENT_AUTH_PATH", authPath);
       const out: string[] = [];

@@ -36,7 +36,7 @@ interface Template {
 }
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
-  releaseId: "release-one",
+  config: "{}",
   name: "my-agent",
   channels: [],
   runtime: "node",

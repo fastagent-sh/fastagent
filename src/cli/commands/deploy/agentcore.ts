@@ -7,8 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import {
+  AGENTCORE_VARIABLES_LIMIT,
   type AgentcoreTopology,
   FORWARDER_FILE,
+  agentcoreVariablesSize,
   agentcoreTemplateFile,
   isAgentcoreTemplatePath,
   agentcoreName,
@@ -28,7 +30,7 @@ import { deploySecrets } from "./secrets-step.ts";
 import { IDLE_TIMEOUT_BOUNDS } from "../../../harnesses/pi-durable/config.ts";
 import { failStartup, failUsage } from "../../fail.ts";
 import { shellArg } from "../../../shell-arg.ts";
-import { ownPublicUrl } from "../../../deploy/container.ts";
+import { ownPublicUrl } from "../../../deploy/delivery.ts";
 import { type Answerer, type HostDeploy, boxLoginStep, registrarsFor, urlRecorder } from "./shared.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
@@ -63,6 +65,15 @@ export const agentcoreHost: HostDeploy = {
         `long-connection channel (${longConnectionChannels.map((c) => c.name).join(", ")}) cannot run on AgentCore — there is no ` +
         `resident process to hold the connection, and nothing wakes a reclaimed session. Switch the channel ` +
         `to webhook mode (its events then ride the forwarder like every other channel).`;
+      if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+      console.error(`[fastagent] warn: ${msg}`);
+    }
+    const size = agentcoreVariablesSize(pre.container);
+    if (size > AGENTCORE_VARIABLES_LIMIT) {
+      const msg =
+        `the runtime's environment variables add up to ${size} bytes (the configuration is ` +
+        `${Buffer.byteLength(pre.container.config)} of them), over the ${AGENTCORE_VARIABLES_LIMIT} this deploy allows ` +
+        `them: AWS's quota is 4 KB and the limit is not measured, so it is the cautious reading. Shorten the configuration.`;
       if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
       console.error(`[fastagent] warn: ${msg}`);
     }

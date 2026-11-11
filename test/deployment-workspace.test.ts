@@ -6,11 +6,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyReleaseEnv,
   claimDeploymentStorage,
   assertStorageMounted,
   leaseDeployment,
   parseDeploymentRelease,
+  releaseFromEnv,
   type DeploymentRelease,
 } from "../src/deploy/workspace.ts";
 
@@ -125,7 +125,7 @@ describe("deployed storage", () => {
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
     await expect(claimDeploymentStorage(root, release("two"))).rejects.toThrow();
-    // The manifest's agent name is one path segment.
+    // The record's agent name is one path segment.
     expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
   });
 });
@@ -137,53 +137,22 @@ describe("storage boundary", () => {
   });
 });
 
-describe("applyReleaseEnv: the receiving half of the model chain", () => {
-  // The deploy side decides the model; this is what makes it reach the process. It runs BEFORE the workspace's
-  // own `.env` is read, so whatever it sets outranks a FASTAGENT_MODEL edited on the box.
-  const withModel = (model?: string): DeploymentRelease => ({
-    version: 1,
-    id: "r1",
-    agent: "fastagent",
-    ...(model ? { model } : {}),
+describe("releaseFromEnv: what a deploy set on the box", () => {
+  it("reads the release id and the instance's name", () => {
+    expect(releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123", FASTAGENT_NAME: "reviewer" } as NodeJS.ProcessEnv)).toEqual(
+      { version: 1, id: "abc123", agent: "reviewer" },
+    );
   });
 
-  it("projects the release's model when the environment declares none", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel("p/m"), env);
-    expect(env.FASTAGENT_MODEL).toBe("p/m");
+  it("refuses a box that has no name, which would leave its storage with no owner", () => {
+    expect(() => releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123" } as NodeJS.ProcessEnv)).toThrow(
+      "FASTAGENT_NAME is required for a deployment",
+    );
   });
 
-  it("never overwrites a platform-set variable — the deployment declares only the half of the environment it can", () => {
-    const env = { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel("p/m"), env);
-    expect(env.FASTAGENT_MODEL).toBe("platform/one");
-  });
-
-  it("is a no-op when the release names no model", () => {
-    const env = {} as NodeJS.ProcessEnv;
-    applyReleaseEnv(withModel(), env);
-    expect(env.FASTAGENT_MODEL).toBeUndefined();
-  });
-
-  it("reports the source that actually won, because the remedies differ", async () => {
-    const { log } = await import("../src/log.ts");
-    const info = vi.spyOn(log, "info").mockImplementation(() => {});
-    try {
-      applyReleaseEnv(withModel("p/m"), {} as NodeJS.ProcessEnv);
-      expect(info.mock.calls.flat().join(" ")).toMatch(/the release manifest \(redeploy to change it\)/);
-
-      info.mockClear();
-      applyReleaseEnv(withModel("p/m"), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
-      expect(info.mock.calls.flat().join(" ")).toMatch(/outranks the release manifest/);
-
-      // A redeploy would not change a value no release ever declared, so that half is dropped.
-      info.mockClear();
-      applyReleaseEnv(withModel(), { FASTAGENT_MODEL: "platform/one" } as NodeJS.ProcessEnv);
-      const said = info.mock.calls.flat().join(" ");
-      expect(said).toMatch(/already set in this environment/);
-      expect(said).not.toMatch(/outranks the release manifest/);
-    } finally {
-      info.mockRestore();
-    }
+  it("refuses a name that is not one path segment", () => {
+    expect(() =>
+      releaseFromEnv({ FASTAGENT_RELEASE_ID: "abc123", FASTAGENT_NAME: "../outside" } as NodeJS.ProcessEnv),
+    ).toThrow("invalid deployment release record");
   });
 });

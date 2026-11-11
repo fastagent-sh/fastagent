@@ -3,7 +3,8 @@ import { basename } from "node:path";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookPaths } from "../channel-ingress.ts";
 import { manualWebhookStep, webhookKinds } from "../../channels/webhooks.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deliveredVariables } from "../delivery.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
@@ -63,7 +64,13 @@ export function toDockerProjectName(name: string): string {
   return `fastagent-${slug || "agent"}`;
 }
 
+/** A value as a Compose scalar: JSON's string is a YAML one, and Compose reads `$` as interpolation, so each is doubled. */
+const composeScalar = (value: string): string => JSON.stringify(value).replaceAll("$", () => "$$");
+
 function composeYaml(input: DockerPlanInput): string {
+  const variables = Object.entries(deliveredVariables(input))
+    .map(([name, value]) => `      ${name}: ${composeScalar(value)}`)
+    .join("\n");
   return `${GENERATED_COMPOSE_MARKER}. Edit freely — it is kept unless you pass --force.
 # Public ingress remains yours: add your own tunnel/proxy/DNS/TLS, and name its URL as http.publicUrl.
 name: ${input.projectName}
@@ -83,6 +90,8 @@ services:
       - ${DOCKER_VALUE_FILE}
     environment:
       PORT: "${input.port}"
+      # What varies per instance, rendered here: its name, its release and its configuration (a \`$\` is written \`$$\`).
+${variables}
       # Machinery on the ONE state volume: mutable state and credentials (logged in on the box); the agent's content
       # is linked there by the release itself. Pinned AFTER env_file so a local path in that file (the scaffold lists
       # these) cannot send the container's state, sessions or credentials somewhere outside the volume — or at a
@@ -148,7 +157,6 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
     `# Run FastAgent in local Docker. ${composePath} / Dockerfile(.dockerignore) are generated above.`,
     `# Existing artifacts are authoritative and kept; edit Dockerfile or ${composePath} freely.`,
     `# Prereqs: Docker Engine/Desktop with Compose >= ${MIN_DOCKER_COMPOSE_VERSION} (\`docker compose version\`).`,
-    ...deliveredDirNote(input, "docker"),
   ];
 
   if (secrets.length > 0) {
@@ -165,7 +173,7 @@ export function planDockerDeploy(input: DockerPlanInput): DockerPlan {
 
   runbook.push(
     ``,
-    `# Before building a new definition release, run \`fastagent deploy docker\` to refresh its manifest.`,
+    `# After a change to the configuration, run \`fastagent deploy docker\` again: ${composePath} carries it.`,
     `# The Compose volume at ${MOUNT} is the agent's working directory, and retains its state and credentials.`,
     `# --pull: the base image is a floating tag, and a copy cached here may be older than the runtime floor.`,
     `${compose} build --pull`,

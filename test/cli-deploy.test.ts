@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { containerArtifacts, GENERATED_DOCKERFILE_MARKER } from "../src/deploy/container.ts";
@@ -20,6 +20,18 @@ function isRunning(pid: number): boolean {
   }
 }
 
+/** The variables a generated `fly.<name>.toml` sets on the box, as the box reads them. */
+async function flyVariables(dir: string, name: string): Promise<Record<string, string>> {
+  const toml = await readFile(join(dir, flyTomlFile(name)), "utf8");
+  const found = [...toml.matchAll(/^ {2}(FASTAGENT_(?:NAME|RELEASE_ID|CONFIG_JSON)) = (".*")$/gm)];
+  return Object.fromEntries(found.map((m) => [m[1] as string, JSON.parse(m[2] as string) as string]));
+}
+
+/** The configuration a deploy of `dir` to Fly delivers, parsed. */
+async function flyConfig(dir: string, name: string): Promise<unknown> {
+  return JSON.parse((await flyVariables(dir, name)).FASTAGENT_CONFIG_JSON as string);
+}
+
 describe("cli: deploy and the variables that set the configuration", () => {
   it("does not read them: a deployment's configuration is the program's defaults and what --config delivers", async () => {
     const dir = await agentWorkspace("fa-deploy-vars-", {
@@ -32,7 +44,7 @@ describe("cli: deploy and the variables that set the configuration", () => {
     });
     expect(result.code, result.stderr).toBe(0);
     expect(result.stderr).not.toMatch(/Agent API: not served/);
-    const delivered = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"));
+    const delivered = await flyConfig(dir, await deploymentName(dir));
     expect(delivered).not.toHaveProperty("http.api");
     expect(delivered).not.toHaveProperty("thinkingLevel");
   });
@@ -63,22 +75,51 @@ describe("cli: deploy, an instance of its own", () => {
     expect(await readFile(join(dir, "fastagent.acme.compose.yml"), "utf8")).toMatch(/^name: .*acme/m);
   });
 
-  it("the runbook of an instance says the configuration directory is the last one generated, and how to regenerate it", async () => {
+  it("an instance's name and configuration are in its own manifest, and every instance builds the same image", async () => {
     const { dir, config } = await instances();
-    for (const host of ["fly", "docker", "railway", "agentcore"]) {
-      const result = await runInProcess(["deploy", host, dir, "--config", config("acme")]);
+    const dockerfiles: string[] = [];
+    for (const name of ["acme", "globex"]) {
+      const result = await runInProcess(["deploy", "fly", dir, "--config", config(name)]);
       expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        ".fastagent/deploy/ holds the configuration of the instance `deploy` generated LAST",
-      );
-      expect(result.stdout).toContain(
-        `build "acme" right after \`fastagent deploy ${host} --config ${config("acme")}\``,
-      );
+      expect(result.stdout).not.toContain("LAST");
+      const variables = await flyVariables(dir, name);
+      expect(variables.FASTAGENT_NAME).toBe(name);
+      expect(JSON.parse(variables.FASTAGENT_CONFIG_JSON as string)).toMatchObject({ name });
+      dockerfiles.push(await readFile(join(dir, "Dockerfile"), "utf8"));
     }
-    // The probe behind the sentence: the second instance generated is what the directory holds.
-    await runInProcess(["deploy", "fly", dir, "--config", config("globex")]);
-    const release = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.release.json"), "utf8"));
-    expect(release.agent).toBe("globex");
+    // What each wrote is still there after the other: the manifests differ, the image does not.
+    expect((await flyVariables(dir, "acme")).FASTAGENT_NAME).toBe("acme");
+    expect((await flyVariables(dir, "acme")).FASTAGENT_RELEASE_ID).not.toBe(
+      (await flyVariables(dir, "globex")).FASTAGENT_RELEASE_ID,
+    );
+    expect(dockerfiles[0]).toBe(dockerfiles[1]);
+    // The build directory holds the program's package list and nothing of an instance.
+    expect(await readdir(join(dir, ".fastagent/deploy"))).toEqual(["fastagent.packages"]);
+  });
+
+  it("refuses a configuration a host's variable cannot hold: Railway's 32768 characters, AgentCore's 4096 bytes in all", async () => {
+    const { dir } = await instances();
+    const big = (size: number) => {
+      const file = join(dirname(dir), `big-${size}.json`);
+      return writeFile(file, JSON.stringify({ description: "x".repeat(size) })).then(() => file);
+    };
+    const railway = await runInProcess(["deploy", "railway", dir, "--config", await big(33000), "--run"]);
+    expect([railway.code, railway.stderr]).toEqual([
+      1,
+      expect.stringContaining("a Railway variable holds at most 32768: FASTAGENT_CONFIG_JSON carries it whole"),
+    ]);
+    const agentcore = await runInProcess(["deploy", "agentcore", dir, "--config", await big(4000), "--run"]);
+    expect([agentcore.code, agentcore.stderr]).toEqual([
+      1,
+      expect.stringMatching(/deploy stopped: the runtime's environment variables add up to \d+ bytes .* over the 4096/),
+    ]);
+    // Generate-only says it and goes on: nothing is deployed, and the manifest shows what would not fit.
+    const planned = await runInProcess(["deploy", "agentcore", dir, "--config", await big(4000)]);
+    expect(planned.code, planned.stderr).toBe(0);
+    expect(planned.stderr).toMatch(/warn: the runtime's environment variables add up to/);
+    // What fits goes through the same check unremarked.
+    const fits = await runInProcess(["deploy", "agentcore", dir, "--config", await big(100)]);
+    expect(fits.stderr).not.toMatch(/environment variables add up to/);
   });
 
   it("warns once of a manifest an earlier version wrote, which is no longer read, and names the file that replaces it", async () => {
@@ -384,7 +425,7 @@ esac
     expect(chosen.stderr).toContain('long-connection channel "hook" is custom');
   });
 
-  it("deploy --config delivers the instance configuration into the image's /etc/fastagent/, and decides with it", async () => {
+  it("deploy --config delivers the instance configuration as a variable of the host, and decides with it", async () => {
     const dir = await agentWorkspace("fa-deploy-config-", {
       "fastagent.config.ts": `import { obj, str } from "@earendil-works/pi-schema";
 export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-4o-mini" } };\n`,
@@ -406,17 +447,14 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     expect(delivered.code, delivered.stderr).toBe(0);
     // The configuration decides the deployment's own choices: here, no Agent API key.
     expect(delivered.stderr).toMatch(/Agent API: not served/);
-    const manifest = JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.release.json"), "utf8"));
-    // In a directory of its own, apart from the program's, which the image copies to /etc/fastagent/ and names.
-    expect(manifest.config).toBeUndefined();
+    // The image holds the program and nothing of the instance: no copy of the configuration, no variable naming one.
     const dockerfile = await readFile(join(dir, "Dockerfile"), "utf8");
-    expect(dockerfile).toContain(
-      "COPY .fastagent/deploy/ /etc/fastagent/\nENV FASTAGENT_CONFIG=/etc/fastagent/fastagent.json",
-    );
+    expect(dockerfile).not.toMatch(/FASTAGENT_CONFIG|\/etc\/fastagent|FASTAGENT_RELEASE/);
     // With the app's URL as its http.publicUrl, which Fly's is known before the build: the box points its channels
     // there.
+    const name = await deploymentName(dir, config);
     const flyUrl = expect.stringMatching(/^https:\/\/fa-deploy-config-[a-z0-9-]+\.fly\.dev$/);
-    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(await flyConfig(dir, name)).toEqual({
       settings: { repo: "acme/api" },
       http: { api: false, publicUrl: flyUrl },
     });
@@ -427,11 +465,16 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     // answer for `/.fastagent` followed by `!/.fastagent/deploy` (verified); the order is the whole rule.
     expect(ignore.indexOf("!/.fastagent/deploy")).toBeGreaterThan(ignore.indexOf("\n/.fastagent\n"));
 
-    // Every deploy writes it again, whoever wrote it before: a build output, never a file kept as the author's.
+    // The manifest is the author's once written, so a changed configuration is kept out of it until `--force`: a
+    // `--run` stops there, naming what drifted.
     await writeFile(config, JSON.stringify({ settings: { repo: "acme/web" } }));
-    const again = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    const kept = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    expect(kept.code, kept.stderr).toBe(0);
+    expect(kept.stderr).toMatch(new RegExp(`kept ${flyTomlFile(name)} — it no longer matches`));
+    expect(await flyConfig(dir, name)).toMatchObject({ settings: { repo: "acme/api" } });
+    const again = await runInProcess(["deploy", "fly", dir, "--config", config, "--force"]);
     expect(again.code, again.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(await flyConfig(dir, name)).toEqual({
       settings: { repo: "acme/web" },
       http: { publicUrl: flyUrl },
     });
@@ -440,9 +483,9 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
       config,
       JSON.stringify({ settings: { repo: "acme/web" }, http: { publicUrl: "https://agent.acme.com" } }),
     );
-    const own = await runInProcess(["deploy", "fly", dir, "--config", config]);
+    const own = await runInProcess(["deploy", "fly", dir, "--config", config, "--force"]);
     expect(own.code, own.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(dir, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(await flyConfig(dir, name)).toEqual({
       settings: { repo: "acme/web" },
       http: { publicUrl: "https://agent.acme.com" },
     });
@@ -452,9 +495,9 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     });
     await writeFile(config, JSON.stringify({ thinkingLevel: "high" }));
     expect((await runInProcess(["deploy", "fly", other, "--config", config])).code).toBe(0);
-    const plain = await runInProcess(["deploy", "fly", other]);
+    const plain = await runInProcess(["deploy", "fly", other, "--force"]);
     expect(plain.code, plain.stderr).toBe(0);
-    expect(JSON.parse(await readFile(join(other, ".fastagent/deploy", "fastagent.json"), "utf8"))).toEqual({
+    expect(await flyConfig(other, await deploymentName(other))).toEqual({
       http: { publicUrl: expect.stringMatching(/\.fly\.dev$/) },
     });
 
@@ -488,7 +531,7 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
 
     // An up-to-date generated Dockerfile (built with the SAME inputs deploy uses) → kept quietly, no stale flag.
     const current = containerArtifacts({
-      releaseId: "release-one",
+      config: "{}",
       agent: "any",
       runtime: "node",
       hasLockfile: false,

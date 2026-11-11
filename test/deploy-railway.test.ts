@@ -6,7 +6,7 @@ const runbook = (p: ReturnType<typeof planRailwayDeploy>) => p.runbook.join("\n"
 
 /** Defaults for the fields a test doesn't care about (a code agent with a lockfile). */
 const base = {
-  releaseId: "release-one",
+  config: "{}",
   agent: "reviewer",
   serviceName: "bot",
   runtime: "node",
@@ -15,6 +15,14 @@ const base = {
 } as const;
 
 describe("deploy/railway: planRailwayDeploy", () => {
+  it("prints the variables that vary per instance, quoted for a shell, before the upload that builds on them", () => {
+    const config = JSON.stringify({ description: "it's $" + "{X}" });
+    const out = runbook(planRailwayDeploy({ ...base, config, channels: [] }));
+    expect(out).toContain(`'FASTAGENT_CONFIG_JSON=${config.replaceAll("'", `'"'"'`)}'`);
+    expect(out).toContain("FASTAGENT_NAME=reviewer FASTAGENT_RELEASE_ID=");
+    expect(out.indexOf("FASTAGENT_CONFIG_JSON")).toBeLessThan(out.indexOf("\nrailway up\n"));
+  });
+
   it("generates no Railway config file: Railway builds the root Dockerfile, and the runbook says /health is not waited for", () => {
     const p = planRailwayDeploy({ ...base, channels: [] });
     expect(p.artifacts.map((a) => a.path)).not.toContain("railway.json");
@@ -30,8 +38,6 @@ describe("deploy/railway: planRailwayDeploy", () => {
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
     expect(artifacts.map((a) => a.path)).toEqual([
-      ".fastagent/deploy/fastagent.release.json",
-      ".fastagent/deploy/fastagent.json",
       ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",

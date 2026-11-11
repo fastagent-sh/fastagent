@@ -4,7 +4,7 @@ import { inspectMcp, mcpContext, writeMcpBinding, httpServer } from "../../mcp/h
 import { signInMcp } from "../../mcp/sign-in.ts";
 import { holdingInstance } from "../../harnesses/pi-durable/serve.ts";
 import { declareMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
-import { devInstanceConfig, namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
+import { devInstanceConfig, mcpConfigOf, namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
@@ -69,7 +69,7 @@ export async function runMcp(
   const instance = await (environment === "production" ? namedInstanceConfig() : devInstanceConfig(target)).catch(
     failStartup,
   );
-  const config = instance?.label;
+  const config = instance === undefined ? undefined : mcpConfigOf(instance);
   if (action === "list") {
     const servers = await inspectMcp(target, config === undefined ? {} : { config }).catch(failStartup);
     if (options.json) console.log(JSON.stringify(servers));

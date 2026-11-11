@@ -23,7 +23,7 @@ An agent's program has one configuration file, `fastagent.config.ts`; an instanc
 | Written by | The author, published with the agent | The person or machine running one instance |
 | Holds | Constants (`providers`), the `settings` schema, and `defaults`: what an instance starts with | Overrides of `defaults` (`starters`, `model`, `thinkingLevel`, `http`, `channels`), values for `settings`, and what only an instance has: `name`, `description`, `content`, `instructions`, `skills`, `prompts` |
 | Format | TypeScript: it can import, and `defineAgent` types it | JSON, with a `$schema` that checks its shape; no code |
-| Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command; without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
+| Read by | Every command: `dev` as source, `build` into `dist/` | `--config` (or `FASTAGENT_CONFIG`) names the file for every command, or `FASTAGENT_CONFIG_JSON` holds its JSON (what a deploy sets on a host; both together are refused); without it `dev` reads the one at the project root, and `start` and `deploy` read none. An app: the `config` it passes `openAgent` |
 | In git | Committed | The development one is ignored by the scaffold's `.gitignore` (it is one person's); a deployment's is delivered by `deploy --config` |
 
 Take one agent that runs for two customers: the author writes `settings: obj({ repo: str() })` in `fastagent.config.ts` once, and
@@ -165,8 +165,8 @@ fastagent build && FASTAGENT_MODEL=openai/gpt-5.5 fastagent start
 ```
 
 `deploy` evaluates the same chain in production: `FASTAGENT_MODEL` from `.secrets/production/.env`, else
-`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is recorded in the
-release manifest (`.fastagent/deploy/fastagent.release.json`); a variable already set on the platform wins over it. `deploy` prints the
+`config.model`. Your shell is not read, and `deploy` has no `--model` flag. The production value is delivered as the
+configuration's `model` (in `FASTAGENT_CONFIG_JSON`); a `FASTAGENT_MODEL` variable already set on the platform wins over it. `deploy` prints the
 effective model and its source.
 
 ### Model lists

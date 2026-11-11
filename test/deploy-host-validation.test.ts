@@ -32,6 +32,7 @@ vi.mock("../src/deploy/preflight.ts", () => ({
       messages: [],
       values,
       valueFile: dotEnvPath(agentDir),
+      container: { agent: "agent", config: "{}" },
       channels: [{ name: "feishu", ingress: webhook ? "webhook" : "long-connection" }],
       declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", ...(webhook ? ["FEISHU_VERIFICATION_TOKEN"] : [])].map(
         (name) => ({ name, source: "channels/feishu.ts" }),

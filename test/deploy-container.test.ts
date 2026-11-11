@@ -5,16 +5,13 @@ import { NOT_HOSTED, type RunsAs } from "../src/serving-command.ts";
 import { definitionSections } from "../src/harnesses/pi-durable/text.ts";
 
 const input = {
-  releaseId: "release-one",
   runtime: "node",
   hasLockfile: true,
   agent: "reviewer",
+  config: "{}",
 } as const;
 
 describe("deploy/container: shared Docker context", () => {
-  it("refuses an agent name the release manifest could not carry", () => {
-    expect(() => containerArtifacts({ ...input, agent: "../agent" })).toThrow("manifest");
-  });
   it("keeps tracked secrets scaffolds without shipping credentials, state or clones", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
@@ -106,43 +103,27 @@ describe("deploy/container: shared Docker context", () => {
     expect(imageHasGit({ apt: ["ca-certificates", "chromium"] })).toBe(false);
   });
 
-  it("records a value-file model in the release manifest, and nothing when the config named it", () => {
-    // The carrier is the manifest, not the Dockerfile: every host writes it unconditionally (`alwaysWrite`), it is
-    // rewritten by every deploy so it cannot go stale, and nothing on the way in can interpolate a shell.
-    const manifest = (i: typeof input & { modelSpec?: string; config?: string }) =>
-      JSON.parse(containerArtifacts(i).find((a) => a.path.endsWith("fastagent.release.json"))!.content);
-    expect(manifest({ ...input, modelSpec: "baseten/zai-org/GLM-5.3" })).toEqual({
-      version: 1,
-      id: "release-one",
-      agent: "reviewer",
-      model: "baseten/zai-org/GLM-5.3",
-    });
-    expect(manifest(input).model).toBeUndefined();
-    // A delivered configuration is a directory of its own, which the image copies and names; the manifest says nothing
-    // of it. Without one it is `{}`, so one an earlier deploy delivered never ships again.
-    const file = (i: typeof input & { config?: string }) =>
-      containerArtifacts(i).find((a) => a.path === ".fastagent/deploy/fastagent.json")?.content;
-    expect(file({ ...input, config: '{"thinkingLevel":"high"}' })).toBe('{"thinkingLevel":"high"}');
-    expect(file(input)).toBe("{}\n");
-    expect(manifest({ ...input, config: "{}" }).config).toBeUndefined();
-    const generated = containerArtifacts(input).find((a) => a.path === "Dockerfile")!.content;
-    // After the build, so a change of configuration builds nothing again.
-    expect(generated.indexOf("COPY .fastagent/deploy/ /etc/fastagent/")).toBeGreaterThan(
-      generated.indexOf("fastagent build"),
-    );
-    // It is NOT in the image's instructions — a credential could never ride this carrier, and neither does this.
-    const dockerfile = containerArtifacts({ ...input, modelSpec: "openai/gpt-4o-mini" }).find(
-      (a) => a.path === "Dockerfile",
-    )!.content;
-    expect(dockerfile).not.toContain("FASTAGENT_MODEL");
+  it("holds the program and nothing of an instance, so one build is every instance's image", () => {
+    const files = (i: Parameters<typeof containerArtifacts>[0]) =>
+      Object.fromEntries(containerArtifacts(i).map((a) => [a.path, a.content]));
+    const one = files(input);
+    const other = files({ ...input, agent: "support", config: '{"thinkingLevel":"high"}', configFile: "support.json" });
+    // Every artifact is the same whichever instance it is for: a name, a configuration or a release changes none.
+    expect(other).toEqual(one);
+    // The only build output is the package list, which is the program's; no configuration, text or manifest.
+    expect(Object.keys(one).sort()).toEqual([".dockerignore", ".fastagent/deploy/fastagent.packages", "Dockerfile"]);
+    for (const text of Object.values(one)) {
+      expect(text).not.toContain("/etc/fastagent");
+      expect(text).not.toContain("FASTAGENT_CONFIG");
+      expect(text).not.toContain("FASTAGENT_RELEASE");
+      expect(text).not.toContain("FASTAGENT_MODEL");
+    }
   });
 
-  it("bakes the agent directory as the definition, with a stable release, and says what a deployment keeps", () => {
+  it("bakes the agent directory as the definition, and says what a deployment keeps", () => {
     const dockerfiles = [input, { ...input, hasPackageJson: false }, { ...input, runtime: "bun" as const }].map(
       (i) => containerArtifacts(i).find((artifact) => artifact.path === "Dockerfile")!.content,
     );
-    const values = dockerfiles.map((content) => /^ENV FASTAGENT_RELEASE_FILE=(\S+)$/m.exec(content)?.[1]);
-    expect(values).toEqual(Array(3).fill("/etc/fastagent/fastagent.release.json"));
     // Every image opens the baked definition by path; nothing selects an agent by name any more.
     for (const content of dockerfiles) {
       expect(content).toMatch(/^WORKDIR \/app$/m);
@@ -152,8 +133,6 @@ describe("deploy/container: shared Docker context", () => {
       expect(content).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
       expect(content).not.toContain("STORAGE_DIR");
     }
-    const manifest = containerArtifacts(input).find((a) => a.path === ".fastagent/deploy/fastagent.release.json")!;
-    expect(JSON.parse(manifest.content)).toEqual({ version: 1, id: "release-one", agent: "reviewer" });
     const note = (runsAs: RunsAs, wake = false) => {
       const section = definitionSections("/agent", [], { wake, runsAs }).find(({ key }) => key === "self_change");
       return (section?.render({} as never, {} as never) as string | undefined) ?? "";

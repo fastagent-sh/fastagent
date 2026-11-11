@@ -7,7 +7,8 @@ import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";
 import { webhookRunbook } from "../channel-ingress.ts";
-import { type Artifact, type ContainerInput, containerArtifacts, deliveredDirNote } from "../container.ts";
+import { type Artifact, type ContainerInput, containerArtifacts } from "../container.ts";
+import { deliveredVariables } from "../delivery.ts";
 import { deploymentLoginCommand } from "../box-shell.ts";
 import type { DeploymentSecret } from "../secrets.ts";
 import { stripEdges } from "../../strip-edges.ts";
@@ -101,6 +102,44 @@ export function agentcoreSecretName(name: string): string {
 
 /** The environment variable that tells the container which secret to read at its first invocation. */
 export const SECRET_ARN_ENV = "FASTAGENT_SECRET_ARN";
+
+/**
+ * What the runtime's environment variables may add up to, as keys and values in UTF-8 bytes. AWS's quota says 4 KB
+ * and its template reference says 2048 without a unit; neither is measured here (configuration-layout.md §7), so
+ * this is the first, taken as the whole set's.
+ */
+export const AGENTCORE_VARIABLES_LIMIT = 4096;
+
+/** The runtime's variables whose value is known now: the fixed ones, and what a deploy delivers. */
+function literalVariables(input: Pick<ContainerInput, "agent" | "config">): Record<string, string> {
+  return {
+    PORT: "8080", // the Runtime service contract's fixed port (config.http.port does not apply here)
+    FASTAGENT_AGENTCORE: "1", // serve mounts /invocations + /ping, arms no resident cron
+    FASTAGENT_ROOT: MOUNT,
+    FASTAGENT_STATE_DIR: `${MOUNT}/.state`,
+    FASTAGENT_SECRETS_DIR: SECRETS_DIR,
+    ...deliveredVariables(input),
+  };
+}
+
+/**
+ * The variables set from stack parameters, whose values exist only at deploy time, and the most each can be: an ARN is
+ * under 200 characters, the deploy mints a UUID (36) and a secret a person supplies is allowed up to 64.
+ */
+const PARAMETER_VARIABLES = [
+  { env: SECRET_ARN_ENV, parameter: "SecretArn", reserve: 200 },
+  { env: "FASTAGENT_INGRESS_SECRET", parameter: "FastagentIngressSecret", reserve: 64 },
+  { env: "FASTAGENT_WAKE_SECRET", parameter: "FastagentWakeSecret", reserve: 64 },
+] as const;
+
+/** What the runtime's variables add up to for this deployment, parameters at their most: compare with the limit. */
+export function agentcoreVariablesSize(input: Pick<ContainerInput, "agent" | "config">): number {
+  const literal = Object.entries(literalVariables(input)).reduce(
+    (sum, [name, value]) => sum + Buffer.byteLength(name) + Buffer.byteLength(value),
+    0,
+  );
+  return PARAMETER_VARIABLES.reduce((sum, { env, reserve }) => sum + env.length + reserve, literal);
+}
 
 /** The instance's template: `agentcore.<name>.template.yaml`, one file for each stack it describes. */
 export const agentcoreTemplateFile = (name: string): string => `agentcore.${name}.template.yaml`;
@@ -208,14 +247,6 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `    Type: String`,
     `    Description: content-hashed key of the forwarder .zip in ForwarderBucket`,
   );
-  const envLines: string[] = [
-    `        PORT: "8080"`, // the Runtime service contract's fixed port (config.http.port does not apply here)
-    `        FASTAGENT_AGENTCORE: "1"`, // serve mounts /invocations + /ping, arms no resident cron
-    `        FASTAGENT_ROOT: ${MOUNT}`,
-    `        FASTAGENT_STATE_DIR: ${MOUNT}/.state`,
-    `        FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`,
-    `        ${SECRET_ARN_ENV}: !Ref SecretArn`,
-  ];
   // IAM invocation permission does not prove forwarder origin. Internal envelopes need a secret.
   params.push(
     `  FastagentIngressSecret:`,
@@ -223,7 +254,6 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `    NoEcho: true`,
     `    Description: shared secret authenticating forwarder→runtime envelopes (any random string; --run mints one)`,
   );
-  envLines.push(`        FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret`);
   // The wake-alarm shared secret: the container authenticates its alarm callbacks to the forwarder with it.
   params.push(
     `  FastagentWakeSecret:`,
@@ -231,7 +261,10 @@ function template(input: AgentcorePlanInput, topology: AgentcoreTopology): strin
     `    NoEcho: true`,
     `    Description: shared secret between the container and the forwarder's wake-alarm callback (any random string; --run mints one)`,
   );
-  envLines.push(`        FASTAGENT_WAKE_SECRET: !Ref FastagentWakeSecret`);
+  const envLines = [
+    ...Object.entries(literalVariables(input)).map(([name, value]) => `        ${name}: ${JSON.stringify(value)}`),
+    ...PARAMETER_VARIABLES.map(({ env, parameter }) => `        ${env}: !Ref ${parameter}`),
+  ];
 
   const lines: string[] = [
     `${GENERATED_TEMPLATE_MARKER}. Edit freely — deploy then treats it as hand-written and never gates on drift.`,
@@ -452,7 +485,6 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `# Deploy "${name}" to AWS Bedrock AgentCore. ${agentcoreTemplateFile(input.agent)} / Dockerfile(.dockerignore) are generated above.`,
     `# Prereqs: AWS CLI v2 with credentials + a region where AgentCore is available, and Docker with buildx`,
     `# (the image MUST be linux/arm64 — the one host whose build runs on YOUR machine, not remotely).`,
-    ...deliveredDirNote(input, "agentcore"),
     ``,
     `# 0. First use of AgentCore in this account only: the runtime needs its service-linked role, and without it`,
     `#    CloudFormation fails at the runtime, after the build, with a bare AccessDenied. Skip if \`aws iam get-role`,
@@ -576,7 +608,7 @@ export function planAgentcoreDeploy(input: AgentcorePlanInput): AgentcorePlan {
     `aws bedrock-agentcore stop-runtime-session --agent-runtime-arn <RuntimeArn> \\`,
     `  --runtime-session-id "${ingressSessionId(name)}"`,
     ``,
-    `# Redeploy = \`fastagent deploy agentcore\` (a new definition needs a fresh release manifest) + step 1b`,
+    `# Redeploy = \`fastagent deploy agentcore\` (a changed configuration is rendered into the template) + step 1b`,
     `# (new forwarder key, if its code changed) + step 2 with a NEW tag + step 3.`,
     `# STATE: ${MOUNT} is managed SessionStorage, the agent's working directory. It keeps what the agent wrote there, .state/`,
     `# and .secrets/ across compute stop/resume — an idle-reclaimed agent resumes with its memory. AWS`,

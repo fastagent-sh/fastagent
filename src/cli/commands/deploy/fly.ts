@@ -15,7 +15,7 @@ import { spawnRunner } from "../../../deploy/runner.ts";
 import { readTextIfExists } from "../../../paths.ts";
 import { residencyFor } from "../../../deploy/residency.ts";
 import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
-import { withPublicUrl } from "../../../deploy/container.ts";
+import { withPublicUrl } from "../../../deploy/delivery.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { ModelKey } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
