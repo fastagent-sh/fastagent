@@ -3,7 +3,9 @@ import { crc32 } from "node:zlib";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { describe, expect, it } from "vitest";
 import {
+  AGENTCORE_VARIABLES_LIMIT,
   type AgentcorePlanInput,
+  agentcoreVariablesSize,
   MOUNT,
   SECRETS_DIR,
   agentcoreTemplateFile,
@@ -21,7 +23,7 @@ import {
 import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
-  releaseId: "release-one",
+  config: "{}",
   name: "my-agent",
   channels: [],
   runtime: "node",
@@ -52,14 +54,48 @@ describe("deploy agentcore: name/id helpers", () => {
   });
 });
 
+describe("deploy agentcore: the runtime's variables", () => {
+  const environmentOf = (template: string): Record<string, string> =>
+    Object.fromEntries(
+      [...template.matchAll(/^ {8}([A-Z_]+): (.*)$/gm)]
+        .filter(([, name]) => name?.startsWith("FASTAGENT_") || name === "PORT")
+        .map(([, name, value]) => [name as string, value as string]),
+    );
+
+  it("renders the instance's name, release and configuration beside the fixed ones, and the parameters by reference", () => {
+    const config = JSON.stringify({ description: 'says "hi"' });
+    const env = environmentOf(planAgentcoreDeploy(baseInput({ config })).artifacts[0]!.content);
+    expect(JSON.parse(env.FASTAGENT_CONFIG_JSON as string)).toBe(config);
+    expect(JSON.parse(env.FASTAGENT_NAME as string)).toBe("my-agent");
+    expect(env.FASTAGENT_SECRET_ARN).toBe("!Ref SecretArn");
+    expect(env.FASTAGENT_INGRESS_SECRET).toBe("!Ref FastagentIngressSecret");
+    expect(env.FASTAGENT_WAKE_SECRET).toBe("!Ref FastagentWakeSecret");
+  });
+
+  it("counts every variable of the template, parameters at their most, so the size cannot drift from what is rendered", () => {
+    const input = baseInput({ config: '{"a":1}' });
+    const env = environmentOf(planAgentcoreDeploy(input).artifacts[0]!.content);
+    const referenced = Object.entries(env).filter(([, value]) => value.startsWith("!Ref"));
+    const literal = Object.entries(env).filter(([, value]) => !value.startsWith("!Ref"));
+    const literalBytes = literal.reduce(
+      (sum, [name, value]) => sum + Buffer.byteLength(name) + Buffer.byteLength(JSON.parse(value) as string),
+      0,
+    );
+    const size = agentcoreVariablesSize(input);
+    // Each referenced variable is at least its name and a value of a few characters; none is missing from the count.
+    expect(size).toBeGreaterThan(literalBytes + referenced.reduce((sum, [name]) => sum + name.length, 0));
+    // A longer configuration is that many bytes more, counted as UTF-8 and not as characters.
+    expect(agentcoreVariablesSize({ ...input, config: `${input.config}é` }) - size).toBe(2);
+    expect(size).toBeLessThan(AGENTCORE_VARIABLES_LIMIT);
+  });
+});
+
 describe("deploy agentcore: the plan", () => {
   it("minimal shape (no channel, no schedule): the forwarder is still there — it carries the wake alarms", () => {
     const plan = planAgentcoreDeploy(baseInput());
     expect(plan.artifacts.map((a) => a.path)).toEqual([
       agentcoreTemplateFile("my-agent"),
       FORWARDER_FILE,
-      ".fastagent/deploy/fastagent.release.json",
-      ".fastagent/deploy/fastagent.json",
       ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",
@@ -71,9 +107,9 @@ describe("deploy agentcore: the plan", () => {
     expect(template).not.toContain("EfsAccessPoint");
     expect(template).toContain('FASTAGENT_AGENTCORE: "1"');
     expect(template).toContain('PORT: "8080"');
-    expect(template).toContain(`FASTAGENT_ROOT: ${MOUNT}`);
-    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
-    expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${SECRETS_DIR}`);
+    expect(template).toContain(`FASTAGENT_ROOT: "${MOUNT}"`);
+    expect(template).toContain(`FASTAGENT_STATE_DIR: "${MOUNT}/.state"`);
+    expect(template).toContain(`FASTAGENT_SECRETS_DIR: "${SECRETS_DIR}"`);
     expect(template).toContain("AWS::Lambda::Function");
     expect(template).not.toContain("AWS::Scheduler::Schedule");
     expect(template).not.toContain("WEBHOOKS_ENABLED"); // no channel: the forwarder relays no webhook
@@ -98,8 +134,8 @@ describe("deploy agentcore: the plan", () => {
 
   it("keeps state and credentials as independent siblings on EFS", () => {
     const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    expect(template).toContain(`FASTAGENT_STATE_DIR: ${MOUNT}/.state`);
-    expect(template).toContain(`FASTAGENT_SECRETS_DIR: ${MOUNT}/.secrets`);
+    expect(template).toContain(`FASTAGENT_STATE_DIR: "${MOUNT}/.state"`);
+    expect(template).toContain(`FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"`);
   });
 
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {

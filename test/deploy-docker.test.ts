@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import {
   MIN_DOCKER_COMPOSE_VERSION,
   ingressNotes,
@@ -13,7 +14,7 @@ const compose = (plan: ReturnType<typeof planDockerDeploy>) =>
 const runbook = (plan: ReturnType<typeof planDockerDeploy>) => plan.runbook.join("\n");
 
 const base = {
-  releaseId: "release-one",
+  config: "{}",
   agent: "bot",
   valueFile: ".secrets/.env",
   projectName: "fastagent-bot",
@@ -23,6 +24,27 @@ const base = {
 } as const;
 
 describe("deploy/docker: planDockerDeploy", () => {
+  it("says how to regenerate the manifest after a change: this instance's --config, and --force for a file that is kept", () => {
+    const out = runbook(planDockerDeploy({ ...base, channels: [], configFile: "/etc/acme prod.json" }));
+    expect(out).toContain("run `fastagent deploy docker --config '/etc/acme prod.json' --force`");
+    expect(runbook(planDockerDeploy({ ...base, channels: [] }))).toContain("run `fastagent deploy docker --force`");
+  });
+
+  it("renders the instance's name, release and configuration into the Compose file, with `$` doubled for Compose", () => {
+    const config = JSON.stringify({
+      mcpServers: { n: { url: "https://e.com", headers: { A: `Bearer $` + "{TOKEN}" } } },
+    });
+    const yaml = compose(planDockerDeploy({ ...base, config, channels: [] }));
+    const { environment } = parseYaml(yaml).services.agent as { environment: Record<string, string> };
+    expect(environment.FASTAGENT_NAME).toBe("bot");
+    expect(environment.FASTAGENT_RELEASE_ID).toMatch(/^[0-9a-f]{12}$/);
+    // Compose reads `$$` as `$`: what the box is given is the configuration as written.
+    expect(environment.FASTAGENT_CONFIG_JSON).toContain("$${TOKEN}");
+    expect(environment.FASTAGENT_CONFIG_JSON?.replaceAll("$$", "$")).toBe(config);
+    // The same configuration renders the same file, so a committed one changes only when the configuration does.
+    expect(compose(planDockerDeploy({ ...base, config, channels: [] }))).toBe(yaml);
+  });
+
   it("asks for no container privilege: the volume is a local disk, nothing needs mounting", () => {
     const yaml = compose(planDockerDeploy({ ...base, channels: [] }));
     expect(yaml).not.toContain("SYS_ADMIN");
@@ -32,8 +54,6 @@ describe("deploy/docker: planDockerDeploy", () => {
     const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent.bot.compose.yml",
-      ".fastagent/deploy/fastagent.release.json",
-      ".fastagent/deploy/fastagent.json",
       ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",

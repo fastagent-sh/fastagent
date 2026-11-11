@@ -21,7 +21,7 @@ each case (a project, an app, a container volume, a second environment) added a 
 | Model credentials (`auth.json`, `device.json`) | `<agent>/.secrets/`, `~/.fastagent/.secrets/auth.json`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_SECRETS_DIR`, `<root>/.state/` for an app |
 | MCP grants (`mcp-auth.json`) | `<agent>/.secrets/` for the CLI, `<root>/.state/` for an app (`keeps: "secrets" \| "state"` in `openServing`) |
 | Instance state and working directory | `.fastagent/dev/`, `.fastagent/start/`, `--root`, `--state`, `--workdir`, `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `/data`, `/mnt/data` |
-| Instance configuration | the project's `fastagent.json`, `--config`, `FASTAGENT_CONFIG`, `/etc/fastagent/fastagent.json` baked into the image, `<root>/fastagent.json` for an app |
+| Instance configuration | the project's `fastagent.json`, `--config`, `FASTAGENT_CONFIG`, `FASTAGENT_CONFIG_JSON` on a deployed box, `<root>/fastagent.json` for an app |
 
 Three causes, each visible in the code and `git log`:
 
@@ -86,7 +86,7 @@ An instance is a **named deployment of a program with one configuration file**.
 sets: the configuration (below), `FASTAGENT_NAME` (the instance's name, the variable that already carries it; the
 storage claim and the lease use it) and `FASTAGENT_RELEASE_ID` (for the log and the record of the release last started
 on the storage). `FASTAGENT_NAME` is also set on local instances, so it cannot say "this is a deployed box"; the
-presence of `FASTAGENT_RELEASE_ID` does.
+image's `FASTAGENT_DEPLOYED` does (§6: a mark held in a platform variable that is edited or deleted would turn a deployed box into a local-looking one that skips the storage's mount check).
 
 The configuration file is delivered as one variable holding its JSON, `FASTAGENT_CONFIG_JSON`, rendered by the host's own
 mechanism for non-secret values:
@@ -129,7 +129,7 @@ add to it on a host.
 | `<agent>/.secrets/mcp-auth.json` | `<root>/.state/` |
 | `.secrets/` and its ignore file | removed; the committed template is `<agent>/.env.example` |
 | `/etc/fastagent/fastagent.json`, `FASTAGENT_CONFIG` on a box | `FASTAGENT_CONFIG_JSON` |
-| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID` (its presence marks a deployed box); `model` is in the configuration |
+| `fastagent.release.json`, `FASTAGENT_RELEASE_FILE` | removed; `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID`, and the image's `FASTAGENT_DEPLOYED` marks a deployed box; the value file's `FASTAGENT_MODEL` is laid over the delivered configuration's `model` |
 | `deploy` reading `FASTAGENT_MODEL`, `GITHUB_TOKEN`, `FASTAGENT_API_KEY` from a value file | the file's `model`; the others are secrets the target holds |
 | `fastagent secrets set docker`, Compose `env_file:` | Compose's `environment:` with names only (`- OPENAI_API_KEY`), which Compose fills from the shell running it, so a CI job's variables reach the box; `secrets set docker` is removed |
 | `FASTAGENT_ROOT`, `FASTAGENT_STATE_DIR`, `FASTAGENT_WORKDIR`, `FASTAGENT_CONFIG` and the flags | unchanged for a local instance |
@@ -147,8 +147,13 @@ Decided:
   not. Compose's own `secrets:` (files under `/run/secrets`) keeps values out of
   `docker inspect`, but it is one host's mechanism and would need a second read path in the box; not taken.
 - **A deployment's text is the program's.** An instance on a host adds no `instructions`, `skills` or `prompts`.
+- **The mark of a deployed box is the image's**, `FASTAGENT_DEPLOYED=1` in the generated Dockerfile (a hand-written one sets it
+  too, or `--run` stops), and the variables that name the release are required once it is set. Held in a platform
+  variable instead, a deleted or mistyped one would start the box as a local instance on the image's disk, with no mount
+  check, no lease and no owner, and nothing would say so.
 - **The release facts are variables**, not a file in the image (§5), because the manifest's random id would make every
-  deploy, and every instance, a different image.
+  deploy, and every instance, a different image. The id is a digest of the name and the configuration, not a random
+  value: it is rendered into manifests meant to be committed, and a random one would change them at every deploy.
 
 ## 7. Limits, measured and not
 
@@ -204,9 +209,20 @@ file split across variables; Docker and Fly are expected not to, and are not mea
 One PR each, in this order; each leaves the product working. No compatibility layer, per the maintenance policy.
 
 1. **Name** (built). The instance name from the configuration (`deploymentName`, `src/deploy/deployment-name.ts`); host resources, generated manifests and the storage claim use it, and `secrets`, `logs`, `destroy` and `login --deployment` take `--config` to say which instance. The default name is the program's (`package.json`'s), not the directory's, so an agent whose `package.json` name differs from its directory deploys under a new name; the manifests an earlier version wrote (`fly.toml`, `fastagent.compose.yml`, `agentcore.template.yaml`) are not read.
-2. **Delivery.** The image holds the program only; `FASTAGENT_CONFIG_JSON`, `FASTAGENT_NAME` and
-   `FASTAGENT_RELEASE_ID` rendered per host; `delivered-text`, the `/etc/fastagent/` layer and the release manifest go;
-   the pre-flight refuses what cannot be a variable.
+2. **Delivery** (built). The image holds the program only (the one build output left in `.fastagent/deploy/` is the program's
+   package list); `FASTAGENT_CONFIG_JSON`, `FASTAGENT_NAME` and `FASTAGENT_RELEASE_ID` are rendered per host
+   (`src/deploy/delivery.ts`); `delivered-text`, the `/etc/fastagent/` layer and the release manifest are gone; the box
+   reads `FASTAGENT_CONFIG_JSON` (refused together with `FASTAGENT_CONFIG`); the pre-flight refuses what cannot be a
+   variable and the host's limit (Railway 32768 characters; AgentCore 4096 bytes for the whole set, counting the
+   runtime's own variables with its three parameter-set secrets at their most). Settled while building it:
+   - The release id is a digest of the name and the configuration (§6), not a random value.
+   - The value file's `FASTAGENT_MODEL` travels as the delivered configuration's `model` (laid over the file's own),
+     rewritten whole at every deploy, so no stale variable outlives it on a host. Step 3 drops that source.
+   - A generated manifest is the author's once written, so a changed configuration is in it only after `--force`,
+     which resets the manifest's other settings; `--run` stops on the drift. A hand-edited manifest is changed by hand,
+     the variable included.
+   - Only `literalCredentials` of the *delivered* configuration are refused; the program's own `context.json` entries
+     stay a warning, as they ship in the image like the code.
 3. **Secrets.** `deploy` reads no value file; Docker's Compose file names the declared secrets and takes their values from the shell; `.secrets/production/` and `FASTAGENT_ENVIRONMENT` go.
 4. **Local values.** `<agent>/.env` for `dev` and `start`; the scaffold, ignore rules and `.env.example` follow.
 5. **Credentials.** The user-level layer; `.secrets/`, `keeps` and `FASTAGENT_SECRETS_DIR` go.

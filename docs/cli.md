@@ -41,7 +41,7 @@ else that is not an agent, it refuses and points at `fastagent init`. Nothing is
 | `deploy fly [agent]` | Generate `fly.<name>.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
 | `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
 | `deploy agentcore [agent]` | Generate `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. `--idle-timeout <seconds>` (60–1209600) sets how long an idle session keeps its microVM, over the program's `defaults.deploy.agentcore.idleTimeoutSeconds`; the other hosts report it as ignored. |
-| `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, carried in the image at `/etc/fastagent/` (`FASTAGENT_CONFIG` names it). Its `name` is the deployment's name: the host's resources and the generated manifests carry it ([deploy](deploy.md#an-instance-of-its-own)), and `secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to address it. Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
+| `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, set on the host as the variable `FASTAGENT_CONFIG_JSON` ([deploy](deploy.md)); the image holds none of it. Its `name` is the deployment's name: the host's resources and the generated manifests carry it ([deploy](deploy.md#an-instance-of-its-own)), and `secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to address it. Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
 | `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
 | `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
 | `start [agent]` | Serve without watch. |
@@ -600,7 +600,7 @@ state:    --state > FASTAGENT_STATE_DIR > <root>/.state > <agent dir>/.fastagent
           (agent.sqlite, channel and schedule state)
 workdir:  --workdir > FASTAGENT_WORKDIR > <root> > <agent dir>/.fastagent/start   (the agent's cwd)
 root:     --root > FASTAGENT_ROOT
-config:   --config > FASTAGENT_CONFIG > none: start never reads the project's fastagent.json
+config:   --config > FASTAGENT_CONFIG or FASTAGENT_CONFIG_JSON (the JSON itself; not both) > none: start never reads the project's fastagent.json
 secrets:  --env-file > FASTAGENT_SECRETS_DIR > <agent dir>/.secrets/production   (still the project's, whatever the root)
 content:  <workdir>/content/<name> (clones)
 ```

@@ -30,13 +30,13 @@ const CFN_TAGS = [
 ];
 
 interface Template {
-  Parameters?: Record<string, { Type: string; NoEcho?: boolean; Description?: string }>;
+  Parameters?: Record<string, { Type: string; NoEcho?: boolean; Description?: string; MaxLength?: number }>;
   Resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
   Outputs?: Record<string, unknown>;
 }
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
-  releaseId: "release-one",
+  config: "{}",
   name: "my-agent",
   channels: [],
   runtime: "node",
@@ -165,6 +165,22 @@ describe("the agentcore template (parsed)", () => {
     const read = statements.filter((st) => st.Action.includes("secretsmanager:GetSecretValue"));
     expect(read).toEqual([
       { Effect: "Allow", Action: ["secretsmanager:GetSecretValue"], Resource: { Ref: "SecretArn" } },
+    ]);
+  });
+});
+
+describe("deploy agentcore: the parameters behind the runtime's variables", () => {
+  it("makes the template enforce what the size counts for a parameter: its MaxLength is the reserve", () => {
+    const { Parameters } = parseTemplate();
+    // CloudFormation refuses a longer value, so a secret a person supplies cannot push the set past what was counted.
+    expect(
+      Object.entries(Parameters ?? {}).flatMap(([name, { MaxLength }]) =>
+        MaxLength === undefined ? [] : [[name, MaxLength]],
+      ),
+    ).toEqual([
+      ["SecretArn", 200],
+      ["FastagentIngressSecret", 64],
+      ["FastagentWakeSecret", 64],
     ]);
   });
 });

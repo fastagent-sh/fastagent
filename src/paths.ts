@@ -162,6 +162,8 @@ export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
 export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
 export const INSTANCE_STATE_ENV = "FASTAGENT_STATE_DIR";
 export const INSTANCE_CONFIG_ENV = "FASTAGENT_CONFIG";
+/** The instance configuration as the JSON itself, which a deploy sets on a box that has no file for it. */
+export const INSTANCE_CONFIG_JSON_ENV = "FASTAGENT_CONFIG_JSON";
 
 /** Where fastagent keeps what it makes for a local instance of the project in `dir`, one directory per environment. */
 export const INSTANCES_DIRNAME = ".fastagent";
@@ -208,10 +210,20 @@ export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.
   return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? environmentPath(dir, SECRETS_DIRNAME, env);
 }
 
+/** The release a deploy started on the box: set on the host with the instance's name, read when the storage is taken. */
+export const RELEASE_ID_ENV = "FASTAGENT_RELEASE_ID";
+
+/**
+ * Set by the generated image itself, so a platform variable that is edited or deleted cannot turn a deployed box into
+ * a local-looking one that skips the storage's mount check. Its presence is what tells `start` to take the deployment's
+ * storage, and the variables that name the release are then required.
+ */
+export const DEPLOYED_ENV = "FASTAGENT_DEPLOYED";
+
 /** Is this process the deployed container the generated artifacts describe? ONE reading of the
  *  environment fact the image states, so a second spelling cannot drift from it. */
 export function isDeployedWorkspace(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.FASTAGENT_RELEASE_FILE);
+  return Boolean(env[DEPLOYED_ENV]);
 }
 
 /** Is this process running inside the AgentCore Runtime? Set by the generated deploy artifacts. */

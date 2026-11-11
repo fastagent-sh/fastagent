@@ -276,6 +276,43 @@ describe("the configuration a command is given", () => {
     const found = await runInProcess(["info", dir, "--json"], undefined, { ...process.env, FASTAGENT_CONFIG: named });
     expect(JSON.parse(found.stdout).thinkingLevel).toBe("high");
   });
+
+  it("FASTAGENT_CONFIG_JSON is the configuration itself, for a box that has no file for it", async () => {
+    const dir = await agentWorkspace("fa-instance-config-json-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const env = (extra: Record<string, string>) => ({ ...process.env, ...extra });
+    const found = await runInProcess(
+      ["info", dir, "--json"],
+      undefined,
+      env({ FASTAGENT_CONFIG_JSON: '{"thinkingLevel":"high"}' }),
+    );
+    expect(JSON.parse(found.stdout).config.thinkingLevel).toEqual({ value: "high", source: "FASTAGENT_CONFIG_JSON" });
+
+    // Both would be a guess about which one counted.
+    const named = join(await scratch(), "env.json");
+    await writeFile(named, JSON.stringify({ thinkingLevel: "low" }));
+    const both = await runInProcess(
+      ["info", dir, "--json"],
+      undefined,
+      env({ FASTAGENT_CONFIG: named, FASTAGENT_CONFIG_JSON: "{}" }),
+    );
+    expect(both.code).not.toBe(0);
+    expect(both.stderr).toContain("FASTAGENT_CONFIG and FASTAGENT_CONFIG_JSON are both set");
+
+    // The flag beats every variable: the file it names is the configuration, and the JSON is not consulted.
+    const flagged = await runInProcess(
+      ["info", dir, "--json", "--config", named],
+      undefined,
+      env({ FASTAGENT_CONFIG_JSON: "{nope" }),
+    );
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(JSON.parse(flagged.stdout).config.thinkingLevel).toEqual({ value: "low", source: named });
+
+    const broken = await runInProcess(["info", dir, "--json"], undefined, env({ FASTAGENT_CONFIG_JSON: "{nope" }));
+    expect(broken.code).not.toBe(0);
+    expect(broken.stderr).toContain("FASTAGENT_CONFIG_JSON is not JSON");
+  });
 });
 
 describe("--env-file: the file an agent's secrets are read from", () => {

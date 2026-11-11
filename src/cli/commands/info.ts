@@ -9,7 +9,12 @@ import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { type EffectiveConfig, agentPresentation, configValue } from "../../harnesses/pi-durable/config.ts";
+import {
+  type EffectiveConfig,
+  agentPresentation,
+  configValue,
+  mcpConfigOf,
+} from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadDevProject, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { openText, readCommands } from "../../harnesses/pi-durable/text.ts";
@@ -92,7 +97,9 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const commands = readCommands(text).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
-  const mcp = await inspectMcp(agentDir, instance === undefined ? {} : { config: instance.label }).catch(failStartup);
+  const mcp = await inspectMcp(agentDir, instance === undefined ? {} : { config: mcpConfigOf(instance) }).catch(
+    failStartup,
+  );
 
   if (opts.json) {
     console.log(

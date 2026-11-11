@@ -253,10 +253,11 @@ src/
 │   ├── preflight.ts        # host-neutral pre-flight: the definition builds, its model exists and authenticates
 │   │                       # where it runs, channel discovery, warnings
 │   ├── build-context.ts    # what the build context holds that must not ship, and what a KEPT ignore file lets through
-│   ├── delivered-text.ts   # the instance text a deploy delivers: the paths the configuration names, copied beside it
-│   │                       # into `.fastagent/deploy/` so they resolve the same in the image's `/etc/fastagent/`
-│   ├── container.ts        # portable image + ignore files + release manifest (host-neutral), and the one command
-│   │                       # that runs `login --stdio` inside that image where its server runs
+│   ├── delivery.ts         # what a deploy sets on the host besides the image: the instance's name, release id and
+│   │                       # configuration as variables (`FASTAGENT_NAME`, `FASTAGENT_RELEASE_ID`, `FASTAGENT_CONFIG_JSON`);
+│   │                       # each host renders them (a manifest, or Railway's variables)
+│   ├── container.ts        # portable image (the program only: one build serves every instance) + ignore files
+│   │                       # (host-neutral), and the one command that runs `login --stdio` inside that image
 │   ├── workspace.ts        # the deployed lifecycle every host shares: assert the storage is MOUNTED, one
 │   │                       # process lease, the release last started on it (the storage is the instance's root; the
 │   │                       # program is the image's)

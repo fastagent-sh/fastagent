@@ -271,7 +271,7 @@ Keep credentials out of chat transcripts, issue comments, source files, and logs
 Set `defaults: { model: "provider/model-id" }` in the existing `fastagent.config.ts`, preserving its export. A terminal
 picker can also set the model; unattended invocations require an explicit model. A deployment resolves
 from two sources only — that config value, or `FASTAGENT_MODEL` in `.secrets/production/.env`, which
-`deploy` reads from the file and records in the release manifest. A `--model` flag is local to the run
+`deploy` reads from the file and delivers in the configuration it sets on the host. A `--model` flag is local to the run
 that passes it, and `deploy` has none. See [models and auth](configuration.md).
 
 ```bash

@@ -154,7 +154,7 @@ it("says each literal credential where the file travels, and not a reference or 
     files: { command: "npx", env: { TOKEN: "${FILES_TOKEN}", PLAIN: "x" } },
   });
   expect(literalCredentials(declareMcp(dir))).toEqual([
-    { file: "context.json", server: "docs", field: "headers", key: "Authorization" },
-    { file: "context.json", server: "files", field: "env", key: "PLAIN" },
+    { file: "context.json", server: "docs", field: "headers", key: "Authorization", origin: "program" },
+    { file: "context.json", server: "files", field: "env", key: "PLAIN", origin: "program" },
   ]);
 });

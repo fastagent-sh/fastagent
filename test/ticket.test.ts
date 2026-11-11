@@ -11,8 +11,10 @@ import {
   checkTicket,
   createTicket,
   endTicket,
+  groupRunning,
   procfsIsOurs,
   runTicket,
+  running,
   startTicket,
   stopTicket,
   ticketLogPath,
@@ -23,17 +25,6 @@ afterEach(() => vi.restoreAllMocks());
 
 const ticketFile = (ticket: string) =>
   join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${ticket}.json`);
-
-/** Whether `pid` runs: signal 0 only asks. */
-function running(pid: number | undefined): boolean {
-  if (pid === undefined) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 const request = (subject = "login:openai", timeoutSeconds = 60) => ({
   subject,
@@ -53,17 +44,29 @@ const stubborn = (sidecar: string) => `
   require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
   setInterval(() => {}, 1000);`;
 
+/**
+ * What a step's process starts, as a tunnel does: told SIGTERM, it needs `ms` to let go of what it holds, notes that in
+ * `<sidecar>.released`, and exits. The step's own process ends at once on SIGTERM, which is the shape that matters.
+ */
+const releasesAfter = (sidecar: string, ms: number) => `
+  process.on("SIGTERM", () => setTimeout(() => { require("node:fs").writeFileSync(${JSON.stringify(`${sidecar}.released`)}, "x"); process.exit(0); }, ${ms}));
+  require("node:fs").writeFileSync(${JSON.stringify(sidecar)}, String(process.pid));
+  setInterval(() => {}, 1000);`;
+
 async function waitingStep(
   subject: string,
   {
     status = "need_user_action",
     sidecar,
+    releaseAfterMs,
     finishing = false,
     whenRunning = "replace",
     timeoutSeconds = 60,
   }: {
     status?: string;
     sidecar?: string;
+    /** With a sidecar: the child lets go this long after SIGTERM and exits, where it otherwise ignores SIGTERM. */
+    releaseAfterMs?: number;
     finishing?: boolean;
     whenRunning?: "replace" | "join";
     timeoutSeconds?: number;
@@ -74,7 +77,7 @@ async function waitingStep(
     const { readFileSync, writeFileSync } = require("node:fs");
     const path = require("node:path").join(process.env.HOME, ".fastagent", ".state", "tickets", process.argv.at(-1) + ".json");
     const ticket = JSON.parse(readFileSync(path, "utf8"));
-    ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(stubborn(sidecar))}], { stdio: "ignore" });`}
+    ${sidecar === undefined ? "" : `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(releaseAfterMs === undefined ? stubborn(sidecar) : releasesAfter(sidecar, releaseAfterMs))}], { stdio: "ignore" });`}
     ${sidecar === undefined ? "" : `while (!require("node:fs").existsSync(${JSON.stringify(sidecar)})) {}`}
     // Whole, as a step's own process writes it: one rewritten in place is read as its old bytes and then its new ones.
     writeFileSync(path + ".tmp", JSON.stringify({ ...ticket, status: ${JSON.stringify(status)}, ${finishing ? "finishing: true, " : ""}url: "https://auth.example/a", pid: process.pid }));
@@ -269,6 +272,64 @@ describe("a step that outlives the command that starts it", () => {
       if (running(started)) process.kill(started, "SIGKILL");
     }
   });
+
+  it("a stop waits for what the step started to let go, though the step's own process ends at once", async () => {
+    const sidecar = sidecarFile();
+    const step = await waitingStep("add:slack:dev:/slow", { sidecar, releaseAfterMs: 300 });
+    const started = Number(readFileSync(sidecar, "utf8"));
+    try {
+      await stopTicket(step.ticket);
+      // A tunnel told to stop needs a moment to unregister; killed before that, it is left open on the platform's side.
+      expect(existsSync(`${sidecar}.released`)).toBe(true);
+      expect(running(started)).toBe(false);
+    } finally {
+      if (running(started)) process.kill(started, "SIGKILL");
+    }
+  });
+
+  it("a stop does not wait out its deadline for members that have exited and that nothing reaps", async () => {
+    // Where /proc says who a group's members are, a group whose members are all zombies is empty. A container whose PID 1
+    // does not reap keeps them so for good, and signal 0 to the group still answers: waiting on it is the full deadline.
+    // Only such a PID 1 makes the condition (`docker run --entrypoint sleep`, then `exec` the suite): where the test
+    // runs under one that reaps, as CI's runners do, the members are gone at once and this passes without it.
+    const sidecar = sidecarFile();
+    const step = await waitingStep("add:slack:dev:/zombie", { sidecar, releaseAfterMs: 0 });
+    const started = Number(readFileSync(sidecar, "utf8"));
+    try {
+      const at = Date.now();
+      await stopTicket(step.ticket);
+      expect(running(started)).toBe(false);
+      expect(Date.now() - at).toBeLessThan(2_500);
+    } finally {
+      if (running(started)) process.kill(started, "SIGKILL");
+    }
+  });
+
+  it.skipIf(!existsSync("/proc/self/stat"))(
+    "a group is still found running when the processes of others cannot be read, and a stat read that fails for a member says so",
+    () => {
+      // Another user's process is unreadable under hidepid=1 (EPERM), and one that exits as it is read may answer ESRCH:
+      // neither is a member of a group this user started, and neither may end the look at the ones that are.
+      const leader = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
+      const pid = leader.pid as number;
+      const failing =
+        (code: string) =>
+        (other: number): string => {
+          if (other === pid) return readFileSync(`/proc/${other}/stat`, "utf8");
+          throw Object.assign(new Error(code), { code });
+        };
+      try {
+        for (const code of ["EPERM", "EACCES", "ESRCH"]) expect(groupRunning(pid, failing(code))).toBe(true);
+        // A member's own stat that cannot be read is not hidden: the leader here is the member asked about.
+        const unreadable = (): string => {
+          throw Object.assign(new Error("EIO"), { code: "EIO" });
+        };
+        expect(() => groupRunning(pid, unreadable)).toThrow("EIO");
+      } finally {
+        process.kill(-pid, "SIGKILL");
+      }
+    },
+  );
 
   it("a step finishing what its person did is never stopped halfway: a newer attempt is answered with it", async () => {
     const atWork = await waitingStep("add:slack:dev:/b", { status: "working", finishing: true });

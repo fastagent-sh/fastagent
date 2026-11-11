@@ -1,7 +1,7 @@
 /** `deploy docker`: one app service + loopback port + state volume, as a user-owned Compose file. */
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { ownPublicUrl } from "../../../deploy/container.ts";
+import { ownPublicUrl } from "../../../deploy/delivery.ts";
 import {
   dockerComposeFile,
   isDockerComposePath,

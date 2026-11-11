@@ -94,9 +94,7 @@ async function declared(agentDir: string, configFile: string | undefined, host: 
     agentDir,
     name,
     config,
-    ...(instance === undefined
-      ? {}
-      : { delivered: { source: instance, text: `${JSON.stringify(instance.values, null, 2)}\n` } }),
+    ...(instance === undefined ? {} : { delivered: { source: instance } }),
     run: false,
     force: false,
     noResidentProcess: false,

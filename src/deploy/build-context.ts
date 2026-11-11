@@ -17,7 +17,7 @@ import {
   resolveSecretsDir,
   resolveStateRoot,
 } from "../paths.ts";
-import { DELIVERED_CONFIG_DIR, isGeneratedDockerignore } from "./container.ts";
+import { DEPLOY_DIR, isGeneratedDockerignore } from "./container.ts";
 import type { DeployReport } from "./preflight.ts";
 
 /**
@@ -168,7 +168,7 @@ export async function checkKeptIgnoreFiles(
     }
     if (instancesShip && !excluded(`${instancesShip}/dev/content/x`)) {
       report.warn(
-        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`, `!/${DELIVERED_CONFIG_DIR}`])}`,
+        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`, `!/${DEPLOY_DIR}`])}`,
       );
     }
     // An issue, not a warning: a release holding content/ is refused on the host, which links its own there.

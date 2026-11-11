@@ -205,7 +205,7 @@ describe("what an open, a serve and a message read of the process", () => {
     expect(served.channels).toEqual({ routes: [], longConnections: ["both"] });
     await served.close();
     expect(runsAsIn({})).toEqual(NOT_HOSTED);
-    expect(runsAsIn({ FASTAGENT_DEV: "1", FASTAGENT_RELEASE_FILE: "/etc/x.json", FASTAGENT_AGENTCORE: "1" })).toEqual({
+    expect(runsAsIn({ FASTAGENT_DEV: "1", FASTAGENT_DEPLOYED: "1", FASTAGENT_AGENTCORE: "1" })).toEqual({
       dev: true,
       deployed: true,
       agentcore: true,
@@ -213,7 +213,7 @@ describe("what an open, a serve and a message read of the process", () => {
   });
 
   it("does not describe a deployment in the prompt of an instance `openAgent` opens, though `runsAs` does", async () => {
-    vi.stubEnv("FASTAGENT_RELEASE_FILE", "/etc/fastagent/fastagent.release.json");
+    vi.stubEnv("FASTAGENT_DEPLOYED", "1");
     const dir = await fauxAgent("fa-open-inputs-", { "fastagent.config.ts": RECORDING_CONFIG });
     const promptOf = async (agent: { sessions: LocalAgent["sessions"]; messages: LocalAgent["messages"] }) => {
       const session = await agent.sessions.create();
@@ -224,7 +224,7 @@ describe("what an open, a serve and a message read of the process", () => {
     const app = await open({
       dir,
       stateDir: await state(),
-      env: { FASTAGENT_RELEASE_FILE: "/etc/fastagent/fastagent.release.json" },
+      env: { FASTAGENT_DEPLOYED: "1" },
     });
     expect(await promptOf(app)).not.toContain("survives restarts");
     const deployed = await openAs(dir, { dev: false, deployed: true, agentcore: false });
