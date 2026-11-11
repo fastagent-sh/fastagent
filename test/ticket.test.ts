@@ -24,15 +24,21 @@ afterEach(() => vi.restoreAllMocks());
 const ticketFile = (ticket: string) =>
   join(process.env.HOME as string, ".fastagent", ".state", "tickets", `${ticket}.json`);
 
-/** Whether `pid` runs: signal 0 only asks. */
+/**
+ * Whether `pid` runs: signal 0 only asks. On Linux a process that exited and is not yet reaped by its parent (this
+ * process, until its event loop turns) still answers it; /proc says it has exited, which is stopped for what it held.
+ */
 function running(pid: number | undefined): boolean {
   if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  if (!existsSync(`/proc/${pid}/stat`)) return true;
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const state = stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3);
+  return state !== "Z" && state !== "X";
 }
 
 const request = (subject = "login:openai", timeoutSeconds = 60) => ({
