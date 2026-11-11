@@ -60,7 +60,10 @@ export function toRailwayName(basename: string): string {
 /** Compute the Railway deploy plan from the resolved definition. */
 export function planRailwayDeploy(input: RailwayPlanInput): RailwayPlan {
   const { serviceName, channels } = input;
-  const artifacts: Artifact[] = [...containerArtifacts(input), { path: RAILWAYIGNORE_FILE, content: railwayignore() }];
+  const artifacts: Artifact[] = [
+    ...containerArtifacts(input),
+    { path: RAILWAYIGNORE_FILE, content: railwayignore(input.machineryPaths) },
+  ];
 
   const secrets = input.secrets ?? [];
 

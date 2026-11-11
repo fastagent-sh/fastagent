@@ -53,7 +53,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A"), need("B")],
       known: ["A", "B"],
-      source: { file: "the environment", flag: "--from-env", values: new Map([["A", "a"]]) },
+      source: { file: "the environment", flags: ["--from-env"], values: new Map([["A", "a"]]) },
       asker,
     });
     expect(out).toBeUndefined();
@@ -71,7 +71,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       known: ["A", "B", "C", "OPT"],
       source: {
         file: "the environment",
-        flag: "--from-env",
+        flags: ["--from-env"],
         // OPT is declared and optional: offered along; UNDECLARED is held by the file and never offered; an empty
         // line is not a value.
         values: new Map([
@@ -96,7 +96,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A")],
       known: ["A"],
-      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["A", "file-a"]]) },
+      source: { file: "f.env", flags: ["--env-file f.env"], values: new Map([["A", "file-a"]]) },
       asker,
     });
     expect(asked).toEqual(["Fly lacks A, which f.env holds. Set them on Fly from it?", "A"]);
@@ -110,7 +110,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A"), need("B", "your model provider key")],
       known: ["A", "B"],
-      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["A", "file-a"]]) },
+      source: { file: "f.env", flags: ["--env-file f.env"], values: new Map([["A", "file-a"]]) },
     });
     expect(out).toContain("Fly has no value for: A (required by src/A.ts); B (your model provider key).");
     expect(out).toContain("`fastagent secrets push fly --env-file f.env` sets the one f.env holds (A)");
@@ -129,7 +129,7 @@ describe("provideSecrets: the target holds every name the deployment needs", () 
       store: fake,
       needs: [need("A")],
       known: ["A", "OPT"],
-      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["OPT", "file-opt"]]) },
+      source: { file: "f.env", flags: ["--env-file f.env"], values: new Map([["OPT", "file-opt"]]) },
       say: (line) => said.push(line),
     });
     expect(out).toBeUndefined();
@@ -191,7 +191,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       store: fake,
       needs: [],
       known: ["KEY"],
-      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["KEY", "from-file"]]) },
+      source: { file: "f.env", flags: ["--env-file f.env"], values: new Map([["KEY", "from-file"]]) },
       mint,
       onMinted: async (values) => void kept.push(values),
       inform: (line) => told.push(line),
@@ -215,7 +215,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       store: filed.fake,
       needs: [],
       known: ["KEY"],
-      source: { file: "f.env", flag: "--env-file f.env", values: new Map([["KEY", "from-file"]]) },
+      source: { file: "f.env", flags: ["--env-file f.env"], values: new Map([["KEY", "from-file"]]) },
       asker,
       mint,
     });
@@ -240,7 +240,7 @@ describe("provideSecrets: values FastAgent makes itself", () => {
       store: fake,
       needs: [],
       known: ["KEY"],
-      source: { file: "the environment", flag: "--from-env", values: new Map([["KEY", "from-env"]]) },
+      source: { file: "the environment", flags: ["--from-env"], values: new Map([["KEY", "from-env"]]) },
       mint: restoreOnly,
       inform: (line) => told.push(line),
     });

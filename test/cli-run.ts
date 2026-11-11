@@ -107,6 +107,9 @@ export function runInProcess(
 
 async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.ProcessEnv) {
   const { runCli } = await import("../src/cli/program.ts");
+  // A real command is a process of its own, so what one chose of the value file (`--env-file`, no default file for a
+  // deployment) is not left for the next: reset what a process starts with.
+  (await import("../src/value-file.ts")).useValueFile(undefined);
   const saved = {
     cwd: process.cwd(),
     env: { ...process.env },

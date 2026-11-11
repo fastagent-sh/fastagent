@@ -95,8 +95,14 @@ describe("a deploy's secrets step", () => {
     const ticket = { kind: "ticket", step: {} } as unknown as Answerer;
     const viaFile = await step(ticket, { values, opts: { envFile: "prod.env" } })(target());
     expect(viaFile).toMatch(/`fastagent secrets push fly [^`]*--env-file prod\.env` sets the one/);
-    const viaEnv = await step(ticket, { values, opts: { fromEnv: true, envFile: "prod.env" } })(target());
+    const viaEnv = await step(ticket, { values, opts: { fromEnv: true } })(target());
     expect(viaEnv).toMatch(/--from-env` sets the one/);
+    // Both: `push` reads one source a run and the file's values are not in the second process's environment, so each
+    // is a command of its own, said as such.
+    const both = await step(ticket, { values, opts: { fromEnv: true, envFile: "prod.env" } })(target());
+    expect(both).toMatch(
+      /`fastagent secrets push fly [^`]*--env-file prod\.env` and `fastagent secrets push fly [^`]*--from-env` set, each from its own source,/,
+    );
     // Given nothing, a source is not offered: the environment is the shell's, and nothing was said to read it.
     const none = await step(ticket)(target());
     expect(none).toMatch(/`fastagent secrets push fly [^`]*--from-env` takes them from the environment/);

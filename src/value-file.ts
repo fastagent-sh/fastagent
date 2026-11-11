@@ -48,6 +48,7 @@ export function loadEnvValues(file: string): Map<string, string> {
  * the agent runs. A `dev` worker is spawned with its supervisor's arguments and takes the flag itself.
  */
 let selectedValueFile: string | undefined;
+/** Per process: a command sets it at its entry, and a command that does not (`add`, `models`) runs with the default. */
 let defaultValueFile = true;
 
 /**

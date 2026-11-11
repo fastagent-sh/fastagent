@@ -494,7 +494,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
         `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     );
   }
-  const paths = await buildContextPaths(agentDir, authPath);
+  const paths = await buildContextPaths(agentDir, authPath, namedValueFile());
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
   const environment = loadEnvironment(agentDir);

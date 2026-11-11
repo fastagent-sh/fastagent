@@ -723,6 +723,12 @@ const channels: CommandSpec = {
             "(default for dev: .secrets/.env)",
         },
         {
+          flags: "--from-env",
+          description:
+            "with --record-url: also take the app's credentials from this command's environment (without it only " +
+            "--env-file is read, so a token exported for the development app is not mistaken for the deployment's)",
+        },
+        {
           flags: "--record-url",
           description: "record the URL the deployment confirms, in the configuration --config names",
         },
@@ -744,6 +750,7 @@ const channels: CommandSpec = {
           ...(typeof f.ingress === "string" ? { ingress: f.ingress } : {}),
           ...(typeof f.config === "string" ? { config: f.config } : {}),
           ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
+          fromEnv: f.fromEnv === true,
           ...(typeof f.url === "string" ? { url: f.url } : {}),
           json: f.json === true,
           input: f.input !== false,

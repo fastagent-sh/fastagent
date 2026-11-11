@@ -52,10 +52,13 @@ function valuesSource(
   valuesFrom: string,
   opts: Pick<DeployOptions, "envFile" | "fromEnv">,
 ): ProvideSecrets["source"] {
-  // `--from-env` reads the environment, which the file `--env-file` names is laid into, so it covers both.
-  if (opts.fromEnv) return { file: valuesFrom, flag: "--from-env", values };
-  if (opts.envFile !== undefined) return { file: valuesFrom, flag: `--env-file ${shellArg(opts.envFile)}`, values };
-  return undefined;
+  // `secrets push` takes one source a run, so two sources are two commands: the file's values are not in the
+  // environment of the process that runs the second.
+  const flags = [
+    ...(opts.envFile === undefined ? [] : [`--env-file ${shellArg(opts.envFile)}`]),
+    ...(opts.fromEnv ? ["--from-env"] : []),
+  ];
+  return flags.length === 0 ? undefined : { file: valuesFrom, flags, values };
 }
 
 export function deploySecrets(input: {

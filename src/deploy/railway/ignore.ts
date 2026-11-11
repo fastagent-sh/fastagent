@@ -16,7 +16,19 @@ export function isGeneratedRailwayignore(content: string): boolean {
   return content.startsWith(MARKER);
 }
 
-export function railwayignore(): string {
+/** The machinery paths the names `railwayignore` writes do not reach: those outside `.secrets` and `.state`. */
+function unnamedPaths(paths: readonly string[]): string[] {
+  return paths.filter(
+    (p) => p !== ".secrets" && !p.startsWith(".secrets/") && p !== ".state" && !p.startsWith(".state/"),
+  );
+}
+
+/**
+ * `paths`: the resolved machinery paths in the agent directory that the names below do not reach (a value file
+ * `--env-file` names, a relocated secrets dir), each excluded by its path.
+ */
+export function railwayignore(paths: readonly string[] = []): string {
+  const named = unnamedPaths(paths);
   return `${MARKER}. Delete this line to take ownership (deploy then keeps your file).
 # Credentials, state and clones never leave this machine, whatever .gitignore says.
 .secrets
@@ -25,7 +37,7 @@ export function railwayignore(): string {
 .env
 .env.*
 !.env.example
-# The deploy's own directory is what the image is built from, and .gitignore ignores .fastagent.
+${named.map((p) => `/${p}\n`).join("")}# The deploy's own directory is what the image is built from, and .gitignore ignores .fastagent.
 !.fastagent
 .fastagent/*
 !${DEPLOY_DIR}
@@ -45,12 +57,20 @@ function readIfExists(path: string): string {
  * Why a `.railwayignore` the author kept would leave the deploy's own directory out of the upload, so the image build
  * could not copy it, or undefined when it lets it through (or there is none to keep).
  */
-export function keptRailwayignoreProblem(agentDir: string): string | undefined {
+export function keptRailwayignoreProblem(agentDir: string, machineryPaths: readonly string[] = []): string | undefined {
   const kept = readIfExists(join(agentDir, RAILWAYIGNORE_FILE));
   if (kept === "" || isGeneratedRailwayignore(kept)) return undefined;
   const upload = ignore()
     .add(readIfExists(join(agentDir, ".gitignore")))
     .add(kept);
+  const uploaded = unnamedPaths(machineryPaths).filter((p) => !upload.ignores(p));
+  if (uploaded.length > 0) {
+    return (
+      `your ${RAILWAYIGNORE_FILE} (kept), with .gitignore, does not exclude ${uploaded.map((p) => `\`${p}\``).join(", ")} — ` +
+      `\`railway up\` would upload it into the image build, and it holds secrets. Add ${uploaded.map((p) => `\`/${p}\``).join(" and ")} ` +
+      `to it, or delete it to let deploy generate one.`
+    );
+  }
   if (!upload.ignores(PACKAGES_PATH)) return undefined;
   return (
     `your ${RAILWAYIGNORE_FILE} (kept), with .gitignore, leaves ${DEPLOY_DIR}/ out of what \`railway up\` ` +

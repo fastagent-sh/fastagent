@@ -29,7 +29,7 @@ export const railwayHost: HostDeploy = {
   shell: async (agentDir, name) => railwayShell(toRailwayName(name), agentDir),
   validate({ opts, agentDir, pre }) {
     const problem =
-      keptRailwayignoreProblem(agentDir) ??
+      keptRailwayignoreProblem(agentDir, pre.container.machineryPaths ?? []) ??
       (pre.container.config.length > RAILWAY_VARIABLE_LIMIT
         ? `the configuration is ${pre.container.config.length} characters, and a Railway variable holds at most ` +
           `${RAILWAY_VARIABLE_LIMIT}: ${INSTANCE_CONFIG_JSON_ENV} carries it whole`

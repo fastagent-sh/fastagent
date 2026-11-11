@@ -58,7 +58,7 @@ app of its own (a Socket Mode app receives over the socket alone, so two instanc
 values to that file. Webhook apps are created with a placeholder Request URL (`http.publicUrl` when the configuration
 names one): Slack allows an app whose URL does not answer yet. Once the instance is served, open **Event Subscriptions**,
 set the URL (`<where it is served>/slack`), and Slack verifies it as you save. `fastagent channels setup slack
---record-url --config prod.json` then records it for later deploys.
+--record-url --config prod.json --env-file <values>` then records it for later deploys.
 
 The app is created for a single workspace (internal use), not for Marketplace distribution, and with Slack's Agent
 features, which a free workspace has too. The channel falls back to the compatibility renderer where one is missing.

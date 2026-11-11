@@ -46,9 +46,10 @@ export interface ProvideSecrets {
   known: readonly string[];
   /**
    * Where the values a deploy may offer come from: `file` names it in what is said ("the environment", or the
-   * `--env-file`'s path) and `flag` is how `secrets push` is told to read the same source (`--from-env`, `--env-file F`).
+   * `--env-file`'s path) and `flags` are how `secrets push` is told to read it (`--from-env`, `--env-file F`). Several
+   * when the sources are several: `push` takes one source per run, so each is a command of its own.
    */
-  source?: { file: string; flag: string; values: ReadonlyMap<string, string> };
+  source?: { file: string; flags: readonly string[]; values: ReadonlyMap<string, string> };
   /** Absent: nobody to ask. */
   asker?: SecretAsker;
   commands: SecretCommands;
@@ -66,6 +67,11 @@ export interface ProvideSecrets {
   onMinted?: (values: Readonly<Record<string, string>>) => Promise<void>;
 }
 
+/** The `secrets push` commands that read `source`: one per source it has, said as alternatives. */
+function pushes(commands: SecretCommands, source: NonNullable<ProvideSecrets["source"]>): string {
+  return source.flags.map((flag) => `\`${commands.push} ${flag}\``).join(" and ");
+}
+
 /** The gap the target has, as the line a person (or the agent relaying one) acts on. */
 function gapLine(
   host: string,
@@ -78,9 +84,9 @@ function gapLine(
   const fromFile = missing.filter((need) => held.includes(need.name));
   const rest = missing.filter((need) => !held.includes(need.name));
   const ways = [
-    ...(fromFile.length > 0
+    ...(fromFile.length > 0 && source !== undefined
       ? [
-          `\`${commands.push} ${source?.flag}\` sets ${fromFile.length === 1 ? "the one" : "the ones"} ${source?.file} holds (${fromFile.map((n) => n.name).join(", ")})`,
+          `${pushes(commands, source)} ${source.flags.length === 1 ? "sets" : "set, each from its own source,"} ${fromFile.length === 1 ? "the one" : "the ones"} ${source.file} holds (${fromFile.map((n) => n.name).join(", ")})`,
         ]
       : []),
     ...(rest.length > 0
@@ -88,7 +94,7 @@ function gapLine(
           `a person gives ${fromFile.length > 0 ? "the others" : rest.length === 1 ? "it" : "them"} in a terminal, one command each: ${rest.map((need) => `\`${commands.set(need.name)}\``).join(", ")}`,
         ]
       : []),
-    ...(source?.flag === "--from-env"
+    ...(source?.flags.includes("--from-env")
       ? []
       : [
           `\`${commands.push} --from-env\` takes them from the environment of a secret manager or a CI job (\`op run\`, \`doppler run\`)`,
@@ -143,7 +149,7 @@ export async function provideSecrets(input: ProvideSecrets): Promise<string | un
       // Names a file holds and the target lacks, which nothing requires: said, since nobody was asked to set them.
       if (offered.length > 0 && source !== undefined) {
         input.say?.(
-          `${host} lacks ${offered.join(", ")}, which ${source.file} holds; \`${commands.push} ${source.flag}\` sets ${offered.length === 1 ? "it" : "them"}`,
+          `${host} lacks ${offered.join(", ")}, which ${source.file} holds; ${pushes(commands, source)} ${source.flags.length === 1 ? "sets" : "set, each from its own source,"} ${offered.length === 1 ? "it" : "them"}`,
         );
       }
       if (Object.keys(minted).length > 0) {

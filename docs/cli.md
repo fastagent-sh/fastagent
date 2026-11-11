@@ -507,7 +507,7 @@ fastagent channels setup telegram [agent]
 fastagent channels setup feishu [agent]                    # scan-to-create; lark: guided console
 fastagent channels setup slack [agent] [--ingress webhook|connection] [--config <file>] [--env-file <file>]
 fastagent channels setup slack --json                       # a coding agent: the person pastes on a page
-fastagent channels setup slack --record-url --config prod.json [--url <url>]
+fastagent channels setup slack --record-url --config prod.json (--env-file <file> | --from-env) [--url <url>]
 ```
 
 Sets up the platform app of **one instance** of a channel and keeps its credentials with that instance
@@ -545,7 +545,7 @@ stands, `--timeout <seconds>` sets how long it stays open (default 900).
 
 `--record-url` records the URL a person set on a Slack or Lark app's page (§5 of the design), in the configuration a deploy
 delivers, once the deployment confirms the platform reaches it there; the app is named by its bot token (Slack) or
-`LARK_APP_ID` (Lark), in `--env-file` or the instance's values.
+`LARK_APP_ID` (Lark), in the file `--env-file` names, or in the environment with `--from-env`; a deployment has no default file, and without either the command refuses, so a token exported for the development app is not taken for the deployment's.
 
 See [Telegram](telegram.md), [Slack](slack.md), [Feishu (Lark compatibility)](feishu.md).
 

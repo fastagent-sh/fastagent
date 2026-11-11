@@ -158,7 +158,7 @@ Request URL, which no credential on the box can change, is the person's to set (
 platform reaches it there with an authenticated request, the verification on saving or any event; at a terminal with
 `--config`, `--run` then records it in that file (`channels.<name>.app.url`), so later deploys of the file, CI
 included, report it registered from the start. A deployment that did not record it:
-`fastagent channels setup <name> --config <file> --url <its URL> --record-url`. Each run prints the steps it could not do.
+`fastagent channels setup <name> --config <file> --env-file <values> --url <its URL> --record-url` (`--from-env` instead takes the app's credentials from the environment). Each run prints the steps it could not do.
 
 On AgentCore the runtime has no `/health` of its own: it points its channels at the forwarder's URL (or `http.publicUrl`
 when the configuration names one, a custom domain in front of the Function URL) on the first envelope the forwarder
@@ -579,12 +579,12 @@ each with its description, and a deploy whose target has no value for one stops 
 
 **Artifacts** land in the agent directory: `Dockerfile` and `.dockerignore`, and `fastagent.<name>.compose.yml` / `fly.<name>.toml` /
 `agentcore.<name>.template.yaml` (Railway also gets a `.railwayignore`, below). The ignore file excludes `.secrets` contents (except `.env.example` and `.gitignore`),
-`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`.
+`**/.state`, `/.fastagent` (but not `/.fastagent/deploy`, which the image is built from), `/content`, `**/node_modules`, `**/.cache` and `**/.env*`, and keeps `.git`. The file `--env-file` names is excluded by its path when it is inside the agent directory: a name like `prod.env` matches none of the rules above, and without that line its secrets would be baked into the image. Keep it outside the directory when you can; a kept `.dockerignore` or `.railwayignore` that does not exclude it stops `--run` and names the line to add.
 
 - **Railway** uploads the directory with `railway up`, which follows `.gitignore` and only inside a git repository: a
   project without one would upload its credentials, and one with one would leave out `.fastagent/deploy/`, which
   `.gitignore` ignores and the image is built from. The generated `.railwayignore` (it outranks `.gitignore`) keeps
-  `.secrets`, `.state`, `content/` and `.env*` home and lets `.fastagent/deploy/` through. One you kept that, with
+  `.secrets`, `.state`, `content/`, `.env*` and the file `--env-file` names (when it is in the directory) home and lets `.fastagent/deploy/` through. One you kept that, with
   `.gitignore`, would drop that directory warns, and stops `--run`.
 - Generated artifacts start with a marker line. `--force` regenerates only those; a file without the marker is
   never touched.

@@ -141,6 +141,48 @@ describe("cli: channels setup --record-url", () => {
     }
   });
 
+  it("finds the app by the credentials it was given, never by the shell's: a development token exported there is not the deployment's", async () => {
+    const dir = await agentWorkspace("fa-record-url-shell-", { "fastagent.config.ts": `export default {};\n` });
+    const config = join(dir, "..", "shell.json");
+    await writeFile(config, JSON.stringify({ http: { publicUrl: "https://agent.acme.com" } }));
+    const values = join(dir, "..", "shell.env");
+    await writeFile(values, "SLACK_BOT_TOKEN=xoxb-production\n");
+    const box = await deployment("registered", "slack");
+    const real = globalThis.fetch;
+    const tokens: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.startsWith("https://slack.com/api/")) return real(input, init);
+      tokens.push(String(new Headers(init?.headers).get("authorization")));
+      const method = (url.split("/").pop() as string).split("?")[0] as string;
+      return Response.json(
+        method === "auth.test"
+          ? { ok: true, team_id: "T1", user_id: "U1", bot_id: "B1" }
+          : { ok: true, bot: { id: "B1", app_id: "A1" } },
+      );
+    });
+    try {
+      const shell = { ...process.env, SLACK_BOT_TOKEN: "xoxb-development" };
+      const base = ["channels", "setup", "slack", dir, "--record-url", "--config", config, "--url", box.url];
+      // Nothing given: refused, saying what to pass; the shell's token is not used.
+      const none = await runInProcess(base, undefined, shell);
+      expect(none.code).toBe(2);
+      expect(none.stderr).toContain("pass --env-file <file>");
+      // The file's token, whatever the shell holds.
+      const filed = await runInProcess([...base, "--env-file", values], undefined, shell);
+      expect(filed.code, filed.stderr).toBe(0);
+      expect(new Set(tokens)).toEqual(new Set(["Bearer xoxb-production"]));
+      // The environment only when asked for.
+      tokens.length = 0;
+      const env = await runInProcess([...base, "--from-env"], undefined, shell);
+      expect(env.code, env.stderr).toBe(0);
+      expect(new Set(tokens)).toEqual(new Set(["Bearer xoxb-development"]));
+    } finally {
+      vi.unstubAllGlobals();
+      box.close();
+    }
+  });
+
   it("names what is missing: the mode, a channel with such a URL, the configuration, its URL", async () => {
     const dir = await agentWorkspace("fa-record-url-usage-", {
       "fastagent.config.ts": `export default {};\n`,

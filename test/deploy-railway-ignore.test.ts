@@ -38,6 +38,26 @@ describe("deploy railway: what is uploaded", () => {
     }
   });
 
+  it("excludes a value file in the agent directory by its path, since no name rule reaches `prod.env`", async () => {
+    const generated = ignore().add(railwayignore(["prod.env", ".secrets", "deep/dir/keys.txt"]));
+    for (const path of ["prod.env", "deep/dir/keys.txt"]) expect(generated.ignores(path), path).toBe(true);
+    expect(generated.ignores("other.env")).toBe(false);
+    // Without one named, the file is the one it always was.
+    expect(railwayignore()).toBe(railwayignore([".secrets", ".state/x"]));
+    expect(railwayignore()).not.toContain("prod.env");
+
+    // A kept file that does not exclude it is refused, naming it and the line to add; one that does, or a generated one, is not.
+    const dir = await agentWorkspace("fa-railwayignore-valuefile-", {});
+    await writeFile(join(dir, ".railwayignore"), "tmp\n");
+    expect(keptRailwayignoreProblem(dir, ["prod.env", ".secrets"])).toMatch(
+      /does not exclude `prod\.env`.*it holds secrets\. Add `\/prod\.env`/,
+    );
+    await writeFile(join(dir, ".railwayignore"), "/prod.env\n");
+    expect(keptRailwayignoreProblem(dir, ["prod.env", ".secrets"])).toBeUndefined();
+    await writeFile(join(dir, ".railwayignore"), railwayignore(["prod.env"]));
+    expect(keptRailwayignoreProblem(dir, ["prod.env"])).toBeUndefined();
+  });
+
   it("is refused when the author kept a .railwayignore that, with .gitignore, drops the deploy's directory", async () => {
     const dir = await agentWorkspace("fa-railwayignore-", {});
     const problem = () => keptRailwayignoreProblem(dir);
