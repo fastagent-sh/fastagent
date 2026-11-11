@@ -46,8 +46,11 @@ export function discussionBlock(text: string): string {
 export interface ContextBuffer<E> {
   /** Record an un-summoned message. */
   push(placeKey: string, entry: E): void;
-  /** The place's entries after `after` and up to `until` (positions: see `createContextBuffer`), rendered for a turn. */
-  fold(placeKey: string, range: { after?: number; until: number }): Discussion<E>;
+  /**
+   * The place's entries after `after` and up to `until` (positions: see `createContextBuffer`), rendered for a turn,
+   * minus the ones `skip` names: what the reading conversation's own session already holds.
+   */
+  fold(placeKey: string, range: { after?: number; until: number; skip?: (entry: E) => boolean }): Discussion<E>;
 }
 
 export function createContextBuffer<E>(options: {
@@ -105,9 +108,10 @@ export function createContextBuffer<E>(options: {
         throw error;
       }
     },
-    fold(placeKey, { after, until }) {
+    fold(placeKey, { after, until, skip }) {
       const folded = (buffers.get(placeKey) ?? []).filter(
-        (entry) => (after === undefined || position(entry) > after) && position(entry) <= until,
+        (entry) =>
+          (after === undefined || position(entry) > after) && position(entry) <= until && skip?.(entry) !== true,
       );
       return { text: folded.map(line).join("\n"), folded };
     },

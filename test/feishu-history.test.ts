@@ -30,7 +30,7 @@ function msg(id: string, text: string, over: Partial<FeishuListedMessage> = {}):
 /** A place whose messages the test appends to (oldest first); the fake lists them newest first, as the platform does. */
 type MemberNames = FeishuApi["chatMemberNames"];
 
-function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string } = {}) {
+function setup(opts: { names?: MemberNames; path?: string } = {}) {
   const messages: FeishuListedMessage[] = [];
   let fail: Error | undefined;
   const listMessages = vi.fn(
@@ -58,7 +58,6 @@ function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string
       appId: "cli_self",
       label: "[feishu]",
       path,
-      isTurnInput: (id) => opts.turnInputs?.includes(id) ?? false,
     });
   let asks = 0;
   /** The ask each place's session was last sent: where its next read starts (the Agent's answer, in the channel). */
@@ -76,7 +75,7 @@ function setup(opts: { turnInputs?: string[]; names?: MemberNames; path?: string
       const until = { at: Number(ask.create_time), id: ask.message_id as string };
       const after = sent.get(key);
       if (!lost) sent.set(key, until);
-      return { key, ...(after === undefined ? {} : { after }), until };
+      return { key, conversation: "c", ...(after === undefined ? {} : { after }), until };
     },
     listMessages,
     chatMemberNames,
@@ -121,9 +120,9 @@ describe("Feishu place history", () => {
     expect((await place.history.fold(read)).text).toBe(first.text); // a replayed turn reads what it read before
   });
 
-  it("leaves out what the session holds — turn asks and turn answers — and keeps the agent's own posts", async () => {
-    const place = setup({ turnInputs: ["om_ask"] });
-    place.history.recordOutput("oc_1", "om_answer");
+  it("leaves out the answers its own conversation was sent, and keeps asks, other conversations' answers and the agent's own posts", async () => {
+    const place = setup();
+    place.history.recordOutput("oc_1", "c", "om_answer");
     place.messages.push(
       msg("om_ask", "@bot summarize"),
       msg("om_answer", "the summary", { sender: { id: "cli_self", sender_type: "app" } }),
@@ -133,15 +132,17 @@ describe("Feishu place history", () => {
       msg("om_deleted", "oops", { deleted: true }),
     );
     const text = await answeredTurn(place);
-    expect(text).not.toContain("summarize");
+    expect(text).toContain("Alice (msg om_ask): @bot summarize"); // someone's ask is discussion to every reader
     expect(text).not.toContain("the summary");
     expect(text).not.toContain("oops");
     // A digest is the agent's own words: kept past the per-line bound people get, up to its own cap.
-    expect(text).toMatch(/^you \(msg om_digest\): daily digest x{1900,}/);
+    expect(text).toMatch(/^you \(msg om_digest\): daily digest x{1900,}/m);
     expect(text).toContain(" … (truncated)");
     expect(text).toContain("bot cli_ci (msg om_other_bot): build #42 green");
-    // Only humans need names, and only humans are asked about.
-    expect(place.chatMemberNames).toHaveBeenCalledTimes(0);
+    // Another conversation was never told that answer, so it reads it.
+    const { after: _own, ...fromScratch } = place.ask();
+    const other = await place.history.fold({ ...fromScratch, conversation: "someone-else" });
+    expect(other.text).toContain("the summary");
   });
 
   it("a turn reads up to its own ask: a queued ask, and what was said after, wait for their own turn", async () => {
@@ -170,15 +171,15 @@ describe("Feishu place history", () => {
     await place.history.fold(place.ask());
     // The answer lands after the read, through the place's recording client.
     place.messages.push(msg("om_answer1", "first answer", self));
-    place.history.recordOutput("oc_1", "om_answer1");
+    place.history.recordOutput("oc_1", "c", "om_answer1");
 
     // Other places' traffic does not touch this place's record, and a restart keeps it.
     const reopened = place.open();
-    for (let i = 0; i < 1500; i++) reopened.recordOutput(`oc_busy_${i % 3}`, `om_busy_${i}`);
+    for (let i = 0; i < 1500; i++) reopened.recordOutput(`oc_busy_${i % 3}`, "c", `om_busy_${i}`);
     place.messages.push(msg("om_aside", "days later"));
     expect(await answeredTurn(place, "oc_1", reopened)).toBe("Alice (msg om_aside): days later");
     const saved = JSON.parse(readFileSync(place.path, "utf8")) as Record<string, string[]>;
-    expect(saved.oc_1).toEqual(["om_answer1"]);
+    expect(saved["c\noc_1"]).toEqual(["om_answer1"]);
   });
 
   it("an output that cannot be persisted is still left out, and the failure is said", async () => {
@@ -186,7 +187,7 @@ describe("Feishu place history", () => {
     const place = setup();
     mkdirSync(`${place.path}.tmp`); // the atomic write's temp path is a directory: every write fails
     place.messages.push(msg("om_answer", "an answer", { sender: { id: "cli_self", sender_type: "app" } }));
-    expect(() => place.history.recordOutput("oc_1", "om_answer")).not.toThrow(); // the message was sent
+    expect(() => place.history.recordOutput("oc_1", "c", "om_answer")).not.toThrow(); // the message was sent
     expect(warn.mock.calls.join("\n")).toContain("may fold the agent's own answer");
     expect(await answeredTurn(place)).toBe("");
   });
@@ -311,9 +312,9 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_1", "room talk"));
     const asked = place.ask(); // the room's session was last sent this ask
     place.messages.push(msg("om_2", "said since"));
-    const room = await place.history.fold({ key: "oc_1", after: asked.until });
+    const room = await place.history.fold({ key: "oc_1", conversation: "c", after: asked.until });
     expect(room.text).toBe("Alice (msg om_2): said since");
-    expect((await place.history.fold({ key: "oc_1" })).text).toContain("room talk"); // a room nothing was asked in
+    expect((await place.history.fold({ key: "oc_1", conversation: "c" })).text).toContain("room talk"); // a room nothing was asked in
   });
 
   it("an outputs file of the wrong shape is reported, and every place reads afresh", async () => {
@@ -333,7 +334,7 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_secret", "the other group's plan", { chat_id: "oc_2", thread_id: "omt_9" }));
     const key = feishuHistoryKey({ chatId: "oc_1", threadId: "omt_9" });
     await expect(place.history.snapshot(key)).rejects.toThrow("thread omt_9 is not in chat oc_1");
-    const folded = await place.history.fold({ key, until: { at: Date.now(), id: "om_ask" } });
+    const folded = await place.history.fold({ key, conversation: "c", until: { at: Date.now(), id: "om_ask" } });
     expect(folded.text).toContain("could not read the recent discussion here");
     expect(folded.text).not.toContain("plan");
   });
@@ -361,7 +362,7 @@ describe("Feishu place history", () => {
       expect.stringMatching(/^- thread omt_2 \(started .+\): user ou_bob: lunch plans$/),
     ]);
     // A tool's read leaves nothing out: what the session holds elsewhere is what this thread said.
-    place.history.recordOutput(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }), "om_t1_reply");
+    place.history.recordOutput(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }), "c", "om_t1_reply");
     const read = await place.history.snapshot(feishuHistoryKey({ chatId: "oc_1", threadId: "omt_1" }));
     expect(read.text).toContain("killed the backfill, redeploy succeeded");
   });

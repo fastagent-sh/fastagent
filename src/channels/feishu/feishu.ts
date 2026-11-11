@@ -19,6 +19,7 @@ import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { senderConversation } from "../kit/sender-conversation.ts";
 import type { PlaceMessage } from "../kit/place-history.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
@@ -279,8 +280,7 @@ function createFeishuRuntimeFactory(
       isRecord: isStoredFeishuTurn,
       order: (a, b) => a.seq - b.seq,
     });
-    // Every message this channel took as input (a turn, a /stop): the dedup ring. A history read also leaves these out,
-    // to shape the prompt only — what keeps a queued ask out of an earlier turn is the read's bound, not this ring.
+    // Every message this channel took as input (a turn, a /stop): the dedup ring.
     const seen = createSeenRing(join(stateHome, "seen.json"), label);
     // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
     const asks = createAskLog<FeishuPosition>({
@@ -295,7 +295,6 @@ function createFeishuRuntimeFactory(
       appId,
       label,
       path: join(stateHome, "history.json"),
-      isTurnInput: (id) => seen.has(id),
     });
     // A group turn's room, for the thread-reading tool (`feishuThreads`): the chat it was asked in, and its threads.
     const rooms = createRoomThreads({
@@ -307,11 +306,14 @@ function createFeishuRuntimeFactory(
     registerRoomThreads(kind, stateHome, rooms);
     /**
      * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
-     * session already, so the place records it and its next read leaves it out. The send tools use the plain client,
-     * so what the agent posts itself stays discussion. A routed turn has no place and reads no history.
+     * turn's session already, so the place records it for that conversation and its next read leaves it out; another
+     * conversation's read keeps it. The send tools use the plain client, so what the agent posts itself stays
+     * discussion. A routed turn has no place and reads no history.
      */
-    const placeApi = (historyKey: string | undefined): FeishuApi =>
-      historyKey === undefined ? api : api.recordingSends((id) => history.recordOutput(historyKey, id));
+    const placeApi = (turn: { historyKey?: string; conversation: string }): FeishuApi =>
+      turn.historyKey === undefined
+        ? api
+        : api.recordingSends((id) => history.recordOutput(turn.historyKey as string, turn.conversation, id));
     // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
     const sideTasks = createTaskTracker(label);
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
@@ -324,7 +326,7 @@ function createFeishuRuntimeFactory(
     // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
       const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(placeApi(r.historyKey), targetOf(r), undefined, body).catch((e) =>
+      void settleFeishuPreview(placeApi(r), targetOf(r), undefined, body).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
       );
     };
@@ -339,6 +341,7 @@ function createFeishuRuntimeFactory(
         const start = await readStart(asks, label, rec.conversation, recordedSession(rec.conversation), until);
         const fold = await history.fold({
           key: rec.historyKey,
+          conversation: rec.conversation,
           ...(start.after === undefined ? {} : { after: start.after }),
           until,
         });
@@ -351,14 +354,14 @@ function createFeishuRuntimeFactory(
       fromStored: ({ attempts: _a, ...intent }) => intent,
       where: (rec) => `chat=${rec.chatId}`,
       notifyDropped,
-      acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec.historyKey), rec.id, label),
+      acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec), rec.id, label),
       // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
       notifyShared: (rec) =>
         rec.replyTo === undefined
           ? Promise.resolve()
-          : settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, SHARED_ANSWER_NOTICE),
+          : settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, SHARED_ANSWER_NOTICE),
       deliverAnswer: (rec, answer) =>
-        portJoin(() => settleFeishuPreview(placeApi(rec.historyKey), targetOf(rec), undefined, answer)),
+        portJoin(() => settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, answer)),
       execute: (rec, discussion, onAnswered, hooks) =>
         Effect.promise(async () => {
           // What the room has said since its own session last read it, read by the thread's first turn (§8): the
@@ -367,6 +370,7 @@ function createFeishuRuntimeFactory(
           const start = await readStart(asks, label, rec.parentConversation, recordedSession(rec.parentConversation));
           const room = await history.fold({
             key: rec.roomKey,
+            conversation: rec.parentConversation,
             ...(start.after === undefined ? {} : { after: start.after }),
           });
           return start.unreadable === undefined
@@ -390,7 +394,7 @@ function createFeishuRuntimeFactory(
             // A group turn under the default routing reads its chat's threads; a DM has none to read.
             const threadsRoom =
               rec.group && rec.historyKey !== undefined ? feishuPlaceOf(rec.historyKey).chatId : undefined;
-            const turnApi = placeApi(rec.historyKey);
+            const turnApi = placeApi(rec);
             return hooks.reply(
               feishuTurnStream(
                 agent,
@@ -483,12 +487,17 @@ function createFeishuRuntimeFactory(
         return;
       }
 
-      // Memory follows the place (participant model §5): one conversation per chat, and one per thread.
+      // A group's main timeline is one conversation per sender; a thread, a topic and a DM are one per place.
       const routed = r.conversation;
-      const conversation = routed ?? placeKey(kind, m);
-      // Lineage is recorded ONLY for the default place-derived conversation.
+      const mainTimeline = m.chat_type === "group" && m.thread_id === undefined;
+      const sender = senderId(event.sender);
+      const conversation = routed ?? (mainTimeline ? senderConversation(placeKey(kind, m), sender) : placeKey(kind, m));
+      // Lineage is recorded ONLY for the default place-derived conversation. A thread starts from what its asker said
+      // in the main timeline: their own conversation there.
       const parentConversation =
-        routed === undefined && m.thread_id !== undefined ? placeKey(kind, { chat_id: m.chat_id }) : undefined;
+        routed === undefined && m.thread_id !== undefined
+          ? senderConversation(placeKey(kind, { chat_id: m.chat_id }), m.chat_type === "group" ? sender : undefined)
+          : undefined;
       // Read BEFORE this turn records its own participation below, or it is always true.
       const roomKey =
         parentConversation !== undefined && !threadParticipants.agentSpokeIn(conversation)
@@ -514,7 +523,7 @@ function createFeishuRuntimeFactory(
         sideTasks.track(
           dispatchStop(agent, recordedSession(conversation), label)
             .then((feedback) =>
-              placeApi(historyKey)
+              placeApi({ historyKey, conversation })
                 .sendText({ chatId, replyTo, replyInThread }, feedback)
                 .then(() => undefined),
             )

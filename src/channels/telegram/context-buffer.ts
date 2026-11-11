@@ -18,6 +18,8 @@ export interface BufferEntry {
   fileIds?: string[];
   /** file_ids of photos (usable as vision inputs on a later summon). */
   imageIds?: string[];
+  /** The conversation whose turn posted it, when it is the agent's answer: that session holds it already. */
+  conversation?: string;
 }
 
 /**
@@ -71,8 +73,9 @@ const OWN_POST_MAX_CHARS = 2000;
  * its own messages as updates (and the Bot API has no history read), so this is the only way the chat's next turn
  * knows it was said. The label says only what the transport knows — the agent sent it — not which tool did.
  */
-export function ownPostEntry(body: string, messageId: number): BufferEntry {
+export function ownPostEntry(body: string, messageId: number, conversation?: string): BufferEntry {
   return {
+    ...(conversation === undefined ? {} : { conversation }),
     sender: "you (sent by the agent)",
     body: truncateCodePointPrefix(body.replace(/\s+/g, " ").trim(), OWN_POST_MAX_CHARS, " … (truncated)"),
     messageId,
@@ -91,7 +94,8 @@ function isBufferEntry(e: unknown): e is BufferEntry {
     typeof t.messageId === "number" &&
     (t.replyTo === undefined || typeof t.replyTo === "number") &&
     strings(t.fileIds) &&
-    strings(t.imageIds)
+    strings(t.imageIds) &&
+    (t.conversation === undefined || typeof t.conversation === "string")
   );
 }
 

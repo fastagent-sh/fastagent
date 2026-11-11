@@ -355,11 +355,13 @@ place rather than the individual ask ([design note](design/participant-model.md)
 | Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
 Each conversation has its own session, which the channel creates the first time it is asked there and records in
-`<state root>/channels/<kind>/sessions.json`. There are no session modes to choose. A room has one memory that
-everyone in it shares, so a colleague can follow up on someone else's question; a thread is a separate place with its
-own — **started from what the room knew**: a new thread's session is a fork of the room's, up to the message the
-thread branched from, including images and tool results. The fork happens once, when the thread's session is created;
-after that the two places are independent, and the room never sees what the thread discusses.
+`<state root>/channels/<kind>/sessions.json`. There are no session modes to choose. In a group's main timeline each
+sender has a session of their own (`<kind>:<chat_id>#<sender>`), so one person's long task does not hold up another's
+question; the others' discussion and the agent's answers to them reach a session as attributed context, not as its own
+history. A sender the platform gave no id shares the chat's session. A thread is a separate place with its own —
+**started from what its asker knew**: a new thread's session is a fork of its asker's session in the main timeline, up
+to the message the thread branched from, including images and tool results. The fork happens once, when the thread's session is created;
+after that the two places are independent, and the main timeline never sees what the thread discusses.
 
 Discussion the room heard but never answered has not entered its session yet, so the fork cannot
 carry it — the thread's first turn reads that pending discussion instead, attachments included.
@@ -386,9 +388,7 @@ inside a thread or out of it — a quote is the user pointing at something that 
 An unreadable referent degrades to a marker instead of failing the turn.
 
 A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
-next step, after its current tool calls. Since the conversation is the place, **a whole group room is one session**: a second
-person's `@Agent` in a busy room is steered into the running work, so their question can end that run and share its answer
-(delivered once) instead of getting one of its own; their message gets a short "Answered together with an earlier message above" reply under it, since the answer quotes the first asker's. Different places run concurrently, which is why a thread is the way to
+next step, after its current tool calls. A group's main timeline is a session per sender, so a second person's `@Agent` does not reach the first's run; a second message from the **same** sender is steered into it, can end that run and shares its answer (delivered once), and gets a short "Answered together with an earlier message above" reply under it, since the answer quotes their first. Different places run concurrently, which is why a thread is the way to
 start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. While a
 message waits for that answer, the Agent marks it with an `OnIt` reaction and swaps it for `DONE` when it is answered
 (a failed turn just takes the mark off); the first message of a run shows its own card instead.

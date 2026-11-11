@@ -662,7 +662,7 @@ describe("Slack sessions, context, and thread participation", () => {
     );
   });
 
-  it("a DM turn reads what slack-send posted into the DM, and not the earlier asks or their answers", async () => {
+  it("a DM turn reads what slack-send posted into the DM and the earlier ask, but not the answer to it", async () => {
     vi.stubGlobal("fetch", okFetch());
     const { agent, calls } = replyingAgent("the answer");
     const { handler } = mount(agent);
@@ -679,8 +679,10 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(2);
     const second = calls[1]?.prompt.text ?? "";
     expect(second).toContain("you (msg 5.0): Weekly digest: 3. ship it");
-    expect(second).not.toContain("first ask");
-    // …nor the answer to it (in the ask's assistant thread, a place of its own): the digest is the agent's only line.
+    // The first ask went to a session of its own (each DM message opens an assistant thread), so for this one it is
+    // what was said in the DM.
+    expect(second).toContain("first ask");
+    // …but not the answer to it (in the ask's assistant thread, a place of its own): the digest is the agent's only line.
     expect(second.match(/^you \(msg /gm)).toHaveLength(1);
   });
 
