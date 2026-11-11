@@ -208,6 +208,8 @@ A private-chat-only use is not blocked, and no administrator privilege is reques
 administrator bot is an exception to privacy filtering; the global flag does not prove what each group delivered.
 Missing messages are never represented as heard.
 
+Built: `channels setup telegram` reads the flag with the token's check and lists steps 1, 2 and 4 when the mode is on, or says Telegram did not report it; the serve's startup warning carries the same steps and says when `getMe` failed (`channels/telegram/privacy.ts` holds the one wording). Whether a particular group delivers everything is not checked.
+
 The HTTP Bot API has no history listing, and disabling privacy mode changes incoming coverage, not retrospective access.
 Undelivered updates are kept for at most 24 hours. MTProto's `messages.getMessages` and `channels.getMessages` let a bot
 request known ids; they are not the current transport and have not been live-tested here. Sources:

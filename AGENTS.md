@@ -198,7 +198,8 @@ src/
 │   ├── telegram/           # telegram channel: see docs/design/core.md §7
 │   │   ├── telegram.ts     # the runtime (accept an update, run the turn) + its two ways in: webhook route, long polling
 │   │   ├── polling.ts      # getUpdates as a LongConnection: webhook taken away first, confirm by offset, what ends it
-│   │   ├── setup.ts        # what `channels setup telegram` asks for: the bot token, checked with getMe; a webhook's secret
+│   │   ├── setup.ts        # what `channels setup telegram` asks for: the bot token, checked with getMe (and its group privacy flag); a webhook's secret
+│   │   ├── privacy.ts      # group privacy mode's cost and its fix, in one wording (setup and the startup warning)
 │   │   ├── parse.ts        # pure protocol parsing: fields, prompt envelope, summon/route policy
 │   │   ├── invoke-turn.ts  # resolve this platform's attachments for one turn
 │   │   ├── turn-store.ts   # telegram's record + update_id arrival order over the generic store
