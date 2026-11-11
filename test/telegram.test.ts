@@ -2160,6 +2160,9 @@ describe("telegram channel", () => {
     await groupSettle();
     const privacyWarnings = () => errs.filter((e) => /privacy mode is on/.test(e)).length;
     expect(privacyWarnings()).toBe(1); // exactly once, at startup
+    const warning = errs.find((e) => /privacy mode is on/.test(e)) ?? "";
+    expect(warning).toContain("/setprivacy"); // how to undo it…
+    expect(warning).toContain("add it again"); // …and that a group the bot is already in needs the bot added again
 
     // Driving group updates must NOT re-warn — it is a startup check, not a per-request one.
     await ch(tgRequest(groupMsg(1, "alice", "hi")));

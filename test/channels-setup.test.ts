@@ -70,7 +70,7 @@ const GOOD_APP = "xapp-1-A1-1-good";
 const SIGNING = "0123456789abcdef0123456789abcdef";
 
 /** Telegram's and Slack's Web APIs as a token is checked against them. Everything else goes to the real fetch. */
-function platforms(options: { unreachable?: boolean } = {}) {
+function platforms(options: { unreachable?: boolean; groupPrivacy?: "off" | "on" | "unreported" } = {}) {
   const calls: string[] = [];
   const real = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
@@ -80,7 +80,15 @@ function platforms(options: { unreachable?: boolean } = {}) {
       calls.push(`telegram ${telegram[2]}`);
       if (options.unreachable) throw new Error("getaddrinfo ENOTFOUND api.telegram.org");
       return telegram[1] === GOOD_BOT
-        ? Response.json({ ok: true, result: { username: "acme_bot" } })
+        ? Response.json({
+            ok: true,
+            result: {
+              username: "acme_bot",
+              ...(options.groupPrivacy === "unreported"
+                ? {}
+                : { can_read_all_group_messages: options.groupPrivacy !== "on" }),
+            },
+          })
         : Response.json({ ok: false, description: "Unauthorized" }, { status: 401 });
     }
     const slack = url.match(/^https:\/\/slack\.com\/api\/([\w.]+)/);
@@ -152,6 +160,36 @@ describe("channels setup at a terminal", () => {
     expect(prompts.infos[0]).toContain("@BotFather");
     expect(opened).toEqual(["https://t.me/BotFather"]);
     expect(calls).toEqual(["telegram getMe"]);
+  });
+
+  describe("what it says about group privacy mode", () => {
+    const nextSteps = () => vi.mocked(console.error).mock.calls.flat().join("\n");
+
+    it("tells a person whose bot has it on how to turn it off, and to add the bot to its groups again", async () => {
+      const dir = await workspace("fa-setup-gp-on-");
+      platforms({ groupPrivacy: "on" });
+      prompts.answers.push(GOOD_BOT);
+      await ends(setup("telegram", dir));
+      expect(nextSteps()).toContain("group privacy mode is on");
+      expect(nextSteps()).toContain("/setprivacy");
+      expect(nextSteps()).toContain("add it again");
+    });
+
+    it("says nothing about it when the bot already reads every message of a group", async () => {
+      const dir = await workspace("fa-setup-gp-off-");
+      platforms({ groupPrivacy: "off" });
+      prompts.answers.push(GOOD_BOT);
+      await ends(setup("telegram", dir));
+      expect(nextSteps()).not.toContain("group privacy");
+    });
+
+    it("says it could not tell when Telegram did not report it, rather than taking it for off", async () => {
+      const dir = await workspace("fa-setup-gp-unreported-");
+      platforms({ groupPrivacy: "unreported" });
+      prompts.answers.push(GOOD_BOT);
+      await ends(setup("telegram", dir));
+      expect(nextSteps()).toContain("did not say whether group privacy mode is on");
+    });
   });
 
   it("is safe to run again: a value the platform still accepts is kept unasked, one it refuses is asked for again", async () => {

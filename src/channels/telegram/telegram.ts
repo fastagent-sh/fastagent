@@ -35,6 +35,7 @@ import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
 import { createMessageOwners } from "../kit/message-owners.ts";
+import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
 import { isSenderConversation, senderConversation } from "../kit/sender-conversation.ts";
 import { createSeenRing } from "../kit/seen.ts";
 import { NO_ACK, createTurnRunner } from "../kit/turn-runner.ts";
@@ -106,10 +107,7 @@ function createTelegramRuntime(
     (me) => {
       if (mentionName === undefined) mentionName = me.username;
       if (me.can_read_all_group_messages === false) {
-        log.warn(
-          "[telegram] privacy mode is on: the bot only sees @mentions / replies / commands, so group " +
-            "context (un-summoned messages) won't be captured. Disable it via @BotFather → /setprivacy.",
-        );
+        log.warn(`[telegram] ${PRIVACY_MODE_EFFECT}. To change that, ${PRIVACY_MODE_FIX}.`);
       }
     },
     // Name every capability the missing username costs, so "the bot ignores /stop@name" is diagnosable from this
