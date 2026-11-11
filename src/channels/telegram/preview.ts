@@ -111,6 +111,8 @@ export function telegramReply(
   onAnswered?: (answer: string) => void,
   /** The answer is in the chat, in messages `messageIds` (none when it said nothing); the first is where it stands. */
   onDelivered?: (messageIds: number[], text: string) => void,
+  /** The live preview is in the chat as message `messageId`. */
+  onPreview?: (messageId: number) => void,
 ) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
@@ -154,6 +156,7 @@ export function telegramReply(
       messageId = await sendMessage(api, botToken, target, text, { html: false });
       if (messageId === undefined)
         throw new Error("telegram sendMessage returned ok without a message_id — live preview disabled for this turn");
+      onPreview?.(messageId);
     };
 
     const { touch, finish } = yield* previewPump({

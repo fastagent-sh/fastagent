@@ -2910,9 +2910,13 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
       await handler(feishuRequest(ask("om_bob", "bob's ask", "ou_bob")));
       await idle();
       const sessions = JSON.parse(readFileSync(join(home, "sessions.json"), "utf8")) as Record<string, string>;
+      const before = Object.keys(owned(home));
       await handler(feishuRequest(ask("om_stop", "stop", "ou_bob", { parentId: "om_alice" })));
       await idle();
       expect(stopped).toEqual([sessions["feishu:oc_1#ou_bob"]]);
+      // The feedback is Bob's: he is the one who stopped, so a reply to it reaches his session.
+      const feedback = Object.entries(owned(home)).filter(([id]) => !before.includes(id));
+      expect(feedback).toEqual([[expect.stringMatching(/^om_bot_/), "feishu:oc_1#ou_bob"]]);
     });
   });
 

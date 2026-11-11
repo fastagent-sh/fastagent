@@ -167,6 +167,11 @@ function createTelegramRuntime(
   const askedBy = (rec: PendingTurn): string => `${rec.conversation}@${rec.placeKey}`;
   /** The newest message id of each place the channel has taken (a summons, or discussion it buffered). */
   const newestTaken = new Map<string, number>();
+  /** Messages the agent posted for a sender's session, so a reply to one reaches it (a group's main timeline only). */
+  const recordOwned = (rec: PendingTurn, messageIds: number[]): void => {
+    if (!isSenderConversation(telegramPlaceKey(rec.chatId, rec.threadId), rec.conversation)) return;
+    for (const id of messageIds) owners.record(ownerKey(rec.chatId, id), rec.conversation);
+  };
   /**
    * An answer a sender's session holds, put where the chat's other senders' reads find it: Telegram never echoes a bot
    * its own messages, so without this Bob's session would not know what Alice was told. Only in a group's main timeline
@@ -177,7 +182,7 @@ function createTelegramRuntime(
     const place = telegramPlaceKey(rec.chatId, rec.threadId);
     const [messageId] = messageIds;
     if (messageId === undefined || !isSenderConversation(place, rec.conversation)) return;
-    for (const id of messageIds) owners.record(ownerKey(rec.chatId, id), rec.conversation);
+    recordOwned(rec, messageIds);
     // An answer is a preview that is edited into its text, so its message id is from when the answer began. Anyone
     // asked in the chat since has not read it, and their read starts strictly after their own ask: it stands at the
     // newest message of this chat the channel has taken, and sorts after it.
@@ -239,8 +244,16 @@ function createTelegramRuntime(
           },
         ),
         (events) =>
-          telegramReply(events, apiBaseUrl, botToken, targetOf(rec), formatError, onAnswered, (id, text) =>
-            recordAnswer(rec, id, text),
+          telegramReply(
+            events,
+            apiBaseUrl,
+            botToken,
+            targetOf(rec),
+            formatError,
+            onAnswered,
+            (ids, text) => recordAnswer(rec, ids, text),
+            // A correction is as likely a reply to the preview a run is working under as to its answer.
+            (id) => recordOwned(rec, [id]),
           ),
       ),
   });

@@ -863,6 +863,29 @@ describe("inputs steered into one run (real Agent)", () => {
         expect(sessionKeys(state)).toEqual(["-100#7"]);
       });
 
+      it("steers a reply to the preview a run is working under into that run's session", async () => {
+        numberedSends();
+        const state = freshStateDir();
+        let release = (): void => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const agent = scriptedAgent(async function* () {
+          yield ev.message();
+          await gate;
+          yield ev.text("done");
+          yield ev.ended();
+        });
+        const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: go, stateDir: state });
+        await ch(tgRequest(said(10, "alice asks", 7)));
+        await flush(); // the run is held open; its "Thinking…" preview is message 101
+        await ch(tgRequest(said(20, "actually, I meant the other one", 8, replyTo(101))));
+        await flush();
+        expect(sessionKeys(state)).toEqual(["-100#7"]);
+        release();
+        await flush();
+      });
+
       it("leaves a reply to a message nothing names with its sender's own session", async () => {
         numberedSends();
         const state = freshStateDir();

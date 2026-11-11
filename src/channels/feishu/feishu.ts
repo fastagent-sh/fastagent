@@ -536,7 +536,7 @@ function createFeishuRuntimeFactory(
         sideTasks.track(
           dispatchStop(agent, recordedSession(routed ?? own), label)
             .then((feedback) =>
-              placeApi({ historyKey, conversation })
+              placeApi({ historyKey, conversation: routed ?? own })
                 .sendText({ chatId, replyTo, replyInThread }, feedback)
                 .then(() => undefined),
             )
