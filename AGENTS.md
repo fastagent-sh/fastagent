@@ -184,6 +184,7 @@ src/
 │   │   │                   # turns posted into a place, which a read leaves out
 │   │   ├── sender-conversation.ts # a group's main timeline: one conversation per sender (the one place the rule is written)
 │   │   ├── ask-log.ts      # where a conversation's session read to: its recent asks, the Agent saying which it holds
+│   │   ├── message-owners.ts # which conversation a platform message belongs to (asks and the agent's posts): a reply to it is steered there
 │   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer, folded by message-id range, never cleared
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── seen.ts         # bounded durable delivery dedup

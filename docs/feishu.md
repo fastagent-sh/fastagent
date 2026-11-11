@@ -389,7 +389,7 @@ An unreadable referent degrades to a marker instead of failing the turn.
 
 A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
 next step, after its current tool calls. A group's main timeline is a session per sender, so a second person's `@Agent` does not reach the first's run; a second message from the **same** sender is steered into it, can end that run and shares its answer (delivered once), and gets a short "Answered together with an earlier message above" reply under it, since the answer quotes their first. Different places run concurrently, which is why a thread is the way to
-start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. While a
+start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. A reply in the main timeline to an answer, or to a request the Agent took, is steered into the session that holds it, whoever sends it: the channel remembers the most recent ~1000 such messages (`owners.json`), and a reply to any other message is an ordinary message of its sender. While a
 message waits for that answer, the Agent marks it with an `OnIt` reaction and swaps it for `DONE` when it is answered
 (a failed turn just takes the mark off); the first message of a run shows its own card instead.
 
