@@ -1,13 +1,10 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentError, agentError } from "../src/agent-api.ts";
 import { conversationSessions } from "../src/conversation-sessions.ts";
-import * as stateFile from "../src/state-file.ts";
 import { scriptedAgent } from "./scripted-agent.ts";
-
-vi.mock("../src/state-file.ts", { spy: true });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -20,19 +17,30 @@ async function mapFile(recorded: Record<string, string> = {}): Promise<string> {
   await writeFile(file, JSON.stringify(recorded));
   return file;
 }
-const recordedIn = async (file: string) => JSON.parse(await readFile(file, "utf8")) as Record<string, string>;
+/** An Agent that holds the session `id` and no other. */
+function agentHolding(id: string) {
+  const base = agent();
+  return {
+    ...base,
+    sessions: {
+      ...base.sessions,
+      get: async (sessionId: string) => {
+        if (sessionId !== id) throw agentError("not_found", `no session ${sessionId}`);
+        return { id } as never;
+      },
+    },
+  };
+}
 
 it("reads its file once: a turn of a known conversation reads no file that grows with every conversation", async () => {
   const subject = agent();
   const created = await subject.sessions.create();
   const file = await mapFile({ room: created.id });
   const sessions = conversationSessions(file);
-  const reads = vi.mocked(stateFile.loadStateFile);
-  reads.mockClear();
+  expect(await sessions.of("room", subject)).toBe(created.id);
+  // The file changes under it: what it answers is what it read the first time.
+  await writeFile(file, JSON.stringify({ room: "elsewhere" }));
   for (let i = 0; i < 3; i++) expect(await sessions.of("room", subject)).toBe(created.id);
-  await sessions.of("another", subject);
-  expect(sessions.get("another")).toBeDefined();
-  expect(reads).toHaveBeenCalledTimes(1);
 });
 
 it("a recorded session the Agent no longer holds is replaced and recorded, and said so", async () => {
@@ -44,7 +52,8 @@ it("a recorded session the Agent no longer holds is replaced and recorded, and s
   const sessions = conversationSessions(file);
   const replaced = await sessions.of("room", agent());
   expect(replaced).not.toBe("lost");
-  expect(await recordedIn(file)).toEqual({ room: replaced, other: "also-lost" });
+  // Recorded: a restart opens the conversation in the session that replaced the lost one.
+  expect(await conversationSessions(file).of("room", agentHolding(replaced))).toBe(replaced);
   expect(warns.some((line) => line.includes("its session lost is not in the agent's storage"))).toBe(true);
 });
 
@@ -63,5 +72,6 @@ it("a storage that cannot answer is the turn's refusal, with its retryable, neve
   const refused = conversationSessions(file).of("room", unavailable);
   await expect(refused).rejects.toBeInstanceOf(AgentError);
   await expect(refused).rejects.toMatchObject({ code: "unavailable", retryable: true });
-  expect(await recordedIn(file)).toEqual({ room: "kept" });
+  // Nothing was replaced: once the storage answers again, the conversation is in the session it was.
+  expect(await conversationSessions(file).of("room", agentHolding("kept"))).toBe("kept");
 });

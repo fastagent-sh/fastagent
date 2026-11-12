@@ -1,22 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { prepareChannelApps, unpreparedChannelApps } from "../src/cli/commands/deploy/channel-apps.ts";
-import { setUpChannel } from "../src/cli/channel-setup.ts";
+import { expect, it } from "vitest";
+import { unpreparedChannelApps } from "../src/cli/commands/deploy/channel-apps.ts";
 
-vi.mock("../src/cli/channel-setup.ts", async (original) => ({
-  ...(await original<typeof import("../src/cli/channel-setup.ts")>()),
-  setUpChannel: vi.fn(async () => ({ written: [], kept: [], after: [] })),
-}));
-
-const dirs: string[] = [];
-afterEach(async () => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  vi.mocked(setUpChannel).mockClear();
-  for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
-});
+// Which apps a deploy makes or prepares; that it makes them in the file it is given, for the person it has, and before
+// anything reaches the host is deploy-prepare-order.test.ts's.
 
 it("creates missing apps for either way and prepares an existing webhook app without its token", () => {
   const channels = [
@@ -39,35 +25,4 @@ it("creates missing apps for either way and prepares an existing webhook app wit
   expect(unpreparedChannelApps(channels, values)).toEqual([]);
   values.set("FEISHU_VERIFICATION_TOKEN", " ");
   expect(unpreparedChannelApps(channels, values)).toEqual([{ kind: "feishu", way: "webhook" }]);
-});
-
-it("sets each app up as production, in the file it was given, for the person it was given", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "fa-prepare-"));
-  dirs.push(dir);
-  await mkdir(join(dir, ".secrets"), { recursive: true });
-  const dev = "FEISHU_APP_ID=cli_dev\nFEISHU_APP_SECRET=dev_secret\n";
-  await writeFile(join(dir, ".secrets", ".env"), dev);
-  vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
-  vi.stubEnv("FASTAGENT_ENVIRONMENT", "production");
-  const printed = vi.spyOn(console, "error").mockImplementation(() => {});
-  const person = { waitsOn: () => {}, carriesOn: () => {}, afterwards: () => {} };
-  const file = join(dir, "prod.env");
-  await prepareChannelApps(
-    dir,
-    file,
-    [
-      { kind: "feishu", way: "webhook" },
-      { kind: "lark", way: "connection" },
-    ],
-    "fastagent deploy fly --run",
-    person,
-  );
-  expect(vi.mocked(setUpChannel).mock.calls.map(([input]) => input)).toEqual([
-    { kind: "feishu", agentDir: dir, file, way: "webhook", dev: false, rerun: "fastagent deploy fly --run", person },
-    { kind: "lark", agentDir: dir, file, way: "connection", dev: false, rerun: "fastagent deploy fly --run", person },
-  ]);
-  expect(printed.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
-    "preparing the production app for webhook",
-  );
-  expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toBe(dev);
 });

@@ -1,58 +1,32 @@
 import { buildable } from "./cli-run.ts";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { HOSTS, runDeploy } from "../src/cli/commands/deploy.ts";
-import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
-import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
-import { createFeishuApi } from "../src/channels/feishu/feishu-api.ts";
-import { feishuAppScopes } from "../src/channels/feishu/setup-mode.ts";
+import { runDeploy } from "../src/cli/commands/deploy.ts";
+import { loadEnvValues } from "../src/value-file.ts";
+import { type FeishuPlatform, feishuPlatform } from "./feishu-platform.ts";
+import { hostCli, resetHostClis } from "./host-cli-double.ts";
 
 vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
-
-let changedIngress = false;
-
+vi.mock("../src/deploy/runner.ts", () => import("./host-cli-double.ts"));
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 vi.mock("../src/open-url.ts", () => ({ openExternalUrl: vi.fn() }));
 vi.mock("../src/cli/shared.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/cli/shared.ts")>()),
   isInteractive: () => true,
 }));
-vi.mock("../src/deploy/preflight.ts", () => ({
-  preflightDeploy: async ({
-    agentDir,
-    config,
-  }: {
-    agentDir: string;
-    config: { channels?: Record<string, { ingress?: string }> };
-  }) => {
-    const values = loadEnvValues(dotEnvPath(agentDir));
-    const webhook = !changedIngress && config.channels?.feishu?.ingress !== "connection";
-    return {
-      ok: true,
-      messages: [],
-      values,
-      valuesFrom: "the environment",
-      container: { agent: "agent", config: "{}" },
-      channels: [{ name: "feishu", ingress: webhook ? "webhook" : "long-connection" }],
-      declaredSecrets: ["FEISHU_APP_ID", "FEISHU_APP_SECRET", ...(webhook ? ["FEISHU_VERIFICATION_TOKEN"] : [])].map(
-        (name) => ({ name, source: "channels/feishu.ts" }),
-      ),
-    };
-  },
-}));
-vi.mock("../src/channels/feishu/register-app.ts", () => ({
-  registerFeishuApp: vi.fn(async () => ({ appId: "cli_production", appSecret: "secret", tenantBrand: "feishu" })),
-}));
-vi.mock("../src/channels/feishu/feishu-api.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/channels/feishu/feishu-api.ts")>()),
-  createFeishuApi: vi.fn(() => ({
-    listAppScopes: async () =>
-      feishuAppScopes("webhook").map(({ request }) => ({ name: request, type: "tenant", grantStatus: 1 })),
-    getAppConfig: async () => ({ verificationToken: "production_token" }),
-  })),
-}));
+
+/** Feishu, where the app is created, and the host's CLI, where the deploy is handed off: what each saw, in order. */
+let platform: FeishuPlatform;
+let atHost: { created: boolean; values: string }[];
+function host(bin: "aws" | "docker") {
+  hostCli(bin, () => {
+    atHost.push({ created: platform.created(), values: readFileSync(valueFile, "utf8") });
+    return { code: 1, stderr: `${bin} refuses\n` };
+  });
+}
 
 let root: string;
 let said: string[];
@@ -60,7 +34,8 @@ const stopped = new Error("process exit");
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "fa-host-validation-"));
   said = [];
-  changedIngress = false;
+  atHost = [];
+  platform = feishuPlatform();
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("FASTAGENT_ENVIRONMENT", "");
   vi.spyOn(process, "exit").mockImplementation(() => {
@@ -71,9 +46,10 @@ beforeEach(async () => {
   });
 });
 afterEach(async () => {
+  resetHostClis();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  vi.clearAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -119,58 +95,43 @@ it.each([
   },
 ] as const)(
   "refuses $host ($error) before creating or configuring an app",
-  async ({ host, name, content, error, ...rest }) => {
+  async ({ host: target, name, content, error, ...rest }) => {
     const { dir, file } = await agent(name, content);
+    host("aws");
     const config = "connection" in rest ? { config: await connectionConfig() } : {};
-    await expect(runDeploy(host, dir, { run: true, envFile: file, ...config })).rejects.toBe(stopped);
-    expect(registerFeishuApp).not.toHaveBeenCalled();
-    expect(createFeishuApi).not.toHaveBeenCalled();
+    await expect(runDeploy(target, dir, { run: true, envFile: file, ...config })).rejects.toBe(stopped);
+    expect(platform.requests).toEqual([]);
+    expect(atHost).toEqual([]);
     expect(await readFile(file, "utf8")).toBe(content);
     expect(said.join("\n")).toContain(error);
   },
 );
 
-it("a valid AgentCore setup still onboards before deployment", async () => {
-  const host = "agentcore";
+it("a valid AgentCore setup onboards before the deploy reaches the host", async () => {
   const { dir } = await agent("agent", "");
-  const deploy = vi.spyOn(HOSTS[host], "deploy").mockImplementation(async (ctx) => {
-    expect(registerFeishuApp).toHaveBeenCalledOnce();
-    expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
-    expect(ctx.pre.values.get("FEISHU_VERIFICATION_TOKEN")).toBe("production_token");
-  });
-  await runDeploy(host, dir, { run: true, envFile: valueFile });
-  expect(deploy).toHaveBeenCalledOnce();
-});
-
-it("a valid Docker setup (a channel that connects out) onboards before deployment", async () => {
-  const { dir } = await agent("agent", "");
-  const deploy = vi.spyOn(HOSTS.docker, "deploy").mockImplementation(async (ctx) => {
-    expect(registerFeishuApp).toHaveBeenCalledOnce();
-    expect(ctx.pre.values.get("FEISHU_APP_ID")).toBe("cli_production");
-  });
-  await runDeploy("docker", dir, { run: true, envFile: valueFile, config: await connectionConfig() });
-  expect(deploy).toHaveBeenCalledOnce();
-});
-
-it("validates the refreshed channel facts after onboarding before handing off to the host", async () => {
-  const { dir } = await agent("agent", "");
-  vi.mocked(registerFeishuApp).mockImplementationOnce(async () => {
-    changedIngress = true;
-    return { appId: "cli_production", appSecret: "secret", tenantBrand: "feishu" };
-  });
-  const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue(undefined);
+  host("aws");
   await expect(runDeploy("agentcore", dir, { run: true, envFile: valueFile })).rejects.toBe(stopped);
-  expect(registerFeishuApp).toHaveBeenCalledOnce();
-  expect(deploy).not.toHaveBeenCalled();
-  expect(said.join("\n")).toContain("cannot run on AgentCore");
+  expect(atHost[0]?.created).toBe(true);
+  expect(loadEnvValues(valueFile).get("FEISHU_APP_ID")).toBe("cli_production");
+  expect(atHost[0]?.values).toMatch(/^FEISHU_APP_ID=cli_production$/m);
+  expect(atHost[0]?.values).toMatch(/^FEISHU_VERIFICATION_TOKEN=production_token$/m);
+});
+
+it("a valid Docker setup (a channel that connects out) onboards before the deploy reaches the host", async () => {
+  const { dir } = await agent("agent", "");
+  host("docker");
+  await expect(
+    runDeploy("docker", dir, { run: true, envFile: valueFile, config: await connectionConfig() }),
+  ).rejects.toBe(stopped);
+  expect(atHost[0]?.created).toBe(true);
+  expect(atHost[0]?.values).toMatch(/^FEISHU_APP_ID=cli_production$/m);
 });
 
 it("generate-only agentcore still warns without onboarding", async () => {
   const { dir } = await agent("agent", "");
-  const deploy = vi.spyOn(HOSTS.agentcore, "deploy").mockResolvedValue(undefined);
+  host("aws");
   await runDeploy("agentcore", dir, { config: await connectionConfig() });
-  expect(registerFeishuApp).not.toHaveBeenCalled();
-  expect(createFeishuApi).not.toHaveBeenCalled();
-  expect(deploy).toHaveBeenCalledOnce();
+  expect(platform.requests).toEqual([]);
+  expect(atHost).toEqual([]);
   expect(said.join("\n")).toContain("[fastagent] warn:");
 });

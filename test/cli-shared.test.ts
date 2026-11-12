@@ -12,6 +12,22 @@ const { modelEnvironment } = environment;
 // enterAgentDirectory installs the proxy fetch, and undici.install() swaps this process's fetch/Response/
 // Headers/FormData/WebSocket with no way back. Keep the side effect out of the test process.
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
+/** The person at the terminal: what they were asked, each answered with a cancel. */
+const asked = vi.hoisted(() => [] as string[]);
+vi.mock("@clack/prompts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@clack/prompts")>();
+  const ask = (kind: string) => async (options: { message?: string }) => {
+    asked.push(`${kind}: ${options.message ?? ""}`);
+    return Symbol("cancel");
+  };
+  return {
+    ...real,
+    select: ask("select"),
+    autocomplete: ask("autocomplete"),
+    text: ask("text"),
+    password: ask("password"),
+  };
+});
 
 describe("reportAssembly (the startup report dev and start share)", () => {
   let opened: Parameters<typeof reportAssembly>[0];
@@ -78,18 +94,18 @@ describe("enterAgentDirectory: --no-input never reaches the picker", () => {
   // `dev`'s worker passes input:false so the supervisor's pick is not re-asked in a child process.
   // The guard is resolveFirstRunModel returning BEFORE isInteractive(), so a worker that inherits a
   // terminal still stays silent — which is exactly the case a TTY-less test would pass either way.
-  it("returns without reading the model environment, even when stdin and stdout are terminals", async () => {
+  it("asks nothing, even when stdin and stdout are terminals", async () => {
     // A model from the environment satisfies resolveFirstRunModel before it reads `input`, so leaving
     // FASTAGENT_MODEL set would pass this test without ever running the guard.
     vi.stubEnv("FASTAGENT_MODEL", undefined);
-    const runtime = vi.spyOn(environment, "modelEnvironment");
     process.stdin.isTTY = true;
     process.stdout.isTTY = true;
+    asked.length = 0;
 
     const dir = modellessAgent();
     // The directory half, which owns the picker: the full command then refuses the missing default at startup.
     expect(await enterAgentDirectory(dir, { input: false })).toEqual({ agentDir: dir });
-    expect(runtime).not.toHaveBeenCalled();
+    expect(asked).toEqual([]);
   });
 });
 
