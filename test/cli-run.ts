@@ -1,6 +1,6 @@
 // Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has, and so only in an
 // integration test: exit codes and stdout/stderr discipline across a real pipe (cli.integration.test.ts,
-// cli-kernel.integration.test.ts), a command that outlives its caller (the ticket tests in cli-login/cli-deploy), a
+// cli-kernel.integration.test.ts), a step that runs a process of its own (a host CLI's sign-in, a box's shell), a
 // signal, a kill. `runInProcess` calls the same entry in this process, for everything that is about what a COMMAND
 // decides: ~0.5-1s of CPU cheaper per call, and the unit tier's way to run a command.
 import { useValueFile } from "../src/value-file.ts";
@@ -115,8 +115,11 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  * out), `process.exitCode`, stdout/stderr, and the signal/exit listeners the command added. Runs are serialized,
  * since they share all of that. It is stdin-less and TTY-less, as `run` is.
  *
- * NOT for a test that is about the process itself: a command that outlives it (a ticket's background process,
- * which signals its process group on exit), stdout/stderr discipline across a real pipe, a signal, a crash.
+ * A ticket's two halves run here too, apart: the command, with `startTicket` mocked to record what it would start, and
+ * the step, as `<command> --ticket <id>`, while the test plays the person through the ticket's files (cli-login-ticket,
+ * cli-mcp-ticket, cli-deploy-ticket). That a step outlives its command is `startTicket`'s, in ticket.integration.test.ts.
+ *
+ * NOT for a test that is about the process itself: stdout/stderr discipline across a real pipe, a signal, a crash.
  * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
  */
 export function runInProcess(

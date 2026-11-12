@@ -1,7 +1,7 @@
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { agentWorkspace } from "./cli-run.ts";
+import { hostCli } from "./host-cli-double.ts";
 
 /** A channel that declares what a deployment needs: GH_TOKEN required, SENTRY_DSN optional. */
 const HOOK = `export default {
@@ -20,64 +20,66 @@ export async function agent(files: Record<string, string> = {}) {
 
 export const read = (file: string) => readFile(file, "utf8");
 
-/** A `fly` on PATH that answers what the store asks of it and keeps what it was given. */
-export async function fakeFly(listed: string[] = ["GH_TOKEN"]) {
-  const bin = await mkdtemp(join(tmpdir(), "fa-fake-fly-"));
-  const log = join(bin, "log");
-  await writeFile(
-    join(bin, "fly"),
-    `#!/bin/sh
-echo "$@" >> "${log}"
-case "$1" in
-  version) echo "fly v0";;
-  apps) if [ "$2" = "list" ]; then
-      if [ -n "$FAKE_FLY_APP_EXISTS" ] || [ -f "${log}.created" ]; then echo '[{"Name":"'"$FAKE_FLY_APP"'"}]'; else echo '[]'; fi
-    else touch "${log}.created"; echo "New app created"; fi;;
-  secrets)
-    # Like flyctl: an app that was never made has no secrets to list.
-    if [ "$2" = "list" ]; then
-      if [ ! -f "${log}.created" ] && [ -z "$FAKE_FLY_APP_EXISTS" ]; then echo "Error: app not found" >&2; exit 1; fi
-      echo '[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]'
-    fi
-    if [ "$2" = "set" ]; then cat >> "${log}.stdin"; echo >> "${log}.stdin"; echo "Secrets are staged"; fi;;
-esac
-`,
-  );
-  await chmod(join(bin, "fly"), 0o755);
-  return {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } as NodeJS.ProcessEnv,
-    calls: async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n"),
-    stdin: async () => readFile(`${log}.stdin`, "utf8").catch(() => undefined),
-  };
+/** A `fly` that answers what the store asks of it and keeps what it was given; `app` is an app that already exists. */
+export function fakeFly(listed: string[] = ["GH_TOKEN"], options: { app?: string } = {}) {
+  const calls: string[] = [];
+  let created = false;
+  let stdin: string | undefined;
+  hostCli("fly", ({ args, input }) => {
+    calls.push(args.join(" "));
+    const [command, sub] = args;
+    if (command === "version") return { stdout: "fly v0\n" };
+    if (command === "apps" && sub === "list") {
+      return { stdout: options.app !== undefined || created ? `[{"Name":"${options.app ?? ""}"}]\n` : "[]\n" };
+    }
+    if (command === "apps") {
+      created = true;
+      return { stdout: "New app created\n" };
+    }
+    // Like flyctl: an app that was never made has no secrets to list.
+    if (command === "secrets" && sub === "list") {
+      if (!created && options.app === undefined) return { code: 1, stderr: "Error: app not found\n" };
+      return { stdout: `[${listed.map((name) => `{"Name":"${name}"}`).join(",")}]\n` };
+    }
+    if (command === "secrets" && sub === "set") {
+      stdin = `${stdin ?? ""}${input ?? ""}\n`;
+      return { stdout: "Secrets are staged\n" };
+    }
+    return {};
+  });
+  return { calls: () => calls, stdin: () => stdin };
 }
 
-/** An `aws` on PATH with one Secrets Manager secret in a file: absent until `create-secret`, as the CLI answers. */
-export async function fakeAws(initial?: string) {
-  const bin = await mkdtemp(join(tmpdir(), "fa-fake-aws-"));
-  const log = join(bin, "log");
-  const secret = join(bin, "secret");
-  if (initial !== undefined) await writeFile(secret, initial);
-  await writeFile(
-    join(bin, "aws"),
-    `#!/bin/sh
-echo "$@" >> "${log}"
-[ "$1" = secretsmanager ] || exit 1
-case "$2" in
-  describe-secret)
-    [ -f "${secret}" ] || { echo "An error occurred (ResourceNotFoundException) when calling DescribeSecret" >&2; exit 254; }
-    case "$*" in *ARN*) echo "arn:aws:secretsmanager:us-west-2:1:secret:fastagent/x-AbCdEf";; *) echo '{"Name":"x"}';; esac;;
-  create-secret) echo '{}' > "${secret}"; echo '{"Name":"x"}';;
-  get-secret-value) cat "${secret}"; echo;;
-  put-secret-value) for last; do :; done; cp "\${last#file://}" "${secret}"; echo '{"VersionId":"v"}';;
-esac
-`,
-  );
-  await chmod(join(bin, "aws"), 0o755);
-  return {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-    calls: async () => (await readFile(log, "utf8").catch(() => "")).trim().split("\n"),
-    held: async () => readFile(secret, "utf8").catch(() => undefined),
-  };
+/** An `aws` with one Secrets Manager secret: absent until `create-secret`, as the CLI answers. */
+export function fakeAws(initial?: string) {
+  const calls: string[] = [];
+  let secret = initial;
+  hostCli("aws", ({ args }) => {
+    calls.push(args.join(" "));
+    if (args[0] !== "secretsmanager") return { code: 1 };
+    switch (args[1]) {
+      case "describe-secret":
+        if (secret === undefined) {
+          return { code: 254, stderr: "An error occurred (ResourceNotFoundException) when calling DescribeSecret\n" };
+        }
+        return {
+          stdout: args.join(" ").includes("ARN")
+            ? "arn:aws:secretsmanager:us-west-2:1:secret:fastagent/x-AbCdEf\n"
+            : '{"Name":"x"}\n',
+        };
+      case "create-secret":
+        secret = "{}";
+        return { stdout: '{"Name":"x"}\n' };
+      case "get-secret-value":
+        return { stdout: `${secret ?? ""}\n` };
+      case "put-secret-value":
+        secret = readFileSync((args.at(-1) as string).replace(/^file:\/\//, ""), "utf8");
+        return { stdout: '{"VersionId":"v"}\n' };
+      default:
+        return {};
+    }
+  });
+  return { calls: () => calls, held: () => secret };
 }
 
 export const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");

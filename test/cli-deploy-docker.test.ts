@@ -1,12 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { dockerComposeFile } from "../src/deploy/docker/plan.ts";
 import { deploymentName } from "../src/deploy/deployment-name.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
+import { hostCli, resetHostClis } from "./host-cli-double.ts";
 
 vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
 vi.mock("../src/git.ts", () => import("./git-double.ts"));
+vi.mock("../src/deploy/runner.ts", () => import("./host-cli-double.ts"));
+
+afterEach(() => resetHostClis());
 
 describe("cli: deploy docker", () => {
   it("deploy docker generates app-only Compose and keeps user-owned Dockerfile/Compose on re-run", async () => {
@@ -148,5 +152,33 @@ describe("cli: deploy docker", () => {
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown option '--tunnel'");
     await expect(access(join(dir, dockerComposeFile(await deploymentName(dir))))).rejects.toThrow();
+  });
+
+  it("deploy docker --run checks the names against the environment Compose will run in, with or without --from-env", async () => {
+    // Compose has no other place to take a value from, so the shell counts here whatever `--from-env` says: that flag is
+    // about what `deploy` reads for a store, and Docker keeps none.
+    const dir = await agentWorkspace("fa-deploy-compose-gate-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "src/tools/gh.mjs": `export default {
+  kind: "fastagent.needs",
+  secrets: [{ name: "GH_TOKEN", optional: false }],
+  build: () => ({ name: "gh", description: "d", parameters: { type: "object", properties: {} }, execute: async () => ({ output: [] }) }),
+};\n`,
+    });
+    // A `docker` that has Compose but no daemon: the run gets as far as the values check, then to the daemon check.
+    hostCli("docker", ({ args }) => ({ code: args[0] === "compose" && args[1] === "version" ? 0 : 1 }));
+    const clean: NodeJS.ProcessEnv = { ...process.env };
+    delete clean.GH_TOKEN;
+    const missing = await runInProcess(["deploy", "docker", dir, "--run"], undefined, clean);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("deploy stopped: Docker has no value for: GH_TOKEN");
+    expect(missing.stderr).not.toContain("Docker daemon is unavailable");
+    // Set in the shell, with no --from-env, the name passes and the run reaches the daemon check.
+    const given = await runInProcess(["deploy", "docker", dir, "--run", "--force"], undefined, {
+      ...clean,
+      GH_TOKEN: "x",
+    });
+    expect(given.stderr).toContain("Docker daemon is unavailable");
+    expect(given.stderr).not.toContain("Docker has no value for");
   });
 });
