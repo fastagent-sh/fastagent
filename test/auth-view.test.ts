@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { formatAuthReport } from "../src/cli/auth-view.ts";
 import { deployedHost } from "../src/paths.ts";
@@ -48,24 +47,6 @@ describe("auth-view: formatAuthReport", () => {
         "from the agent directory this was deployed from (add --config <the file it was deployed with> for an instance " +
         'that file names), choosing "API key"',
     );
-  });
-
-  it("local recovery commands write the selected auth path, including shell-special characters", () => {
-    const authPath = "/agent's dir/$production/auth.json";
-    const local = { authPath, valueFile: "/agent/.secrets/production/.env" };
-    for (const status of [
-      {},
-      { stored: "oauth" },
-      { source: "OAuth", stored: "oauth", shadowed: "ANTHROPIC_API_KEY" },
-    ]) {
-      const report = formatAuthReport({ provider: P, path: PATH, local, ...status });
-      const command = report.warn?.match(/`([^`]+)`/)?.[1];
-      expect(command).toBeDefined();
-      const result = spawnSync("sh", ["-c", `fastagent() { printf '%s' "$FASTAGENT_AUTH_PATH"; }; ${command}`]);
-      expect(result.status).toBe(0);
-      expect(result.stdout.toString()).toBe(authPath);
-    }
-    expect(formatAuthReport({ provider: P, path: PATH, local }).warn).toContain(local.valueFile);
   });
 
   it("a box that cannot tell its host leaves <host> in the command, never a guess", () => {

@@ -26,14 +26,13 @@ describe("the name", () => {
     expect(instanceName("@@//")).toBe("agent");
     expect(instanceName("reviewer@")).toBe("reviewer");
     expect(instanceName("@reviewer")).toBe("reviewer");
-    // Interior dashes stay as written, and a long run of them is not slow to trim (a regex backtracks on it).
+    // Interior dashes stay as written, and a long run of them is not slow to trim: a regex backtracks on it for over a minute,
+    // past the test's timeout.
     expect(instanceName("a--b")).toBe("a--b");
     expect(instanceName("@acme//x")).toBe("acme--x");
-    const started = performance.now();
-    expect(instanceName(`${"-".repeat(100_000)}x${"-".repeat(100_000)}y`)).toBe(
-      `${"-".repeat(100_000)}x${"-".repeat(100_000)}y`.replace(/^-+/, ""),
+    expect(instanceName(`${"-".repeat(300_000)}x${"-".repeat(300_000)}y`)).toBe(
+      `${"-".repeat(300_000)}x${"-".repeat(300_000)}y`.replace(/^-+/, ""),
     );
-    expect(performance.now() - started).toBeLessThan(1000);
     expect(instanceName("@acme/reviewer", "kage_1")).toBe("kage_1");
     for (const bad of ["", "a/b", "a b", "..", "é"]) {
       expect(() => instanceName("support", bad), JSON.stringify(bad)).toThrow(/must be one path segment/);

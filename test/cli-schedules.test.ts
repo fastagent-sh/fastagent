@@ -1,16 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveStateRoot } from "../src/paths.ts";
-import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
-import {
-  agentWorkspace,
-  fauxAgent as agent,
-  killWhileLingering,
-  lingered,
-  runInProcess,
-  whileServed,
-} from "./cli-run.ts";
+import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "./cli-run.ts";
+
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
 
 /** A schedule module as `defineSchedule` returns it, so the fixture needs no package of its own. */
 const schedule = (cron: string, extra = "") =>
@@ -35,8 +30,6 @@ describe("cli: schedules", () => {
       join(claims, "2026-01-01T09-00-00-000Z"),
       JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }),
     );
-    const { addWakeup } = await import("../src/schedule/wakeups.ts");
-    const { resolveStateRoot } = await import("../src/paths.ts");
     const added = addWakeup(resolveStateRoot(dir), {
       session: "chat:42",
       prompt: "check the deploy",
@@ -108,13 +101,6 @@ const scheduleOf = (prompt: string) =>
 const SCHEDULE = scheduleOf("write the digest");
 
 describe("cli: schedules run and unwake", () => {
-  it("schedules run refuses to fire while a serve holds the storage", async () => {
-    const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
-    const refused = await whileServed(dir, () => runInProcess(["schedules", "run", "digest", dir]));
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
-  });
-
   it("schedules run continues its session and records interrupted and completed claims", async () => {
     const dir = await agent("fa-schedules-run-", { "src/schedules/digest.ts": SCHEDULE });
     const claims = join(resolveStateRoot(dir), "schedule", "claims", "digest");
@@ -132,36 +118,11 @@ describe("cli: schedules run and unwake", () => {
     expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
   });
 
-  it("schedules run checks the schedule's name before the model a fire needs: both are choices, exit 2", async () => {
-    // No model anywhere: agentWorkspace's config names none, and the environment holds none.
-    const dir = await agentWorkspace("fa-schedules-unknown-", { "src/schedules/digest.ts": schedule("0 9 * * *") });
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.FASTAGENT_MODEL;
-    const unknown = await runInProcess(["schedules", "run", "weekly", dir], undefined, env);
-    expect([unknown.code, unknown.stderr]).toEqual([
-      2,
-      expect.stringMatching(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/),
-    ]);
-    expect(unknown.stderr).not.toMatch(/missing model/);
-    const known = await runInProcess(["schedules", "run", "digest", dir], undefined, env);
-    expect([known.code, known.stderr]).toEqual([2, expect.stringMatching(/missing model/)]);
-  });
-
-  it("schedules run exits 1 on a cut-off answer, and refuses work a stopped process left unfinished", async () => {
-    const dir = await agent("fa-schedules-unfinished-", {
-      "src/schedules/clipped.ts": scheduleOf("cut it short"),
-      "src/schedules/slow.ts": scheduleOf("linger over it"),
-    });
-    // The claim counts a cut-off answer as completed; a check does not.
-    const clipped = await runInProcess(["schedules", "run", "clipped", dir]);
-    expect([clipped.code, clipped.stdout.trim()], clipped.stderr).toEqual([1, "cut sho"]);
-    expect(clipped.stderr).toContain("clipped: its answer was cut off (incomplete)");
-
-    await killWhileLingering(["schedules", "run", "slow", dir], dir);
-    const refused = await runInProcess(["schedules", "run", "clipped", dir]);
+  it("schedules run refuses to fire while a serve holds the storage", async () => {
+    const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
+    const refused = await whileServed(dir, () => runInProcess(["schedules", "run", "digest", dir]));
     expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(/the storage holds 1 message\(s\) an earlier process accepted and stopped before/);
-    expect(await lingered(dir)).toBe(1);
+    expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
   });
 
   it("schedules unwake cancels a wake-up whatever session set it, and only when no serve runs", async () => {
@@ -182,5 +143,20 @@ describe("cli: schedules run and unwake", () => {
     const again = await runInProcess(["schedules", "unwake", added.id, dir]);
     expect(again.code).toBe(1);
     expect(again.stderr).toContain(`no pending wake-up ${added.id}`);
+  });
+
+  it("schedules run checks the schedule's name before the model a fire needs: both are choices, exit 2", async () => {
+    // No model anywhere: agentWorkspace's config names none, and the environment holds none.
+    const dir = await agentWorkspace("fa-schedules-unknown-", { "src/schedules/digest.ts": schedule("0 9 * * *") });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    const unknown = await runInProcess(["schedules", "run", "weekly", dir], undefined, env);
+    expect([unknown.code, unknown.stderr]).toEqual([
+      2,
+      expect.stringMatching(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/),
+    ]);
+    expect(unknown.stderr).not.toMatch(/missing model/);
+    const known = await runInProcess(["schedules", "run", "digest", dir], undefined, env);
+    expect([known.code, known.stderr]).toEqual([2, expect.stringMatching(/missing model/)]);
   });
 });

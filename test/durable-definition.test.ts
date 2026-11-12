@@ -3,10 +3,9 @@
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
 import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import {
@@ -14,7 +13,6 @@ import {
   type TranscriptContext,
   fauxAssistantMessage,
   type fauxProvider,
-  fauxToolCall,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
@@ -26,79 +24,16 @@ import {
   assembleAgent,
   loadSourceDefinition,
 } from "../src/harnesses/pi-durable/open.ts";
-import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
+import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { openSource } from "./open-source.ts";
 import { listWakeups } from "../src/schedule/wakeups.ts";
-import { DEV_SERVE_ENV, NOT_HOSTED } from "../src/serving-command.ts";
+import { NOT_HOSTED } from "../src/serving-command.ts";
 import { definitionSections, expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
+import { made, DEFINE, agentPackage, FILES, ENV, toolCall, lastToolResult } from "./durable-definition-fixtures.ts";
 
-// Under test/fixtures, so the agent's modules resolve this repository's packages and its src/ by a fixed depth.
-const ROOT = join(import.meta.dirname, "fixtures");
-const made: string[] = [];
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });
 });
-
-const DEFINE = "../../../../../src/harnesses/pi-durable/define.ts";
-
-/** An agent package with `files`, its directory under test/fixtures. */
-function agentPackage(files: Record<string, string>): string {
-  const dir = join(ROOT, `.tmp-${process.pid}-${made.length}`);
-  made.push(dir);
-  for (const [file, text] of Object.entries({ "package.json": '{ "name": "support", "type": "module" }', ...files })) {
-    mkdirSync(dirname(join(dir, file)), { recursive: true });
-    writeFileSync(join(dir, file), text);
-  }
-  return dir;
-}
-
-/** A model scripted through a module both the agent's configuration and the test import: one instance, by URL. */
-const MODEL_MODULE = `import { fauxProvider } from "@earendil-works/pi-ai";
-export const faux = fauxProvider({ provider: "fixture", models: [{ id: "m" }] });
-`;
-
-const FILES: Record<string, string> = {
-  "model.ts": MODEL_MODULE,
-  "fastagent.config.ts": `import { faux } from "./model.ts";
-export default { defaults: { model: "fixture/m", thinkingLevel: "low" }, providers: [faux.provider] };
-`,
-  "SYSTEM.md": "You are Support.\n",
-  "AGENTS.md": "Be brief.\n",
-  "skills/lookup-order/SKILL.md": `---
-name: lookup-order
-description: Look an order up. Use when a customer names an order.
----
-Ask for the order number, then read references/codes.md.
-`,
-  "skills/Not_Valid/SKILL.md": "---\nname: Not_Valid\ndescription: broken\n---\nbody\n",
-  "prompts/review.md": "---\ndescription: Review something\n---\nReview $1 carefully. Everything: $@\n",
-  "src/tools/weather.ts": `import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
-import { needs } from "${DEFINE}";
-export default needs(
-  [{ name: "WEATHER_KEY", description: "The weather service's API key" }, { name: "WEATHER_REGION", optional: true }],
-  ({ WEATHER_KEY, WEATHER_REGION }) =>
-    defineTool({
-      name: "weather",
-      description: "Tells the weather",
-      parameters: obj({ city: str() }),
-      execute: async (args) => ({
-        output: [{ type: "text", text: \`\${args.city}: sunny (key \${WEATHER_KEY}, region \${WEATHER_REGION ?? "none"})\` }],
-      }),
-    }),
-);
-`,
-  "src/tools/weather.test.ts": "throw new Error('a test file is not a module');\n",
-  "src/extensions/audit.ts": `import { defineExtension, section } from "@earendil-works/pi-durable";
-export default defineExtension({ name: "audit", sections: [section("audit", () => "Every answer is audited.")] });
-`,
-  "src/schedules/daily.ts": `import { defineSchedule } from "${DEFINE}";
-export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: ({ at }) => \`Report for \${at.toISOString()}\` });
-`,
-  "context.json": JSON.stringify({ environment: { variables: { GH_TOKEN: { description: "For gh" } } } }),
-};
-
-const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 
 describe("an agent definition on pi-durable", () => {
   it("takes a third-party extension from a package as a module of src/extensions/ that re-exports it", async () => {
@@ -352,21 +287,6 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
     });
 
-    it("what it runs from a dev process is not dev: the bash tool's children do not inherit the mark", async () => {
-      const { agent, faux } = await open();
-      process.env[DEV_SERVE_ENV] = "1";
-      try {
-        faux.setResponses([
-          () => toolCall("bash", { command: `printf "[%s]" "$${DEV_SERVE_ENV}"` }),
-          (context) => fauxAssistantMessage(lastToolResult(context)),
-        ]);
-        expect((await ask(agent, "run it")).answer?.text).toContain("[]");
-        expect(process.env[DEV_SERVE_ENV]).toBe("1"); // the serving process itself keeps it
-      } finally {
-        delete process.env[DEV_SERVE_ENV];
-      }
-    });
-
     it("runs its tool with the secret it declared, an unset optional one absent", async () => {
       const { agent, faux } = await open();
       faux.setResponses([
@@ -508,60 +428,6 @@ export default defineTool({
   });
 });
 
-describe("two agents in one process", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("each runs on its own secrets: its code, its commands and its model keys, the process's left alone", async () => {
-    for (const name of ["WEATHER_KEY", "GH_TOKEN", "ANTHROPIC_API_KEY"]) vi.stubEnv(name, undefined);
-    const before = { ...process.env };
-    const agents = [
-      {
-        values: { WEATHER_KEY: "k-a", GH_TOKEN: "gh-a", ANTHROPIC_API_KEY: "sk-a" },
-        key: "k-a",
-        token: "gh-a",
-        anthropic: true,
-      },
-      { values: { WEATHER_KEY: "k-b", GH_TOKEN: "gh-b" }, key: "k-b", token: "gh-b", anthropic: false },
-    ].map((agent) => ({ ...agent, dir: agentPackage(FILES) }));
-    const opened = [];
-    for (const { dir, values } of agents) {
-      opened.push(
-        await openServing(await loadSourceDefinition(dir), {
-          secrets: values,
-          env: {},
-          ownEnv: process.env,
-          runsAs: NOT_HOSTED,
-          storage: "memory",
-          credentialStore: new InMemoryCredentialStore(),
-        }),
-      );
-    }
-    try {
-      for (const [i, { dir, key, token, anthropic }] of agents.entries()) {
-        const { agent, models } = opened[i] as (typeof opened)[number];
-        const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-        const answer = async (call: ReturnType<typeof toolCall>) => {
-          faux.setResponses([() => call, (context) => fauxAssistantMessage(lastToolResult(context))]);
-          const sessionId = (await agent.sessions.create()).id;
-          return (await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text;
-        };
-        expect(await answer(toolCall("weather", { city: "London" }))).toBe(`London: sunny (key ${key}, region none)`);
-        expect(await answer(toolCall("bash", { command: 'printf "[%s]" "$GH_TOKEN"' }))).toContain(`[${token}]`);
-        expect((await models.authStatus("anthropic")).source).toBe(anthropic ? "ANTHROPIC_API_KEY" : undefined);
-        // A request reads it too, as Bedrock reads its region and Azure its endpoint, not only the auth before it.
-        faux.setResponses([(_context, options) => fauxAssistantMessage(`request env: ${options?.env?.GH_TOKEN}`)]);
-        const sessionId = (await agent.sessions.create()).id;
-        expect((await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text).toBe(
-          `request env: ${token}`,
-        );
-      }
-      expect(process.env).toEqual(before);
-    } finally {
-      for (const { agent } of opened) await agent.close();
-    }
-  });
-});
-
 describe("the secrets an instance is given name where its state and credentials are", () => {
   afterEach(() => vi.unstubAllEnvs());
 
@@ -589,85 +455,6 @@ describe("the secrets an instance is given name where its state and credentials 
       expect(process.env.FASTAGENT_STATE_DIR).toBeUndefined();
     } finally {
       await opened.agent.close();
-    }
-  });
-});
-
-describe("the environment of the processes an agent starts", () => {
-  it("is the base given, the declared secrets and the git ceiling: nothing else of the host's", async () => {
-    vi.stubEnv("FA_HOST_ONLY", "stray-host-variable");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "stray-cloud-credential");
-    const dir = agentPackage(FILES);
-    const workdir = join(dir, "work");
-    mkdirSync(workdir);
-    const agent = await openAgent(await loadSourceDefinition(dir), {
-      workdir,
-      stateDir: join(dir, "state"),
-      offline: true,
-      env: { PATH: "/usr/bin:/bin", HOME: "/home/instance" },
-      secrets: {
-        WEATHER_KEY: "k",
-        GH_TOKEN: "gh-declared",
-        UNDECLARED_TOKEN: "not-declared",
-        FA_HOST_ONLY: "also-given",
-      },
-    });
-    try {
-      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-      faux.setResponses([
-        () => toolCall("bash", { command: "env" }),
-        (context) => fauxAssistantMessage(lastToolResult(context)),
-      ]);
-      const sessionId = (await agent.sessions.create()).id;
-      const end = await agent.messages.send({ sessionId, content: "go" }, { wait: 30 });
-      const seen = Object.fromEntries(
-        (end.answer?.text ?? "")
-          .split("\n")
-          .filter((line) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(line))
-          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
-      );
-      expect(seen).toMatchObject({
-        PATH: "/usr/bin:/bin",
-        HOME: "/home/instance",
-        GH_TOKEN: "gh-declared",
-        GIT_CEILING_DIRECTORIES: dir,
-      });
-      for (const name of ["UNDECLARED_TOKEN", "FA_HOST_ONLY", "AWS_SECRET_ACCESS_KEY", DEV_SERVE_ENV]) {
-        expect(seen, name).not.toHaveProperty(name);
-      }
-    } finally {
-      await agent.close();
-    }
-  });
-});
-
-describe("git discovery in the agent's working directory", () => {
-  it("stops at the workspace: a repository around it is not the agent's to act on", async () => {
-    const dir = agentPackage(FILES);
-    execFileSync("git", ["init", "-q", dir]);
-    const workdir = join(dir, "work");
-    mkdirSync(workdir);
-    const agent = await openAgent(await loadSourceDefinition(dir), {
-      workdir,
-      stateDir: join(dir, "state"),
-      offline: true,
-      env: { PATH: process.env.PATH ?? "" },
-      secrets: ENV,
-    });
-    try {
-      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-      const ask = async (command: string) => {
-        faux.setResponses([
-          () => toolCall("bash", { command }),
-          (context) => fauxAssistantMessage(lastToolResult(context)),
-        ]);
-        const sessionId = (await agent.sessions.create()).id;
-        return (await agent.messages.send({ sessionId, content: "go" }, { wait: 30 })).answer?.text ?? "";
-      };
-      expect(await ask("git rev-parse --show-toplevel 2>&1; true")).toContain("not a git repository");
-      expect(await ask("git init -q . && git rev-parse --show-toplevel")).toContain("work");
-    } finally {
-      await agent.close();
     }
   });
 });
@@ -713,12 +500,3 @@ describe("prompt templates", () => {
     );
   });
 });
-
-const toolCall = (name: string, args: Record<string, string>) =>
-  fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });
-
-function lastToolResult(context: TranscriptContext): string {
-  const result = context.messages.at(-1);
-  if (result?.role !== "toolResult") throw new Error("the model was not answering a tool call");
-  return result.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-}

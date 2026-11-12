@@ -1,11 +1,11 @@
-// Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has: exit codes
-// and stdout/stderr discipline across a real pipe (cli.test.ts, cli-kernel.test.ts's end-to-end block), a command that
-// outlives its caller (the ticket tests in cli-login/cli-deploy), a signal, a kill. `runInProcess` calls the same entry
-// in this process, for everything that is about what a COMMAND decides: ~0.5-1s of CPU cheaper per call.
-// Rule of thumb: reach for `runInProcess`; use `run` when the test would be wrong if no process were involved.
+// Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has, and so only in an
+// integration test: exit codes and stdout/stderr discipline across a real pipe (cli.integration.test.ts,
+// cli-kernel.integration.test.ts), a command that outlives its caller (the ticket tests in cli-login/cli-deploy), a
+// signal, a kill. `runInProcess` calls the same entry in this process, for everything that is about what a COMMAND
+// decides: ~0.5-1s of CPU cheaper per call, and the unit tier's way to run a command.
 import { useValueFile } from "../src/value-file.ts";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -57,6 +57,27 @@ export async function agentWorkspace(prefix: string, files: Record<string, strin
   return dir;
 }
 
+/**
+ * A path for `name` outside the agent directory `dir`, in a directory of that agent's alone. Never `join(dir, "..", name)`:
+ * the parent of a temp agent is the machine's temp directory, which every test process and every run shares.
+ */
+export function besideAgent(dir: string, name: string): string {
+  const beside = `${dir}-beside`;
+  mkdirSync(beside, { recursive: true });
+  return join(beside, name);
+}
+
+/**
+ * The environment a command is given, on the clean machine `test/setup.ts` makes: a test that names the whole environment
+ * still runs with the test's HOME and no model catalog fetched, unless it names those itself. Without HOME a command finds
+ * the user's own home directory, and its credentials; without FASTAGENT_OFFLINE it fetches pi.dev's catalog.
+ */
+function onCleanMachine(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const key of ["HOME", "FASTAGENT_OFFLINE"]) if (process.env[key] !== undefined) clean[key] = process.env[key];
+  return { ...clean, ...env };
+}
+
 /** Run the CLI to completion, its stdin ended at once as a coding agent's shell hands it; capture stdout, stderr, exit code. */
 export function run(
   args: string[],
@@ -64,7 +85,10 @@ export function run(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { ...(cwd ? { cwd } : {}), env: env ?? process.env });
+    const child = spawn(process.execPath, [CLI, ...args], {
+      ...(cwd ? { cwd } : {}),
+      env: onCleanMachine(env ?? process.env),
+    });
     child.stdin.end();
     let stdout = "";
     let stderr = "";
@@ -93,14 +117,14 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  *
  * NOT for a test that is about the process itself: a command that outlives it (a ticket's background process,
  * which signals its process group on exit), stdout/stderr discipline across a real pipe, a signal, a crash.
- * Those stay on {@link run}; `cli-run-parity.test.ts` pins that the two agree.
+ * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
  */
 export function runInProcess(
   args: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const turn = inProcessQueue.then(() => runOnce(args, cwd, env ?? process.env));
+  const turn = inProcessQueue.then(() => runOnce(args, cwd, onCleanMachine(env ?? process.env)));
   inProcessQueue = turn.catch(() => undefined);
   return turn;
 }
@@ -267,7 +291,7 @@ export async function whileRunning<T>(
   during: (stderr: string) => Promise<T>,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
-  const child = spawn(process.execPath, [CLI, ...args], { env });
+  const child = spawn(process.execPath, [CLI, ...args], { env: onCleanMachine(env) });
   const closed = new Promise((resolve) => child.on("close", resolve));
   let stderr = "";
   try {

@@ -2835,12 +2835,11 @@ describe("Feishu inputs steered into one run", () => {
     await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
     await handler(feishuRequest(messageEvent({ id: "om_2", text: "and keep the old column" })));
     await vi.waitFor(() => expect(reactionCalls).toBeGreaterThan(0));
-    const released = Date.now();
     release();
     await idle();
-    // One attempt, no retries: the platform's rate limit would otherwise cost 1s, 2s and 3s of waiting.
+    // One attempt, no retries: the platform's rate limit would otherwise cost 1s, 2s and 3s of waiting, and the
+    // transport waits only before a retry.
     expect(reactionCalls).toBe(1);
-    expect(Date.now() - released).toBeLessThan(2000);
     expect(JSON.parse(readFileSync(join(home, "turns.json"), "utf8"))).toEqual({});
   });
 

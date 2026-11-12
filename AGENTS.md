@@ -312,6 +312,7 @@ src/
     │   │                   # them, each value with its source; `fastagent.schema.json`
     │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
     │   ├── build.ts        # `fastagent build`: the project's tsc into dist/, the text and resources, the generated entry
+    │   ├── tsc.ts          # the project's TypeScript as the build runs it (a process per call), apart so a test can stand in
     │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,
     │   │                   # and the opener of a built package (`loadProjectBuild`, `loadBuiltDefinition`)
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
@@ -348,7 +349,13 @@ src/
         ├── login.ts        # signing in to a model provider, for any front end; `fastagent login` is one
         └── host.ts         # what a host calls (credentialFile, signIn, signInOptions, providerAuth): thin over
                             # login.ts and credentials.ts, and the ONE translation of sign-in-api.ts's types to pi-ai's
-test/                       # vitest; faux models by default
+test/                       # vitest; faux models by default; two tiers (CONTRIBUTING.md, "Test tiers")
+├── forbidden.ts            # what a tier refuses, failed after the test: setup.ts (off-machine connections, both
+│                           # tiers), unit-setup.ts (child processes, unit)
+├── git-double.ts           # src/git.ts for a unit test: no git, or the answers a test scripts for a directory
+├── tsc-double.ts           # the build's compiler for a unit test: imports followed, types stripped, nothing checked
+├── storage-no-wait.ts      # the instance's storage for a unit test: a held database refused at once, not after 5 s
+├── e2e/packed.ts           # the packed package end to end (init, invoke, build, an app opens the build): CI's packed job
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)
@@ -391,7 +398,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 - **A convention with four enforcers has none.** When several call sites must each remember to do a thing, the thing belongs in a function they all call, and that function must REPAIR rather than trust the first writer. `writeFileAtomic` is that shape.
 - **A shared rule is tested once, where it lives; a caller's test proves only its own wiring.** Four hosts calling one `registerWebhooks` do not each owe a "long-connection is not registered" test — that belongs to `deploy-channel-ingress.test.ts`, and a host test owes the URL it hands over and what it does with the gate. Same for the Lark scaffold that is the Feishu one with the cloud swapped, and a chat channel over `channels/kit/turn-*` (its own tests cover the record shape, the ACK boundary, and how a dropped or deferred turn reaches the asker — not the ceiling arithmetic). A list-driven structural guard is likewise ONE test whose assertion names the offending file, not one `it` per file: `package-boundary.test.ts` shed 40 cases that way without losing a line of coverage.
 
-- **A CLI test calls the command in-process unless the test is about the process.** `runInProcess` (`test/cli-run.ts`) answers what a spawned CLI answers — exit code, stdout, stderr, the files it writes — for the cost of the command; `run` cold-starts a whole process, ~0.5–1s of CPU each, and the suite is CPU-bound, so every needless spawn is paid by every CI job. Use `runInProcess` for what a COMMAND decides (a refusal, a usage error, a JSON answer, a write). Use `run` only when the test would be wrong with no process involved: stdout/stderr discipline across a real pipe, a signal or a kill, a command that outlives its caller (a ticket's background process signals its process group on exit, so it must never run in-process). `test/cli-run-parity.test.ts` pins that the two agree; if you find a difference, extend it there.
+- **A test is in the smallest tier that can show it** (CONTRIBUTING.md, "Test tiers"). Unit (`*.test.ts`, `npm test`) runs in one process: no child process, no connection off the machine, no elapsed-time assertion, and the setup files refuse the first two where they happen. Integration (`*.integration.test.ts`, `npm run test:integration`) is for what a process or a tool on this machine must show. A CLI test calls the command with `runInProcess` (`test/cli-run.ts`), which answers what a spawned CLI answers (exit code, stdout, stderr, the files it writes) for the cost of the command. Spawn it with `run`, in an integration file, only when the test would be wrong with no process involved: stdout/stderr discipline across a real pipe, a signal or a kill, a command that outlives its caller (a ticket's background process signals its process group on exit, so it must never run in-process). `test/cli-run-parity.integration.test.ts` pins that the two agree; if you find a difference, extend it there.
 
 - **A test that asserts "X must not happen" is unproven until X has happened.** Run the mutation that makes it happen and watch the test fail; a green suite says nothing about a claim the test cannot observe. The failure mode is specific: a test DOUBLE that omits part of the contract it stands in for. Two fake `fetch`es here ignored `init.signal`, so "the client does not kill a healthy connection" stayed green under a change that killed every one of them — the doubles reported on bytes and could not see teardown at all. Hence one shared double per contract (`scripted-agent.ts` for the Agent) rather than a fake per case: a clause several hand-written doubles must each remember is a clause some of them will not.
 
@@ -399,7 +406,7 @@ fastagent *is* a developer-experience product: its whole promise is turning an e
 
 Full version: `CONTRIBUTING.md`. The essentials:
 
-1. **Local-first.** While iterating, run the test files for the code you changed (`npx vitest run test/<file>.test.ts`); run the full gate once before pushing. Do not push to discover bugs in CI.
+1. **Local-first.** While iterating, run the test files for the code you changed (`npx vitest run test/<file>.test.ts`); run the full gate once before pushing, and `npm run test:integration` too when the change touches what that tier tests. Do not push to discover bugs in CI.
    ```bash
    npm run lint && npm run typecheck && npm test
    ```

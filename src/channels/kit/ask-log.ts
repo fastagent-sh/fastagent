@@ -55,8 +55,10 @@ export function createAskLog<C>(deps: {
   isPosition(value: unknown): value is C;
   /** Negative, zero or positive as `a` is before, at or after `b`. */
   compare(a: C, b: C): number;
+  /** Conversations kept (default 2000). */
+  maxConversations?: number;
 }): AskLog<C> {
-  const { label, path, messages, compare } = deps;
+  const { label, path, messages, compare, maxConversations = MAX_CONVERSATIONS } = deps;
   const conversations = load(path, label, deps.isPosition);
 
   const save = (): void => {
@@ -78,7 +80,7 @@ export function createAskLog<C>(deps: {
       // Most recently asked in last: the map's order is the eviction order.
       conversations.delete(conversation);
       conversations.set(conversation, kept.slice(-ASKS_PER_CONVERSATION));
-      for (const victim of [...conversations.keys()].slice(0, Math.max(0, conversations.size - MAX_CONVERSATIONS))) {
+      for (const victim of [...conversations.keys()].slice(0, Math.max(0, conversations.size - maxConversations))) {
         conversations.delete(victim);
       }
       save();

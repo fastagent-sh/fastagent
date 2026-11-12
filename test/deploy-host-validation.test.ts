@@ -9,6 +9,8 @@ import { registerFeishuApp } from "../src/channels/feishu/register-app.ts";
 import { createFeishuApi } from "../src/channels/feishu/feishu-api.ts";
 import { feishuAppScopes } from "../src/channels/feishu/setup-mode.ts";
 
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
+
 let changedIngress = false;
 
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));

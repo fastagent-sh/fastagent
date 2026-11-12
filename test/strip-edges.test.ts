@@ -95,27 +95,23 @@ describe("the callers keep what they made of a name", () => {
   });
 });
 
+// The test's timeout is the bound: a regex that backtracks on these runs takes over a minute, a linear trim milliseconds.
 describe("a long run is not slow at any caller", () => {
-  const run = (char: string) => char.repeat(100_000);
-  const fast = (name: string, work: () => unknown) => {
-    const started = performance.now();
-    work();
-    expect(performance.now() - started, `${name} took too long`).toBeLessThan(1000);
-  };
+  const run = (char: string) => char.repeat(300_000);
   const dashes = `${run("-")}x${run("-")}y`;
 
   it("for the names the deploy hosts and the instance derive", () => {
-    fast("instanceName", () => instanceName(dashes));
-    fast("toRailwayName", () => toRailwayName(dashes));
-    fast("toFlyAppName", () => toFlyAppName(dashes));
-    fast("agentcoreName", () => agentcoreName(dashes));
-    fast("toRuntimeName", () => toRuntimeName(dashes));
-    fast("toDockerProjectName", () => toDockerProjectName(dashes));
+    instanceName(dashes);
+    toRailwayName(dashes);
+    toFlyAppName(dashes);
+    agentcoreName(dashes);
+    toRuntimeName(dashes);
+    toDockerProjectName(dashes);
     expect(toRailwayName(dashes)).toBe(`x${run("-")}y`);
   });
 
   it("for a URL's slashes, and for a Slack bot's name, which is cut before it is trimmed", () => {
-    fast("stripTrailingSlashes", () => stripTrailingSlashes(`${run("/")}x${run("/")}`));
+    stripTrailingSlashes(`${run("/")}x${run("/")}`);
     expect(stripTrailingSlashes(`https://x.test${run("/")}`)).toBe("https://x.test");
     expect(
       buildSlackManifest({ name: `${run("-")}Bot${run("-")}`, ingress: "connection" }).features.bot_user.display_name,

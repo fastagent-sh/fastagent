@@ -296,10 +296,9 @@ describe("a step that outlives the command that starts it", () => {
     const step = await waitingStep("add:slack:dev:/zombie", { sidecar, releaseAfterMs: 0 });
     const started = Number(readFileSync(sidecar, "utf8"));
     try {
-      const at = Date.now();
-      await stopTicket(step.ticket);
+      // A deadline past the test's timeout: a stop that waited on the zombies would fail the test.
+      await stopTicket(step.ticket, 60_000);
       expect(running(started)).toBe(false);
-      expect(Date.now() - at).toBeLessThan(2_500);
     } finally {
       if (running(started)) process.kill(started, "SIGKILL");
     }

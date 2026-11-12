@@ -17,6 +17,8 @@ import { prepareChannelApps } from "../src/cli/commands/deploy/channel-apps.ts";
 import type { Person } from "../src/cli/person.ts";
 import { loadEnvValues } from "../src/value-file.ts";
 
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
+
 /** The real `fetch`, for reaching a setup's own page while the platform's API is a stand-in. */
 const realFetch = globalThis.fetch;
 

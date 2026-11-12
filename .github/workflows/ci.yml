@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test (Node ${{ matrix.node-version }}, shard ${{ matrix.shard }}/2)
+  unit:
+    name: Unit (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -19,10 +19,6 @@ jobs:
         # line (`24`) is not a third entry: it only sits between these two, and a job that cannot fail
         # differently is one more chance for a flaky test to fail the run.
         node-version: ['24.15.0', '26']
-        # The suite is CPU-bound (wall ~ total CPU / cores), so two runners each take half the files:
-        # vitest's --shard splits by file, and the two halves measured within ~10% of each other in CPU.
-        # `2` here must match the `/2` in the Test step and the job name.
-        shard: [1, 2]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -37,17 +33,39 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Lint and typecheck do not depend on the Node version, so they run once, on the floor's first shard.
+      # Lint and typecheck do not depend on the Node version, so they run once, on the floor.
       - name: Lint
-        if: matrix.node-version == '24.15.0' && matrix.shard == 1
+        if: matrix.node-version == '24.15.0'
         run: npm run lint
 
       - name: Typecheck
-        if: matrix.node-version == '24.15.0' && matrix.shard == 1
+        if: matrix.node-version == '24.15.0'
         run: npm run typecheck
 
-      - name: Test
-        run: npm test -- --shard=${{ matrix.shard }}/2
+      - name: Unit tests
+        run: npm test
+
+  # One Node version: what these tests add over the unit tier is the operating system and the tools on it (processes,
+  # signals, git, tsc), not the runtime.
+  integration:
+    name: Integration (Node 24.15.0)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Integration tests
+        run: npm run test:integration
 
   package-smoke:
     name: Packed package smoke
@@ -75,12 +93,17 @@ jobs:
       - name: Pack, install, and import the published surface
         run: |
           tarball=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
+          echo "TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
           mkdir "$RUNNER_TEMP/package-smoke"
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP/$tarball" --ignore-scripts
           node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/client"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu"); await import("@fastagent-sh/fastagent/lark")'
           ./node_modules/.bin/fastagent --version
+
+      # An agent made by `init` from the packed package answers through `invoke`, builds, and its build answers in an app.
+      - name: End to end on the packed package
+        run: node test/e2e/packed.ts "$TARBALL"
 
   bun-smoke:
     name: Bun 1.4 smoke
@@ -133,12 +156,13 @@ jobs:
   # aggregate gate, not the removed core/ directory.)
   core-checks:
     name: Core checks
-    needs: [test, package-smoke, bun-smoke]
+    needs: [unit, integration, package-smoke, bun-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require all jobs to pass
         run: |
-          [ "${{ needs.test.result }}" = "success" ]
+          [ "${{ needs.unit.result }}" = "success" ]
+          [ "${{ needs.integration.result }}" = "success" ]
           [ "${{ needs.package-smoke.result }}" = "success" ]
           [ "${{ needs.bun-smoke.result }}" = "success" ]

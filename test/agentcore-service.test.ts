@@ -13,6 +13,8 @@ import { buildable } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
 
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
+
 async function agentDir(files: Record<string, string> = {}, config = `{ defaults: { model: "${CODEX_MODEL}" } }`) {
   const dir = await mkdtemp(join(tmpdir(), "fa-agentcore-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);

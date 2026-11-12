@@ -1,34 +1,28 @@
-/**
- * A built package opened as an app opens one (agent-artifact.md §3, §10 delivery 1): installed under `node_modules`,
- * read-only, once per instance, two instances at a time. What the package is made of is build.test.ts's; that a
- * project's `dist/` is the one `start` opens is cli.test.ts's.
- */
-import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { loadBuiltDefinition, loadProjectBuild } from "../src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "./probe-package.ts";
 import { assertDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
-import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { expect } from "vitest";
+import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
+
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
 
 const made: string[] = [];
-let installed: string | undefined;
+
 const agents: LocalAgent[] = [];
+
 const scratch = (parent: string, prefix: string) => {
   const dir = mkdtempSync(join(parent, prefix));
   made.push(dir);
   return dir;
 };
-
-afterAll(async () => {
-  for (const agent of agents) await agent.close();
-  if (installed !== undefined) setMode(installed, 0o644, 0o755);
-  for (const dir of made) rmSync(dir, { recursive: true, force: true });
-});
 
 /** Every file of `dir` with a hash of its content: what "the package was not written to" is compared on. */
 const snapshot = (dir: string) =>
@@ -46,6 +40,7 @@ const setMode = (dir: string, file: number, directory: number) => {
   }
   chmodSync(dir, directory);
 };
+
 const readOnly = (dir: string) => setMode(dir, 0o444, 0o555);
 
 async function ask(agent: LocalAgent, name: string, args: Record<string, unknown>) {
@@ -57,6 +52,16 @@ async function ask(agent: LocalAgent, name: string, args: Record<string, unknown
   expect(end.status).toBe("completed");
   return end;
 }
+
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
+
+let installed: string | undefined;
+
+afterAll(async () => {
+  for (const agent of agents) await agent.close();
+  if (installed !== undefined) setMode(installed, 0o644, 0o755);
+  for (const dir of made) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("an installed package, opened as instances", () => {
   let definition: Awaited<ReturnType<typeof loadBuiltDefinition>>;
@@ -100,7 +105,7 @@ describe("an installed package, opened as instances", () => {
     const root = scratch(tmpdir(), "fa-instance-held-");
     const first = await openAgent(definition, { root, offline: true });
     agents.push(first);
-    await expect(openAgent(definition, { root })).rejects.toThrow();
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow();
     await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(
       'root must be an absolute path, and is "relative/root"',
     );
@@ -157,7 +162,9 @@ describe("a project's build is the one `start` opens only while the project is w
   });
 
   it("refuses a project nobody built, naming the command", async () => {
-    await expect(loadProjectBuild(project, { checkSources: true })).rejects.toThrow(
+    const unbuilt = scratch(FIXTURES, ".tmp-built-none-");
+    writeFileSync(join(unbuilt, "package.json"), '{"name":"none","type":"module"}');
+    await expect(loadProjectBuild(unbuilt, { checkSources: true })).rejects.toThrow(
       /dist holds no build: run `fastagent build`/,
     );
   });

@@ -34,7 +34,7 @@ function agentWith(held: Record<string, Partial<Message> | "missing" | Error>) {
   return { messages: messages as never, asked };
 }
 
-function setup(held: Record<string, Partial<Message> | "missing" | Error> = {}) {
+function setup(held: Record<string, Partial<Message> | "missing" | Error> = {}, maxConversations?: number) {
   const root = mkdtempSync(join(tmpdir(), "ask-log-"));
   roots.push(root);
   const path = join(root, "asks.json");
@@ -46,6 +46,7 @@ function setup(held: Record<string, Partial<Message> | "missing" | Error> = {}) 
       messages: agent.messages,
       isPosition: (value): value is number => typeof value === "number",
       compare: (a, b) => a - b,
+      ...(maxConversations === undefined ? {} : { maxConversations }),
     });
   return { asks: open(), open, path, agent };
 }
@@ -145,9 +146,9 @@ describe("ask log: where a conversation's session read to", () => {
   it("bounds the asks a conversation keeps and the conversations it keeps", async () => {
     const held: Record<string, Partial<Message>> = {};
     for (let i = 0; i < 10; i++) held[`k${i}`] = { entryId: `e${i}` };
-    const { asks, agent } = setup(held);
+    const { asks, agent } = setup(held, 10);
     for (let i = 0; i < 10; i++) asks.record("c", { key: `k${i}`, at: i });
-    for (let i = 0; i < 2100; i++) asks.record(`other-${i}`, { key: "x", at: 1 });
+    for (let i = 0; i < 10; i++) asks.record(`other-${i}`, { key: "x", at: 1 });
     expect(await asks.readTo("c", "s", 100)).toBeUndefined(); // c is the least recent conversation: dropped
     asks.record("c", { key: "k9", at: 9 });
     agent.asked.length = 0;

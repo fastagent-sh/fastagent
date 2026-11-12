@@ -12,8 +12,9 @@
     "src/feishu.ts",
     "src/lark.ts",
     "test/**/*.test.ts",
-    // Run by CI's Bun job, which vitest is not.
-    "test/bun/*.ts"
+    // Run by CI's Bun and packed-package jobs, which vitest is not.
+    "test/bun/*.ts",
+    "test/e2e/*.ts"
   ],
   "project": ["src/**/*.ts", "test/**/*.ts"],
   // Scaffold bundles/templates are copied as files at scaffold time, never imported; the AgentCore

@@ -308,15 +308,14 @@ describe("telegramReply preview frames are droppable (direct)", () => {
     src.end();
     // The answer must land without waiting out Telegram's 25s flood wait for a frame nobody needs:
     // the next frame redraws the same view, and the final write is authoritative.
-    const started = Date.now();
-    let elapsed = -1;
+    let settled = false;
     void turn.then(() => {
-      elapsed = Date.now() - started;
+      settled = true;
     });
-    // Well past any flood wait: the question is not WHETHER the answer lands, but whether it waited.
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(elapsed).toBeGreaterThanOrEqual(0);
-    expect(elapsed).toBeLessThan(5_000);
+    // The question is not WHETHER the answer lands, but whether it waited: five seconds of the fake clock are far
+    // short of the 25s flood wait.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).toBe(true);
     expect(edits.at(-1)).toBe("hello");
     await turn;
   });

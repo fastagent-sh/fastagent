@@ -1,7 +1,7 @@
 /**
  * `login --method account` without a terminal, for a coding agent: a ticket the person finishes. The command that starts
  * it, the step that runs it and the command that reads it are each tested where they are decided, in this process. That
- * a step outlives the command that starts it is `startTicket`'s, and tested with real processes in ticket.test.ts.
+ * a step outlives the command that starts it is `startTicket`'s, and tested with real processes in ticket.integration.test.ts.
  */
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";

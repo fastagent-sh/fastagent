@@ -7,6 +7,8 @@ import { FEISHU_AGENT_SCOPES } from "../src/channels/feishu/setup-mode.ts";
 import { checkTicket, createTicket } from "../src/cli/ticket.ts";
 import { agentWorkspace } from "./cli-run.ts";
 
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
+
 // At a terminal, so `--json` alone is what says a coding agent runs this (the ticket's own run asks nothing either way).
 vi.mock("../src/cli/shared.ts", async (original) => ({
   ...(await original<typeof import("../src/cli/shared.ts")>()),

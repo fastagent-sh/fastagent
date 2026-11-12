@@ -9,56 +9,13 @@ import { modelsOver } from "../src/harnesses/models/models.ts";
 import { resolveStateRoot } from "../src/paths.ts";
 import { useValueFile } from "../src/value-file.ts";
 import { keepCatalog } from "./kept-catalog.ts";
-import { type EffectiveConfig, readInstanceConfigFile, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
-import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
+import { readInstanceConfigFile } from "../src/harnesses/pi-durable/config.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
+import { agent, empty, call } from "./deploy-preflight-fixtures.ts";
+import { besideAgent } from "./cli-run.ts";
 
-/** An agent directory, as `init` produces one; `files` land in it. Named `agent`: a deployed agent's name is its
- *  directory's, and the temp prefix would not pass the release-name rule. */
-async function agent(files: Record<string, string> = {}): Promise<string> {
-  const host = await mkdtemp(join(tmpdir(), "fa-preflight-"));
-  const dir = join(host, "agent");
-  await mkdir(join(dir, ".secrets"), { recursive: true });
-  await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
-  await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
-  await writeFile(
-    join(dir, "package.json"),
-    JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
-  );
-  // Real credential files: the leak gate only fires on paths that EXIST (nothing else can be baked).
-  await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
-  await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
-  for (const [name, content] of Object.entries(files)) {
-    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (schedules/…)
-    await writeFile(join(dir, name), content);
-  }
-  return dir;
-}
-
-/** The values of a configuration a test sets; the rest is what an empty one resolves to. */
-type FastagentConfig = Pick<EffectiveConfig, "model" | "thinkingLevel" | "http" | "deploy">;
-const empty = resolveConfig(
-  defineDefinition({
-    format: 1,
-    builtWith: "0.0.0",
-    name: "empty",
-    version: "0.0.0",
-    dir: "/empty",
-    config: {},
-    registry: { tools: [], extensions: [], channels: [], schedules: [] },
-  }),
-);
-
-const call = (target: string, config: FastagentConfig, over: Partial<Parameters<typeof preflightDeploy>[0]> = {}) =>
-  preflightDeploy({
-    agentDir: target,
-    name: "agent",
-    config: { ...empty, ...config },
-    run: false,
-    force: false,
-    ...over,
-  });
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -797,7 +754,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
     await mkdir(join(pkg, "bin"), { recursive: true });
     await writeFile(join(pkg, "package.json"), "{}\n");
-    const runs = join(dir, "..", "mise-runs.log");
+    const runs = besideAgent(dir, "mise-runs.log");
     await writeFile(
       join(pkg, "bin", "mise"),
       `#!/bin/sh\necho "$*" >> "${runs}"\ncase "$1" in\n  tool) printf '{"backend":"aqua:o/%s"}' "$2" ;;\nesac\n`,
@@ -810,42 +767,6 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     type: "module",
     dependencies: { "@fastagent-sh/fastagent": "^1" },
     optionalDependencies: Object.fromEntries(MISE_PACKAGE_NAMES.map((name) => [name, "2026.10.7"])),
-  });
-
-  it("packages need the linux mise in package.json, and mise here to check them; deploy installs nothing here", async () => {
-    const dir = await agent({
-      "package.json": `{"type":"module","dependencies":{"@fastagent-sh/fastagent":"^1"}}`,
-      "context.json": JSON.stringify({ environment: { packages: { jq: "1.8.1" }, aptPackages: ["chromium", "git"] } }),
-    });
-    const gated = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(gated).toMatchObject({
-      ok: false,
-      gate: expect.stringMatching(
-        /does not list @jdxcode\/mise-linux-arm64, @jdxcode\/mise-linux-x64\. Run `fastagent env install`/,
-      ),
-    });
-    await writeFile(join(dir, "package.json"), withMise);
-    // Listed but not installed on this machine (it never installed the agent's dependencies): nothing can be checked,
-    // which stops --run and only warns a deploy that writes the artifacts.
-    const notHere =
-      `the agent's mise is not installed here, so the packages context.json declares cannot be checked. Run ` +
-      `\`fastagent env install\` in ${dir}, then deploy again.`;
-    expect(await call(dir, { model: "openai/gpt-4o-mini" }, { run: true })).toMatchObject({ ok: false, gate: notHere });
-    const artifactsOnly = await call(dir, { model: "openai/gpt-4o-mini" });
-    expect(artifactsOnly.ok && artifactsOnly.messages).toContainEqual({ level: "warn", text: notHere });
-    const runs = await installMise(dir);
-    const checked = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(checked.ok).toBe(true);
-    if (checked.ok) {
-      expect(checked.container.packages).toEqual(["jq@1.8.1"]);
-      // mise downloads over TLS (the slim image has no CAs); the agent's own apt packages join the one layer.
-      expect(checked.container.apt).toEqual(["ca-certificates", "chromium", "git"]);
-    }
-    // Checked here; the image installs them.
-    expect(await runs()).toBe("tool jq --json\n");
-    await writeFile(join(dir, "context.json"), JSON.stringify({ environment: { aptPackages: ["chromium"] } }));
-    const none = await call(dir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(none.ok && none.container.packages).toBeUndefined();
   });
 
   it("an image that installs rust has curl: rustup, which mise installs it with, downloads with it", async () => {

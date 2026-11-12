@@ -65,7 +65,6 @@ async function ended(agent: Agent, message: Message): Promise<Message> {
 
 async function untilStatus(agent: Agent, message: Message, status: Message["status"]) {
   await vi.waitFor(async () => expect((await agent.messages.get(byId(message))).status).toBe(status), {
-    timeout: 5000,
     interval: 10,
   });
 }
@@ -117,10 +116,9 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
   describe(`Agent API conformance: ${name}`, () => {
     let agent: Agent;
     /** Until the message just sent is running its `hold` or `stubborn` call, so a release or a stop reaches it. */
-    const holding = () => vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+    const holding = () => vi.waitFor(() => expect(subject.held()).toBe(1), { interval: 5 });
     /** Until the cancel just sent has signalled the tool it stops. */
-    const stopRecorded = (count = 1) =>
-      vi.waitFor(() => expect(subject.signalled()).toBe(count), { timeout: 5000, interval: 5 });
+    const stopRecorded = (count = 1) => vi.waitFor(() => expect(subject.signalled()).toBe(count), { interval: 5 });
     const send = (request: SendRequest, options?: Parameters<Agent["messages"]["send"]>[1]) =>
       agent.messages.send(request, options);
     beforeEach(async () => {
@@ -644,7 +642,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const sessionId = await newSession(agent);
         const message = await send({ sessionId, content: "slow" });
         await vi.waitFor(async () => expect((await agent.sessions.get(sessionId)).reply?.text).toBeTruthy(), {
-          timeout: 5000,
           interval: 10,
         });
         const watching = attach(agent, sessionId);
@@ -1197,7 +1194,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await agent.sessions.compact(sessionId, { instructions: "Keep the numbers." });
         await vi.waitFor(
           async () => expect((await history(agent, sessionId)).some((entry) => entry.kind === "compaction")).toBe(true),
-          { timeout: 5000, interval: 20 },
+          { interval: 20 },
         );
         await expect(agent.sessions.compact("nope")).rejects.toMatchObject({ code: "not_found" });
       });

@@ -27,15 +27,20 @@ export interface MessageOwners {
   ownerOf(key: string): MessageOwner | undefined;
 }
 
-export function createMessageOwners(options: { label: string; path: string }): MessageOwners {
-  const { label, path } = options;
+export function createMessageOwners(options: {
+  label: string;
+  path: string;
+  /** Messages kept (default 1000). */
+  maxMessages?: number;
+}): MessageOwners {
+  const { label, path, maxMessages = MAX_MESSAGES } = options;
   const owners = load(path, label);
   return {
     record(key, owner) {
       // Most recently recorded last: the map's order is the eviction order.
       owners.delete(key);
       owners.set(key, owner);
-      for (const victim of [...owners.keys()].slice(0, Math.max(0, owners.size - MAX_MESSAGES))) owners.delete(victim);
+      for (const victim of [...owners.keys()].slice(0, Math.max(0, owners.size - maxMessages))) owners.delete(victim);
       try {
         saveStateFile(path, Object.fromEntries(owners));
       } catch (error) {

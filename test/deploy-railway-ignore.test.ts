@@ -6,9 +6,11 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import ignore from "ignore";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { keptRailwayignoreProblem, railwayignore } from "../src/deploy/railway/ignore.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
+
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
 
 const GITIGNORE = ".fastagent\n.secrets\nnode_modules\n";
 

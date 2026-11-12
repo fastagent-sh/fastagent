@@ -91,6 +91,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -831,7 +832,10 @@ describe("the post-deploy probe (verify restore + construction before registrati
 
   it("retries a non-200 forwarder answer to the deadline, then gates with the LAST answer", async () => {
     const fetchImpl = vi.fn(async () => new Response("forbidden\n", { status: 403 }));
-    const out = await deployAgentcoreRun(
+    // The clock moves only when the test moves it, so the probe gets every retry its 20 ms allow, however busy the machine.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
+    let out: unknown;
+    void deployAgentcoreRun(
       plan({ topology: FORWARDER }),
       fakeCli(happyAws).cli,
       fakeCli().cli,
@@ -840,9 +844,12 @@ describe("the post-deploy probe (verify restore + construction before registrati
       writeZip,
       { telegram: async () => "registered", feishu: undefined },
       { fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20, intervalMs: 1 },
-    );
+    ).then((result) => {
+      out = result;
+    });
+    while (out === undefined) await vi.advanceTimersByTimeAsync(1);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("403 forbidden") });
-    expect(fetchImpl.mock.calls.length).toBeGreaterThan(1);
+    expect(fetchImpl.mock.calls.length).toBeGreaterThan(10);
   });
 
   it("a forwarder URL that never answers gates with the reachability message", async () => {

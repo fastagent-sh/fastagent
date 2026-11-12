@@ -22,12 +22,20 @@ export type StorageLocking = "posix" | "leased-dotfile";
 const BUSY_TIMEOUT_MS = 5_000;
 const SQLITE_BUSY = 5;
 
-/** Open the database at `path`, or refuse, naming `holders` (what else opens it) when given. */
-export async function openLockedStorage(path: string, locking: StorageLocking, holders?: string): Promise<Storage> {
+/**
+ * Open the database at `path`, or refuse, naming `holders` (what else opens it) when given. A database another process
+ * holds is waited for `busyTimeoutMs` before the refusal.
+ */
+export async function openLockedStorage(
+  path: string,
+  locking: StorageLocking,
+  holders?: string,
+  busyTimeoutMs = BUSY_TIMEOUT_MS,
+): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
   if (locking === "leased-dotfile") breakStaleLock(`${path}.lock`);
   const location = locking === "posix" ? path : `file:${path}?vfs=unix-dotfile`;
-  const database = new DatabaseSync(location, { timeout: BUSY_TIMEOUT_MS });
+  const database = new DatabaseSync(location, { timeout: busyTimeoutMs });
   const adapter = new NodeSqliteDatabase(database);
   try {
     // In this order: an exclusive lock keeps WAL's index in this process's memory, so no shared memory is needed.

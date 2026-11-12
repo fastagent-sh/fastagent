@@ -12,7 +12,7 @@ afterEach(() => {
 });
 
 /** A place history over a platform with nothing to say: what each read is handed shows what the place remembers. */
-function setup(path?: string) {
+function setup(path?: string, maxPlaces?: number) {
   const root = mkdtempSync(join(tmpdir(), "place-history-"));
   roots.push(root);
   const read = vi.fn(
@@ -23,7 +23,12 @@ function setup(path?: string) {
     ): Promise<PlaceListing> => ({ messages: [], earlier: false }),
   );
   const open = (file = path ?? join(root, "history.json")) =>
-    createPlaceHistory<number>({ label: "[test]", path: file, read });
+    createPlaceHistory<number>({
+      label: "[test]",
+      path: file,
+      read,
+      ...(maxPlaces === undefined ? {} : { maxPlaces }),
+    });
   const history = open();
   /** Whether a read of `key` would leave `id` out: a recorded output the place still holds. */
   const drops = async (key: string, id: string, reader = history, conversation = "c"): Promise<boolean> => {
@@ -93,8 +98,8 @@ describe("place history", () => {
   });
 
   it("forgets the least recently used place when there are too many, but not the one just recorded", async () => {
-    const { history, drops } = setup();
-    for (let i = 0; i < 2000; i++) history.recordOutput(`place-${i}`, "c", `answer-${i}`);
+    const { history, drops } = setup(undefined, 10);
+    for (let i = 0; i < 10; i++) history.recordOutput(`place-${i}`, "c", `answer-${i}`);
     history.recordOutput("busy", "c", "answer-busy");
     expect(await drops("busy", "answer-busy")).toBe(true);
     expect(await drops("place-0", "answer-0")).toBe(false); // the oldest paid for it
