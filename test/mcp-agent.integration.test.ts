@@ -130,7 +130,7 @@ it("partial open cleans previously started children and releases the state lease
     },
   });
   const pidFile = join(dir, "pids");
-  await expect(openSource(dir, { mcp: { variables: { PID_FILE: pidFile } } })).rejects.toThrow();
+  await expect(openSource(dir, { mcp: { variables: { PID_FILE: pidFile } } })).rejects.toThrow(/MCP open failed/);
   const pids = (await readFile(pidFile, "utf8")).trim().split("\n").map(Number);
   await vi.waitFor(() => expect(pids.filter(alive)).toEqual([]));
   await writeFile(join(dir, "context.json"), JSON.stringify({ mcpServers: {} }));

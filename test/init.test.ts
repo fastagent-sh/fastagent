@@ -191,7 +191,7 @@ describe("init: scaffoldAgent", () => {
     // root THEY pre-created would destroy a directory this run never made. Rollback must do neither.
     const agent = await freshDir();
     await chmod(agent, 0o500); // r-x: writes inside fail
-    await expect(scaffoldAgent(agent)).rejects.toThrow();
+    await expect(scaffoldAgent(agent)).rejects.toMatchObject({ code: "EACCES" });
     await chmod(agent, 0o700);
     expect(await exists(agent)).toBe(true); // theirs, not ours — preserved
     expect(await readdir(agent)).toEqual([]); // …and empty, so the retry is a fresh scaffold

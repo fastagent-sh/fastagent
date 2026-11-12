@@ -180,7 +180,10 @@ describe("serve: serveHandler", () => {
     // cannot pass for the wrong reason — a LAN probe picks up whatever interface is first, often a
     // VPN/docker one where the refusal comes from routing, and a FILTERED interface would hang the
     // fetch with no timeout until vitest killed the file.
-    await expect(fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(2000) })).rejects.toThrow();
+    // No answer either way: refused where 127.0.0.2 is configured (Linux), timed out where it is not (macOS).
+    await expect(fetch(`http://127.0.0.2:${port}/`, { signal: AbortSignal.timeout(2000) })).rejects.toThrow(
+      /fetch failed|aborted due to timeout/,
+    );
     await host.close();
   });
 

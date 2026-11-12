@@ -554,6 +554,6 @@ describe("deploy/railway/run: pure parsers", () => {
     expect(volumeOn(volumes({ serviceName: "worker" }, { serviceName: null }), "bot", "/data")).toBeUndefined();
     expect(volumeOn(volumes({ serviceName: "bot", mountPath: "/other" }), "bot", "/data")).toBeUndefined();
     // Unreadable output is not "no volume": reading it so would add a second one.
-    expect(() => volumeOn("", "bot", "/data")).toThrow();
+    expect(() => volumeOn("", "bot", "/data")).toThrow(SyntaxError);
   });
 });

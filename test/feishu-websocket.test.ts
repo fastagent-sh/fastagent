@@ -116,7 +116,7 @@ describe("Feishu/Lark WebSocket ingress", () => {
         { schema: "2.0", header: { event_type: "im.message.receive_v1" }, event },
         { needCheck: false },
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/EISDIR/);
     await expect(readFile(join(home, "turns.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readFile(join(home, "seen.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });

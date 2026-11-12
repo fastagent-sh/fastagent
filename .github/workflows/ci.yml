@@ -42,8 +42,17 @@ jobs:
         if: matrix.node-version == '24.15.0'
         run: npm run typecheck
 
+      # A failed run keeps its whole report: which tests failed and how, beyond what the log above holds.
       - name: Unit tests
-        run: npm test
+        run: npm test -- --reporter=default --reporter=json --outputFile.json=test-reports/unit.json
+
+      - name: Keep the unit report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unit-report-node-${{ matrix.node-version }}
+          path: test-reports/
+          retention-days: 14
 
   # One Node version: what these tests add over the unit tier is the operating system and the tools on it (processes,
   # signals, git, tsc), not the runtime.
@@ -65,7 +74,15 @@ jobs:
         run: npm ci
 
       - name: Integration tests
-        run: npm run test:integration
+        run: npm run test:integration -- --reporter=default --reporter=json --outputFile.json=test-reports/integration.json
+
+      - name: Keep the integration report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: integration-report
+          path: test-reports/
+          retention-days: 14
 
   package-smoke:
     name: Packed package smoke

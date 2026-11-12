@@ -683,7 +683,7 @@ describe("a serve points its webhook channels at itself", () => {
     const service = await serveAgent(served, { onChannelClosed: () => {} });
     try {
       await service.listen(0, "127.0.0.1").catch(() => {});
-      await expect(service.ready).rejects.toThrow();
+      await expect(service.ready).rejects.toThrow("no");
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(service.webhooks).toEqual([{ channel: "telegram", outcome: "pending" }]);
       expect(errors.mock.calls.flat().join("\n")).not.toContain("webhook registration failed");
@@ -770,7 +770,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     await expect(service.listen(0, "127.0.0.1")).rejects.toThrow("the service is already listening");
 
     await agent.close();
-    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toThrow();
+    await expect(fetch(`http://127.0.0.1:${port}/health`)).rejects.toMatchObject({ cause: { code: "ECONNREFUSED" } });
     // The instance's storage is free again: another process (here, another open) may hold it.
     const again = await openSource(dir);
     expect(await again.sessions.get(session.id)).toMatchObject({ id: session.id });

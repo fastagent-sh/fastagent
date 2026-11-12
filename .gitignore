@@ -9,3 +9,4 @@ dist
 .DS_Store
 
 test/fixtures/.tmp-*
+test-reports/

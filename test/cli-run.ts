@@ -15,6 +15,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { resolveStateRoot } from "../src/paths.ts";
+import { CHILD_REFUSALS } from "./network-guard.ts";
 
 const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 
@@ -69,12 +70,15 @@ export function besideAgent(dir: string, name: string): string {
 
 /**
  * The environment a command is given, on the clean machine `test/setup.ts` makes: a test that names the whole environment
- * still runs with the test's HOME and no model catalog fetched, unless it names those itself. Without HOME a command finds
- * the user's own home directory, and its credentials; without FASTAGENT_OFFLINE it fetches pi.dev's catalog.
+ * still runs with the test's HOME, no model catalog fetched and the network guard, unless it names those itself. Without
+ * HOME a command finds the user's own home directory, and its credentials; without FASTAGENT_OFFLINE it fetches pi.dev's
+ * catalog; without NODE_OPTIONS a child process could reach the network unseen.
  */
 function onCleanMachine(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {};
-  for (const key of ["HOME", "FASTAGENT_OFFLINE"]) if (process.env[key] !== undefined) clean[key] = process.env[key];
+  for (const key of ["HOME", "FASTAGENT_OFFLINE", "NODE_OPTIONS", CHILD_REFUSALS]) {
+    if (process.env[key] !== undefined) clean[key] = process.env[key];
+  }
   return { ...clean, ...env };
 }
 

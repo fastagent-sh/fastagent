@@ -36,16 +36,21 @@ describe("deployed storage", () => {
       "deployment selects other, but this storage belongs to fastagent",
     );
     await writeFile(join(root, ".deployment/applied.json"), "broken");
-    await expect(claimDeploymentStorage(root, release("two"))).rejects.toThrow();
+    await expect(claimDeploymentStorage(root, release("two"))).rejects.toThrow(SyntaxError);
     // The record's agent name is one path segment.
-    expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow();
+    expect(() => parseDeploymentRelease(JSON.stringify({ ...release("one"), agent: "../outside" }))).toThrow(
+      "invalid deployment release record",
+    );
   });
 });
 
 describe("storage boundary", () => {
   it("does not mistake a directory for a mounted volume", async () => {
     const { root } = await fixture();
-    await expect(assertStorageMounted(root)).rejects.toThrow();
+    await expect(assertStorageMounted(root, ["/", "/data"])).rejects.toThrow(
+      `persistent storage is not mounted at ${root}`,
+    );
+    await expect(assertStorageMounted(root, ["/", root])).resolves.toBeUndefined();
   });
 });
 

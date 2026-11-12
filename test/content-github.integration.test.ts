@@ -246,10 +246,10 @@ describe("github content: a clone is brought up to date in place, never over the
     // What the agent's own `git push` there would be given: the token as it is now in the environment.
     expect(fill("ghp_one")).toContain("password=ghp_one");
     expect(fill("ghp_two")).toContain("password=ghp_two");
-    expect(() => fill(undefined)).toThrow();
+    expect(() => fill(undefined)).toThrow(/git credential fill/);
     // A clone whose config lost it (made before it existed, or edited) gets it back at the next start.
     git(entry.location, "config", "--unset", "credential.https://github.com.helper");
-    expect(() => fill("ghp_one")).toThrow();
+    expect(() => fill("ghp_one")).toThrow(/git credential fill/);
     await cloneContent(entry);
     expect(fill("ghp_one")).toContain("password=ghp_one");
     expect(readFileSync(join(entry.location, ".git", "config"), "utf8")).not.toContain("ghp_");

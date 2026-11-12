@@ -8,6 +8,7 @@ import * as double from "./host-cli-double.ts";
 const path = process.env.PATH;
 afterEach(() => {
   process.env.PATH = path;
+  delete process.env.AWS_PAGER;
   double.resetHostClis();
 });
 
@@ -32,6 +33,8 @@ it("answers as spawnRunner and awsRunner do: exit code, captured streams, standa
     await chmod(join(bin, name), 0o755);
   }
   process.env.PATH = `${bin}${delimiter}${path}`;
+  // The operator's own pager, which `awsRunner` turns off whatever it is.
+  process.env.AWS_PAGER = "less";
   for (const name of ["cli", "aws"]) double.hostCli(name, answer);
   const calls = async (module: typeof real | typeof double) => {
     const cli = module.spawnRunner("cli", bin);
@@ -47,7 +50,8 @@ it("answers as spawnRunner and awsRunner do: exit code, captured streams, standa
     ];
   };
   const fromProcess = await calls(real);
-  expect(fromProcess[0]).toEqual({ code: 0, stdout: "out list --json ||pager[unset]\n", stderr: "err\n" });
+  expect(fromProcess[0]).toEqual({ code: 0, stdout: "out list --json ||pager[less]\n", stderr: "err\n" });
   expect(fromProcess[5]?.stdout).toContain("pager[]");
+  expect(fromProcess[6]).toEqual({ code: 127, stdout: "", stderr: "" });
   expect(await calls(double)).toEqual(fromProcess);
 });

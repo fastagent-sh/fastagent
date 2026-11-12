@@ -5,8 +5,9 @@
  */
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import net from "node:net";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { afterAll, afterEach } from "vitest";
+import { CHILD_REFUSALS, refuseConnectionsOffTheMachine } from "./network-guard.ts";
 
 const refused: string[] = [];
 
@@ -21,53 +22,33 @@ function refuse(what: string): Error {
   return error;
 }
 
-/** What was refused since the last test, cleared: for the test of this file's own guards. */
+/** What was refused since the last test, here and in the child processes it started, cleared. */
 export function takeRefused(): string[] {
+  const file = process.env[CHILD_REFUSALS];
+  if (file !== undefined && existsSync(file)) {
+    for (const what of readFileSync(file, "utf8").split("\0").filter(Boolean))
+      refused.push(`in a child process: ${what}`);
+    rmSync(file, { force: true });
+  }
   return refused.splice(0);
 }
 
 function failIfRefused(): void {
-  if (refused.length === 0) return;
-  const found = refused.splice(0).join("\n\n");
-  throw new Error(`this test did what its tier forbids (CONTRIBUTING.md, "Test tiers"):\n\n${found}`);
+  const found = takeRefused();
+  if (found.length === 0) return;
+  throw new Error(`this test did what its tier forbids (CONTRIBUTING.md, "Test tiers"):\n\n${found.join("\n\n")}`);
 }
 
 afterEach(failIfRefused);
 afterAll(failIfRefused);
 
-const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|::1|::ffff:127(\.\d{1,3}){3})$/i;
-
-function hostOf(args: unknown[]): string | undefined {
-  // `net.connect` hands `Socket#connect` its arguments already normalized, as one array.
-  const [first, second] = Array.isArray(args[0]) ? (args[0] as unknown[]) : args;
-  if (typeof first === "object" && first !== null) {
-    const options = first as { host?: string; path?: string };
-    return options.path ? undefined : (options.host ?? "localhost");
-  }
-  if (typeof first === "string" && !/^\d+$/.test(first)) return undefined; // a pipe or a Unix socket's path
-  return typeof second === "string" ? second : "localhost";
-}
-
 /**
- * No connection leaves the machine: a test that needs a server serves one on loopback. A name is judged by the address it
- * resolves to, since a dispatcher may resolve it to somewhere else (undici's HTTP proxy resolves the origin to the proxy).
+ * No connection leaves the machine: a test that needs a server serves one on loopback. The child processes a test starts
+ * refuse the same through `child-network-guard.ts`, which `test/setup.ts` hands them in NODE_OPTIONS; what they refused is
+ * written to `REFUSALS` and fails the test here.
  */
 export function forbidNetwork(): void {
-  const connect = net.Socket.prototype.connect;
-  net.Socket.prototype.connect = function (this: net.Socket, ...args: unknown[]) {
-    const host = hostOf(args);
-    if (host !== undefined && net.isIP(host) !== 0 && !LOOPBACK.test(host)) {
-      throw refuse(`a connection to ${host}, which is not loopback`);
-    }
-    if (host !== undefined && net.isIP(host) === 0) {
-      this.once("lookup", (error: Error | null, address: string) => {
-        if (error === null && !LOOPBACK.test(address)) {
-          this.destroy(refuse(`a connection to ${host} (${address}), which is not loopback`));
-        }
-      });
-    }
-    return (connect as (...a: unknown[]) => net.Socket).apply(this, args);
-  } as typeof connect;
+  refuseConnectionsOffTheMachine(refuse);
 }
 
 /** The test runs in this process: no child process, whoever starts it. */

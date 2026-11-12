@@ -19,7 +19,9 @@ describe("decryptEvent", () => {
     // CBC ciphertext must be block-aligned. Truncation is deterministic; unlike a wrong-key assertion,
     // it cannot randomly land on valid PKCS#7 padding (AES-CBC is not authenticated). Never a silent empty.
     const payload = Buffer.from(encryptEvent("right-key", "{}"), "base64");
-    expect(() => decryptEvent("right-key", payload.subarray(0, -1).toString("base64"))).toThrow();
+    expect(() => decryptEvent("right-key", payload.subarray(0, -1).toString("base64"))).toThrow(
+      /wrong final block length/,
+    );
     expect(() => decryptEvent("k", Buffer.from("short").toString("base64"))).toThrow(/too short/);
   });
 });

@@ -140,7 +140,7 @@ describe("a deploy's secrets step", () => {
     expect(told).toContain(`FASTAGENT_API_KEY=${key?.[1]}`);
     // No file of this machine holds it: not the development file, not the one `start` reads.
     for (const file of [".secrets/.env", ".secrets/production/.env"]) {
-      await expect(readFile(join(dir, file), "utf8")).rejects.toThrow();
+      await expect(readFile(join(dir, file), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 
@@ -175,7 +175,9 @@ describe("a deploy's secrets step", () => {
     }
     // It is done, not left for the person: a ticket's afterwards lists only what they still have to do.
     expect(left).toEqual([]);
-    await expect(readFile(join(dir, ".secrets", "production", ".env"), "utf8")).rejects.toThrow();
+    await expect(readFile(join(dir, ".secrets", "production", ".env"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("makes no key when the target has one", async () => {

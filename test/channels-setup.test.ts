@@ -258,7 +258,7 @@ describe("channels setup at a terminal", () => {
     const secret = (await read(file)).match(/^TELEGRAM_SECRET_TOKEN=([0-9a-f]{48})$/m)?.[1];
     expect(secret).toBeDefined();
     // The development instance's file is not touched.
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
 
     await ends(setup("telegram", dir, { envFile: file }));
     expect((await read(file)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1]).toBe(secret);
@@ -272,8 +272,8 @@ describe("channels setup at a terminal", () => {
     await ends(setup("telegram", dir, { config }), 2);
     expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain("pass --env-file <file>");
     // Nothing was made: not the file `start` reads, and not the development one.
-    await expect(read(join(dir, ".secrets", "production", ".env"))).rejects.toThrow();
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", "production", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
 
     const file = join(dir, "prod.env");
     prompts.answers.push(GOOD_BOT);
@@ -282,7 +282,7 @@ describe("channels setup at a terminal", () => {
     expect(production).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
     // Not dev's: a webhook's secret came with it, and the development file was not made.
     expect(production).toMatch(/^TELEGRAM_SECRET_TOKEN=/m);
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("says once that a directory it does not own now holds secrets, however many values went there", async () => {
@@ -379,7 +379,7 @@ export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) 
     expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(
       "the agent does not build for telegram to receive by connection",
     );
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("Slack in Socket Mode: the app is made from a link that sets Socket Mode, then its bot token and app-level token", async () => {
@@ -460,7 +460,7 @@ describe("setUpChannel: writes where it is told, and makes its own values once",
     expect(first.written.sort()).toEqual(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"]);
     expect(first.kept).toEqual([]);
     expect(await read(elsewhere)).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
 
     const secret = (await read(elsewhere)).match(/^TELEGRAM_SECRET_TOKEN=(.*)$/m)?.[1];
     const again = await setUpChannel({
@@ -551,7 +551,7 @@ describe("channels setup for a coding agent", () => {
 
     const refused = await paste({ TELEGRAM_BOT_TOKEN: "not a token" });
     expect(refused.html).toContain("That is not a bot token.");
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
 
     expect((await paste({ TELEGRAM_BOT_TOKEN: GOOD_BOT })).html).toContain("Telegram connected");
     await ends(run);
@@ -603,6 +603,6 @@ describe("channels setup for a coding agent", () => {
       status: "failed",
       message: expect.stringContaining("ENOTFOUND api.telegram.org"),
     });
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toThrow();
+    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

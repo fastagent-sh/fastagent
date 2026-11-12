@@ -218,11 +218,17 @@ describe("the Agent API's HTTP limits", () => {
     const server = await served(agent, { keepAliveMs: 50 });
     try {
       const { id } = await agent.sessions.create();
-      const response = await fetch(`${server.url}/v1/sessions/${id}/events`, { headers: auth() });
+      // A stream that never sends the comment fails the read here, before the test's timeout, so the server still closes.
+      const response = await fetch(`${server.url}/v1/sessions/${id}/events`, {
+        headers: auth(),
+        signal: AbortSignal.timeout(10_000),
+      });
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
       let text = "";
-      while (!/^: .*\n\n.*: /s.test(text)) text += new TextDecoder().decode((await reader.read()).value);
+      while (!/\n\n: /.test(text)) text += new TextDecoder().decode((await reader.read()).value);
       await reader.cancel();
+      // Open at once, and again after the state event while nothing happens: the keep-alive.
+      expect(text).toMatch(/^: open\n\nevent: state\n[\s\S]*\n\n: open\n\n/);
     } finally {
       await server.close();
     }
