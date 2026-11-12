@@ -4,7 +4,7 @@ description: "The consumer API of a served FastAgent agent: one model of session
 type: spec
 status: current
 version: "2.0"
-updated: 2026-10-29
+updated: 2026-11-13
 ---
 
 # Agent API — Specification v2
@@ -450,268 +450,97 @@ for an end.
 
 ## 8. In process (TypeScript)
 
-The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not changes to sessions,
-messages or their HTTP binding. The package's entry points are one per kind of user:
+The interface is §4's. MCP server configuration and OAuth are [host operations](mcp.md), not part of this API. Each
+export's full signature and documentation are its declaration in the package.
 
 | Import | For | Holds |
 |---|---|---|
-| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent` and `baseEnv`, what a host embedding agents needs beside it (`createAgent`, model credentials/sign-in, MCP inspection and authorization), the authoring functions (`defineAgent`, `defineChannel`, `byIngress`, `defineSchedule`, `needs`), `defineDefinition` (which `fastagent build` writes into a package's entry, never written by hand), `AgentError` and the types |
-| `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs (Node, Bun, Deno, Workers) | `connectAgent`, `AgentError` and the types |
+| `@fastagent-sh/fastagent` | An app or tool on Node or Bun | `openAgent`, `baseEnv`, what a host embedding agents needs (`createAgent`, model credentials and sign-in, MCP), the authoring functions (`defineAgent`, `defineChannel`, `byIngress`, `defineSchedule`, `needs`), `defineDefinition` (written by `fastagent build`, never by hand), `AgentError` and the types |
+| `@fastagent-sh/fastagent/client` | A program anywhere `fetch` runs | `connectAgent`, `AgentError` and the types |
 | `@fastagent-sh/fastagent/<channel>` | An agent's channel file | The first-party channels |
 
 ```ts
-function openAgent<Settings>(
-  definition: AgentDefinition<Settings>,
-  inputs: InstanceInputs<Settings>,
-): Promise<LocalAgent>;
+function openAgent<Settings>(definition: AgentDefinition<Settings>, inputs: InstanceInputs<Settings>): Promise<LocalAgent>;
 function connectAgent(url: string, options: { apiKey: string }): Agent;
 
-/**
- * An agent package's default export, which `fastagent build` generates as `defineDefinition({ ... })`: frozen, and
- * changed only through the inputs.
- */
-interface AgentDefinition<Settings = unknown> {
-  readonly name: string;
-  readonly version: string;
-  /** The JSON Schema of `config.settings`, when the program lets an instance choose settings. */
-  readonly settings?: object;
-  /** What an instance must or may be given, so a host can say what is still missing. */
-  readonly inputs: {
-    readonly secrets: readonly DeclaredSecret[];
-    /** The commands the definition's environment requires on the machine that runs it. */
-    readonly commands: readonly string[];
-  };
-}
-
-/** Each name once, however many places declare it. */
-interface DeclaredSecret {
-  name: string;
-  description?: string;
-  /**
-   * Whether the instance runs without it: true only when every declaration says so. A stored credential satisfies a
-   * model provider's variable, so it is optional.
-   */
-  optional: boolean;
-  /** Every place it is declared: a module of `src/`, `context.json` (its environment, and the references of its `mcpServers`), the default model's provider. */
-  declaredIn: string[];
-  /**
-   * Set when only some channels' ways of receiving read it (`byIngress`): an instance needs it only when one of these
-   * channels receives that way (`channels.<name>.ingress`, else `dev`'s connection and everyone else's webhook).
-   * Absent, every instance does. Decided by the declarations that require it, or by all of them when none does.
-   */
-  whenIngress?: { channel: string; ingress: "webhook" | "connection" }[];
-}
-
-type InstanceInputs<Settings = unknown> = {
-  /**
-   * The instance configuration (`fastagent.json`'s schema), or the absolute path of a `fastagent.json`. Given `root`
-   * and no `config`, the `fastagent.json` in `root` when it holds one; nothing is read for `stateDir` and `workdir`.
-   */
-  config?: InstanceConfig<Settings> | string;
-  /** Secret values: the declared names, and model providers' variables. No variable of the host's reaches the agent. */
-  secrets?: Record<string, string>;
-  /**
-   * The base environment of the processes the agent starts, and the environment of FastAgent's own installing and
-   * cloning for the instance. Default: empty. `baseEnv(process.env)` is the app's.
-   */
-  env?: Record<string, string>;
-  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
-  offline?: boolean;
-  /** The instance's name, over `config`'s `name`, as `model` is over `config`'s `model`: one path segment. */
-  name?: string;
-  /** Where the model credentials are kept. Default: `auth.json` in the state directory. */
-  credentials?: CredentialStore;
-  /** Where MCP grants are kept (`store` with its `bindings`). Default: `mcp-auth.json` in the state directory. */
-  mcp?: McpOptions;
-} & InstanceLocation;
-
-/** The instance root, the agent's working directory with its state in `.state/`; or the two apart. */
-type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
-
-/** The base environment a process gets from `env`'s source: the variables below that it holds, nothing else. */
-function baseEnv(source: Record<string, string | undefined>): Record<string, string>;
-// PATH, HOME, USER, SHELL, LANG, LC_*, TZ, TMPDIR, HTTP_PROXY, HTTPS_PROXY, NO_PROXY
-
-interface InstanceConfig<Settings = unknown> {
-  model?: string;
-  thinkingLevel?: Session["thinkingLevel"];
-  http?: {
-    port?: number;
-    api?: boolean;
-    /**
-     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`):
-     * an absolute `https://` URL without a trailing slash, any other value refusing the open. Set, a serve points each
-     * webhook channel there (`Service.registerWebhooks`); unset, none is pointed, and each one's outcome is `manual`
-     * with the URL to use. Never inferred from the environment.
-     */
-    publicUrl?: string;
-  };
-  /**
-   * How each channel that offers both ways (`byIngress`) receives, by its file's name. Unset, `dev` receives by a
-   * connection it opens and everything else by webhook. A name the agent has no channel by, or a way its channel
-   * cannot receive, refuses the open.
-   */
-  channels?: Record<
-    string,
-    {
-      ingress?: "webhook" | "connection";
-      /**
-       * For a channel whose platform lets only a person set its URL (Slack; Lark where its configuration API is
-       * missing), refused on another: the app this instance is bound to (`id`; Slack's workspace as `team`), and the
-       * `url` a person set there and the platform verified, which `deploy` records once it sees it verified. A record
-       * of that moment: a person who later changes the platform's page changes it too.
-       */
-      app?: { id: string; team?: string; url?: string };
-    }
-  >;
-  settings?: Partial<Settings>;
-  /**
-   * The instance's name, one path segment of letters, digits, `-` and `_`, any other value refusing the open. Default: the
-   * definition's name made one (`@scope/pkg` is `scope-pkg`). The CLI's `--name` and `FASTAGENT_NAME`, and `openAgent`'s
-   * `name`, override it. It is the instance's, so the program's `defaults` do not carry it.
-   */
-  name?: string;
-  /** Content the instance adds to the program's: a name may not be one the program declares. */
-  content?: Record<string, { github: string; ref?: string } | { path: string }>;
-  /**
-   * MCP servers the instance adds, in the shape of the program's `context.json` `mcpServers` map (the MCP ecosystem's entry shape). They add to the program's:
-   * a name both declare refuses the open. A stdio server runs in the instance's workspace, and one given in an object
-   * names a command that is a bare name or an absolute path. `inspectMcp` and `signInMcp` take the same `config`, or the same `root`.
-   */
-  mcpServers?: Record<string, object>;
-  /** Files added after the program's text; directories of skills and of prompt templates. */
-  instructions?: string[];
-  skills?: string[];
-  prompts?: string[];
-}
-
 interface LocalAgent extends Agent {
-  /** Channels, schedules and wake-ups, `/health`, and the HTTP API (§9) when a key is configured. */
+  /** Channels, schedules and wake-ups, `/health`, and the HTTP API (§9) when given keys. */
   serve(options?: { apiKeys?: string[] }): Promise<Service>;
-  /**
-   * What the agent works on, as it opened (a directory of this machine, or a repository's clone): the snapshot that
-   * runs, not the declaration on disk. Not part of the Agent API: it is not served over HTTP.
-   */
+  /** What the agent works on, as opened (not the declaration on disk). Not served over HTTP. */
   readonly content: readonly ResolvedContent[];
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
-  /**
-   * Closes the service, then releases the storage. A message still running is interrupted, as when the process stops
-   * (§5.4): answered when the agent is next opened, unless `sessions.cancel` was stopping it. Cancel first to end it.
-   */
+  /** Closes the service, then releases the storage. */
   close(): Promise<void>;
 }
 
 interface Service {
-  /** For an app's own server to route to. */
-  fetch(request: Request): Promise<Response>;
-  /**
-   * Or a server of its own, Node's `http` server or `Bun.serve`: the one way to start one. Answers the port it bound.
-   * Default port: the instance configuration's `http.port`, else 8787. When `http.publicUrl` is set, it registers the
-   * webhook channels (`registerWebhooks()`) once the serve is ready, in the background: `webhooks` and `/health` say
-   * how it went, and the port is answered without waiting for a platform.
-   */
-  listen(port?: number, host?: string): Promise<number>;
-  /**
-   * Points each webhook channel's platform at `<baseUrl ?? http.publicUrl>/<its path>`, for an app that serves `fetch`
-   * on a server of its own: called once that server answers and the serve is ready, since a platform verifies the URL
-   * as it is set and a host may route to the instance only once its health check passes. Sets it
-   * on every call, never reading it first. Answers every webhook channel's outcome, and rejects only for a `baseUrl`
-   * that is not an absolute http(s) URL: a platform's refusal is a `failed` outcome.
-   */
+  fetch(request: Request): Promise<Response>;              // for an app's own server
+  listen(port?: number, host?: string): Promise<number>;   // or a server of its own; answers the bound port
   registerWebhooks(baseUrl?: string): Promise<WebhookRegistration[]>;
-  /**
-   * Every webhook channel's outcome, `pending` until its registration ends (`listen`'s or `registerWebhooks`'s, the
-   * last one's); empty only with no webhook channel.
-   */
   readonly webhooks: readonly WebhookRegistration[];
   ready: Promise<void>;
-  /**
-   * Ends the API's event streams, each with a `stream_error`, then stops the server, giving requests in flight 500 ms
-   * before it ends them, then the channels and schedules.
-   */
   close(): Promise<void>;
 }
 
-/** One webhook channel's registration. */
 interface WebhookRegistration {
-  /** The channel file's name. */
-  channel: string;
-  /**
-   * `pending`: not registered yet (only in `webhooks`, never in what `registerWebhooks` answers). `registered`: the
-   * platform points at `url`. `manual`: a person's step remains (`step`). `failed`: it is not pointed, and acting on
-   * `step` then registering again can fix it.
-   */
+  channel: string;                                          // the channel file's name
   outcome: "pending" | "registered" | "manual" | "failed";
-  /** The URL it was, or is to be, pointed at; absent when no base URL is known. */
   url?: string;
-  /** For `manual` and `failed`: what to do, said as the step to take. */
-  step?: string;
+  step?: string;                                            // for manual and failed: the step to take
 }
 ```
 
-Telegram, Feishu and Lark are pointed by the instance with its own credentials. Slack's Request URL, and Lark's where
-its configuration API is missing, only a person sets, on the platform's app page, which verifies it then; the
-instance never sets it. Such a channel is `registered` when its `channels.<name>.app.url` is the URL this instance
-needs, or once the instance has received an authenticated request from the platform addressed to that URL (its
-verification on saving, or any event; the address the request was sent to, as its host and any forwarding headers
-say). A platform's signature or token proves who sent a request, not where it was sent, so an authenticated request
-addressed elsewhere proves nothing and is warned of in the log, and one whose address is unknown counts as none.
-Otherwise `manual`, its `step` naming the URL to paste and the page to paste it on.
+**Opening an instance.** `openAgent` opens one instance of a built definition (an agent package's default export)
+from its inputs and nothing else:
 
-`openAgent` opens one instance of a built definition, the default export of an agent's package
-(`import support from "@acme/support"`), from its inputs and nothing else. Of the process's environment FastAgent
-itself reads `FASTAGENT_LOG_LEVEL` and nothing more: no variable places or configures the instance (`FASTAGENT_ROOT`,
-`FASTAGENT_STATE_DIR`, `FASTAGENT_SECRETS_DIR`, `FASTAGENT_AUTH_PATH`, `FASTAGENT_CONFIG`, `FASTAGENT_CONFIG_JSON`, `FASTAGENT_MODEL`,
-`FASTAGENT_NAME`, `FASTAGENT_OFFLINE`), none says how it is served or where it runs, and no `process.env` value reaches
-a process the agent starts. FastAgent reads no file its inputs do not name (the machine's own model credentials
-included), and it writes neither `process.env` nor the package. Its own work for the instance, installing the declared
-packages and cloning content, runs in `env` plus `secrets`, so an app that clones over SSH adds `SSH_AUTH_SOCK` to
-`env`. An instance opened this way is neither `fastagent dev`'s nor a deployment's, whatever variables the process or
-`env` holds: a channel that names no way of receiving receives by webhook, and its prompt says nothing of a
-deployment. Code FastAgent runs for the instance is not held to this: the MCP SDK reads six variables (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`) to build a stdio
-server's default environment, which FastAgent withholds, and a model provider's SDK reads what its own credential
-chain names (a Bedrock request reads `AWS_PROFILE` from the process, whatever `secrets` holds). One process may open several instances, and
-two opens share nothing their inputs do not name (two given one `workdir` share that workspace, which is the caller's to
-avoid). Every path it is given is absolute; a
-relative one is refused rather than resolved against the process's working directory.
-
+- Its inputs are `config` (the instance configuration, or the absolute path of a `fastagent.json`), `secrets`, `env`,
+  `credentials`, `mcp`, `name`, `offline`, and a location: `{ root }` (the working directory, with the state in
+  `.state/`) or `{ stateDir, workdir }`. Every path is absolute; a relative one is refused.
+- Of the process's environment FastAgent itself reads only `FASTAGENT_LOG_LEVEL`. No variable places, configures or
+  serves the instance, no `process.env` value reaches a process the agent starts, and FastAgent writes neither
+  `process.env` nor the package. It reads no file its inputs do not name, the machine's model credentials included.
+  Code it runs for the instance is not held to this: a model provider's SDK reads its own credential chain.
+- FastAgent's own work for the instance (installing the declared packages, cloning content) runs in `env` plus
+  `secrets`: an app that clones over SSH adds `SSH_AUTH_SOCK` to `env`.
+- Without `config`, an instance opened with `root` reads the `fastagent.json` there when it holds one; one opened with
+  `stateDir` and `workdir` reads none. `config` overrides the program's defaults by key (objects merge, arrays
+  replace); its relative paths resolve against its file. Its `settings` are checked against the definition's schema
+  at open, and a required one missing refuses the open, naming the key.
+- `content`, `mcpServers`, `instructions`, `skills` and `prompts` add to the program's; a name the program declares
+  refuses the open, naming both.
+- A required secret without a value refuses the open, naming it. A model provider's variable is read from `secrets`.
+- A process the agent starts gets `env`, the declared environment's commands ahead on its `PATH`, the values of the
+  declared secrets, a stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent; nothing
+  else.
+- The open prepares the declared environment, clones the content and opens the storage, which one process holds at a
+  time: a second open over the same state refuses. An instance opened this way is neither `dev`'s nor a
+  deployment's: a channel that names no way of receiving receives by webhook.
 - A definition `fastagent build` made for another format refuses, naming the FastAgent version it needs.
-- `config` overrides the program's defaults by key (objects merge, arrays replace). The relative paths of a `config`
-  file resolve against that file's directory. Without `config`, an instance opened with `root` reads the
-  `fastagent.json` there when it holds one, and otherwise runs on the program's defaults; nothing is created, and an
-  instance opened with `stateDir` and `workdir` reads no file, since a workdir may hold another instance's (the
-  development one's).
-- `settings` is the program's defaults with `config.settings` over them, checked against the definition's `settings`
-  schema at open: a required setting no one gave, or a value the schema refuses, refuses the open and names the key.
-  The compiler checks the keys and types `config.settings` gives, not that every required one is there.
-- `content`, `instructions`, `skills` and `prompts` add to the program's. An entry whose name the program declares (a
-  content entry, a skill, a prompt template) refuses the open, naming both. `instructions`, `skills` and `prompts` are
-  read for each message, from only the files and directories `config` names, so an edit inside them takes effect on
-  the next message (a path added to `config` takes a reopen; a declared path that goes missing is reported, not read
-  as empty); `info().commands` lists the names a message may start with (§5.1).
-- `secrets` holds values, `credentials` the model providers' stored sign-ins and keys. A required secret without a
-  value refuses the open and names it. The model's auth reads a provider's variable from `secrets`, for whichever
-  provider a session's model is; the declared inputs list only the default model's, as optional. A name `secrets`
-  holds that nothing declares or reads is ignored.
-- The state is the instance's storage, its channels' and schedules' state, its model lists, its model credentials
-  (`auth.json`, when `credentials` is absent) and its MCP grants (`mcp-auth.json`, when `mcp` gives no store); the workspace is the agent's working directory, where its content is
-  cloned and what it produces lands.
-- A process the agent starts (a command, a stdio MCP server, a skill's script) gets `env`, with the commands of the
-  declared environment ahead on its `PATH`; the values `secrets` holds for the names the definition's code (`needs()`)
-  and `context.json`'s environment declare; a stdio MCP server's own `env`; and `GIT_CEILING_DIRECTORIES` at the
-  workspace's parent. Nothing else of the host's reaches it. A model provider's
-  variable and a value an MCP declaration references in its headers reach no process.
-- `name` (of `config`) names the instance: `info().name` is it, and so is what a host reports of it.
-- `http` is how the instance is served: `listen` defaults to `http.port`, and with `http.api: false`, `serve` refuses
-  `apiKeys` instead of serving the HTTP API. `deploy` is read by `fastagent deploy` only.
-- The open prepares the declared environment, clones the content and opens the instance's storage, which one process
-  holds at a time: a second open over the same state refuses. Two instances on one channel's credentials both answer
-  its platform's events; an app keeps them apart.
+
+**Closing.** `close()` interrupts a running message as a process stop does (§5.4): it is answered when the agent is
+next opened, unless `sessions.cancel` was stopping it.
+
+**Serving.** `listen` defaults to `http.port`, else 8787. With `http.publicUrl` set, it registers the webhook channels
+once the serve is ready, in the background. An app that serves `fetch` itself calls `registerWebhooks(baseUrl?)` once
+its server answers; it sets the URL on every call and rejects only a `baseUrl` that is not an absolute http(s) URL (a
+platform's refusal is a `failed` outcome). `webhooks` holds every webhook channel's outcome, `pending` until its
+registration ends. `close()` ends the API's event streams with `stream_error`, gives requests in flight 500 ms, then
+stops the channels and schedules. With `http.api: false`, `serve` refuses `apiKeys`.
+
+**Webhook outcomes.** The instance points Telegram, Feishu and Lark itself. Slack's Request URL, and Lark's where its
+configuration API is missing, only a person sets; such a channel is `registered` when `channels.<name>.app.url` is the
+URL the instance needs, or once the instance has received an authenticated request from the platform addressed to
+that URL. An authenticated request addressed elsewhere proves nothing and is warned of. Otherwise `manual`, with the
+URL to paste and where.
+
+**Channels** are handed `{ agent, sessionFor, recordedSession, turn, stateDir }` ([Channel
+development](channel-development.md)). `sessionFor` records a new conversation's session before returning it, and
+takes calls for one key one at a time. `turn` keeps no record. A channel written with `byIngress` receives the way
+`channels.<name>.ingress` names (else `dev` by connection, everything else by webhook), and is asked only for that
+way's secrets. A connection that cannot be kept ends the serve with its reason.
 
 ### 8.1 Examples
-
-An app that embeds an agent:
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
@@ -735,78 +564,6 @@ import { connectAgent } from "@fastagent-sh/fastagent/client";
 
 const agent = connectAgent("https://support.example.com", { apiKey: process.env.SUPPORT_AGENT_KEY! });
 ```
-
-An answer as it is written:
-
-```ts
-for await (const event of agent.messages.stream({ sessionId, content: "Summarize the ticket" })) {
-  if (event.type === "delta" && event.channel === "text") render(event.text);
-  if (event.type === "done") finish(event.message);
-}
-```
-
-Serving the agent inside an app's own server, on Hono, whose `mount` strips the prefix before the agent's routes
-match:
-
-```ts
-const service = await agent.serve();
-app.mount("/agent", service.fetch);
-```
-
-On a server that does not take a Fetch handler (Express, a plain `node:http` one), the app bridges `service.fetch`
-itself, with `getRequestListener(service.fetch, { overrideGlobalObjects: false })` from `@hono/node-server`, say;
-FastAgent ships no bridge of its own.
-
-A custom channel, from the agent's `src/channels/`:
-
-```ts
-import { defineChannel } from "@fastagent-sh/fastagent";
-
-export default defineChannel(({ agent, sessionFor, turn }) => ({
-  "POST /my-chat": async (request) => {
-    const { chatId, text, messageId } = await verifyAndParse(request); // the platform's signature, checked first
-    // Answered at once: a platform redelivers a webhook that gets no answer within seconds.
-    turn(chatId, async () => {
-      const sessionId = await sessionFor(chatId);
-      const message = await agent.messages.send({ sessionId, content: text, idempotencyKey: messageId }, { wait: 600 });
-      await replyTo(chatId, message.answer?.text ?? "Sorry, that did not work.");
-    });
-    return new Response("ok");
-  },
-}));
-```
-
-What a channel is handed beside the agent, and all it is handed. The first-party channels are written against the
-same context as any other.
-
-- **`turn(place, work)`** runs `work` after the route has answered, one at a time per place (a chat, a thread) in the
-  order they arrived, and counts it as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It
-  keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which
-  the platform's message id as `idempotencyKey` makes safe. A channel that must not lose one keeps its own record in
-  `stateDir`, as the first-party channels do.
-- **`sessionFor(key, { forkFrom? })`** is the session the conversation `key` talks in, from the channel's own map of
-  conversations to sessions: the one recorded, or a new one created and recorded before it is returned, so that a
-  message is sent only into a recorded session. `forkFrom` answers what a new one forks from (`{ sessionId, entryId? }`,
-  or nothing for an empty one), and is asked only when `key` has no session yet, since finding a thread's branch point
-  reads the room's messages. Calls for one key are taken one at a time, so two first messages of a new conversation
-  get one session.
-- **`recordedSession(key)`** is the session recorded for `key`, without making one: what a stop command asks of a
-  place nothing was said in.
-- **`stateDir`** is the channel's own directory, `<state root>/channels/<its file's name>`, made at the mount, for the
-  records it must keep (a turn's intent before it answers the platform, the platform events it has seen).
-
-A channel that can receive either way default-exports both, and each instance takes one:
-
-```ts
-function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> }): ByIngress<T>;
-```
-
-The `webhook` way is a channel of routes, and the `connection` way one that opens and keeps a connection to its platform
-(the first-party ones: Feishu's and Lark's long connection, Slack's Socket Mode and Telegram's long polling). A
-connection that cannot be kept (a credential the platform refuses, the platform's switch for it turned off) ends the
-serve with its reason, never silently. An instance receives the way `channels.<name>.ingress` names, else `dev` by its connection and everything else by webhook, since a host that scales to zero is woken by an
-inbound request. Each way declares its own secrets, and an instance is asked only for its way's
-(`DeclaredSecret.whenIngress`). A channel that is not `byIngress` receives the one way it is.
 
 ## 9. HTTP
 
@@ -888,22 +645,12 @@ streaming).
 
 ### 9.6 Keys and checks, from the CLI
 
-- **`fastagent deploy --run` at a terminal gives a deployment a key.** When neither the target nor the values the deploy
-  was given (its environment, or the file `--env-file` names) hold a `FASTAGENT_API_KEY`, it makes one, sets it on the
-  target and shows it once, so that what it deploys can be called; nothing on the machine keeps it. A CI job's or a coding
-  agent's run makes none, since a key nobody sees locks every Caller out: it stops naming `fastagent secrets set <host>
-  FASTAGENT_API_KEY --generate`. A target that lacks a key the values hold (a deployment made again) gets that one. Its
-  report names the API's URL and the command that checks it; without `--run` it writes nothing. Replacing the key is
-  setting `FASTAGENT_API_KEY` again on the target (`fastagent secrets set <host> FASTAGENT_API_KEY`), with the new and
-  the old key separated by commas while the Callers move. A definition that serves
-  no API says `http: { api: false }` in `fastagent.config.ts`: `deploy` then makes no key, and no serve answers `/v1`,
-  whatever key its environment holds, one an earlier deploy left on a host included. Not on AgentCore, which serves no
-  API either way (§9.5).
-- **`fastagent invoke --url <base>` checks a deployed agent** the way `invoke` checks a local one: the same message,
-  output, `--json`, `--session` and exit code, over `connectAgent`, with `--key` or the first key of
-  `FASTAGENT_API_KEY` in the command's environment (or the file `--env-file` names). `--model` sets the session's model there; without it, the
-  deployment's default answers. A coding agent that checked the agent before deploying it checks the deployment with
-  the same command.
+- **`fastagent deploy --run` at a terminal gives a deployment a key** when neither the target nor the deploy's values
+  hold one, and shows it once; nothing on the machine keeps it. Without a terminal it makes none and names
+  `fastagent secrets set <host> FASTAGENT_API_KEY --generate`. With `http: { api: false }` it makes none, and no serve
+  answers `/v1` whatever key it holds.
+- **`fastagent invoke --url <base>` checks a deployed agent** as `invoke` checks a local one (the same output,
+  `--json`, `--session` and exit code), with `--key` or the first key of `FASTAGENT_API_KEY`.
 
 ## 10. Security model
 
