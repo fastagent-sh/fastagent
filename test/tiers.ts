@@ -1,0 +1,63 @@
+/**
+ * Which tier a test file runs in (CONTRIBUTING.md, "Test tiers"): `*.integration.test.ts` is integration, every other
+ * `*.test.ts` is unit. vitest.config.ts and the tier guard (test-tiers.test.ts) both read this file.
+ */
+
+/**
+ * Files not yet sorted into a tier: each spawns a process or waits out a real timeout, so it runs with the
+ * integration tier until it is split into unit tests and `*.integration.test.ts`. The list only shrinks.
+ */
+export const UNSORTED: readonly string[] = [
+  "add-channel-env.test.ts",
+  "agentcore-service.test.ts",
+  "ai-start.test.ts",
+  "atomic-write.test.ts",
+  "auth-view.test.ts",
+  "auth.test.ts",
+  "authoring.test.ts",
+  "box-login.test.ts",
+  "build.test.ts",
+  "built-package.test.ts",
+  "channel-environments.test.ts",
+  "channels-setup-ticket.test.ts",
+  "channels-setup.test.ts",
+  "cli-add.test.ts",
+  "cli-deploy-docker.test.ts",
+  "cli-deploy.test.ts",
+  "cli-invoke.test.ts",
+  "cli-kernel.test.ts",
+  "cli-login.test.ts",
+  "cli-mcp.test.ts",
+  "cli-run-parity.test.ts",
+  "cli-schedules.test.ts",
+  "cli.test.ts",
+  "config.test.ts",
+  "content-agent.test.ts",
+  "content-github.test.ts",
+  "crashed-message.test.ts",
+  "deploy-host-validation.test.ts",
+  "deploy-preflight.test.ts",
+  "deploy-railway-ignore.test.ts",
+  "deploy-runner.test.ts",
+  "deployment-start.test.ts",
+  "dev-first-run-channels.test.ts",
+  "durable-definition.test.ts",
+  "embedding-host.test.ts",
+  "environment.test.ts",
+  "feishu-setup.test.ts",
+  "host-login.test.ts",
+  "init.test.ts",
+  "instance-location.test.ts",
+  "mcp-agent.test.ts",
+  "mcp-auth.test.ts",
+  "mcp-client.test.ts",
+  "mcp-host.test.ts",
+  "open-agent-inputs.test.ts",
+  "remote-command-environments.test.ts",
+  "scheduler-effects.test.ts",
+  "secrets-command.test.ts",
+  "setup-http.test.ts",
+  "storage.test.ts",
+  "ticket.test.ts",
+  "turn-runner.test.ts",
+];

@@ -100,7 +100,7 @@ describe("an installed package, opened as instances", () => {
     const root = scratch(tmpdir(), "fa-instance-held-");
     const first = await openAgent(definition, { root, offline: true });
     agents.push(first);
-    await expect(openAgent(definition, { root })).rejects.toThrow();
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow();
     await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(
       'root must be an absolute path, and is "relative/root"',
     );

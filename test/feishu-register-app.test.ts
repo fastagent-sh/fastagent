@@ -102,12 +102,18 @@ describe("registerFeishuApp (scan-to-create device flow)", () => {
   });
 
   it("slow_down backs the polling interval off and still completes", async () => {
-    stubAccounts([{ error: "slow_down" }, { client_id: "cli_x", client_secret: "s" }]);
-    const app = await registerFeishuApp({
-      accountsBaseUrl: FEISHU,
-      onVerificationUrl: () => {},
-    });
-    expect(app.appId).toBe("cli_x");
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const { polls } = stubAccounts([{ error: "slow_down" }, { client_id: "cli_x", client_secret: "s" }]);
+      const registered = registerFeishuApp({ accountsBaseUrl: FEISHU, onVerificationUrl: () => {} });
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(polls).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect((await registered).appId).toBe("cli_x");
+      expect(polls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("denial and unknown errors reject with self-describing messages", async () => {

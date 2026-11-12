@@ -668,7 +668,7 @@ describe("a serve points its webhook channels at itself", () => {
   it("registers nothing, and says nothing of webhooks, for a serve that never became ready", async () => {
     const dir = await agentDir({
       "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
-      "src/channels/sock.mjs": `export default { name: "sock", connect: () => ({ ready: Promise.reject(new Error("no")), closed: new Promise(() => {}) }) };`,
+      "src/channels/sock.mjs": `export default { name: "sock", connect: (_ctx, signal) => ({ ready: Promise.reject(new Error("no")), closed: new Promise((resolve) => signal.addEventListener("abort", () => resolve())) }) };`,
     });
     const served = await openServing(await loadSourceDefinition(dir), {
       secrets: {},

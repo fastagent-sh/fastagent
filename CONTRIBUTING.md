@@ -20,17 +20,47 @@ While iterating, run the test files for the code you changed (`npx vitest run te
 npm install
 npm run lint           # Biome (format + lint) plus local Markdown link checks; `npm run format` to fix code
 npm run typecheck      # tsc --noEmit (covers src and test)
-npm test               # vitest --run
+npm test               # the unit tier
 ```
 
+Run `npm run test:integration` as well when the change touches what that tier tests (processes, signals, locks
+between processes, the build, git, the host CLIs); CI runs it on every PR.
+
 Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
+
+## Test tiers
+
+A test's tier is decided by what it uses, so the test infrastructure can check it, rather than by how much code it
+covers. Write the smallest tier that can show the behavior.
+
+| Tier | Files | May use | May not use | Timeout | Runs |
+| --- | --- | --- | --- | --- | --- |
+| **Unit** | `test/*.test.ts` | This process: real modules working together, temp directories, SQLite on a temp file, loopback sockets, the faux model, the shared doubles (`scripted-agent.ts`, a stubbed `fetch`, `runInProcess`), fake timers | A child process of any kind (the CLI, `git`, `tsc`, a stand-in script), a connection off the machine, an assertion on elapsed time, waiting out a real timeout | 10 s | `npm test`, on every Node version CI tests |
+| **Integration** | `test/*.integration.test.ts` | This machine: processes and process groups, signals, locks between processes, the project's real build, `git`, `npm pack`, stand-in host CLIs on the `PATH` | A connection off the machine, a real platform or cloud, an assertion on elapsed time | 30 s | `npm run test:integration`, on the Node floor |
+| **Artifact smoke** | CI's `Packed package smoke` and `Bun smoke`, `test/bun/` | The package as a user installs it, `dist/`, Bun | Anything aliased to `src/` | (the job) | CI |
+
+How the boundary is kept:
+
+- `test/setup.ts` refuses a connection to anything but loopback in every tier, and `test/unit-setup.ts` refuses a child
+  process in the unit tier. Both throw where the call is made and fail the test afterwards, so product code that
+  catches the error cannot hide it.
+- `test/test-tiers.test.ts` refuses an elapsed-time assertion (`Date.now()` minus a start) in any test. Wait for an
+  event instead, or drive the time with fake timers or an injected timeout.
+- Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
+  in-process CLI (`runInProcess`), the host CLI runner (`CliRunner`), a stubbed `fetch`. A new double gets one test
+  that checks it against the real thing, as `cli-run-parity.test.ts` does for `runInProcess`.
+- `test/tiers.ts` lists the files not sorted into a tier yet; they run with the integration tier. The list only
+  shrinks: a file leaves it split into unit tests and a `*.integration.test.ts`.
+
+Platform contracts (what Telegram, Slack or Feishu really return) are not tested in any tier: they are measured and
+recorded in the design docs.
 
 ## Pull request loop
 
 ```text
 1. git checkout -b feature/<thing>
 2. ... change code, iterate locally ...
-3. npm run lint && npm run typecheck && npm test
+3. npm run lint && npm run typecheck && npm test   # and npm run test:integration when it applies
 4. git push -u origin feature/<thing>
 5. gh pr create --base main --assignee @me   # drop --assignee without push access
 6. gh pr merge <N> --squash --auto   # a maintainer's call; merges now or once CI passes (see "Merge strategy")
@@ -87,8 +117,8 @@ A PR is mergeable only when:
 
 - `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
-- `npm test` passes,
-- CI (`Core checks` across Node 24.15 / 26, and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
+- `npm test` passes, and `npm run test:integration` when the change touches what it tests,
+- CI (`Core checks`: unit on Node 24.15 / 26, integration and the artifact smoke on 24.15; and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
 
 Add or update the smallest relevant tests that prove the change. The Agent API's conformance suite lives in `test/agent-api-conformance.ts`; one-off product-scenario scripts should be run and then deleted, not committed.
 

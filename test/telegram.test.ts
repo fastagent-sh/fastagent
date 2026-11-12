@@ -1535,6 +1535,7 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
 describe("telegram channel", () => {
   // The ingress shape guards, in one place (the same grouping feishu's ingress block uses).
   it("405s non-POST, 413s an oversized body before parsing, 400s a verified body that isn't JSON", async () => {
+    vi.stubGlobal("fetch", okFetch()); // the channel asks getMe as it is built
     const { agent } = replyingAgent();
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "B", route: ignore });
     const post = (body: string) =>
@@ -1555,6 +1556,7 @@ describe("telegram channel", () => {
   });
 
   it("rejects a missing/wrong secret token with 401 and never routes", async () => {
+    vi.stubGlobal("fetch", okFetch()); // the channel asks getMe as it is built
     const { agent } = replyingAgent();
     let routed = false;
     const ch = telegramChannel(agent, {
@@ -1600,6 +1602,7 @@ describe("telegram channel", () => {
   });
 
   it("ACKs a non-actionable update without consulting route (dropped BEFORE the route boundary)", async () => {
+    vi.stubGlobal("fetch", okFetch()); // the channel asks getMe as it is built
     const { agent, calls } = replyingAgent("should not run");
     let routed = false;
     const ch = telegramChannel(agent, {

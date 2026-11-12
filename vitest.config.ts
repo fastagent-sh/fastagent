@@ -1,23 +1,13 @@
 import { defineConfig } from "vitest/config";
+import { UNSORTED } from "./test/tiers.ts";
 
-// CLI tests that are about a COMMAND call it in-process (test/cli-run.ts, runInProcess); only genuine
-// process-level contracts (exit codes and stdout/stderr discipline across a real pipe, a command that outlives its
-// caller, signals) spawn `node src/cli.ts <cmd>`, and each of those cold-starts the full harness import graph (~0.7s+
-// of CPU, measured; the pi packages and Effect, not TS stripping). They are split by command across several files
-// (listed in test/cli-run.ts, their shared spawn helper): vitest runs files in parallel but the tests inside one file
-// serially, and as one file they were the suite's longest path.
+// Two tiers (CONTRIBUTING.md, "Test tiers"). Unit runs in one process, which test/unit-setup.ts enforces, and its
+// ceiling finds a hung test fast. Integration runs real processes and builds on this machine. Both are hermetic
+// (test/setup.ts).
 //
-// Under vitest's file-parallelism a contended machine can still push a cold-start past a tight timeout.
-// The fix is the timeout, not a parallelism cap: a 30s ceiling absorbs a slow cold-start (including a
-// dev machine loaded with other work) at near-zero cost — it only bites a genuinely-slow test.
-//
-// The suite is CPU-bound, so wall time ~ total CPU / cores. Measured (8 cores): ~145s wall, ~550s CPU; on a
-// 4-vCPU CI runner the Test step takes ~125-150s. About 15 of ~165 files (the CLI subprocess ones) hold
-// ~65% of that CPU. Capping vitest's workers (maxWorkers) cannot help: it only trades wall time for less
-// contention. What does help is fewer or cheaper spawns, or more cores (`--shard`).
-//
-// `pool: "forks"` is explicit, not left to the default: it is the process isolation these
-// subprocess / process.env tests assume.
+// `pool: "forks"` is explicit, not left to the default: it is the process isolation these process.env tests assume.
+const unsorted = UNSORTED.map((file) => `test/${file}`);
+
 export default defineConfig({
   // Scaffold templates import the PUBLISHED "@fastagent-sh/fastagent" (they are copied verbatim into user
   // workspaces — data to tsc, excluded from the program). Tests that EXECUTE a template resolve that
@@ -35,8 +25,28 @@ export default defineConfig({
   },
   test: {
     pool: "forks",
-    setupFiles: ["test/setup.ts"],
-    testTimeout: 30000,
-    hookTimeout: 30000,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["test/**/*.test.ts"],
+          exclude: ["test/**/*.integration.test.ts", ...unsorted],
+          setupFiles: ["test/setup.ts", "test/unit-setup.ts"],
+          testTimeout: 10_000,
+          hookTimeout: 10_000,
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "integration",
+          include: ["test/**/*.integration.test.ts", ...unsorted],
+          setupFiles: ["test/setup.ts"],
+          testTimeout: 30_000,
+          hookTimeout: 30_000,
+        },
+      },
+    ],
   },
 });

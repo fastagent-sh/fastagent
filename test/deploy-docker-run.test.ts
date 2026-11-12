@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   agentPublishedPorts,
   type DockerRunPlan,
@@ -72,22 +72,23 @@ describe("deploy/docker/run: local Compose journey", () => {
       return {};
     });
     const answers: boolean[] = [];
+    vi.useFakeTimers({ toFake: ["Date"] });
     const out = await deployDockerRun(
       plan(),
       docker,
       () => {},
       async (_url, stillStarting) => {
         answers.push(await stillStarting()); // throttled: the first call inside the window says "yes"
-        await new Promise((r) => setTimeout(r, 5_050));
+        vi.setSystemTime(Date.now() + 5_050);
         running = false;
         answers.push(await stillStarting());
         return false;
       },
-    );
+    ).finally(() => vi.useRealTimers());
     expect(answers).toEqual([true, false]);
     expect(out).toMatchObject({ ok: false, gate: expect.stringContaining("did not become healthy") });
     expect(commands().filter((c) => c.includes("--status running"))).toHaveLength(2);
-  }, 10_000);
+  });
 
   it("the box logs in once healthy; a failed login says what it reported and still says where Compose is", async () => {
     const { docker } = fakeDocker((args) => {
