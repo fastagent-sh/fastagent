@@ -43,7 +43,7 @@ Out of scope:
 FastAgent treats credentials and environment as instance config, never as part of the agent definition:
 
 - keep `.secrets/` (`.env`, `auth.json`, `mcp-auth.json`), `~/.fastagent/.secrets/auth.json`, `.state/`, and provider keys out of version control,
-- `.secrets/` carries its own `.gitignore` (allowing only `.gitignore` and `.env.example`), the scaffolded root `.gitignore` excludes `.fastagent`, `.state`, `.env` and `.env.*`, and FastAgent warns when `--env-file` or `FASTAGENT_SECRETS_DIR` points to an un-ignored path inside a repository,
+- `.secrets/` carries its own `.gitignore` (allowing only `.gitignore` and `.env.example`), and the scaffolded root `.gitignore` excludes `.fastagent`, `.state`, `.env` and `.env.*`; if you point `--env-file`, `FASTAGENT_SECRETS_DIR` or `FASTAGENT_AUTH_PATH` at another path inside a repository, exclude that path in `.gitignore` yourself,
 - webhook channels require a verification secret (e.g. `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
 
 If you find a case where a secret can leak into the agent definition, logs, or the deployable artifact, report it through the process above.

@@ -1,7 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 
-const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "llms.txt", "docs", ".github"];
+const repoRoot = resolve(import.meta.dirname, "..");
+const docsDir = resolve(repoRoot, "docs");
+const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "llms.txt", "docs", ".github"].map(
+  (entry) => resolve(repoRoot, entry),
+);
 
 async function docFiles(path, explicit = false) {
   const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined);
@@ -49,11 +53,12 @@ function anchors(markdown) {
 function resolveTarget(file, target) {
   if (!target || /^mailto:/.test(target)) return undefined;
   if (/^https?:/.test(target)) {
-    const siteDoc = /^https:\/\/fastagent\.sh\/docs(?:\/([^#]*))?(?:#(.*))?$/.exec(target);
-    if (!siteDoc) return undefined;
-    const slug = (siteDoc[1] ?? "").replace(/^\/+|\/+$/g, "");
+    const url = URL.parse(target);
+    if (url?.origin !== "https://fastagent.sh") return undefined;
+    if (url.pathname !== "/docs" && !url.pathname.startsWith("/docs/")) return undefined;
+    const slug = url.pathname.slice("/docs".length).replace(/^\/+|\/+$/g, "");
     const rel = !slug ? "README.md" : extname(slug) ? slug : `${slug}.md`;
-    return { targetFile: resolve("docs", rel), fragment: siteDoc[2] };
+    return { targetFile: resolve(docsDir, rel), fragment: url.hash ? url.hash.slice(1) : undefined };
   }
   const [pathPart, fragment] = target.split("#", 2);
   return { targetFile: resolve(dirname(file), pathPart || file), fragment };
