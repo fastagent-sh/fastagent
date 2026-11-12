@@ -517,16 +517,14 @@ describe("sanitizeSlackMarkdown", () => {
   });
 
   it("stays linear on adversarial input (ReDoS regression)", () => {
-    const unterminatedBang = `<!${"!".repeat(200_000)}`;
-    const unterminatedPipes = `<@0|${"!|".repeat(200_000)}`;
+    const unterminatedBang = `<!${"!".repeat(400_000)}`;
+    const unterminatedPipes = `<@0|${"!|".repeat(400_000)}`;
     // Many `<` start positions with no closing `>`: this is the case a `>`-only bound handles in O(n^2).
-    const manyStarts = "<!".repeat(200_000);
-    const start = Date.now();
-    // Nothing matches (no closing '>'), so each input is returned unchanged — the point is that this
-    // completes fast instead of triggering polynomial backtracking.
+    const manyStarts = "<!".repeat(400_000);
+    // Nothing matches (no closing '>'), so each input is returned unchanged. The test's timeout is the bound: polynomial
+    // backtracking on these inputs takes minutes, a linear match milliseconds.
     expect(sanitizeSlackMarkdown(unterminatedBang)).toBe(unterminatedBang);
     expect(sanitizeSlackMarkdown(unterminatedPipes)).toBe(unterminatedPipes);
     expect(sanitizeSlackMarkdown(manyStarts)).toBe(manyStarts);
-    expect(Date.now() - start).toBeLessThan(1_000);
   });
 });

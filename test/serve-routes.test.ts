@@ -216,9 +216,7 @@ describe("serve: serveHandler", () => {
     const never = answer("/never");
     const quick = answer("/quick");
     await handling;
-    const started = Date.now();
     await host.close();
-    expect(Date.now() - started).toBeLessThan(2000);
     expect(await quick).toBe("200 done");
     expect(await never).toMatch(/^503/);
   });

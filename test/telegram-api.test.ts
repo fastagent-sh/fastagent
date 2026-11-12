@@ -189,10 +189,8 @@ describe("callApi transport pipeline", () => {
         ),
     );
     vi.stubGlobal("fetch", fetchMock);
-    const t0 = Date.now();
-    // The error self-describes the transport's own decision (not just the server's text).
+    // An hour-long wait would be far past the test's timeout. The error self-describes the transport's own decision (not just the server's text).
     await expect(callApi(API, "BOT", "getMe", {})).rejects.toThrow(/exceeds the \d+s flood-wait cap/);
-    expect(Date.now() - t0).toBeLessThan(1000);
     expect(fetchMock).toHaveBeenCalledTimes(1); // and did not burn retries on it either
   });
 

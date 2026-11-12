@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { describe, expect, it, vi } from "vitest";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveStateRoot } from "../src/paths.ts";
-import { agentWorkspace, fauxAgent as agent, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "./cli-run.ts";
+
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
 
 /** A schedule module as `defineSchedule` returns it, so the fixture needs no package of its own. */
 const schedule = (cron: string, extra = "") =>
@@ -27,8 +30,6 @@ describe("cli: schedules", () => {
       join(claims, "2026-01-01T09-00-00-000Z"),
       JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }),
     );
-    const { addWakeup } = await import("../src/schedule/wakeups.ts");
-    const { resolveStateRoot } = await import("../src/paths.ts");
     const added = addWakeup(resolveStateRoot(dir), {
       session: "chat:42",
       prompt: "check the deploy",
@@ -115,6 +116,33 @@ describe("cli: schedules run and unwake", () => {
     };
     expect(listed.schedules[0]?.session).toEqual(expect.any(String));
     expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
+  });
+
+  it("schedules run refuses to fire while a serve holds the storage", async () => {
+    const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
+    const refused = await whileServed(dir, () => runInProcess(["schedules", "run", "digest", dir]));
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
+  });
+
+  it("schedules unwake cancels a wake-up whatever session set it, and only when no serve runs", async () => {
+    const dir = await agent("fa-schedules-unwake-");
+    const stateRoot = resolveStateRoot(dir);
+    const added = addWakeup(stateRoot, { session: "a schedule's own", prompt: "check", cron: "0 * * * *" });
+    if (!added.ok) throw new Error(added.error);
+
+    const refused = await whileServed(dir, () => runInProcess(["schedules", "unwake", added.id, dir]));
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("is held by another process");
+    expect(listWakeups(stateRoot).map((w) => w.id)).toEqual([added.id]);
+
+    const removed = await runInProcess(["schedules", "unwake", added.id, dir]);
+    expect(removed.code, removed.stderr).toBe(0);
+    expect(removed.stdout).toContain(`removed wake ${added.id}`);
+    expect(listWakeups(stateRoot)).toEqual([]);
+    const again = await runInProcess(["schedules", "unwake", added.id, dir]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain(`no pending wake-up ${added.id}`);
   });
 
   it("schedules run checks the schedule's name before the model a fire needs: both are choices, exit 2", async () => {

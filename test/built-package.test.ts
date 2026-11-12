@@ -1,13 +1,57 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { loadBuiltDefinition, loadProjectBuild } from "../src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "./probe-package.ts";
 import { assertDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
-import { made, agents, scratch, snapshot, setMode, readOnly, ask } from "./built-package-fixtures.ts";
+import { createHash } from "node:crypto";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { expect } from "vitest";
+import type { LocalAgent } from "../src/harnesses/pi-durable/serve.ts";
+
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
+
+const made: string[] = [];
+
+const agents: LocalAgent[] = [];
+
+const scratch = (parent: string, prefix: string) => {
+  const dir = mkdtempSync(join(parent, prefix));
+  made.push(dir);
+  return dir;
+};
+
+/** Every file of `dir` with a hash of its content: what "the package was not written to" is compared on. */
+const snapshot = (dir: string) =>
+  readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => {
+      const file = join(entry.parentPath, entry.name);
+      return `${file.slice(dir.length + 1)} ${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
+    })
+    .sort();
+
+const setMode = (dir: string, file: number, directory: number) => {
+  for (const entry of readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    chmodSync(join(entry.parentPath, entry.name), entry.isDirectory() ? directory : file);
+  }
+  chmodSync(dir, directory);
+};
+
+const readOnly = (dir: string) => setMode(dir, 0o444, 0o555);
+
+async function ask(agent: LocalAgent, name: string, args: Record<string, unknown>) {
+  const session = await agent.sessions.create();
+  const end = await agent.messages.send(
+    { sessionId: session.id, content: JSON.stringify({ name, args }) },
+    { wait: 30 },
+  );
+  expect(end.status).toBe("completed");
+  return end;
+}
 
 vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
 
@@ -56,6 +100,22 @@ describe("an installed package, opened as instances", () => {
     expect(snapshot(installed as string)).toEqual(before);
     expect(readdirSync(installed as string)).not.toContain("out.txt");
   }, 60_000);
+
+  it("refuses a second open over the same state, and a relative location", async () => {
+    const root = scratch(tmpdir(), "fa-instance-held-");
+    const first = await openAgent(definition, { root, offline: true });
+    agents.push(first);
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow();
+    await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(
+      'root must be an absolute path, and is "relative/root"',
+    );
+    await expect(openAgent(definition, { root, stateDir: join(root, "s"), workdir: root } as never)).rejects.toThrow(
+      "give the instance a root, or a stateDir and a workdir, not both",
+    );
+    await expect(openAgent(definition, { stateDir: join(root, "s"), workdir: "w" })).rejects.toThrow(
+      'workdir must be an absolute path, and is "w"',
+    );
+  });
 });
 
 describe("what an opener accepts", () => {

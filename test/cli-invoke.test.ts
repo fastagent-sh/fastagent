@@ -1,10 +1,15 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
+import { resolveStateRoot } from "../src/paths.ts";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { openSource } from "./open-source.ts";
 import { fauxAgent as agent, runInProcess, whileServed } from "./cli-run.ts";
+
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
@@ -82,6 +87,18 @@ describe("cli: invoke", () => {
     expect(lines[0]).toMatchObject({ type: "message", message: { sessionId } });
     expect(lines.find((line) => line.type === "tool_started")).toMatchObject({ name: "read" });
     expect(lines.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
+  });
+
+  it("refuses to run while another invoke holds the storage", async () => {
+    const dir = await agent("fa-invoke-busy-");
+    const held = await openLockedStorage(join(resolveStateRoot(dir), "invoke.sqlite"), "posix", "the test");
+    try {
+      const busy = await runInProcess(["invoke", "hello", dir]);
+      expect(busy.code).toBe(1);
+      expect(busy.stderr).toContain("another `fastagent invoke` of this agent is running");
+    } finally {
+      await held.close(BACKGROUND_CONTEXT);
+    }
   });
 
   it("refuses a session it does not hold", async () => {

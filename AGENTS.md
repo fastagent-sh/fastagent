@@ -354,6 +354,7 @@ test/                       # vitest; faux models by default; two tiers (CONTRIB
 │                           # tiers), unit-setup.ts (child processes, unit)
 ├── git-double.ts           # src/git.ts for a unit test: no git, or the answers a test scripts for a directory
 ├── tsc-double.ts           # the build's compiler for a unit test: imports followed, types stripped, nothing checked
+├── storage-no-wait.ts      # the instance's storage for a unit test: a held database refused at once, not after 5 s
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)

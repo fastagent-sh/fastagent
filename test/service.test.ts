@@ -724,10 +724,16 @@ describe("openAgent: an agent directory opened in an app", () => {
       .sessions.events(id)
       [Symbol.asyncIterator]();
     expect((await events.next()).value).toMatchObject({ type: "state" });
-    const started = Date.now();
+    // The same stream as bytes: one the server's grace cut would end in an error, not at its end.
+    const raw = await fetch(`http://127.0.0.1:${port}/v1/sessions/${id}/events`, {
+      headers: { authorization: "Bearer k" },
+    });
+    const reader = (raw.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let said = decoder.decode((await reader.read()).value);
     await watched.close();
-    // Ended before the server stops, so the close does not wait out the server's grace for it.
-    expect(Date.now() - started).toBeLessThan(450);
+    for (let read = await reader.read(); !read.done; read = await reader.read()) said += decoder.decode(read.value);
+    expect(said).toContain("the service is closing");
     expect((await events.next()).value).toMatchObject({
       type: "stream_error",
       error: { code: "unavailable", message: "the service is closing" },

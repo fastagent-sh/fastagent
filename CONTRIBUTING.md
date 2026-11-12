@@ -35,8 +35,8 @@ covers. Write the smallest tier that can show the behavior.
 
 | Tier | Files | May use | May not use | Timeout | Runs |
 | --- | --- | --- | --- | --- | --- |
-| **Unit** | `test/*.test.ts` | This process: real modules working together, temp directories, SQLite on a temp file, loopback sockets, the faux model, the shared doubles (`scripted-agent.ts`, a stubbed `fetch`, `runInProcess`), fake timers | A child process of any kind (the CLI, `git`, `tsc`, a stand-in script), a connection off the machine, an assertion on elapsed time, waiting out a real timeout | 10 s | `npm test`, on every Node version CI tests |
-| **Integration** | `test/*.integration.test.ts` | This machine: processes and process groups, signals, locks between processes, the project's real build, `git`, `npm pack`, stand-in host CLIs on the `PATH` | A connection off the machine, a real platform or cloud, an assertion on elapsed time | 30 s | `npm run test:integration`, on the Node floor |
+| **Unit** | `test/*.test.ts` | This process: real modules working together, temp directories, SQLite on a temp file, loopback sockets, the faux model, the shared doubles (`scripted-agent.ts`, a stubbed `fetch`, `runInProcess`), fake timers | A child process of any kind (the CLI, `git`, `tsc`, a stand-in script), a connection off the machine, a bound on how long something took, waiting out a real timeout | 20 s | `npm test`, on every Node version CI tests |
+| **Integration** | `test/*.integration.test.ts` | This machine: processes and process groups, signals, locks between processes, the project's real build, `git`, `npm pack`, stand-in host CLIs on the `PATH` | A connection off the machine, a real platform or cloud, a bound on how long something took | 30 s | `npm run test:integration`, on the Node floor |
 | **Artifact smoke** | CI's `Packed package smoke` and `Bun smoke`, `test/bun/` | The package as a user installs it, `dist/`, Bun | Anything aliased to `src/` | (the job) | CI |
 
 How the boundary is kept:
@@ -44,11 +44,14 @@ How the boundary is kept:
 - `test/setup.ts` refuses a connection to anything but loopback in every tier, and `test/unit-setup.ts` refuses a child
   process in the unit tier. Both throw where the call is made and fail the test afterwards, so product code that
   catches the error cannot hide it.
-- `test/test-tiers.test.ts` refuses an elapsed-time assertion (`Date.now()` minus a start) in any test. Wait for an
-  event instead, or drive the time with fake timers or an injected timeout.
+- `test/test-tiers.test.ts` refuses a bound on how long something took (`Date.now()` minus a start, below a limit):
+  load decides it as much as the code does. A lower bound, that the code waited, is allowed. To show something does
+  not wait, drive the time with fake timers, or make the wait it must not take longer than the test's timeout (inject
+  it, or ask for the longest one there is), so the timeout is the bound with a margin no load closes. A regular
+  expression is shown linear the same way: an input on which a backtracking one runs for over a minute.
 - Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
   in-process CLI (`runInProcess`), the host CLI runner (`CliRunner`), a stubbed `fetch`, `test/git-double.ts` for
-  `src/git.ts`, `test/tsc-double.ts` for the build's compiler. A double gets one integration test that checks it
+  `src/git.ts`, `test/tsc-double.ts` for the build's compiler, `test/storage-no-wait.ts` for a held database. A double gets one integration test that checks it
   against the real thing, as `cli-run-parity.integration.test.ts` does for `runInProcess`.
 - A subject tested in both tiers is two files, `<name>.test.ts` and `<name>.integration.test.ts`; what both need is in
   `<name>-fixtures.ts`.

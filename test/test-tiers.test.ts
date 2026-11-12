@@ -1,40 +1,22 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { readFileSync, readdirSync } from "node:fs";
+import { expect, it } from "vitest";
 
 const TEST_DIR = new URL(".", import.meta.url).pathname;
 
-/** How long something took (the clock read minus a start), which load decides as much as the code does. */
+/** How long something took (the clock read minus a start). */
 const ELAPSED = /\b(?:Date|performance)\.now\(\)\s*-\s*[A-Za-z_$]/;
+/** A lower bound: that the code waited. Load only lengthens a wait, so it cannot fail one. */
+const LOWER_BOUND = /\.toBeGreaterThan(?:OrEqual)?\(/;
 
-/** Files that still assert elapsed time, to be moved to a fake clock or an injected timeout. The list only shrinks. */
-const ASSERTS_ELAPSED = [
-  "agent-api-conformance.ts",
-  "feishu.test.ts",
-  "http-api.test.ts",
-  "instance-name.test.ts",
-  "preview.test.ts",
-  "serve-routes.test.ts",
-  "service.test.ts",
-  "slack-preview.test.ts",
-  "strip-edges.test.ts",
-  "telegram-api.test.ts",
-  "telegram.test.ts",
-  "ticket.integration.test.ts",
-];
-
-const files = readdirSync(TEST_DIR).filter((file) => file.endsWith(".ts"));
-
-describe('the test tiers (CONTRIBUTING.md, "Test tiers")', () => {
-  it("no test asserts elapsed time beyond the files listed, and every one listed still does", () => {
-    const stale = ASSERTS_ELAPSED.filter((file) => !existsSync(`${TEST_DIR}${file}`));
-    const timed = files.filter((file) => ELAPSED.test(readFileSync(`${TEST_DIR}${file}`, "utf8")));
-    expect({ stale, unlisted: timed.filter((file) => !ASSERTS_ELAPSED.includes(file)) }).toEqual({
-      stale: [],
-      unlisted: [],
-    });
-    expect(
-      ASSERTS_ELAPSED.filter((file) => !timed.includes(file)),
-      "no longer asserts elapsed time: unlist it",
-    ).toEqual([]);
-  });
+it('no test bounds how long something took (CONTRIBUTING.md, "Test tiers")', () => {
+  const found = readdirSync(TEST_DIR)
+    .filter((file) => file.endsWith(".ts"))
+    .flatMap((file) =>
+      readFileSync(`${TEST_DIR}${file}`, "utf8")
+        .split("\n")
+        .flatMap((line, i) =>
+          ELAPSED.test(line) && !LOWER_BOUND.test(line) ? [`${file}:${i + 1}: ${line.trim()}`] : [],
+        ),
+    );
+  expect(found).toEqual([]);
 });

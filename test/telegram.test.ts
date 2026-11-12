@@ -1066,12 +1066,11 @@ describe("inputs steered into one run (real Agent)", () => {
     await vi.waitFor(async () => expect((await agent.sessions.list()).data[0]?.status).toBe("running"));
     await ch(tgRequest(upd(2, "and keep the old column")));
     await vi.waitFor(() => expect(reactionCalls).toBeGreaterThan(0));
-    const released = Date.now();
     release();
     await vi.waitFor(() => expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({}));
-    // One attempt, no retries: a 429 that Telegram answers with "wait 1s" would otherwise cost three waits of 2s each.
+    // One attempt, no retries: a 429 that Telegram answers with "wait 1s" would otherwise cost three waits of 2s each,
+    // and the transport waits only before a retry.
     expect(reactionCalls).toBe(1);
-    expect(Date.now() - released).toBeLessThan(2000);
   });
 
   it("goes on without a mark when Telegram refuses the reaction", async () => {

@@ -168,14 +168,13 @@ describe("the Agent API's HTTP limits", () => {
     try {
       const { id: sessionId } = await agent.sessions.create();
       const message = await agent.messages.send({ sessionId, content: "hold" });
-      let started = Date.now();
-      const capped = await fetch(`${server.url}/v1/sessions/${sessionId}/messages/${message.id}?wait=5`, {
+      // The longest wait a request may name: uncapped, it would outlast the test's timeout.
+      const capped = await fetch(`${server.url}/v1/sessions/${sessionId}/messages/${message.id}?wait=60`, {
         headers: auth(),
       });
-      expect(Date.now() - started).toBeLessThan(2000);
       expect(await capped.json()).toMatchObject({ status: "running" });
       asked = 0;
-      started = Date.now();
+      const started = Date.now();
       const waited = await connectAgent(server.url, { apiKey: KEY }).messages.get(
         { sessionId, messageId: message.id },
         { wait: 0.7 },

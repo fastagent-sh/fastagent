@@ -258,10 +258,10 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * own process ends at once when told to, and what it started (a tunnel) needs a moment to let go of what it holds, so
  * what is waited for is the group, not the process that leads it.
  */
-async function stop(pid: number): Promise<void> {
+async function stop(pid: number, timeoutMs = STOP_TIMEOUT_MS): Promise<void> {
   if (!groupRunning(pid)) return;
   signalGroup(pid, "SIGTERM");
-  for (const deadline = Date.now() + STOP_TIMEOUT_MS; Date.now() < deadline; await sleep(POLL_MS)) {
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; await sleep(POLL_MS)) {
     if (!groupRunning(pid)) break;
   }
   // What the step started may outlive it, or ignore SIGTERM.
@@ -446,9 +446,10 @@ export async function checkTicket(id: string, address?: string): Promise<Ticket 
 
 /**
  * Stop the step of ticket `id` where it is, and everything it started, on a person's or an agent's say: the way out of
- * a step that hangs while finishing, which no deadline cuts. What it was doing may be left half-done.
+ * a step that hangs while finishing, which no deadline cuts. What it was doing may be left half-done. What it started
+ * has `stopTimeoutMs` to let go before it is killed.
  */
-export async function stopTicket(id: string): Promise<Ticket> {
+export async function stopTicket(id: string, stopTimeoutMs = STOP_TIMEOUT_MS): Promise<Ticket> {
   const ticket = readTicket(id);
   if (ticket === undefined) throw new Error(`ticket ${id} is gone from ${ticketsDir()}`);
   if (!waiting(ticket)) return ticket;
@@ -456,7 +457,7 @@ export async function stopTicket(id: string): Promise<Ticket> {
     status: "failed",
     message: `stopped on request; what it was doing may be left half-done (${ticketLogPath(id)} says where it was)`,
   });
-  if (ticket.pid !== undefined) await stop(ticket.pid);
+  if (ticket.pid !== undefined) await stop(ticket.pid, stopTimeoutMs);
   return ended;
 }
 
