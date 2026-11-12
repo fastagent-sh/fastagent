@@ -73,7 +73,7 @@ describe("the Agent API over HTTP", () => {
 describe("refusals over HTTP", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("answers each code with the status §7 names", () => {
+  it("answers each code with its status", () => {
     const cases: [ErrorCode | "a_later_code", unknown, number][] = [
       ["invalid_request", undefined, 400],
       ["invalid_request", { reason: "too_large" }, 413],

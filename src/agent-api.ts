@@ -1,5 +1,5 @@
 /**
- * The Agent API (docs/SPEC.md) as Effect Schemas: its objects, what a Caller sends, its errors and its
+ * The Agent API as Effect Schemas: its objects, what a Caller sends, its errors and its
  * limits. Imports only `effect`: it is the layer that keeps the harness away from its Callers, and the HTTP binding is
  * built from the same schemas, so the two bindings cannot describe different APIs.
  */
@@ -23,7 +23,7 @@ export class Tokens extends Schema.Opaque<Tokens>()(
   }),
 ) {}
 
-/** Spend by `provider/model` for model calls, and by tool name for what tools reported (§3). */
+/** Spend by `provider/model` for model calls, and by tool name for what tools reported. */
 export class Usage extends Schema.Opaque<Usage>()(
   Schema.Struct({
     models: Schema.Record(Schema.String, Tokens),
@@ -52,7 +52,7 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
      * program's, unless the instance gives its own.
      */
     starters: Schema.optionalKey(Schema.Array(Schema.String)),
-    /** What a message may start with as `/<name>` (§5.1). */
+    /** What a message may start with as `/<name>`. */
     commands: Schema.Array(Named),
     /** The tools a session may enable. */
     tools: Schema.Array(Named),
@@ -92,7 +92,7 @@ export const AgentErrorData = Schema.Struct({
 });
 export type AgentErrorData = typeof AgentErrorData.Type;
 
-/** What every operation rejects with (§7). */
+/** What every operation rejects with. */
 export class AgentError extends Schema.Error<AgentError>("AgentError")(AgentErrorData) {}
 
 /**
@@ -111,7 +111,8 @@ const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.opti
 
 /**
  * A status as a field: the values this version defines, and any other, since a later version may add one and a Caller
- * reads it the way §7.1 says (an unknown session status is busy, an unknown message status has not ended).
+ * reads it as an unknown value of an open set (an unknown session status is busy, an unknown message status has
+ * not ended).
  */
 const open = <S extends Schema.Top>(known: S) =>
   // As a type, the known values and any string, so an editor still offers them (`string & {}` does not absorb them).
@@ -152,7 +153,7 @@ export class Message extends Schema.Opaque<Message>()(
 
 const ENDS: ReadonlySet<string> = new Set<MessageStatus>(["completed", "incomplete", "failed", "canceled"]);
 
-/** Whether a message has ended: its ends are a closed set, so any other status, known or not, has not (§7.1). */
+/** Whether a message has ended: its ends are a closed set, so any other status, known or not, has not. */
 export const hasEnded = (message: Pick<Message, "status">): boolean => ENDS.has(message.status);
 
 /**
@@ -245,9 +246,9 @@ export const SendRequest = Schema.Struct({
     Schema.String,
     Schema.Array(Schema.Union([TextPart, ImagePart])).check(Schema.isMinLength(1)),
   ]),
-  /** The Caller's key for this message, unique within the session (§5.2). */
+  /** The Caller's key for this message, unique within the session. */
   idempotencyKey: Schema.optional(IdempotencyKey),
-  /** What the message is when the session is busy with another (§5.3). Default: "queue". */
+  /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
 });
 export type SendRequest = typeof SendRequest.Type;

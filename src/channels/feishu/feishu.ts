@@ -92,7 +92,7 @@ interface StoredFeishuTurn extends TurnRecordBase {
   parentId?: string;
   /** The exchange a new thread was opened on: its session forks the one that holds it, at that ask. */
   forkOf?: { conversation: string; ask: string };
-  /** The ROOM whose history this thread's first turn reads, read-only (§8). */
+  /** The ROOM whose history this thread's first turn reads, read-only. */
   roomKey?: string;
   images: { msg: string; key: string }[];
   files: { msg: string; key: string; name?: string }[];
@@ -383,7 +383,7 @@ function createFeishuRuntimeFactory(
               ? Promise.resolve(undefined)
               : threadForkSource(agent, recordedSession(rec.forkOf.conversation), rec.forkOf.ask));
         return Effect.promise(async () => {
-          // What the room has said since the exchange this thread was opened on, read by the thread's first turn (§8):
+          // What the room has said since the exchange this thread was opened on, read by the thread's first turn:
           // its session holds none of it, so the room's newest messages when nothing named one. The fork's own answer
           // is read again, since the room's session may have answered more after it.
           if (rec.roomKey === undefined) return undefined;
@@ -454,7 +454,7 @@ function createFeishuRuntimeFactory(
     registerFeishuApi(appId, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
-    // Who the agent has heard in a thread decides whether a bare message addresses it (participant model §3), and it
+    // Who the agent has heard in a thread decides whether a bare message addresses it (the participant model), and it
     // comes from what this channel observed.
 
     let warnedUnidentified = false;
@@ -537,7 +537,7 @@ function createFeishuRuntimeFactory(
       const askAt = Number.isFinite(created) && created > 0 ? created : Date.now();
       const chatId = r.chatId ?? m.chat_id;
       const sameTarget = chatId === m.chat_id;
-      // Answer where asked (§4): quote in a group so the ask is identifiable among many speakers, stay plain in an
+      // Answer where asked: quote in a group so the ask is identifiable among many speakers, stay plain in an
       // ordinary direct message, and stay inside a thread whenever the question came from one — a direct message's
       // thread is a place too, and relocating out of it is the silent move the model refuses.
       const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
@@ -583,7 +583,7 @@ function createFeishuRuntimeFactory(
           chatId,
           replyTo,
           replyInThread,
-          // A quote is the user explicitly pointing at something that may predate this session (§8 rung 2), so it is
+          // A quote is the user explicitly pointing at something that may predate this session, so it is
           // always loaded.
           parentId: m.parent_id,
           ...(forkOf !== undefined ? { forkOf } : {}),
@@ -595,7 +595,7 @@ function createFeishuRuntimeFactory(
       );
 
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT bare message
-      // address it without a mention (§3).
+      // address it without a mention.
       if (heard && replyInThread === true && sameTarget && r.conversation === undefined) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive could otherwise
         // say "answered here, heard nobody".

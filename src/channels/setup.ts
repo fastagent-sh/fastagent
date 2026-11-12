@@ -4,7 +4,7 @@
  * (`channels/<kind>/setup.ts`); `cli/channel-setup.ts` asks, in a terminal or on a page, and writes what is accepted.
  */
 
-/** How a channel receives (SPEC.md §8): which values its app needs depends on it. */
+/** How a channel receives: which values its app needs depends on it. */
 export type SetupWay = "webhook" | "connection";
 
 /** Where a value is found: what to do, and the page to do it on. */

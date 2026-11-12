@@ -68,7 +68,7 @@ Everything is at **[fastagent.sh/docs](https://fastagent.sh/docs/)**. Start with
 
 ## Status
 
-Pre-1.0. The [Agent API](https://fastagent.sh/docs/spec/) is the stable center; the rest of the package may still
+Pre-1.0. The [Agent API](https://fastagent.sh/docs/agent-api/) is the stable center; the rest of the package may still
 change. Changes are in the [releases](https://github.com/fastagent-sh/fastagent/releases).
 
 > ☁️ **Prefer these managed?** FastAgent Cloud will run your agents with multi-instance durability, scale-to-zero, and

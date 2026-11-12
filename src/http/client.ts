@@ -1,5 +1,5 @@
 /**
- * An Agent over HTTP (SPEC.md §8, §9): the interface `openAgent` gives in process, called through the contract the
+ * An Agent over HTTP: the interface `openAgent` gives in process, called through the contract the
  * server answers from. Runs wherever `fetch` does (Node, Bun, Deno, Workers): nothing here needs a runtime's own API.
  */
 import * as Cause from "effect/Cause";
@@ -39,7 +39,7 @@ export interface ConnectOptions {
 
 /**
  * What a request checks before it is sent, with the schema the in-process Agent checks it with. A field given as
- * `undefined` is left out (§4): JSON would send it as `null`, which in a session's changes clears the field.
+ * `undefined` is left out: JSON would send it as `null`, which in a session's changes clears the field.
  */
 function checked<S extends Schema.Top>(schema: S, value: unknown, what: string): S["Type"] {
   const exit = Schema.decodeUnknownExit(schema as unknown as Schema.Codec<S["Type"], unknown>)(value);
@@ -64,7 +64,7 @@ const rejected = (signal: AbortSignal) =>
 
 /**
  * A refusal at a status the contract does not declare, a later server's: its body says what it is, as any refusal's
- * does (§7.1). A body that is not one (a proxy's page) leaves the failure the request met.
+ * does. A body that is not one (a proxy's page) leaves the failure the request met.
  */
 const refusalIn = (error: unknown): Effect.Effect<never, unknown> => {
   const response = (error as { reason?: { response?: HttpClientResponse.HttpClientResponse } }).reason?.response;
@@ -86,7 +86,7 @@ const said = (error: unknown) => (error instanceof Error ? error.message : Strin
 const whatFailed = (baseUrl: string, error: unknown) => {
   if (reasonOf(error)?._tag === "TransportError") return `could not reach the agent at ${baseUrl}: ${said(error)}`;
   const answered = `the agent at ${baseUrl} answered what this client cannot read: ${said(error)}`;
-  // A serve mounts the API only while it holds a key (SPEC §9.6): a host that is up and has none answers 404 here.
+  // A serve mounts the API only while it holds a key: a host that is up and has none answers 404 here.
   return reasonOf(error)?.response?.status === 404
     ? `${answered} (a deployment serves no Agent API without a FASTAGENT_API_KEY, and AgentCore serves none)`
     : answered;
@@ -94,7 +94,7 @@ const whatFailed = (baseUrl: string, error: unknown) => {
 
 /**
  * A read's failure, and a write's other than a send's: a refusal as the agent answered it; one that could not get
- * through or met a server's error may be sent again, since repeating any request but a send does no harm (§7);
+ * through or met a server's error may be sent again, since repeating any request but a send does no harm;
  * anything else is not the Caller's to retry.
  */
 function readFailure(baseUrl: string, error: unknown): AgentError {
@@ -115,7 +115,7 @@ interface SendStage {
 }
 
 /**
- * A send's failure, by how far it got (§5.2), the one place that says so. Refused before it was recorded, it is the
+ * A send's failure, by how far it got, the one place that says so. Refused before it was recorded, it is the
  * refusal; recorded, or perhaps recorded, it is `unconfirmed` with what finds it: the key, the client's own when the
  * Caller gave none, and the message's id once known.
  */
@@ -166,7 +166,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
   };
 
   /**
-   * Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute (§7). What a
+   * Asks again until the message ends or the Caller's `wait` is over: a request waits at most a minute. What a
    * request after the first that fails means is `failureAfter`'s to say: for a send, the message is recorded by then.
    */
   const waited = async (
@@ -193,7 +193,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
   /**
    * An event stream. Until it has delivered an event, a failure rejects its first read with what `refused` makes of
    * it, an answer that ends before its first event included; once it has, a connection that fails or ends before the
-   * stream's own end ends it with `stream_error` (§6). A signal ends it, rejecting the read waiting then with its reason.
+   * stream's own end ends it with `stream_error`. A signal ends it, rejecting the read waiting then with its reason.
    */
   const watched = <E extends { readonly type: string }>(
     opened: Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>,
@@ -212,7 +212,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     const events = Stream.unwrap(
       opened.pipe(Effect.catch(refusalIn), Effect.provideService(HttpClient.TracerPropagationEnabled, false)),
     ).pipe(
-      // A type a later server sends is not one this Caller can be handed (§7.1).
+      // A type a later server sends is not one this Caller can be handed.
       Stream.filter((event): event is E => known.has(event.type)),
       Stream.tap(() =>
         Effect.sync(() => {
@@ -253,7 +253,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     };
   };
 
-  /** A send carries a key, the Caller's or one of its own, so that one whose answer was lost can be found (§5.2). */
+  /** A send carries a key, the Caller's or one of its own, so that one whose answer was lost can be found. */
   const keyed = (sendRequest: SendRequest, what: string) => {
     const { sessionId, idempotencyKey, ...body } = checked(SendRequest, sendRequest, what);
     return { stage: { sessionId, key: idempotencyKey ?? crypto.randomUUID() }, body };
@@ -337,7 +337,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         );
       },
       stream: (sendRequest, streamOptions) => {
-        // Checked on the first read, which a refusal rejects (§6.2): until then there is no stage to fail at.
+        // Checked on the first read, which a refusal rejects: until then there is no stage to fail at.
         let stage: SendStage | undefined;
         let messageId: string | undefined;
         return watched<MessageStreamEvent>(

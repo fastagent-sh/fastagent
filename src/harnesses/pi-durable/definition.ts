@@ -23,7 +23,7 @@ interface IngressCondition {
   ingress: Ingress;
 }
 
-/** A secret an instance must or may be given (SPEC.md §8): each name once, required when any declaration requires it. */
+/** A secret an instance must or may be given: each name once, required when any declaration requires it. */
 interface DeclaredInput {
   name: string;
   description?: string;

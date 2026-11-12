@@ -20,5 +20,5 @@ FastAgent serves an agent directory as a live service. Pick what you want to do.
 | Call it from my app | [Embedding](embedding.md) |
 | Run it on a server | [Deploy](deploy.md) |
 | Look up a command | [CLI](cli.md) |
-| Look up the API | [Agent API](SPEC.md), [TypeScript exports](api-reference.md) |
+| Look up the API | [Agent API](agent-api.md), [TypeScript exports](api-reference.md) |
 | Fix something | [Troubleshooting](troubleshooting.md) |

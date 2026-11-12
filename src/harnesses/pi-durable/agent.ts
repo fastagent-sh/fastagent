@@ -1,5 +1,5 @@
 /**
- * The Agent API (SPEC.md) over pi-durable: a Harness opened on the instance's storage, and the operations read
+ * The Agent API over pi-durable: a Harness opened on the instance's storage, and the operations read
  * from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per process, since
  * one process owns a storage.
  */
@@ -74,7 +74,7 @@ import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
 
-/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model (SPEC.md §5.1). */
+/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
 export interface AgentCommand {
   name: string;
   description?: string;
@@ -232,7 +232,7 @@ function durableAgent(
     return agentError("internal", message);
   };
 
-  /** An operation as the Promise the API promises: what it names, or a rejection with an AgentError (§4). */
+  /** An operation as the Promise the API promises: what it names, or a rejection with an AgentError. */
   const settle = <A>(program: Effect.Effect<A, AgentError | PortFailure | Released>): Promise<A> =>
     Effect.runPromise(
       program.pipe(
@@ -379,7 +379,7 @@ function durableAgent(
         const { content, sent } = expandCommand(request.content, commands());
         const conversation = yield* conversationOf(request.sessionId);
         // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
-        // seen answers with its message whatever the process holds (SPEC.md §5.2).
+        // seen answers with its message whatever the process holds.
         const atCapacity = (yield* inFlight) >= LIMITS.inFlightPerProcess;
         const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
         let submitting = false;
@@ -652,7 +652,7 @@ function durableAgent(
 
   /**
    * Stops everything the session is doing, and answers once that stop is recorded rather than once it has ended
-   * (§4). pi-durable runs commits one at a time in the order they are called, and `abort()` calls its commit at once:
+   *. pi-durable runs commits one at a time in the order they are called, and `abort()` calls its commit at once:
    * so the read before it sees what it stops, and the check after it runs once the stop is in the storage.
    */
   const cancel = (sessionId: string): Promise<{ stopped: string[] }> =>
@@ -788,7 +788,7 @@ function expandCommand(
   return { content: [{ type: "text", text: command.expand(match[2] ?? "") }, ...parts.slice(1)], sent: first.text };
 }
 
-/** One page of a session's published entries (§4): after a cursor, before one, or the newest. */
+/** One page of a session's published entries: after a cursor, before one, or the newest. */
 function readPage(
   reads: Reads,
   conversation: Conversation,
@@ -842,7 +842,7 @@ function readPage(
   });
 }
 
-/** A page stops at the byte budget (§7), keeping at least one entry: the end nearest its cursor. */
+/** A page stops at the byte budget, keeping at least one entry: the end nearest its cursor. */
 function withinBudget(entries: Entry[], keep: "oldest" | "newest"): Entry[] {
   const ordered = keep === "oldest" ? entries : [...entries].reverse();
   const kept: Entry[] = [];

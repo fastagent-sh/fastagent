@@ -1,5 +1,5 @@
 /**
- * The Agent API over HTTP (docs/SPEC.md §9) as one `effect/http-api` contract: the server answers from it,
+ * The Agent API over HTTP as one `effect/http-api` contract: the server answers from it,
  * `connectAgent` calls through it and `/v1/openapi.json` is generated from it, so none of them can describe another API
  * than the one served. Built from agent-api.ts's schemas; imports nothing that needs Node, so a client runs wherever
  * `fetch` does.
@@ -40,7 +40,7 @@ import {
 
 export const API_PREFIX = "/v1";
 
-/** The status a refusal answers with (§7). */
+/** The status a refusal answers with. */
 export function statusOf(error: AgentErrorData): number {
   const reason = (error.details as { reason?: unknown } | undefined)?.reason;
   switch (error.code) {
@@ -77,7 +77,7 @@ export const Refusal = Schema.Struct({ error: AgentErrorData }).pipe(
 
 /**
  * `{ error }` at `status`. Encoding takes only an error whose status this is, which is how the server's answer gets its
- * status; decoding takes any code, since a later server may answer with one this client does not know (§7.1).
+ * status; decoding takes any code, since a later server may answer with one this client does not know.
  */
 function refusedWith(status: number) {
   return Schema.Struct({ error: AgentErrorData }).pipe(
@@ -110,7 +110,7 @@ export class Malformed extends HttpApiMiddleware.Service<Malformed>()("fastagent
 const typesOf = (events: { members: readonly { fields: { type: { literal: string } } }[] }): ReadonlySet<string> =>
   new Set(events.members.map((member) => member.fields.type.literal));
 
-/** The event types this version defines; a Caller ignores any other (§7.1). */
+/** The event types this version defines; a Caller ignores any other. */
 export const SESSION_EVENT_TYPES = typesOf(SessionEvent);
 export const MESSAGE_STREAM_EVENT_TYPES = typesOf(MessageStreamEvent);
 
@@ -119,7 +119,7 @@ const Unknown = Schema.Struct({ type: Schema.String });
 
 /**
  * An event as server-sent: its type as the event's name, the event as its data, and an entry's id as its id, so that
- * `Last-Event-ID` is the last entry a Caller received (§9.3).
+ * `Last-Event-ID` is the last entry a Caller received.
  */
 function serverSent<S extends Schema.Codec<{ readonly type: string }, unknown>>(events: S, known: ReadonlySet<string>) {
   const json = Schema.fromJsonString(events);
@@ -170,7 +170,7 @@ const SendBody = Schema.Struct({
 
 /**
  * A key as a header carries it: percent-encoded, as in the `by-key` path, since a header holds only Latin-1 and loses
- * the spaces around a value, while a key may be any 1 to 256 characters (§9.2).
+ * the spaces around a value, while a key may be any 1 to 256 characters.
  */
 const KeyHeader = Schema.String.pipe(Schema.decodeTo(IdempotencyKey, SchemaTransformation.stringFromUriComponent));
 
@@ -182,7 +182,7 @@ const AgentGroup = HttpApiGroup.make("agent")
     HttpApiEndpoint.get("usage", "/usage", { success: Usage, error: Refused }),
     HttpApiEndpoint.get("openapi", "/openapi.json", { success: Schema.Json, error: Refused }),
     HttpApiEndpoint.post("createSession", "/sessions", {
-      // Its options may be left out, as in process (§4): a request without a body is one without them, which the
+      // Its options may be left out, as in process: a request without a body is one without them, which the
       // contract reads as `null` only when a payload schema is `null` itself.
       payload: [CreateSessionOptions, Schema.Null],
       success: Session.pipe(HttpApiSchema.status(201)),
@@ -259,4 +259,4 @@ const AgentGroup = HttpApiGroup.make("agent")
 
 export class AgentHttpApi extends HttpApi.make("fastagent")
   .add(AgentGroup)
-  .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "2" })) {}
+  .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "1" })) {}

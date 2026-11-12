@@ -1,6 +1,6 @@
 /**
  * A definition opened: its code built with its secrets, its model environment, its storage, and the Agent over them.
- * `openAgent` is how an app opens one (SPEC.md §8); `dev`, `start`, AgentCore, `invoke` and `schedules run` open it
+ * `openAgent` is how an app opens one; `dev`, `start`, AgentCore, `invoke` and `schedules run` open it
  * through `openServing`, which also takes where the Agent keeps its sessions and what becomes of an earlier process's
  * messages.
  */
@@ -298,7 +298,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   };
 }
 
-/** An agent opened in this process (SPEC.md §8): the Agent API, and how it is served and operated. */
+/** An agent opened in this process: the Agent API, and how it is served and operated. */
 export interface LocalAgent extends Agent {
   /**
    * Channels, schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
@@ -317,11 +317,11 @@ export interface LocalAgent extends Agent {
 }
 
 export interface ServeAgentOptions {
-  /** The keys a Caller of the Agent API may present (SPEC.md §9.1). */
+  /** The keys a Caller of the Agent API may present. */
   apiKeys?: readonly string[];
 }
 
-/** The instance root, the agent's working directory with its state in `.state/`; or the two apart (SPEC.md §8). */
+/** The instance root, the agent's working directory with its state in `.state/`; or the two apart. */
 export type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
 
 export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {

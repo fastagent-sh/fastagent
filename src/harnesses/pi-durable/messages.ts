@@ -1,5 +1,5 @@
 /**
- * pi-durable's input submissions as the Agent API's messages (SPEC.md §5): a submission is a message, its request
+ * pi-durable's input submissions as the Agent API's messages: a submission is a message, its request
  * id carries the Caller's key, and its settlement is the message's end.
  */
 import { randomUUID } from "node:crypto";
@@ -97,7 +97,7 @@ function end(
   if (reply?.role !== "assistant") {
     throw new Error(`message ${record.id} was answered by entry ${record.answer}, which holds no reply`);
   }
-  // A run a tool ended (`control.terminate`) settles on the reply that called it, which is not an answer (§5.4).
+  // A run a tool ended (`control.terminate`) settles on the reply that called it, which is not an answer.
   if (hasToolCalls(reply)) return { status: "completed" };
   return {
     status: reply.stopReason === "length" ? "incomplete" : "completed",

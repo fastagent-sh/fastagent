@@ -91,8 +91,8 @@ interface ServingSurface {
 }
 
 /**
- * Mount the channels and the health check: JSON, `{ status, webhooks }`, each webhook channel only by name and outcome
- * (SPEC.md §9.1), since it is public; a step and its reasons are in the log.
+ * Mount the channels and the health check: JSON, `{ status, webhooks }`, each webhook channel only by name and outcome,
+ * since it is public; a step and its reasons are in the log.
  */
 export function routesFor(
   agent: Agent,
@@ -150,7 +150,7 @@ export function startSchedules(
   return scheduler;
 }
 
-/** What `serve()` answers (SPEC.md §8): the agent's channels, schedules and wake-ups, and `GET /health`. */
+/** What `serve()` answers: the agent's channels, schedules and wake-ups, and `GET /health`. */
 export interface Service {
   /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
@@ -188,7 +188,7 @@ export interface ServedAgent extends Service {
   /** What actually mounted: channels serving routes, and long connections. */
   channels: { routes: string[]; longConnections: string[] };
   schedules: readonly Schedule[];
-  /** Whether the Agent API is served, under `/v1`: only with a key (SPEC.md §9.1). */
+  /** Whether the Agent API is served, under `/v1`: only with a key. */
   api: boolean;
 }
 
@@ -201,7 +201,7 @@ export interface WebhookRegistry {
   dispose(): void;
 }
 
-/** The channels whose platform lets only a person set the URL (SPEC.md §8): Slack, and Lark without its config API. */
+/** The channels whose platform lets only a person set the URL: Slack, and Lark without its config API. */
 const PERSON_SET: readonly WebhookKind[] = ["slack", "lark"];
 
 /** Where a channel's URL a person set is confirmed: its state (what reached it), and its binding's recorded `url`. */
@@ -364,7 +364,7 @@ export interface ServeOptions {
   onChannelClosed?: (name: string, error?: unknown) => void;
   /** How long `close()` waits for a channel to stop before reporting it stuck (default 5s). */
   closeTimeoutMs?: number;
-  /** The keys the Agent API takes; without one it is not served (SPEC.md §9.1). */
+  /** The keys the Agent API takes; without one it is not served. */
   apiKeys?: readonly string[];
 }
 

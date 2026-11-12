@@ -20,10 +20,10 @@ How to use them:
 
 | To | Read |
 |---|---|
-| Call an agent, in process or over HTTP | [Agent API](SPEC.md) |
+| Call an agent, in process or over HTTP | [Agent API](agent-api.md) |
 | Open an agent in an app, serve it, sign in to providers, edit its content | [Embedding](embedding.md) |
 | Write `fastagent.config.ts`, tools, schedules and `needs` | [Configuration](configuration.md) |
 | Write a channel | [Channel development](channel-development.md) |
 | Add MCP servers and their sign-in | [MCP servers](mcp.md) |
 
-FastAgent is pre-1.0; the [Agent API](SPEC.md) is the stable design center.
+FastAgent is pre-1.0; the [Agent API](agent-api.md) is the stable design center.

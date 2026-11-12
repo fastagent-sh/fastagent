@@ -1,5 +1,5 @@
 /**
- * A serve pointing its platforms at itself (SPEC.md §8, `Service.registerWebhooks`): which of its
+ * A serve pointing its platforms at itself (`Service.registerWebhooks`): which of its
  * channels take a webhook, the step a person takes for each one the instance cannot set, and the registration that
  * sets what the app's own credentials can set, on every call and without reading it first.
  */
@@ -9,7 +9,7 @@ import { DEPLOY_REGISTRATION_ATTEMPTS, type RegistrationOutcome } from "./regist
 import { registerTelegramWebhook } from "./telegram/register-webhook.ts";
 import { log } from "../log.ts";
 
-/** One webhook channel's registration (SPEC.md §8). */
+/** One webhook channel's registration. */
 export interface WebhookRegistration {
   /** The channel file's name. */
   channel: string;

@@ -180,7 +180,7 @@ ${kinds.map((kind) => `  ${kind}`).join("\n")}
 
 /**
  * The package `dist/` is: the project's name, version and own dependencies, with FastAgent and the pi packages its
- * code imports as peers, so an app that installs several agents holds one copy of each (§3.5).
+ * code imports as peers, so an app that installs several agents holds one copy of each.
  */
 async function distPackageJson(dir: string, definition: AgentDefinition): Promise<string> {
   const pkg = (await readPackageJson(dir)) as {

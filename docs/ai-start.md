@@ -239,10 +239,10 @@ keeps the machine up; on AgentCore, EventBridge runs it ([Deploy](deploy.md#scal
 
 ## 8. Embed it in an app (optional)
 
-Open the built package with `openAgent(definition, { root })` and call the [Agent API](SPEC.md): `sessions.create`,
+Open the built package with `openAgent(definition, { root })` and call the [Agent API](agent-api.md): `sessions.create`,
 then `messages.send` with `wait`, or `messages.stream`. `await agent.serve()` adds its channels and schedules. The app
 keeps auth, users and data. One instance is one trust domain: give users who must not see each other an instance each
-([security model](SPEC.md#10-security-model)). See [Embedding](embedding.md).
+([security model](agent-api.md#security)). See [Embedding](embedding.md).
 
 ## 9. Deploy
 
