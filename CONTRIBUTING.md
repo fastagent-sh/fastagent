@@ -24,8 +24,8 @@ npm test               # the unit tier
 ```
 
 Run `npm run test:integration` as well when the change touches what that tier tests (processes, signals, locks
-between processes, the build, git, the host CLIs); CI runs it on every PR. CI runs on Linux: `npm run test:linux` runs
-both tiers in a Linux container (Docker), for a change whose tests take a path only Linux takes (`flock`, `dpkg`, `/proc`).
+between processes, the build, git, the host CLIs); CI runs it on every PR. CI runs both tiers on Linux, which checks the
+paths only Linux takes (`flock`, `dpkg`, `/proc`) that a run on macOS skips.
 
 Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
 
@@ -62,8 +62,9 @@ How the boundary is kept:
   `join(dir, "..", name)`: the parent of a temp directory is the machine's, shared by every test process and every run.
   `test-tiers.test.ts` refuses the second.
 - Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
-  in-process CLI (`runInProcess`), the host CLI runner (`CliRunner`), a stubbed `fetch`, `test/git-double.ts` for
-  `src/git.ts`, `test/tsc-double.ts` for the build's compiler, `test/storage-no-wait.ts` for a held database. A double gets one integration test that checks it
+  in-process CLI (`runInProcess`), a stubbed `fetch`, `test/git-double.ts` for `src/git.ts`, `test/tsc-double.ts` for
+  the build's compiler, `test/host-cli-double.ts` for the host CLIs (`src/deploy/runner.ts`), `test/storage-no-wait.ts`
+  for a held database. A ticket's command and step run in process apart (`cli-login-ticket.test.ts`). A double gets one integration test that checks it
   against the real thing, as `cli-run-parity.integration.test.ts` does for `runInProcess`.
 - A subject tested in both tiers is two files, `<name>.test.ts` and `<name>.integration.test.ts`; what both need is in
   `<name>-fixtures.ts`.

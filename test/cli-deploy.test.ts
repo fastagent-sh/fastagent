@@ -1,5 +1,5 @@
 import ignore from "ignore";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,10 +10,15 @@ import { dockerComposeFile } from "../src/deploy/docker/plan.ts";
 import { flyTomlFile } from "../src/deploy/fly/plan.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
-import { flyVariables, flyConfig } from "./cli-deploy-fixtures.ts";
+import { fakeAwsAndDocker, flyVariables, flyConfig } from "./cli-deploy-fixtures.ts";
+import { gitAnswersIn } from "./git-double.ts";
+import { resetHostClis } from "./host-cli-double.ts";
 
 vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
 vi.mock("../src/git.ts", () => import("./git-double.ts"));
+vi.mock("../src/deploy/runner.ts", () => import("./host-cli-double.ts"));
+
+afterEach(() => resetHostClis());
 
 describe("cli: deploy and the variables that set the configuration", () => {
   it("does not read them: a deployment's configuration is the program's defaults and what --config delivers", async () => {
@@ -493,5 +498,62 @@ export default { settings: obj({ repo: str() }), defaults: { model: "openai/gpt-
     // A HAND-WRITTEN Dockerfile (no marker) → kept verbatim.
     const hw = await setup("FROM python:3.12\n");
     expect(hw.dockerfile).toBe("FROM python:3.12\n"); // preserved, never clobbered
+  });
+});
+
+describe("cli: deploy, with the host's CLI", () => {
+  it("warns that git would track a value file in the agent directory, and says nothing when it is ignored, outside it, or there is no checkout", async () => {
+    const dir = await agentWorkspace("fa-deploy-tracked-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const file = join(dir, "prod.env");
+    await writeFile(file, "OPENAI_API_KEY=sk\n");
+    const tracked = /prod\.env holds secrets and is not ignored by git/;
+    // Not a checkout: nothing git could commit.
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file])).stderr).not.toMatch(tracked);
+    // A checkout whose rules (the scaffold's `.env` and `.env.*`) match none of this name.
+    gitAnswersIn(dir, { "rev-parse --is-inside-work-tree": "true", "check-ignore -q prod.env": undefined });
+    const warned = await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"]);
+    expect(warned.code, warned.stderr).toBe(0);
+    expect(warned.stderr).toMatch(tracked);
+    // Ignored by the author's own rule: silent.
+    gitAnswersIn(dir, { "rev-parse --is-inside-work-tree": "true", "check-ignore -q prod.env": "" });
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", file, "--force"])).stderr).not.toMatch(tracked);
+    // Outside the directory: its own place to protect, and not the repository's.
+    gitAnswersIn(dir, { "rev-parse --is-inside-work-tree": "true", "check-ignore -q prod.env": undefined });
+    const outside = join(await mkdtemp(join(tmpdir(), "fa-outside-values-")), "prod.env");
+    await writeFile(outside, "OPENAI_API_KEY=sk\n");
+    expect((await runInProcess(["deploy", "docker", dir, "--env-file", outside, "--force"])).stderr).not.toMatch(
+      tracked,
+    );
+  });
+
+  it("deploy agentcore --run with a login to redo and no terminal stops before the build and the stack", async () => {
+    // Every AgentCore deploy wipes the runtime's login; with nobody to redo it, the deploy would replace a serving
+    // runtime with one that cannot answer. Decided once the target's values are known, and before anything is built.
+    const dir = await agentWorkspace("fa-deploy-ac-login-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const aws = fakeAwsAndDocker("{}");
+    const result = await runInProcess(["deploy", "agentcore", dir, "--run"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/wipes the runtime's openai login.*run this deploy in a terminal/);
+    // The coding agent's way names this agent, run from wherever this deploy was; the key's variable is named.
+    expect(result.stderr).toContain(
+      `\`fastagent deploy agentcore ${dir} --run --json\`, which hands the login to its user`,
+    );
+    expect(result.stderr).toContain("fastagent secrets set agentcore OPENAI_API_KEY");
+    expect(aws.calls()).not.toMatch(/cloudformation deploy|ecr |s3 |s3api |docker buildx build|docker login/);
+  });
+
+  it("deploy agentcore --run goes on when the target already holds the model's key: there is no login to redo", async () => {
+    const dir = await agentWorkspace("fa-deploy-ac-key-", {
+      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+    });
+    const aws = fakeAwsAndDocker('{"OPENAI_API_KEY":"sk"}');
+    const result = await runInProcess(["deploy", "agentcore", dir, "--run"]);
+    expect(result.stderr).not.toContain("wipes the runtime");
+    // Past the stop: the docker CLI of the fake refuses, which is the next thing the deploy needs.
+    expect(aws.calls()).toContain("ecr describe-repositories");
   });
 });
