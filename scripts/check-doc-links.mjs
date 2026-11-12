@@ -56,9 +56,13 @@ function resolveTarget(file, target) {
     const url = URL.parse(target);
     if (url?.origin !== "https://fastagent.sh") return undefined;
     if (url.pathname !== "/docs" && !url.pathname.startsWith("/docs/")) return undefined;
-    const slug = url.pathname.slice("/docs".length).replace(/^\/+|\/+$/g, "");
-    const rel = !slug ? "README.md" : extname(slug) ? slug : `${slug}.md`;
-    return { targetFile: resolve(docsDir, rel), fragment: url.hash ? url.hash.slice(1) : undefined };
+    const raw = url.pathname.slice("/docs".length).replace(/^\/+|\/+$/g, "");
+    const slug = raw === "index.md" ? "" : raw.endsWith("/index.md") ? raw.slice(0, -"/index.md".length) : raw;
+    if (extname(slug)) return { invalid: true };
+    return {
+      targetFile: resolve(docsDir, slug ? `${slug}.md` : "README.md"),
+      fragment: url.hash ? url.hash.slice(1) : undefined,
+    };
   }
   const [pathPart, fragment] = target.split("#", 2);
   return { targetFile: resolve(dirname(file), pathPart || file), fragment };
@@ -74,13 +78,17 @@ for (const file of files) {
     const target = match[1].trim().split(/\s+/)[0].replace(/^<|>$/g, "");
     const resolved = resolveTarget(file, target);
     if (!resolved) continue;
+    const line = markdown.slice(0, match.index).split("\n").length;
+    if (resolved.invalid) {
+      errors.push(`${file}:${line}: missing ${target}`);
+      continue;
+    }
     const { targetFile, fragment } = resolved;
     let targetMarkdown = cache.get(targetFile);
     if (targetMarkdown === undefined) {
       targetMarkdown = await readFile(targetFile, "utf8").catch(() => null);
       cache.set(targetFile, targetMarkdown);
     }
-    const line = markdown.slice(0, match.index).split("\n").length;
     if (targetMarkdown === null) errors.push(`${file}:${line}: missing ${target}`);
     else if (fragment && !anchors(targetMarkdown).has(decodeURIComponent(fragment).toLowerCase())) {
       errors.push(`${file}:${line}: missing anchor ${target}`);
