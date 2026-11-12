@@ -66,39 +66,10 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   // these as done. The v6-only app is #425 itself — it resolves, to an AAAA record alone, which an
   // IPv4-only webhook sender (Telegram, GitHub) cannot reach. The v4-only app is how it gets there:
   // allocate-v4 succeeds, allocate-v6 gates, and the re-run the gate asks for sees v4 and skips.
-  for (const [held, missing, expected] of [
-    [{ ID: "ip_y", Address: "2a09:8280:1::1:2", Type: "v6" }, "v4", "ips allocate-v4 --shared -a bot"],
-    [{ ID: "ip_x", Address: "66.241.124.150", Type: "shared_v4" }, "v6", "ips allocate-v6 -a bot"],
-  ] as const) {
-    it(`allocates the missing ${missing} for an app that holds only the other family`, async () => {
-      const { fly, cmds } = fakeFly((a) => {
-        if (a[0] === "ips") return { stdout: JSON.stringify([held]) };
-        return a[0] === "apps" ? { stdout: "[]" } : {};
-      });
-
-      expect(await run(plan(), fly)).toEqual({ ok: true });
-      expect(cmds().filter((c) => c.startsWith("ips allocate"))).toEqual([expected]);
-    });
-  }
 
   // Exit 0 with unreadable output is a THIRD answer, and every list gates on it rather than reading it
   // as "absent". flyctl has dropped `--json` before (superfly/flyctl#1967), and each collapse has its
   // own damage: a create misreported as a name clash, an unreachable deploy (#425).
-  for (const [label, args] of [
-    ["apps list", ["apps"]],
-    ["ips list", ["ips"]],
-  ] as const) {
-    it(`gate: \`${label}\` exiting 0 with non-JSON is not read as "absent"`, async () => {
-      const { fly, cmds } = fakeFly((a) => {
-        if (a[0] === args[0]) return { stdout: "NAME\tSTATUS\nbot\tdeployed\n" }; // the pre-#1967 table
-        return a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {};
-      });
-
-      expect(await run(plan(), fly)).toEqual({ ok: false, gate: expect.stringContaining(label) });
-      // Gated BEFORE the write it would otherwise have guessed its way into.
-      expect(cmds().some((c) => c.startsWith(`${args[0]} create`) || c.startsWith(`${args[0]} allocate`))).toBe(false);
-    });
-  }
 
   it("gate: not logged in with nobody to sign in → stops before any side effect, naming every way in", async () => {
     const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));

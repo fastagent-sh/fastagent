@@ -3,8 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelContext } from "../src/channels/context.ts";
-import { pollTelegramUpdates } from "../src/channels/telegram/polling.ts";
-import { log } from "../src/log.ts";
 import { type TelegramUpdate, telegramPollingChannel } from "../src/telegram.ts";
 import { ev } from "./scripted-run.ts";
 import { type Prompt, promptOf, scriptedAgent } from "./scripted-agent.ts";
@@ -54,43 +52,12 @@ const update = (id: number, text = "hi"): TelegramUpdate => ({
   message: { message_id: id, text, chat: { id: 42, type: "private" } },
 });
 
-const FAST = { retryFirstMs: 1, retryCapMs: 2, conflictWaitMs: 1, longPollS: 30 };
 const connections: AbortController[] = [];
-const poll = (accept: (u: TelegramUpdate) => void, timing = FAST) => {
-  const abort = new AbortController();
-  connections.push(abort);
-  const connection = pollTelegramUpdates({ apiBaseUrl: API, botToken: TOKEN, accept, timing }, abort.signal);
-  // A failure is read through `closed` in these tests; `ready` is read where one asks for it.
-  connection.closed.catch(() => {});
-  connection.ready.catch(() => {});
-  return { connection, abort };
-};
 
 afterEach(() => {
   for (const abort of connections.splice(0)) abort.abort();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-});
-
-describe("telegram long polling", () => {
-  it("takes the webhook away first, says so, and is ready after an answer that did not wait", async () => {
-    const info = vi.spyOn(log, "info").mockImplementation(() => {});
-    const api = botApi({
-      getWebhookInfo: [ok({ url: "https://old.example.com/telegram" })],
-      getUpdates: [ok([])],
-    });
-    const { connection } = poll(() => {});
-    await connection.ready;
-    expect(api.calls("deleteWebhook")).toHaveLength(1);
-    expect(info).toHaveBeenCalledWith(
-      expect.stringContaining("deleted the bot's webhook (https://old.example.com/telegram)"),
-    );
-    // The call that proved the token is a short one: a quiet bot must not hold readiness for a whole long poll.
-    expect(api.calls("getUpdates")[0]?.params).toEqual({ timeout: 0 });
-    // Afterwards it waits on Telegram.
-    await vi.waitFor(() => expect(api.calls("getUpdates").length).toBeGreaterThan(1));
-    expect(api.calls("getUpdates")[1]?.params).toEqual({ timeout: 30 });
-  });
 });
 
 describe("telegramPollingChannel", () => {

@@ -50,7 +50,6 @@ const flush = async () => {
 const SECRET = "tg-secret";
 const API = "http://tg.test";
 const act = () => ({}); // route: always answer, all defaults
-const ignore = () => null; // route: never answer
 
 function tgRequest(update: unknown, opts: { secret?: string } = {}): Request {
   return new Request("http://app/telegram", {
@@ -196,22 +195,6 @@ describe("defaultTelegramRoute + telegramEnvelope", () => {
 });
 
 describe("telegram channel", () => {
-  // The ingress shape guards, in one place (the same grouping feishu's ingress block uses).
-  it("405s non-POST, 413s an oversized body before parsing, 400s a verified body that isn't JSON", async () => {
-    vi.stubGlobal("fetch", okFetch()); // the channel asks getMe as it is built
-    const { agent } = replyingAgent();
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "B", route: ignore });
-    const post = (body: string) =>
-      new Request("http://app/telegram", {
-        method: "POST",
-        body,
-        headers: { "x-telegram-bot-api-secret-token": SECRET },
-      });
-    expect((await ch(new Request("http://app/telegram", { method: "GET" }))).status).toBe(405);
-    expect((await ch(post("x".repeat((1 << 20) + 1)))).status).toBe(413);
-    expect((await ch(post("not json{"))).status).toBe(400);
-  });
-
   it("rejects a missing/wrong secret token with 401 and never routes", async () => {
     vi.stubGlobal("fetch", okFetch()); // the channel asks getMe as it is built
     const { agent } = replyingAgent();

@@ -40,7 +40,7 @@ function hasTunnelConnection(output: string): boolean {
 }
 
 /** How long after that connection to hand the URL over. */
-export const TUNNEL_DNS_LAG_MS = 5000;
+const TUNNEL_DNS_LAG_MS = 5000;
 
 /** Global timer (rather than timers/promises) so timeout/retry behavior is deterministic under fake timers. */
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
