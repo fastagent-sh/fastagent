@@ -100,7 +100,6 @@ export interface DurableAgentOptions {
   /** What a conversation answers with when its own settings name none (defaults.ts). */
   model?: ModelRef;
   thinkingLevel?: ModelThinkingLevel;
-  inFlightPerProcess?: number;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
 }
@@ -219,7 +218,6 @@ function durableAgent(
   const reads = durableReads(harness, ids, sessions, context);
   const admission = Semaphore.makeUnsafe(1);
   const commands = options.commands ?? (() => []);
-  const inFlightLimit = options.inFlightPerProcess ?? LIMITS.inFlightPerProcess;
   let closing = false;
   harness.subscribeClose(() => {
     closing = true;
@@ -382,7 +380,7 @@ function durableAgent(
         const conversation = yield* conversationOf(request.sessionId);
         // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
         // seen answers with its message whatever the process holds (SPEC.md §5.2).
-        const atCapacity = (yield* inFlight) >= inFlightLimit;
+        const atCapacity = (yield* inFlight) >= LIMITS.inFlightPerProcess;
         const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
         let submitting = false;
         const admitted = yield* port(() =>
@@ -420,7 +418,7 @@ function durableAgent(
         );
         if (admitted.kind === "seen") return { message: yield* reads.message(admitted.seen), replayed: true };
         if (admitted.kind === "capacity") {
-          return yield* agentError("busy", `This agent already holds ${inFlightLimit} messages`, {
+          return yield* agentError("busy", `This agent already holds ${LIMITS.inFlightPerProcess} messages`, {
             reason: "capacity",
           });
         }

@@ -34,7 +34,7 @@ export function parseDelayMs(input: string | number): number | undefined {
 }
 
 /** The minimum delay a wake-up may be scheduled for — rejects a busy-loop (`wake in 1s`, then again…). */
-export const MIN_WAKE_MS = 60_000; // 1 minute
+const MIN_WAKE_MS = 60_000; // 1 minute
 /**
  * The cap on pending wake-ups PER SESSION — rejects one conversation's unbounded self-fan-out without letting it
  * starve others' quota (a global cap would make one chatty session a DoS on everyone else's `wake`, since a multi-user

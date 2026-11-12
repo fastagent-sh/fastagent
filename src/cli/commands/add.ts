@@ -1,6 +1,6 @@
 /**
  * `fastagent add <channel>|skill` — scaffold channel glue (`src/channels/<kind>.ts`) or vendor an Agent Skills skill.
- * A channel changes the program only (channel-setup.md §2): its platform app, and the values of the instance that runs
+ * A channel changes the program only: its platform app, and the values of the instance that runs
  * it, are `channels setup`'s.
  */
 import { join, relative, resolve } from "node:path";
@@ -26,7 +26,7 @@ export interface AddChannelOptions {
 }
 
 /**
- * `add <channel>`: the program only (channel-setup.md §2). It writes the channel file and its tools and names the
+ * `add <channel>`: the program only. It writes the channel file and its tools and names the
  * values they read in `.secrets/.env.example`; it asks nothing and creates no app. The app, and the values of the
  * instance that runs it, are `channels setup`'s.
  */

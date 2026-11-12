@@ -1,6 +1,6 @@
 /**
  * Durable turn intent: the at-least-once half of durable execution. Exactly-once execution needs a different
- * backend and is out of scope (docs/design/core.md §10).
+ * backend and is out of scope.
  *
  * ponytail: at-least-once with a per-turn EXECUTION ceiling ({@link MAX_TURN_ATTEMPTS}). A poison turn that
  * deterministically crashes the process would otherwise replay forever under a container restart policy; a real

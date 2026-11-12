@@ -153,7 +153,6 @@ export function durableSubject(): AgentApiSubject {
   let held: (() => void)[] = [];
   let effects = 0;
   let signalled = 0;
-  let inFlight: number | undefined;
   let signedOut = false;
 
   const holdTool = (name: string, description: string, before: () => void) =>
@@ -265,7 +264,6 @@ export function durableSubject(): AgentApiSubject {
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
       settings: { retry: { maxRetries: 1, baseDelayMs: 1 }, compaction: { keepRecentTokens: 1 } },
-      ...(inFlight === undefined ? {} : { inFlightPerProcess: inFlight }),
     });
     return current;
   };
@@ -277,7 +275,6 @@ export function durableSubject(): AgentApiSubject {
       held = [];
       effects = 0;
       signalled = 0;
-      inFlight = options?.inFlightPerProcess;
       signedOut = options?.signedOut ?? false;
       return open();
     },

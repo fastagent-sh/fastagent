@@ -1,5 +1,5 @@
 /**
- * What a command's `<source>` adds (`init --content`, `fastagent content add`; docs/design/agent-cli.md §3), read the
+ * What a command's `<source>` adds (`init --content`, `fastagent content add`), read the
  * same way by both: `github:owner/repo`, or a directory.
  */
 import { basename, resolve } from "node:path";

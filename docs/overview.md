@@ -1,145 +1,59 @@
 ---
 title: Overview
-description: "What FastAgent is: the serving layer that takes a local agent directory out of the terminal and serves it as a live service on any channel."
+description: "What FastAgent is: a serving layer that turns an agent directory into a live service, and what it deliberately leaves to you."
 status: current
 ---
 
 # Overview
 
-**Vibe first. Then FastAgent.** FastAgent is the serving layer for local agent directories: take a directory out of the terminal, then run it inside your app, connect it to Telegram, Slack or Feishu, handle webhook events, or put it behind your own channel.
+FastAgent turns an agent directory into a live service: inside your app, as a chat bot, on a schedule, or behind your
+own channel. You keep writing the agent as files. FastAgent runs it.
 
-It does not ask you to rewrite an agent into a framework-specific project. An agent is a directory of its own, and a git repository from the start (`fastagent init`): grow it with `SYSTEM.md`, `AGENTS.md`, `skills/` and code under `src/` (tools, channels, schedules), declare the projects it works on as its content, and FastAgent serves it as a live service. The agent can change itself the same way: what it writes into its prompt files and skills takes effect on its next message.
-
-Coding agents made it cheap to vibe useful agent directories. The next gap is serving: local agents live in terminals, but real services receive webhooks, join chats, run on a clock and keep their conversations across restarts. FastAgent connects those directories to real triggers and runtimes.
+## An agent is a directory
 
 ```txt
-reviewer/                   # the agent: its definition, in a git repository
-├── fastagent.config.ts     # the marker: defineAgent({ defaults, providers, … })
-├── context.json            # its content and environment: the repositories it works on, the commands it runs
-├── fastagent.json          # optional: this instance's configuration, and the content it adds (`deploy --config` delivers a configuration of its own to a deployment)
-├── SYSTEM.md               # the system prompt
-├── AGENTS.md               # optional: how this agent is built and changed, a section of every prompt
-├── skills/  prompts/       # optional skills; prompt templates (run as /<name>)
-├── src/tools/              # optional code tools
-├── src/channels/           # optional webhook/bot adapters
-├── src/schedules/          # optional prompts run on a cron
-├── reference.md            # optional reference material the agent reads (any file layout)
-├── content/handbook/       # a clone fastagent makes of each repository the agent works on
-├── .secrets/               # this machine's credentials (kept out of git, except .secrets/.env.example)
-└── .fastagent/dev/         # this machine's dev instance: the agent's cwd, its .state/ storage and content/ clones (kept out of git)
-
-~/code/app/                 # a checkout of acme/app, added in fastagent.json as a directory
-└── AGENTS.md               # the project's own: a file the agent reads there, never part of its prompt
+reviewer/
+├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ defaults, providers })
+├── SYSTEM.md             # the system prompt
+├── AGENTS.md             # optional: how this agent is built and changed
+├── skills/  prompts/     # optional: skills, and prompt templates run as /<name>
+├── src/tools/            # optional: tools
+├── src/channels/         # optional: Telegram, Slack, Feishu or your own
+├── src/schedules/        # optional: prompts run on a cron
+├── context.json          # what it works on (GitHub repositories) and the commands it needs
+└── fastagent.json        # optional: this instance's settings (a deployment gets its own)
 ```
 
-`context.json` declares GitHub repositories (`{ "github": "acme/app" }`), which reach every place the agent runs: here,
-a clone in the working directory; on a host, always a clone. A directory of this machine is added in `fastagent.json`
-alone: it stays here, and a deployment says so.
+`fastagent init` creates it as a git repository. The projects it works on stay outside it, declared as its
+[content](configuration.md#content). The agent can edit its own prompt and skills; a change applies from its next
+message.
 
-## What FastAgent provides
+## The few ideas you need
 
-1. **The agent is a directory**: its prompt files (`SYSTEM.md`, `AGENTS.md`), `skills/`, `prompts/`, its code under `src/` and reference material are files you can inspect, edit, and commit, in a repository of its own. What it works on is declared as its [content](configuration.md#content): files the agent reads and changes there, none of which becomes part of its prompt.
-2. **One API**: the [Agent API](SPEC.md), in process and over HTTP: sessions the Agent names, messages whose outcome outlives whoever sent them, and a durable history every Caller reads the same way.
-3. **One harness**: [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable), which keeps every conversation in the instance's storage and answers an accepted message after a restart. Models come from pi-ai, with your own providers in code.
-4. **Developer workflow**: `init`, `info`, `content`, `env`, `dev`, `invoke`, `schedules`, `start`, `login` / `logout` / `auth check`, `models`, channel scaffolding, and `deploy` / `logs` / `destroy`. Every check is a command a coding agent can run and read.
-5. **Composable adapters**: Telegram, Slack, Feishu with Lark compatibility, and a small public kit for your own channels.
-6. **Time triggers**: schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history (`fastagent schedules list`).
-
-## Design choices
-
-FastAgent deliberately keeps the serving layer small and composable:
-
-- **One API, in process and over HTTP**: every Caller (a channel, a schedule, `invoke`, your app, a service that calls a deployed agent) uses the Agent API; on the network only behind the instance's key.
-- **Small core**: the stable center is the Agent API, not a platform runtime.
-- **App-owned runtime**: your app keeps auth, users, database, routes, deployment, and policy.
-- **Typed edges**: tools, events, and request bodies are explicit and validated at boundaries.
-- **Filesystem truth**: the deployable definition is the directory, not ambient machine state.
-
-See [Design principles](principles.md) for the full rationale and non-goals.
-
-## What we didn't build
-
-FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your host, or the agent itself — composed in, not locked in.
-
-- **No platform to move to**: no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
-- **No new format or DSL**: `AGENTS.md`, Agent Skills, TypeScript modules; FastAgent consumes the standards you already use, not a parallel ecosystem.
-- **No workflow engine**: the agent decides its own steps; for deterministic orchestration, send messages from your own queue or workflow.
-- **One key, no auth system**: a served agent answers its channels, which verify their platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`, behind one key for the whole instance that keeps everyone but its customer out. Users, roles and per-session access are the app's, in its own routes over the Agent API ([security boundary](design/security-boundary.md)).
-
-## Two main use cases
-
-### Embed an agent in an existing app
-
-Use FastAgent as a library and call the agent in process:
-
-```ts
-import { openAgent } from "@fastagent-sh/fastagent";
-
-const agent = await openAgent(agentPackage, { root: "/var/lib/app/agent", model: "openai/gpt-5.5" });
-const session = await agent.sessions.create();
-// agent.messages.send({ sessionId: session.id, content }, { wait }) for the answer, or messages.stream() as written
-```
-
-Your app still owns auth, database, routing, and deployment. See [Embedding](embedding.md).
-
-### Run it for Telegram, Slack, or Feishu
-
-Use the CLI:
-
-```bash
-fastagent init my-agent
-cd my-agent
-fastagent dev
-fastagent build && fastagent start
-```
-
-Add Telegram, Slack, Feishu, or Lark when the agent should help chat users:
-
-```bash
-fastagent add telegram && fastagent channels setup telegram
-fastagent add slack && fastagent channels setup slack
-fastagent add feishu && fastagent channels setup feishu   # 飞书; Lark international: lark
-```
-
-## Documentation map
-
-| If you want to… | Read |
+| Idea | Meaning |
 |---|---|
-| Develop an agent from responsibilities through verification | [Agent development guide](ai-start.md) |
-| Get running quickly | [Quickstart](quickstart.md) |
-| Configure an agent | [Configuration](configuration.md) |
-| Understand design choices | [Design principles](principles.md) |
-| Use CLI commands | [CLI reference](cli.md) |
-| Embed in an app | [Embedding](embedding.md) |
-| Add webhooks/bots | [Channels](channels.md) |
-| Run the agent on a cron / let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [CLI reference](cli.md) |
-| Ship to Fly, Railway, AWS Bedrock AgentCore, or any Docker host | [Deploy](deploy.md) |
-| Use Telegram bots | [Telegram channel](telegram.md) |
-| Use Slack apps | [Slack channel](slack.md) |
-| Use Feishu bots / Lark compatibility | [Feishu channel (Lark compatibility)](feishu.md) |
-| Build a channel adapter | [Channel development](channel-development.md) |
-| Look up public TypeScript exports | [API reference](api-reference.md) |
-| Fix common issues | [Troubleshooting](troubleshooting.md) |
-| Look up the Agent API | [Agent API SPEC](SPEC.md) |
-| Understand implementation tradeoffs | [Design notes](design/README.md) |
+| **Session** | One conversation. It lives in the instance's storage and survives restarts. |
+| **Message** | What you send into a session. Once accepted, it is answered, even after a restart. |
+| **Tool** | A typed action the model can call. Its arguments are checked before it runs. |
+| **Skill** | Markdown know-how the agent loads when it needs it. |
+| **Channel** | Turns a platform's events into messages, after checking they really come from that platform. |
+| **Instance** | One running copy of the agent, with its own storage, secrets and settings. |
 
-## Current status
+Everything (a channel, a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
+interface, the [Agent API](SPEC.md).
 
-Implemented today:
+## What FastAgent leaves to you
 
-- The Agent API on pi-durable, with one SQLite storage per instance (`.state/agent.sqlite`).
-- Program assembly from `SYSTEM.md` / `AGENTS.md`, `skills/`, `prompts/`, `src/`, `fastagent.config.ts` and `context.json`, with secrets declared by the code that reads them (`needs`). `fastagent build` makes the project's `dist/`, which `start`, a deployment and an app open as one immutable definition.
-- An instance of it from explicit inputs: a `fastagent.json` (settings, content, instructions, skills, prompts, MCP servers, name), secrets, state and a workspace. A deployment holds its values on the target (`fastagent secrets`), and `deploy` checks their names.
-- Content: local directories and GitHub repositories (here, a checkout `local` names, used as it is, otherwise a clone; on a host, always a clone; a clone is brought up to date in place at each start).
-- Telegram, Slack, and Feishu channel adapters (Lark international rides the same engine as a compatibility profile).
-- Schedules (`src/schedules/`) and agent self-scheduling (the `wake` tool, on every serve), with a bounded fire history.
-- `dev`, `invoke`, `info`, `schedules`, `start`, and `deploy docker` / `deploy fly` / `deploy railway` / `deploy agentcore` (`--run` drives Docker Compose or the host CLI end-to-end).
-- CLI login backed by a project-level `<agent dir>/.secrets/auth.json` (override: `FASTAGENT_AUTH_PATH`, dir: `FASTAGENT_SECRETS_DIR`); `login --deployment <host>` logs the deployed box in.
-- `openAgent` and its `serve()`: a built definition opened and served inside an app; `createAgent`, model credentials
-  and sign-in for a host that runs agents for a person (a desktop app beside `fastagent dev`).
-- MCP stdio/Streamable HTTP tools from `mcpServers` (the program's in `context.json`, an instance's in `fastagent.json`), browser OAuth, and explicit instance bindings ([guide](mcp.md)).
+| It does not… | Because |
+|---|---|
+| host you on a platform or dashboard | it runs locally, inside your app, or in a container on any host |
+| invent a format | it reads `AGENTS.md`, Agent Skills and TypeScript modules |
+| run workflows | the agent decides its own steps; drive fixed sequences from your own queue |
+| manage users | one key guards a whole instance; give each customer an instance ([security model](SPEC.md#10-security-model)) |
+| tie you to a model or cloud | any provider pi-ai supports, or your own; any host that runs a container |
 
-Not implemented yet:
+## Not built yet
 
-- Context packages ([architecture.md](design/architecture.md) §4).
-- One instance spread over several processes (one process holds an instance's storage).
+- One instance spread over several processes (one process owns an instance's storage today).
+- A sandbox around the agent process: its tools act with the process's authority.
+- Telemetry export (OpenTelemetry).

@@ -16,7 +16,7 @@ interface FeishuWsClientCallbacks {
   onEvent(event: FeishuMessageEvent): void | Promise<void>;
 }
 
-export type CreateFeishuWsClient = (callbacks: FeishuWsClientCallbacks) => FeishuWsClient | Promise<FeishuWsClient>;
+type CreateFeishuWsClient = (callbacks: FeishuWsClientCallbacks) => FeishuWsClient | Promise<FeishuWsClient>;
 
 export interface FeishuWsConnectionOptions {
   kind: FeishuCloudKind;

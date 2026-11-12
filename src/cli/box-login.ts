@@ -131,7 +131,7 @@ export function ticketLoginIO(step: TicketStep, retry: string): LoginIO & { refu
  * prompt for that address with the URL the browser brought back, exactly what the person would paste. The prompt
  * stays up meanwhile: a taken port, or a browser on another machine, still leaves pasting.
  */
-export function catchingRedirect(io: LoginIO): LoginIO & { close(): void } {
+function catchingRedirect(io: LoginIO): LoginIO & { close(): void } {
   let server: Server | undefined;
   let caught: string | undefined;
   let deliver: ((url: string) => void) | undefined;

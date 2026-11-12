@@ -21,7 +21,7 @@ const SUMMARY_MAX_CHARS = 60;
  * The answer's first line as plain text — what the chat list and the push notification show for the settled card
  * (`config.summary.content`).
  */
-export function cardSummary(markdown: string): string {
+function cardSummary(markdown: string): string {
   const line =
     markdown
       .replace(/```[\s\S]*?(```|$)/g, " ") // fenced code is never a readable one-line preview

@@ -1,5 +1,5 @@
 /**
- * An instance's name (agent-artifact.md §4.5): the one thing `info().name` and a host's report call it. An explicit name
+ * An instance's name: the one thing `info().name` and a host's report call it. An explicit name
  * is one path segment, so it is safe to name a directory after, and is refused otherwise; the
  * default is the definition's name made into one (`@scope/pkg` is not one), so two instances of one definition on one
  * machine take distinct names only by being given them.

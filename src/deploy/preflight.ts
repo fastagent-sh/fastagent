@@ -151,7 +151,7 @@ function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined,
 }
 
 /**
- * What each content entry becomes on the host, one line each, so none is missing there unsaid (agent-model.md §3). A
+ * What each content entry becomes on the host, one line each, so none is missing there unsaid. A
  * repository, the program's or the delivered configuration's, is cloned there. A directory of this machine is not on
  * the host, and FastAgent maps none onto it, so the delivered configuration naming one is an issue: the deployed agent
  * would lack data it was configured to work on.

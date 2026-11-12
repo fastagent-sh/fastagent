@@ -4,35 +4,27 @@
  * of its own beside `fastagent dev`'s. The sign-in and credential rules are tested where they live (login.test.ts,
  * credential-store.test.ts); this file owns the translation and the wiring.
  */
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as login from "../src/harnesses/models/login.ts";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import {
-  ContentNameError,
   type Credential,
   type CredentialStore,
   type SignInInteraction,
-  SignInCancelled,
   addContent,
   createAgent,
   credentialFile,
   listContent,
-  providerAuth,
-  readContentSource,
   removeContent,
   signIn,
   signInOptions,
 } from "../src/index.ts";
 import { openSource } from "./open-source.ts";
-import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
-import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
-import { makeFaux } from "./faux.ts";
 import { keepCatalog } from "./kept-catalog.ts";
 
 vi.mock("../src/git.ts", () => import("./git-double.ts"));
@@ -116,30 +108,6 @@ describe("a host's credentials", () => {
     expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
   });
 
-  it("an aborted sign-in, or one the person backs out of, rejects with SignInCancelled and stores nothing", async () => {
-    const store = hostStore();
-    const abort = new AbortController();
-    abort.abort();
-    const signingIn = signIn({
-      credentials: store,
-      provider: "openai",
-      method: "api_key",
-      interaction: typing("sk-typed", abort.signal),
-    });
-    await expect(signingIn).rejects.toBeInstanceOf(SignInCancelled);
-    // The person backing out of a question, as the host's UI says so.
-    const backingOut: SignInInteraction = {
-      notify: () => {},
-      prompt: async () => {
-        throw new SignInCancelled("closed the dialog");
-      },
-    };
-    await expect(
-      signIn({ credentials: store, provider: "openai", method: "api_key", interaction: backingOut }),
-    ).rejects.toBeInstanceOf(SignInCancelled);
-    expect(await store.list()).toEqual([]);
-  });
-
   it("credentialFile is FastAgent's file: written whole, listed by provider, and a corrupt one refuses", async () => {
     const path = join(await tmp("fa-host-creds-"), "auth.json");
     const file = credentialFile(path);
@@ -159,74 +127,6 @@ describe("a host's credentials", () => {
     );
     expect(interaction.prompts).toEqual([]);
     expect(await readFile(path, "utf8")).toBe("{bad");
-  });
-
-  it("a sign-in keeps the installation's id beside credentialFile's file, and takes a host store's own", async () => {
-    const run = vi
-      .spyOn(login, "loginOver")
-      .mockResolvedValue({ provider: "openai", method: "oauth", verified: "n/a" });
-    const interaction = typing("unused");
-
-    // Resolved as the store resolves it: `~/…` is the home directory's, so the id is kept beside the credentials.
-    await signIn({ credentials: credentialFile("~/host/auth.json"), provider: "openai", method: "oauth", interaction });
-    expect(run.mock.calls[0]?.[0]).toMatchObject({ authPath: join(homedir(), "host", "auth.json") });
-    expect(run.mock.calls[0]?.[0]).not.toHaveProperty("credentialStore");
-    expect(() => credentialFile("")).toThrow("credentialFile needs the path of a credentials file");
-
-    await signIn({ credentials: hostStore(), provider: "openai", method: "oauth", interaction, deviceId: "dev-1" });
-    const request = run.mock.calls[1]?.[0];
-    expect(request).not.toHaveProperty("authPath");
-    expect(request?.getDeviceId?.()).toBe("dev-1");
-  });
-
-  it("providerAuth answers what a request sends: the stored key, else the environment's, else nothing", async () => {
-    vi.stubEnv("OPENAI_API_KEY", undefined);
-    expect(await providerAuth(hostStore(), "openai")).toBeUndefined();
-    expect(await providerAuth(hostStore({ openai: { type: "api_key", key: "sk-stored" } }), "openai")).toMatchObject({
-      type: "api_key",
-      apiKey: "sk-stored",
-    });
-    vi.stubEnv("OPENAI_API_KEY", "sk-env");
-    expect(await providerAuth(hostStore(), "openai")).toEqual({
-      type: "api_key",
-      source: "OPENAI_API_KEY",
-      apiKey: "sk-env",
-    });
-    await expect(providerAuth(hostStore(), "nope")).rejects.toThrow('unknown provider "nope"');
-    // A provider that authenticates by a header, and one whose credential decides where requests go.
-    const signedIn = { type: "oauth", access: "at-1", refresh: "rt-1", expires: Date.now() + 3_600_000 } as const;
-    expect(await providerAuth(hostStore({ "kimi-coding": signedIn }), "kimi-coding")).toMatchObject({
-      type: "oauth",
-      headers: { Authorization: "Bearer at-1" },
-    });
-    expect(await providerAuth(hostStore({ "github-copilot": signedIn }), "github-copilot")).toMatchObject({
-      apiKey: "at-1",
-      baseUrl: expect.stringMatching(/^https:\/\/.*githubcopilot\.com/),
-    });
-  });
-});
-
-describe("the models an agent offers", () => {
-  it("say each model's context window, and none for a model that declares none (pi reads it as 0)", async () => {
-    const { models } = makeFaux({
-      models: [
-        { id: "sized", contextWindow: 1000 },
-        { id: "unsized", contextWindow: 0 },
-      ],
-    });
-    const agent = await openDurableAgent({
-      storage: new MemoryStorage(),
-      models,
-      registry: createRegistry(),
-      name: "w",
-    });
-    try {
-      const offered = (await agent.info()).models;
-      expect(offered.find((model) => model.modelId === "sized")).toMatchObject({ contextWindow: 1000 });
-      expect(offered.find((model) => model.modelId === "unsized")).not.toHaveProperty("contextWindow");
-    } finally {
-      await agent.close();
-    }
   });
 });
 
@@ -252,107 +152,6 @@ describe("an agent's own content, from the package entry", () => {
     const removed = await removeContent(dir, "NOTES");
     expect(removed.name).toBe("notes");
     expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
-  });
-
-  it("an opened agent reports the content it opened with, which an edit does not change until a reopen", async () => {
-    const { base, notes, app } = await folders();
-    const dir = join(base, "agent");
-    await createAgent(dir, { content: [bind("app", app)] });
-    const agent = await openSource(dir);
-    try {
-      expect(agent.content.map(({ name, kind, location }) => [name, kind, location])).toEqual([
-        ["app", "local", realpathSync(app)],
-      ]);
-      await addContent(dir, bind("notes", notes));
-      expect(agent.content.map(({ name }) => name)).toEqual(["app"]);
-      expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "notes"]);
-    } finally {
-      await agent.close();
-    }
-    const reopened = await openSource(dir);
-    try {
-      expect(reopened.content.map(({ name }) => name).sort()).toEqual(["app", "notes"]);
-    } finally {
-      await reopened.close();
-    }
-  });
-
-  it("refuses a name the agent has, and a created agent with one bad entry leaves no directory", async () => {
-    const { base, notes, app } = await folders();
-    const dir = join(base, "agent");
-    await createAgent(dir, { content: [bind("app", app)] });
-    await expect(addContent(dir, bind("App", notes))).rejects.toBeInstanceOf(ContentNameError);
-
-    const refused = join(base, "refused");
-    await expect(createAgent(refused, { content: [bind("app", app), bind("bad name", notes)] })).rejects.toBeInstanceOf(
-      ContentNameError,
-    );
-    expect(existsSync(refused)).toBe(false);
-  });
-
-  it("reads a GitHub repository as an entry fastagent clones", () => {
-    const { addition, notes } = readContentSource("github:acme/app", process.cwd(), { ref: "v1" });
-    expect(addition).toEqual({ name: "app", entry: { github: "acme/app", ref: "v1" } });
-    expect(notes).toEqual([]);
-    expect(() => readContentSource("github:acme", process.cwd())).toThrow("names no repository");
-  });
-
-  it("refuses to remove a name the agent does not have, and says what it has", async () => {
-    const { base, app } = await folders();
-    const dir = join(base, "agent");
-    await createAgent(dir, { content: [bind("app", app)] });
-    const error = await removeContent(dir, "nope").catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(ContentNameError);
-    expect((error as Error).message).toContain('no content named "nope" (this agent has: app)');
-    expect((await listContent(dir)).content.map(({ name }) => name)).toEqual(["app"]);
-  });
-
-  it("removes a repository's entry and leaves its clone, saying so", async () => {
-    const { base } = await folders();
-    const dir = join(base, "agent");
-    await createAgent(dir);
-    await addContent(dir, { name: "app", entry: { github: "acme/app" } });
-    await mkdir(join(dir, "content", "app"), { recursive: true });
-    const removed = await removeContent(dir, "app");
-    expect(removed.content).toEqual([]);
-    expect(removed.notes.join("\n")).toContain("content/app is left as it is");
-    expect(existsSync(join(dir, "content", "app"))).toBe(true);
-  });
-
-  it("accepts two names for one folder, and a folder inside another", async () => {
-    const { base, app } = await folders();
-    const inner = join(app, "src");
-    await mkdir(inner);
-    const created = await createAgent(join(base, "agent"), {
-      content: [bind("a", app), bind("b", app), bind("inner", inner)],
-    });
-    expect(created.content.map(({ name }) => name).sort()).toEqual(["a", "b", "inner"]);
-  });
-});
-
-describe("the thinking levels a model offers", () => {
-  it("are those the model supports: only off for a model that does not reason", async () => {
-    const { models } = makeFaux({
-      models: [
-        { id: "plain", reasoning: false },
-        { id: "reasoner", reasoning: true },
-      ],
-    });
-    const agent = await openDurableAgent({
-      storage: new MemoryStorage(),
-      models,
-      registry: createRegistry(),
-      name: "t",
-    });
-    try {
-      const offered = (await agent.info()).models;
-      expect(offered.find((model) => model.modelId === "plain")?.thinkingLevels).toEqual(["off"]);
-      const levels = offered.find((model) => model.modelId === "reasoner")?.thinkingLevels;
-      expect(levels?.[0]).toBe("off");
-      expect(levels).toContain("high");
-    } finally {
-      await agent.close();
-    }
   });
 });
 

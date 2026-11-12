@@ -1,6 +1,6 @@
 /**
  * A storage only one process opens: the instance's SQLite database, held by the one process that owns the instance
- * (architecture.md §4.3), and `fastagent invoke`'s own. pi-durable does no cross-process locking of its own, and in
+ *, and `fastagent invoke`'s own. pi-durable does no cross-process locking of its own, and in
  * WAL mode SQLite lets a second process open and write the same file, which would resume and run the same messages
  * twice. So the database is opened in EXCLUSIVE locking mode: the first access takes the file's lock and keeps it
  * until the process closes it or dies, and a second opener is refused. Locally that is SQLite's own POSIX lock. On a

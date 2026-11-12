@@ -1,6 +1,6 @@
 /**
  * WHERE each content entry is, for THIS instance: the one answer the prompt, the coding tools, authored tools, `info`
- * and `deploy` all read (docs/design/core.md §2). A repository is fastagent's clone at `content/<name>` in the
+ * and `deploy` all read. A repository is fastagent's clone at `content/<name>` in the
  * instance's working directory; a directory is where the instance configuration says. Reads the disk (git included);
  * never the network, never a write. Making a clone real is `cloneContent`'s, and only a process that runs the agent
  * asks for it.

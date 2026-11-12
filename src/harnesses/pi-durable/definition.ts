@@ -1,5 +1,5 @@
 /**
- * A definition as a value (agent-artifact.md §3.5): what `dev` loads from a source project and what a built package
+ * A definition as a value: what `dev` loads from a source project and what a built package
  * will export, one frozen shape every opener assembles from. Its declared inputs are read once, when it is made.
  */
 import { loadEnvironment } from "../../content/file.ts";

@@ -46,7 +46,7 @@ export interface RailwayPlan {
   runbook: string[];
 }
 
-/** What a Railway variable's value may hold, in characters (measured, configuration-layout.md §7). */
+/** What a Railway variable's value may hold, in characters (measured). */
 export const RAILWAY_VARIABLE_LIMIT = 32768;
 
 /** State root = the volume mount path, kept in lockstep. */

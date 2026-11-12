@@ -1,5 +1,5 @@
 /**
- * What setting up a channel's platform app asks of a person (channel-setup.md §2): the values only they have, where
+ * What setting up a channel's platform app asks of a person: the values only they have, where
  * to find each one, and how to tell a wrong one from a right one before it is kept. A channel's own module says it
  * (`channels/<kind>/setup.ts`); `cli/channel-setup.ts` asks, in a terminal or on a page, and writes what is accepted.
  */

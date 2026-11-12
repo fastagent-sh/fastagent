@@ -49,7 +49,7 @@ export function serveService(
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
-export function reportServing(
+function reportServing(
   service: ServedAgent,
   host: string | undefined,
   boundPort: number,

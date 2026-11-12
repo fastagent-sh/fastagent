@@ -1,7 +1,7 @@
 /**
  * What proves a platform reaches this instance at a URL only a person sets (Slack's Request URL; Lark's where its
- * configuration API is missing): an authenticated request from it, and the address it was sent to (SPEC.md §8,
- * channel-setup.md §5). A platform's signature or token proves who sent a request, not where, so the address is read
+ * configuration API is missing): an authenticated request from it, and the address it was sent to (SPEC.md §8).
+ * A platform's signature or token proves who sent a request, not where, so the address is read
  * from the request's host and forwarding headers. The first-party channel records it, durable in its own state
  * directory, and a serve in this process hears it at once.
  */

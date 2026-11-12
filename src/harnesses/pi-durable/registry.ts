@@ -1,5 +1,5 @@
 /**
- * The registry (architecture.md §3): every module in `src/tools/`, `src/extensions/`, `src/channels/` and
+ * The registry: every module in `src/tools/`, `src/extensions/`, `src/channels/` and
  * `src/schedules/` with what it default-exports, so nothing is imported by hand. A file directly in the directory is a
  * module, and anything else a module imports (a helper) lives outside these directories.
  */

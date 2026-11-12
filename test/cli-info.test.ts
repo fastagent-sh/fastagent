@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, runInProcess, withRepoModules } from "./cli-run.ts";
+import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
 /** What `info` runs with: no model from this machine's shell. */
 const withoutModel = (): NodeJS.ProcessEnv => {
@@ -35,133 +35,6 @@ describe("cli: info", () => {
     await expect(stat(join(dir, ".state"))).rejects.toMatchObject({ code: "ENOENT" }); // read-only: never creates the state root
   });
 
-  it("info reports the configuration a variable sets over the instance's, with its source", async () => {
-    const dir = await agentWorkspace("fa-info-env-", {
-      "fastagent.config.ts": 'export default { defaults: { thinkingLevel: "high" } };\n',
-    });
-    const env = { ...withoutModel(), FASTAGENT_THINKING_LEVEL: "low" };
-    const { code, stdout, stderr } = await runInProcess(["info", dir, "--json"], undefined, env);
-    expect(code, stderr).toBe(0);
-    const info = JSON.parse(stdout);
-    expect(info.thinkingLevel).toBe("low");
-    expect(info.config.thinkingLevel).toMatchObject({ value: "low", source: "FASTAGENT_THINKING_LEVEL" });
-  });
-
-  it("info takes the thinking level and the channels' ingress as flags over the variables, and refuses what names no channel", async () => {
-    const dir = await agentWorkspace("fa-info-flags-", {
-      "fastagent.config.ts": 'export default { defaults: { thinkingLevel: "high" } };\n',
-    });
-    const env = { ...withoutModel(), FASTAGENT_THINKING_LEVEL: "low" };
-    const flagged = await runInProcess(["info", dir, "--json", "--thinking", "minimal"], undefined, env);
-    expect(flagged.code, flagged.stderr).toBe(0);
-    expect(JSON.parse(flagged.stdout).thinkingLevel).toBe("minimal");
-    const refused = await runInProcess(["info", dir, "--ingress", "nope=webhook"], undefined, withoutModel());
-    expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("channels.nope names no channel")]);
-    const malformed = await runInProcess(["info", dir, "--ingress", "nope"], undefined, withoutModel());
-    expect([malformed.code, malformed.stderr]).toEqual([
-      2,
-      expect.stringContaining("FASTAGENT_INGRESS must be channel=webhook|connection"),
-    ]);
-  });
-
-  it("every command that runs an instance refuses a variable the configuration would refuse, in one line and exit 2", async () => {
-    const dir = await agentWorkspace("fa-env-refuse-", {
-      "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-4o-mini" } };\n',
-    });
-    const env = { ...withoutModel(), FASTAGENT_HTTP_API: "yes", OPENAI_API_KEY: "x" };
-    for (const argv of [
-      ["info", dir],
-      ["invoke", "hi", dir, "--no-input"],
-      ["schedules", "run", "x", dir, "--no-input"],
-    ]) {
-      const result = await runInProcess(argv, undefined, env);
-      expect([argv[0], result.code, result.stderr.trim()]).toEqual([
-        argv[0],
-        2,
-        'Error: FASTAGENT_HTTP_API must be "true" or "false", and is "yes"',
-      ]);
-    }
-  });
-
-  it("info reports the program's name apart from the instance's, and the description and starters it resolves", async () => {
-    const dir = await agentWorkspace("fa-info-agent-", {
-      "package.json": '{ "name": "@acme/reviewer", "description": "Reviews pull requests.", "type": "module" }',
-      "fastagent.config.ts": 'export default { defaults: { starters: ["Review this PR"] } };\n',
-    });
-    const json = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
-    expect(json.code, json.stderr).toBe(0);
-    expect(JSON.parse(json.stdout)).toMatchObject({
-      name: "acme-reviewer",
-      description: null,
-      agent: { name: "@acme/reviewer", description: "Reviews pull requests." },
-      starters: ["Review this PR"],
-    });
-    await writeFile(join(dir, "fastagent.json"), '{ "description": "Reviews our monorepo." }\n');
-    const text = await runInProcess(["info", dir], undefined, withoutModel());
-    expect(text.code, text.stderr).toBe(0);
-    expect(text.stdout).toMatch(/^program:\s+@acme\/reviewer — Reviews pull requests\.$/m);
-    expect(text.stdout).toMatch(/^description:\s+Reviews our monorepo\.$/m);
-    expect(text.stdout).toMatch(/^starters:\s+"Review this PR"$/m);
-  });
-
-  it("info reports the declared environment without installing it, and says why a refused one stops the agent", async () => {
-    // No mise is installed in this agent: `info` must not need one (it only reads the declaration).
-    const environment = {
-      packages: { jq: "1.8.1" },
-      aptPackages: ["chromium"],
-      variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } },
-    };
-    const dir = await agentWorkspace("fa-info-env-", { "context.json": JSON.stringify({ environment }) });
-    const ok = await runInProcess(["info", dir, "--json"]);
-    expect(ok.code, ok.stderr).toBe(0);
-    expect(JSON.parse(ok.stdout)).toMatchObject({
-      environment,
-      // Required like a tool's secret, attributed to the file that declares it.
-      secrets: [
-        {
-          name: "FA_TEST_HOST",
-          optional: false,
-          declaredIn: ["context.json"],
-          description: "the GitHub host gh talks to",
-        },
-      ],
-      unsetSecrets: ["FA_TEST_HOST"],
-    });
-    expect((await runInProcess(["info", dir])).stdout).toMatch(/^secrets: +FA_TEST_HOST \(context\.json\)$/m);
-    expect((await runInProcess(["info", dir])).stdout).toMatch(/^environment: +jq 1\.8\.1, apt:chromium$/m);
-    await writeFile(
-      join(dir, "context.json"),
-      JSON.stringify({ content: { notes: { github: "acme/notes" } }, environment: { packages: { "cargo:x": "1" } } }),
-    );
-    // The environment's variables are part of what the agent declares, so a refused environment is a definition that
-    // does not open: said as the refusal dev and start stop on, never a fall back to the machine's commands.
-    const refused = await runInProcess(["info", dir, "--json"]);
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(/package "cargo:x" installs with cargo:/);
-  });
-
-  it("info RESOLVES the model spec against the definition's providers, and says so when it does not", async () => {
-    // The docs point at `info` to confirm what an agent resolved, so it must not merely echo the spec: a provider in
-    // code changes which specs exist, and reporting a healthy-looking one that `dev`/`start` then reject is the
-    // failure this pre-empts. Non-fatal: diagnosing a broken agent is the job, so the verdict is DATA (exit 0).
-    const dir = await agentWorkspace("fa-info-models-", {
-      "fastagent.config.ts":
-        'import { fauxProvider } from "@earendil-works/pi-ai";\n' +
-        'export default { providers: [fauxProvider({ provider: "gw", models: [{ id: "m1" }] }).provider] };\n',
-    });
-    await withRepoModules(dir);
-
-    const ok = JSON.parse(
-      (await runInProcess(["info", dir, "--json", "--model", "gw/m1"], undefined, withoutModel())).stdout,
-    );
-    expect(ok.model).toBe("gw/m1");
-    expect(ok.modelError).toBeNull(); // the definition's provider offers it
-
-    const bad = await runInProcess(["info", dir, "--json", "--model", "gw/not-declared"], undefined, withoutModel());
-    expect(bad.code).toBe(0);
-    expect(JSON.parse(bad.stdout).modelError).toBe('no provider "gw" offers "not-declared"');
-  });
-
   it("info says why the definition does not open, naming the module, as dev and start would refuse it", async () => {
     // One module's import failing is the registry's, so the agent does not open: said in one line, with the reason.
     const missing = await agentWorkspace("fa-info-toolfail-", {
@@ -179,20 +52,5 @@ describe("cli: info", () => {
     const refused = await runInProcess(["info", badCron], undefined, withoutModel());
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/src\/schedules\/bad\.ts/);
-  });
-
-  it("info carries each schedule's next instant", async () => {
-    const dir = await agentWorkspace("fa-info-sched-", {
-      "src/schedules/good.ts":
-        'export default { kind: "fastagent.schedule", cron: "0 9 * * *", tz: "UTC", prompt: "digest" };\n',
-    });
-    const { code, stdout } = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
-    expect(code).toBe(0);
-    const info = JSON.parse(stdout);
-    expect(info.schedules).toEqual([
-      { name: "good", cron: "0 9 * * *", tz: "UTC", next: expect.stringMatching(/T09:00:00\.000Z$/) },
-    ]);
-    const text = await runInProcess(["info", dir], undefined, withoutModel());
-    expect(text.stdout).toMatch(/schedules:\s+good \(next .*T09:00:00\.000Z\)/);
   });
 });

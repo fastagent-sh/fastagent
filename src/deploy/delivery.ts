@@ -1,5 +1,5 @@
 /**
- * What a deploy delivers to the host besides the image (configuration-layout.md §5): the image holds the program and
+ * What a deploy delivers to the host besides the image: the image holds the program and
  * nothing of an instance, so what varies per deployment is set as variables the host renders by its own mechanism for
  * non-secret values. The box reads them back in `start` (`FASTAGENT_CONFIG_JSON` in harnesses/pi-durable/config.ts,
  * the other two in deploy/workspace.ts).

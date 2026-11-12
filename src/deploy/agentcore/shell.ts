@@ -40,7 +40,7 @@ const KEEPALIVE_MS = 30_000;
 /** The longest a presigned shell URL may live (the SDK refuses more). */
 const PRESIGN_SECONDS = 300;
 
-export interface AwsCredentials {
+interface AwsCredentials {
   accessKeyId: string;
   secretAccessKey: string;
   sessionToken?: string;
@@ -74,7 +74,7 @@ function regionOf(runtimeArn: string): string {
 }
 
 /** A presigned `wss://` URL for one shell on one runtime session: the SDK's `connectShellPresigned`. */
-export async function presignShellUrl(input: {
+async function presignShellUrl(input: {
   runtimeArn: string;
   sessionId: string;
   shellId: string;
@@ -109,7 +109,7 @@ export async function presignShellUrl(input: {
 }
 
 /** What a status frame says: `undefined` for the connection confirmation, else how the shell exited. */
-export function shellExit(status: string): string | undefined {
+function shellExit(status: string): string | undefined {
   const s = JSON.parse(status) as {
     metadata?: { shellId?: string };
     status?: string;

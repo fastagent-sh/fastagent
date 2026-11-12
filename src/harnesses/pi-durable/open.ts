@@ -1,5 +1,5 @@
 /**
- * A definition assembled onto pi-durable (architecture.md §3): a source project read as a definition, its secrets
+ * A definition assembled onto pi-durable: a source project read as a definition, its secrets
  * checked as one list, its code built with them, and an Agent opened over pi-ai's built-in models with the
  * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
  */

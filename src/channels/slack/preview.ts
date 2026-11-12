@@ -46,7 +46,7 @@ const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please
  * the scan linear even on adversarial input like `(<!)^n` (a `>`-only bound would still be polynomial
  * across the many `<` start positions), while still neutralizing every `<@…>` / `<!…>` control sequence
  * (real Slack controls never contain a `<`). */
-export function sanitizeSlackMarkdown(markdown: string): string {
+function sanitizeSlackMarkdown(markdown: string): string {
   return markdown.replace(/<[@!][^<>]*>/g, (control) => `&lt;${control.slice(1)}`);
 }
 

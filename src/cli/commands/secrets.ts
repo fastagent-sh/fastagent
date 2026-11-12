@@ -1,6 +1,6 @@
 /**
- * `fastagent secrets list|set|push <host>`: a deployment's values on the target that keeps them (agent-artifact.md
- * §6.2). `deploy` checks names and never carries a file; these are how the values get there. A value is never an
+ * `fastagent secrets list|set|push <host>`: a deployment's values on the target that keeps them.
+ * `deploy` checks names and never carries a file; these are how the values get there. A value is never an
  * argument: it is typed without echo, read from standard input, taken from the file `--env-file` names, or from the
  * environment of a command that injected it (`op run -- fastagent secrets push fly --from-env`). A deployment has no
  * default file, and Docker holds no values of its own: Compose takes them from the environment that runs it.

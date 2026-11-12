@@ -1,8 +1,7 @@
 /**
  * Which conversation a platform message belongs to: the asks a channel accepted for a conversation, and what the agent
  * posted for it. A reply to one of them is steered into that conversation, whoever sends it, because its session holds
- * the exchange the reply is about, and a new thread opened on one forks that session at the exchange
- * (docs/design/place-sessions.md, "The message table and replying to an answer").
+ * the exchange the reply is about, and a new thread opened on one forks that session at the exchange.
  *
  * A key names a message in its platform (the channel makes it unique: Telegram's message ids count within one chat).
  * The table only offers candidates: a message it does not hold (another bot's, one from before the agent joined, one

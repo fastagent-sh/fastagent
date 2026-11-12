@@ -29,7 +29,7 @@ export function scopeSatisfied(entry: FeishuScopeRequest, predicate: (name: stri
 
 /**
  * What an agent may know about the rooms it is in, on top of the platform's agent template. There is one posture: the
- * agent takes part in its rooms like a colleague (participant-model.md), so every app gets all of it, requested at
+ * agent takes part in its rooms like a colleague, so every app gets all of it, requested at
  * creation in the one round a tenant may want to approve. What a scope is for is the agent's, not only the channel's:
  * the agent can call the Open API with the app's credentials. A scope belongs here only once something uses it:
  * `im:message.group_msg.include_bot:read` (other bots' group messages) is an event-delivery scope. The channel reads

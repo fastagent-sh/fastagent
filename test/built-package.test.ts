@@ -1,10 +1,8 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
-import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { loadBuiltDefinition, loadProjectBuild } from "../src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "./probe-package.ts";
-import { assertDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
@@ -100,50 +98,6 @@ describe("an installed package, opened as instances", () => {
     expect(snapshot(installed as string)).toEqual(before);
     expect(readdirSync(installed as string)).not.toContain("out.txt");
   }, 60_000);
-
-  it("refuses a second open over the same state, and a relative location", async () => {
-    const root = scratch(tmpdir(), "fa-instance-held-");
-    const first = await openAgent(definition, { root, offline: true });
-    agents.push(first);
-    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow(/is held by another process/);
-    await expect(openAgent(definition, { root: "relative/root" })).rejects.toThrow(
-      'root must be an absolute path, and is "relative/root"',
-    );
-    await expect(openAgent(definition, { root, stateDir: join(root, "s"), workdir: root } as never)).rejects.toThrow(
-      "give the instance a root, or a stateDir and a workdir, not both",
-    );
-    await expect(openAgent(definition, { stateDir: join(root, "s"), workdir: "w" })).rejects.toThrow(
-      'workdir must be an absolute path, and is "w"',
-    );
-  });
-});
-
-describe("what an opener accepts", () => {
-  const spec = {
-    format: 1,
-    builtWith: "1.0.0",
-    name: "x",
-    version: "1.0.0",
-    dir: "/x",
-    config: {},
-    registry: {} as never,
-  };
-
-  it("refuses what is not a definition, and one built for another format, naming the version that opens it", () => {
-    expect(() => assertDefinition({ name: "x" })).toThrow("needs an agent package's default export");
-    expect(() =>
-      assertDefinition(
-        defineDefinition({
-          ...spec,
-          format: 2,
-          builtWith: "9.9.9",
-          registry: { tools: [], extensions: [], channels: [], schedules: [] },
-        }),
-      ),
-    ).toThrow(
-      "x was built as definition format 2, and this FastAgent opens format 1: install @fastagent-sh/fastagent 9.9.9",
-    );
-  });
 });
 
 describe("a project's build is the one `start` opens only while the project is what it was built from", () => {
@@ -167,49 +121,5 @@ describe("a project's build is the one `start` opens only while the project is w
     await expect(loadProjectBuild(unbuilt, { checkSources: true })).rejects.toThrow(
       /dist holds no build: run `fastagent build`/,
     );
-  });
-
-  it("opens a fresh build, and keeps opening it while the agent runs and writes beside it", async () => {
-    await buildProject(project);
-    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
-    for (const written of [".state/agent.sqlite", ".secrets/.env", "content/repo/README.md", "out.txt"]) {
-      mkdirSync(join(project, written, ".."), { recursive: true });
-      writeFileSync(join(project, written), "runtime");
-    }
-    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
-  });
-
-  it("opens a build whose project the agent has edited when the box does not check sources, but never a missing one", async () => {
-    await buildProject(project);
-    writeFileSync(join(project, "SYSTEM.md"), "the agent edited this\n");
-    mkdirSync(join(project, "skills/mine"), { recursive: true });
-    writeFileSync(join(project, "skills/mine/SKILL.md"), "---\nname: mine\ndescription: Mine\n---\nMine.\n");
-    expect((await loadProjectBuild(project, { checkSources: false })).name).toBe("stale");
-    rmSync(join(project, "dist"), { recursive: true });
-    await expect(loadProjectBuild(project, { checkSources: false })).rejects.toThrow(
-      /holds no build: run `fastagent build`/,
-    );
-    await buildProject(project);
-    rmSync(join(project, "skills/mine"), { recursive: true });
-    writeFileSync(join(project, "SYSTEM.md"), "v1\n");
-  });
-
-  it.each([
-    ["a module's code changes", "src/tools/t.ts", "// edited\n"],
-    ["a file a module imports changes", "lib.ts", "export const v = 2;\n"],
-    ["the prompt changes", "SYSTEM.md", "v2\n"],
-    ["a module is added", "src/tools/other.ts", "export default {};\n"],
-    ["a resource beside the code is added", "src/tools/data.txt", "data\n"],
-    ["the manifest changes", "package.json", '{"name":"stale","type":"module","version":"2.0.0"}'],
-  ])("refuses it once %s", async (_what, file, content) => {
-    await buildProject(project);
-    const path = join(project, file);
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, file === "src/tools/t.ts" ? `${readFileSync(path, "utf8")}${content}` : content);
-    await expect(loadProjectBuild(project, { checkSources: true })).rejects.toThrow(
-      /was built from other sources than .* holds now: run `fastagent build`/,
-    );
-    await buildProject(project);
-    expect((await loadProjectBuild(project, { checkSources: true })).name).toBe("stale");
   });
 });

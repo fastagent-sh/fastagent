@@ -1,5 +1,5 @@
 /**
- * Setting up one channel's platform app for one instance (channel-setup.md §2): ask a person for the values only they
+ * Setting up one channel's platform app for one instance: ask a person for the values only they
  * have, check each with the platform, and keep what is accepted in the instance's value file. Safe to run again: a value
  * already there that the platform still accepts is kept, one it refuses is asked for again, a value setup makes itself
  * is made once, and an app already created is not created again.

@@ -6,7 +6,7 @@ import { loadEnvValues, parseEnvContent, valueFileOf } from "./value-file.ts";
 
 /**
  * Write parsed values into `process.env`, matching Node's `--env-file` / `process.loadEnvFile` precedence on BOTH
- * axes (verified against Node in test/env.test.ts): a real env var wins over the file, and within the file the last
+ * axes: a real env var wins over the file, and within the file the last
  * occurrence wins ({@link parseEnvContent}).
  */
 export function applyEnvValues(values: ReadonlyMap<string, string>): void {

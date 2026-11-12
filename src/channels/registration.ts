@@ -12,7 +12,7 @@ export type RegistrationOutcome = "registered" | "manual" | "failed";
 
 /** SHARED: how long a registrar waits for the PLATFORM to be able to reach a freshly minted public URL. */
 const REGISTRATION_ATTEMPTS = 8;
-export const REGISTRATION_RETRY_MS = 10_000;
+const REGISTRATION_RETRY_MS = 10_000;
 
 /** What `deploy --run` spends instead: 180s, because a host CLI returns before the deployment serves. */
 export const DEPLOY_REGISTRATION_ATTEMPTS = 19;

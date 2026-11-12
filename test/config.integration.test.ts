@@ -1,5 +1,5 @@
 /**
- * The configuration of an instance (agent-artifact.md §3.2, §4.2): the program's defaults, an instance's values over
+ * The configuration of an instance: the program's defaults, an instance's values over
  * them, the settings checked against the program's schema, each value with its source. What a reader of the resolved
  * configuration does with it is that reader's test.
  */

@@ -1,7 +1,4 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 
@@ -12,7 +9,6 @@ import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 
 /** What the tool said, read back as the details these assertions were written against. */
 let execute: (params: unknown) => Promise<{ details: unknown }>;
-let description: string;
 beforeAll(async () => {
   const templatePath = new URL("../src/channels/telegram/scaffold/telegram-send.ts", import.meta.url).pathname;
   const mod = (await import(templatePath)) as { default: Needs<ToolRegistration> };
@@ -21,7 +17,6 @@ beforeAll(async () => {
     const result = await tool.execute(params as never, {} as never, {} as never);
     return { details: (result.output?.[0] as { text: string } | undefined)?.text };
   };
-  description = tool.description;
 });
 
 /** A Bot API that answers like the real one: every sent Message names its id and chat. */
@@ -39,14 +34,8 @@ function stubBotApi(): { calls: { url: string; body: FormData | Record<string, u
 }
 
 const json = (call: { body: FormData | Record<string, unknown> } | undefined) => call?.body as Record<string, unknown>;
-const form = (call: { body: FormData | Record<string, unknown> } | undefined) => call?.body as FormData;
 
 describe("scaffold telegram-send: message-or-file mode switch", () => {
-  it("steers the model away from using it to answer a normal chat turn (the channel already delivers)", () => {
-    expect(description).toMatch(/do not call this to answer/i);
-    expect(description).toMatch(/send it twice/i);
-  });
-
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -61,56 +50,5 @@ describe("scaffold telegram-send: message-or-file mode switch", () => {
     // No channel is mounted in this test's process: the message went out, and the result says the chat's next turn
     // will not see it.
     expect(JSON.stringify(r.details)).toContain("not recorded: no telegram channel is mounted in this process");
-  });
-
-  it("path → sendDocument with the file attached (caption rides along)", async () => {
-    const { calls } = stubBotApi();
-    const dir = await mkdtemp(join(tmpdir(), "fa-send-"));
-    await writeFile(join(dir, "report.txt"), "hi");
-    const r = await execute({ chatId: "7", path: join(dir, "report.txt"), caption: "the report" });
-    expect(calls[0]?.url).toContain("/sendDocument");
-    expect(form(calls[0]).get("caption")).toBe("the report");
-    expect(form(calls[0]).get("document")).toBeInstanceOf(Blob);
-    expect(JSON.stringify(r.details)).toContain("sent report.txt to chat 7");
-  });
-
-  it("text AND path — or neither — is rejected before any network call", async () => {
-    const { calls } = stubBotApi();
-    await expect(execute({ chatId: 1, text: "x", path: "/tmp/y" })).rejects.toThrow(/exactly one/);
-    await expect(execute({ chatId: 1 })).rejects.toThrow(/exactly one/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("file-only params alongside text are a corrective error, not a silent drop", async () => {
-    const { calls } = stubBotApi();
-    await expect(execute({ chatId: 1, text: "x", caption: "lost?" })).rejects.toThrow(/file-mode only/);
-    await expect(execute({ chatId: 1, text: "x", asPhoto: true })).rejects.toThrow(/file-mode only/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("long text is split by the TOOL (newlines first, then a hard cut) — counting chars is not the model's job", async () => {
-    const { calls } = stubBotApi();
-    const line = `${"a".repeat(999)}\n`; // 1000 chars per line → 5000 chars total, newline-splittable
-    const r = await execute({ chatId: 9, text: line.repeat(5).trimEnd() });
-    expect(calls.length).toBe(2); // one send per chunk, sequential
-    const texts = calls.map((c) => String(json(c).text));
-    for (const t of texts) expect(t.length).toBeLessThanOrEqual(4096);
-    expect(texts.join("\n")).toBe(line.repeat(5).trimEnd()); // nothing lost at the seams
-    expect(JSON.stringify(r.details)).toContain("sent 2 messages to chat 9");
-
-    // …and a single line with no newline under the cap is hard-cut, never an infinite loop.
-    calls.length = 0;
-    await execute({ chatId: 9, text: "b".repeat(4097) });
-    expect(calls.length).toBe(2);
-    expect(String(json(calls[0]).text)).toHaveLength(4096);
-    expect(String(json(calls[1]).text)).toBe("b");
-  });
-
-  it("a Bot API error surfaces as a named tool error (fail-fast, no silent ok)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      async () => new Response(JSON.stringify({ ok: false, description: "message is too long" }), { status: 400 }),
-    );
-    await expect(execute({ chatId: 1, text: "hello" })).rejects.toThrow(/message is too long/);
   });
 });

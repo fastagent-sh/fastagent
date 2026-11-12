@@ -1,8 +1,7 @@
 /**
  * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, kept current by
  * the catalogs (catalog.ts), and the definition's own providers; and the reads a report, a login or a picker make of
- * it. A custom model is a provider in code (`defineAgent({ providers })`), never a models file or a per-account list
- * (architecture.md §3).
+ * it. A custom model is a provider in code (`defineAgent({ providers })`), never a models file or a per-account list.
  */
 import {
   type Api,

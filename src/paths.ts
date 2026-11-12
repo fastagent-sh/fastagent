@@ -157,7 +157,7 @@ export function configurationPath(path: string, base: string | undefined): strin
   return base === undefined ? undefined : resolve(base, path);
 }
 
-/** Where an instance is, from the environment: the root, or its state and its workspace apart (agent-artifact.md §4.1). */
+/** Where an instance is, from the environment: the root, or its state and its workspace apart. */
 export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
 export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
 export const INSTANCE_STATE_ENV = "FASTAGENT_STATE_DIR";
@@ -169,7 +169,7 @@ export const INSTANCE_CONFIG_JSON_ENV = "FASTAGENT_CONFIG_JSON";
 export const INSTANCES_DIRNAME = ".fastagent";
 
 /**
- * The instance root of the project in `dir` when none is given (agent-artifact.md §4.1): `.fastagent/dev/` for `dev`,
+ * The instance root of the project in `dir` when none is given: `.fastagent/dev/` for `dev`,
  * and `.fastagent/start/` for the commands that run what `start` runs, kept apart so a trial of the production build
  * never reads or writes the development sessions and clones.
  */

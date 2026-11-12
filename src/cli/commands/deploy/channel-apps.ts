@@ -1,6 +1,6 @@
 /**
  * The production Feishu or Lark app a deploy sets up on the spot when the target's values hold none: the same
- * `channels setup` a person runs by hand, aimed at the file `--env-file` names (channel-setup.md §6).
+ * `channels setup` a person runs by hand, aimed at the file `--env-file` names.
  */
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { SetupWay } from "../../../channels/setup.ts";

@@ -77,7 +77,7 @@ function jsonStrings(stdout: string): string[] {
 }
 
 /** The first Railway-provided domain as an https URL, or undefined if none is present. */
-export function parseDomainUrl(stdout: string): string | undefined {
+function parseDomainUrl(stdout: string): string | undefined {
   for (const s of jsonStrings(stdout)) {
     const host = s.match(/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.railway\.app/i)?.[0];
     if (host) return `https://${host}`;
@@ -92,7 +92,7 @@ export function parseDomainUrl(stdout: string): string | undefined {
  * one. Read from any object carrying `mountPath` and `serviceName`, so a wrapper key moving does not matter. Output
  * that is not JSON throws: read as "no volume", it would add a second one.
  */
-export function volumeOn(stdout: string, service: string, mountPath: string): string | undefined {
+function volumeOn(stdout: string, service: string, mountPath: string): string | undefined {
   const walk = (v: unknown): string | undefined => {
     if (Array.isArray(v)) return v.map(walk).find((status) => status !== undefined);
     if (!v || typeof v !== "object") return undefined;

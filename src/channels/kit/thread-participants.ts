@@ -1,7 +1,6 @@
 /**
- * SHARED: who the agent has HEARD in a group thread — the sole input to the participant model's summon rule
- * (docs/design/participant-model.md §3). The key MUST be the string the SESSION uses: a record here is a claim about
- * that session's memory, so the two cannot be keyed independently.
+ * SHARED: who the agent has HEARD in a group thread — the sole input to the participant model's summon rule. The key
+ * MUST be the string the SESSION uses: a record here is a claim about that session's memory, so the two cannot be keyed independently.
  */
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
@@ -20,7 +19,7 @@ interface ThreadParticipation {
 
 export interface ThreadParticipants {
   /**
-   * The participant model's summon rule (docs/design/participant-model.md §3): does a bare message in this thread
+   * The participant model's summon rule: does a bare message in this thread
    * address the agent?
    */
   admitsBareMessage(key: string): boolean;

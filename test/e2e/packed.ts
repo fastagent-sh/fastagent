@@ -1,5 +1,5 @@
 /**
- * The package as a user gets it, end to end (CONTRIBUTING.md, "Test tiers"): the packed tarball installed, an agent made
+ * The package as a user gets it, end to end (AGENTS.md, "Tests"): the packed tarball installed, an agent made
  * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, and the build opened by
  * an app through the package's own entry. The model is pi-ai's faux provider, so only npm's install leaves the machine.
  * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/e2e/packed.ts <tarball>`.

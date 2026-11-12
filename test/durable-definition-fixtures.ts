@@ -7,7 +7,7 @@ const ROOT = join(import.meta.dirname, "fixtures");
 
 export const made: string[] = [];
 
-export const DEFINE = "../../../../../src/harnesses/pi-durable/define.ts";
+const DEFINE = "../../../../../src/harnesses/pi-durable/define.ts";
 
 /** An agent package with `files`, its directory under test/fixtures. */
 export function agentPackage(files: Record<string, string>): string {

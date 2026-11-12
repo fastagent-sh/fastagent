@@ -1,6 +1,6 @@
 import { stripEdges } from "../../strip-edges.ts";
 
-// One posture, as on Feishu: the agent hears the channels it is in (participant-model.md §2), so the history scopes
+// One posture, as on Feishu: the agent hears the channels it is in, so the history scopes
 // and their message events are part of every app. `users:read` names the people in the history a turn reads.
 const SLACK_BOT_SCOPES = [
   "app_mentions:read",

@@ -3,7 +3,6 @@
  * package may install from. FastAgent's own format, with mise underneath: `packages` (mise's tool names, each with a
  * version), `aptPackages` (Debian packages the image installs) and `variables` (the environment variables its commands
  * read, by name: their values come from the environment, as a tool's secrets do). Pure: installing it is mise.ts's.
- * docs/design/agent-service.md §4 is the rule.
  */
 import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
 import { isDeployOwned } from "../deploy/secrets.ts";

@@ -9,9 +9,8 @@ updated: 2026-10-29
 
 # Agent API — Specification v2
 
-> **Status: current.** What `src/agent-api.ts` (in process) and `src/http/` (over HTTP) implement, and the CLI's
-> checks (§9.6). Why the API has this shape is [architecture.md](design/architecture.md); v1, which it replaces, is
-> in this file's history (§13). Changing its semantics is an explicit decision.
+> **Status: current.** What `src/agent-api.ts` (in process) and `src/http/contract.ts` (over HTTP) implement, and the
+> CLI's checks (§9.6). The conformance suite (§11) holds the code to it. Changing its semantics is an explicit decision.
 
 > The keywords MUST, MUST NOT, SHOULD, and MAY are to be interpreted as described in RFC 2119.
 
@@ -354,7 +353,7 @@ model retries, the budget a failing model call spends; a process that closes cle
 left, or once the same step was cut off by restarts too many times in a row, the message ends `failed` with
 `internal`, `details.reason` `interrupted` or `restart_limit`. The Agent never sends a message again on its own. These
 promises hold as far as the storage keeps what it was given: storage that loses its newest writes when its host fails
-loses the newest messages with them ([architecture.md](design/architecture.md) §4.3).
+loses the newest messages with them.
 
 ## 6. Watching
 
@@ -917,7 +916,14 @@ streaming).
   one, moving the Callers, and removing the old.
 - **Everyone a channel lets through is inside the trust domain.** A platform's signature proves the platform, not the
   person: everyone who can message a channel's bot can ask the agent for anything its tools reach.
-- **A session id is a name, not a credential.**
+- **A session id is a name, not a credential.** An app that serves its own users over one instance, in its own routes
+  behind its own authentication, can keep them apart by session only for an agent whose tools reach neither the
+  instance's storage nor its files, and it checks every session id a request names: the one a message is sent to, and
+  a fork's source.
+- **An instance's configuration is an input the agent may write.** An instance opened with `root` and no `config` reads
+  `<root>/fastagent.json`, in the agent's own workspace, so what the agent writes there is the next open's
+  configuration. An app that must not have this passes `config`, or keeps the file outside the root.
+- **Nothing in the process is a sandbox.** The agent's tools act with the authority of the process.
 
 ## 11. Conformance
 
@@ -950,38 +956,3 @@ bindings answer the same way. It checks:
 | Files other than images | |
 | A2A and MCP bindings | Each maps onto this model (a session is A2A's `contextId`, a message its Task; a message is an MCP tool call); designed when a Caller needs one |
 | The API on AgentCore | §9.5 |
-
-## 13. Changes from v1
-
-| v1 | v2 | Why |
-|---|---|---|
-| In process only, no network binding | In process and HTTP, with a key | Agents are called like services |
-| Ten functions on `Agent` | `sessions.*`, `messages.*`, `info`, `usage` | Named by what they act on, as the HTTP routes are |
-| `info()`, synchronous | `info()`, a `Promise` | It is a request over HTTP |
-| `invoke` | `messages.send` | Says what it does |
-| `invoke` without `sessionId` creates a session; a key then needs a session | A message always names its session | One way to start, and no rule about keys without sessions |
-| Results as values: `ok`, `error` | Resolve, or reject with `AgentError` | One failure shape, as HTTP has |
-| `unknown` on an invoke whose receipt could not be read | `unconfirmed`, not retryable, with what is known; `connectAgent` keys its own sends | A key makes the resend safe; without one, nothing may resend |
-| `unknown` on an `abort` that did not answer | The same rule, written for `cancel` (§4): read before cancelling again | A second stop also stops what was sent since |
-| `wait()` on the receipt, `unfinished` when it could not tell | `send` and `get` with `wait`, which answers the status as it is then | Waiting is an option of a request, and works over HTTP |
-| A `signal` on `wait()` and `abort` | A `signal` on `send`, `stream` and `get` | Every wait can be let go of; none stops the message. `cancel` answers in about a millisecond (architecture.md §6.1), so it needs none |
-| `stream(agent, request)` in the Caller | `messages.stream`, served by the Agent | The hard part (a message that is queued, running or ended) is done once |
-| `status: "done"` with `outcome.status` | One `status` with a closed set of ends (§7.1); `max_tokens` is `incomplete` | One field to read, and room for a later waiting state |
-| `taken` | `running` | |
-| `getMessage` answers `undefined` for an unknown message | `messages.get` rejects `not_found` | One way to say "no such thing" |
-| `read` (state and entries; `limit: 0` for the state) | `sessions.get` and `sessions.entries` | One thing each |
-| `resume` with `replayFrom` | `sessions.events` with `after` | Named for what it is; `after` is SSE's `Last-Event-ID` |
-| `listSessions({ before })`, listing `{ sessionId }` | `sessions.list({ after })`, listing `Session` | A list a client can show without reading each session |
-| `createSession({ from })` | `sessions.create({ forkFrom })` | Says what it is |
-| `configure` (model, thinking level) | `sessions.update`, also `instructions` and `tools` | |
-| — | `missing_tool` | A removed tool refuses, as a missing model does, rather than running with less |
-| `abort`, answering once its messages had ended | `sessions.cancel`, answering once its stop is recorded | An answer that a proxy's timeout cannot outlast |
-| — | `sessions.compact` | A Caller may compact a long session |
-| `attachment` answers base64, or `undefined` | `sessions.attachment` answers bytes, or rejects `not_found` | Bytes are what HTTP sends |
-| — | `usage()`, `info().models`, `info().tools`, `defaultModel` | Spend, and what a session may be set to |
-| — | `GET /v1/openapi.json` | A Caller in another language generates its client from it |
-| `user_message`, `assistant_message`, `message_delta`, `retry_scheduled` | `user`, `assistant`, `delta`, `retrying` | "Message" means only what a Caller sends |
-| `serving_error` | `stream_error` | Says what it ends; not `error`, which `EventSource` gives to its connection listener |
-| The `assistant` entry's `outcome` (`failed`, `aborted`, `truncated`) | Its `stop` (`failed`, `aborted`, `max_tokens`) and `error` | The message's status is the outcome; an entry says how its reply stopped |
-| `position`, `duplicate`, `protocolVersion`, `context: "recent"` on a fork, the Middleware role; `info().inputs`, the session's `taken` and `queued`, an entry's `parentEntryId` and `sessionId`, a `user` entry's `idempotencyKey` | Gone | Nothing used them |
-| `openServing`, `mountAgentService`, `serveNode`, `nodeListener`, `/core`, `/node`, `/pi` | `openAgent`, `serve` and its `listen`, and the entry points of §8 | One entry per kind of user, one way to start a server |

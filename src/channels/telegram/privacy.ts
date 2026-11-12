@@ -1,7 +1,7 @@
 /**
  * What Telegram's group privacy mode costs this channel and how to undo it, said the same way wherever it is said (the
  * serve's startup warning, `channels setup telegram`). With it on a bot in a group sees only @mentions, replies to
- * it and commands, so it cannot read the discussion a request builds on (docs/design/place-sessions.md). The flag
+ * it and commands, so it cannot read the discussion a request builds on. The flag
  * `getMe` returns is the bot's global setting: a bot made an administrator of a group receives every message of it
  * regardless, and a change reaches a group only when the bot is added to it again.
  */

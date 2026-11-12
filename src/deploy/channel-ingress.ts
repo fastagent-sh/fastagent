@@ -57,7 +57,7 @@ const INGRESS: Record<WebhookKind, ChannelIngress> = {
   },
   slack: {
     delivers: "now delivers to this deployment",
-    // The Request URL is the app's page, which a person sets (channel-setup.md §3): no credential here changes it.
+    // The Request URL is the app's page, which a person sets: no credential here changes it.
     register: () => undefined,
     runbook: (baseUrl) => [
       `# Set Slack Event Subscriptions → Request URL (default route POST /slack; the running service`,
@@ -252,7 +252,7 @@ const readBoxWebhooks: BoxWebhooksProbe = async (healthUrl) => {
 };
 
 /**
- * What a box that points its own channels made of them (channel-setup.md §5): read from its `/health` until no channel
+ * What a box that points its own channels made of them: read from its `/health` until no channel
  * is `pending`, then gated as {@link registerWebhooks} gates. Slack's Request URL no credential on the box can set, so
  * `registrars.slack` sets it from this machine, as before.
  */
@@ -330,7 +330,7 @@ export interface UrlRecorder {
 /**
  * For each channel whose URL only a person sets (Slack; Lark without its config API), wait for the box to report it
  * reached at the delivered URL, then record that URL in the binding, so every later deploy, CI included, reports it
- * `registered` from the start (channel-setup.md §5).
+ * `registered` from the start.
  */
 async function recordConfirmed(
   input: {

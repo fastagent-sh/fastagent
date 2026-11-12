@@ -1,6 +1,5 @@
 /**
- * What a thread-reading tool may reach: the threads of the room its turn was asked in, and nothing else
- * (docs/design/place-history.md, #374).
+ * What a thread-reading tool may reach: the threads of the room its turn was asked in, and nothing else.
  *
  * The room is never an argument. A model can be asked to read any chat ("what did they say in the other group?"), and
  * the platform lets the bot read every chat it is in, so a room the tool were told would let one chat read another.

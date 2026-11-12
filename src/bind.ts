@@ -60,7 +60,7 @@ export function bindLabel(host: string | undefined, port: number): string {
 }
 
 /** The address a local client should dial for a serve bound to `host` (the ready log's curl). */
-export function clientHost(host: string | undefined): string {
+function clientHost(host: string | undefined): string {
   if (classifyBind(host) === "wildcard") return "127.0.0.1";
   // biome-ignore lint/style/noNonNullAssertion: only a wildcard bind leaves host undefined
   return host!.includes(":") && !host!.startsWith("[") ? `[${host}]` : host!;

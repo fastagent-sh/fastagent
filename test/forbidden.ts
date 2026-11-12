@@ -1,5 +1,5 @@
 /**
- * What a test tier forbids (CONTRIBUTING.md, "Test tiers"), installed by its setup file. A forbidden call throws where it
+ * What a test tier forbids (AGENTS.md, "Tests"), installed by its setup file. A forbidden call throws where it
  * is made, and is also recorded and failed after the test: product code may catch the throw (`src/git.ts` reads a spawn
  * that fails as "no git"), and work a test leaves running can make the call after the test has ended.
  */
@@ -36,7 +36,7 @@ export function takeRefused(): string[] {
 function failIfRefused(): void {
   const found = takeRefused();
   if (found.length === 0) return;
-  throw new Error(`this test did what its tier forbids (CONTRIBUTING.md, "Test tiers"):\n\n${found.join("\n\n")}`);
+  throw new Error(`this test did what its tier forbids (AGENTS.md, "Tests"):\n\n${found.join("\n\n")}`);
 }
 
 afterEach(failIfRefused);

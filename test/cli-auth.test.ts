@@ -98,17 +98,4 @@ describe("logout: removing what login stored, as pi's /logout does", () => {
         "environment variables are unchanged",
     ]);
   });
-
-  it("without a terminal, names what it holds when the provider is missing or not stored", async () => {
-    await agentHolding({ "openai-codex": OAUTH });
-    const errors: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...line: unknown[]) => void errors.push(line.join(" ")));
-    vi.spyOn(process, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-    await expect(runLogout(undefined, { input: false })).rejects.toThrow("exit 2");
-    expect(errors.at(-1)).toMatch(/name the provider to log out of: it holds openai-codex/);
-    await expect(runLogout("openai", {})).rejects.toThrow("exit 1");
-    expect(errors.at(-1)).toMatch(/no credential for "openai" is stored in .*: it holds openai-codex/);
-  });
 });

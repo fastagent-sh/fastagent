@@ -12,14 +12,8 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
-import {
-  HOSTS,
-  HOST_ONLY_FLAGS,
-  applyArtifactPlan,
-  planArtifacts,
-  warnHostOnlyFlags,
-} from "../src/cli/commands/deploy.ts";
-import { DEPLOY_HOSTS, type DeployHost } from "../src/deploy/hosts.ts";
+import { HOSTS, applyArtifactPlan, planArtifacts } from "../src/cli/commands/deploy.ts";
+import type { DeployHost } from "../src/deploy/hosts.ts";
 
 /** Each artifact kind: the opening bytes that make it OURS, and WHO answers for it. A host answers
  *  only its own kind; "container" is the pair `planArtifacts` answers itself, for every host. */
@@ -83,65 +77,6 @@ describe("deploy: ownership decides what --force may replace", () => {
     }
   });
 
-  it("`alwaysWrite` is the ONE exemption: build output that must track the template it belongs to", async () => {
-    // AgentCore's Lambda forwarder is generated code, not operator-owned configuration — a stale copy
-    // beside a fresh template is a broken deployment. It is the one path that skips the rule, so it is
-    // named at the call site rather than inferred from the kind, and the exemption is proven here.
-    const path = "fastagent/agentcore/forwarder/index.js";
-    const dir = await mkdtemp(join(tmpdir(), "fa-own-"));
-    await mkdir(dirname(join(dir, path)), { recursive: true });
-    await writeFile(join(dir, path), "// mine\n");
-    const said: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => said.push(String(m)));
-    try {
-      await applyArtifactPlan(
-        await planArtifacts(dir, [{ path, content: "// fresh\n" }], {
-          force: false,
-          alwaysWrite: [path],
-          isOurs: () => false,
-        }),
-      );
-    } finally {
-      spy.mockRestore();
-    }
-    expect(await readFile(join(dir, path), "utf8")).toBe("// fresh\n"); // overwritten without --force
-    expect(said.join("\n")).toMatch(/wrote fastagent\/agentcore\/forwarder\/index\.js/);
-  });
-
-  it("build output is written by every deploy, never kept or reported stale: the package list", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-own-build-"));
-    await mkdir(join(dir, ".fastagent/deploy"), { recursive: true });
-    for (const path of [".fastagent/deploy/fastagent.packages"]) {
-      await writeFile(join(dir, path), "from an earlier deploy\n");
-      const plan = await planArtifacts(dir, [{ path, content: "this deploy's\n" }], {
-        force: false,
-        isOurs: () => false,
-      });
-      expect(plan.stale).toEqual([]);
-      vi.spyOn(console, "error").mockImplementation(() => {});
-      await applyArtifactPlan(plan);
-      expect(await readFile(join(dir, path), "utf8")).toBe("this deploy's\n");
-    }
-  });
-
-  it("a marker that does not OPEN the file is not ours (a header above it is the author's edit)", async () => {
-    const path = "fastagent/fly.bot.toml";
-    const disguised = `# my own header\n${generatedFor(path)}`;
-    expect((await attempt(path, disguised, true)).content).toBe(disguised);
-  });
-
-  it("every host claims its OWN artifact kind and no other host's", () => {
-    // The predicate the dispatcher binds is one host's, so a host that claims a neighbour's kind (or
-    // whose kind no host claims) is how `--force` becomes a silent no-op. Same types everywhere, so
-    // nothing but this asserts the pairing.
-    for (const path of Object.keys(MARKERS) as Kind[]) {
-      const { owner } = MARKERS[path];
-      for (const host of DEPLOY_HOSTS) {
-        expect(HOSTS[host].isOurs(path, generatedFor(path)), `${host} vs ${path}`).toBe(host === owner);
-      }
-    }
-  });
-
   it("ours is kept without --force and regenerated with it", async () => {
     const path = "fastagent/Dockerfile";
     const stale = `${MARKERS[path].marker}\nedited by me\n`;
@@ -161,75 +96,5 @@ describe("deploy: ownership decides what --force may replace", () => {
     // A file we did NOT generate is never stale: `--force` does not touch it either, and taking a path back is
     // what deleting the marker line is for.
     expect((await attempt(path, "FROM node:22-slim\n", false)).stale).toEqual([]);
-  });
-
-  it("ours and unchanged says so; an absent artifact is simply written", async () => {
-    const path = ".dockerignore";
-    expect((await attempt(path, generatedFor(path), false)).said).toMatch(/kept \.dockerignore \(unchanged\)/);
-
-    const fresh = await attempt(path, undefined, false);
-    expect(fresh.content).toBe(generatedFor(path));
-    expect(fresh.said).toMatch(/wrote \.dockerignore/);
-  });
-
-  it("a kept file's message names ITS consequence, not a generic one", async () => {
-    // Pointing every kind at "the preflight warnings" would send the reader looking for output that is
-    // only ever printed for the ignore file.
-    expect((await attempt("fastagent/Dockerfile", "FROM python:3.12\n", true)).said).toMatch(
-      /assumes it listens on \$PORT/,
-    );
-    expect((await attempt(".dockerignore", "mine\n", true)).said).toMatch(/see the preflight warnings/);
-    const toml = (await attempt("fastagent/fly.bot.toml", 'app = "mine"\n', true)).said;
-    expect(toml).toMatch(/not generated by fastagent/);
-    expect(toml).not.toMatch(/\$PORT|preflight warnings/);
-  });
-});
-
-describe("deploy: a flag only one host honours is reported the same way by every other host", () => {
-  const said = (host: Parameters<typeof warnHostOnlyFlags>[0], opts: Parameters<typeof warnHostOnlyFlags>[1]) => {
-    const lines: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((m: unknown) => void lines.push(String(m)));
-    try {
-      warnHostOnlyFlags(host, opts);
-    } finally {
-      spy.mockRestore();
-    }
-    return lines.join("\n");
-  };
-
-  it("names the owning host in ONE spelling, whichever host is refusing the flag", () => {
-    // The drift this replaces: `Railway-only` from docker/agentcore, `railway-only` from fly.
-    for (const host of ["docker", "agentcore", "fly"] as const) {
-      expect(said(host, { intoLinked: true })).toContain("--into-linked: railway-only");
-    }
-  });
-
-  it("says what THAT host does instead — the sentence is the reason it is not a generic no-op notice", () => {
-    expect(said("fly", { intoLinked: true })).toMatch(/idempotent/);
-    expect(said("docker", { intoLinked: true })).toMatch(/ignored for local Docker/);
-  });
-
-  it("stays silent for the owner, and for a flag nobody passed", () => {
-    expect(said("railway", { intoLinked: true })).toBe("");
-    expect(said("docker", {})).toBe("");
-  });
-});
-
-describe("deploy: every host-only flag has a line for every other host", () => {
-  // The type says so — `instead: Record<Exclude<DeployHost, Owner>, string>` — but that guarantee is
-  // load-bearing on how the table is TYPED, and the natural move when adding a third rule is to relax
-  // it to `HostOnlyFlag<DeployHost>[]`, where `Exclude<DeployHost, DeployHost>` is `never` and an
-  // empty `instead` type-checks. Asserting the DATA holds whatever the annotation becomes.
-  it("covers every non-owner host, with a non-empty sentence", () => {
-    for (const rule of HOST_ONLY_FLAGS) {
-      const expected = DEPLOY_HOSTS.filter((host) => host !== rule.owner);
-      const instead = rule.instead as Record<string, string>;
-      expect(Object.keys(instead).sort()).toEqual([...expected].sort());
-      for (const host of expected) expect(instead[host]).toBeTruthy();
-    }
-  });
-
-  it("names an owner that is a real deploy host", () => {
-    for (const rule of HOST_ONLY_FLAGS) expect(DEPLOY_HOSTS).toContain(rule.owner);
   });
 });

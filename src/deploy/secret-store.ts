@@ -1,5 +1,5 @@
 /**
- * Where a deployment's values live and how a deploy fills the gaps (agent-artifact.md §6.2). A target keeps its own
+ * Where a deployment's values live and how a deploy fills the gaps. A target keeps its own
  * values; `deploy` checks names and never carries a file. Most stores can say which names they hold and not the values,
  * so that is all the interface asks of them.
  *

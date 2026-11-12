@@ -1,5 +1,5 @@
 /**
- * Where a command's instance is (agent-artifact.md §4.1): the flags that place it, over the environment variables that
+ * Where a command's instance is: the flags that place it, over the environment variables that
  * name the same inputs, settled once at the command's entry into absolute paths in this process's environment. A
  * `dev` worker inherits them, and every reader after (`resolveStateRoot`, `resolveWorkdir`, the instance configuration)
  * reads one answer.
@@ -217,7 +217,7 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
 }
 
 /** Who runs this process's instance, as its own variables say: the one place the CLI reads them for an open. */
-export function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
+function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
   return { dev: servedByDev(env), deployed: isDeployedWorkspace(env), agentcore: isAgentcoreRuntime(env) };
 }
 

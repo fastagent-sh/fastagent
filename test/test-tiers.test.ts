@@ -21,7 +21,7 @@ const lines = readdirSync(TEST_DIR)
       .map((line, i) => ({ at: `${file}:${i + 1}: ${line.trim()}`, line })),
   );
 
-it('no test bounds how long something took (CONTRIBUTING.md, "Test tiers")', () => {
+it('no test bounds how long something took (AGENTS.md, "Tests")', () => {
   expect(lines.filter(({ line }) => ELAPSED.test(line) && !LOWER_BOUND.test(line)).map(({ at }) => at)).toEqual([]);
 });
 
@@ -29,6 +29,6 @@ it("no test writes a fixed name beside its temp directory, where other tests and
   expect(lines.filter(({ line }) => SHARED_TEMP.test(line)).map(({ at }) => at)).toEqual([]);
 });
 
-it('no test asserts that something fails without saying how (CONTRIBUTING.md, "Test tiers")', () => {
+it('no test asserts that something fails without saying how (AGENTS.md, "Tests")', () => {
   expect(lines.filter(({ line }) => ANY_ERROR.test(line)).map(({ at }) => at)).toEqual([]);
 });

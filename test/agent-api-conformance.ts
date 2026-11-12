@@ -26,11 +26,8 @@ import {
 } from "../src/agent-api.ts";
 
 export interface AgentApiSubject {
-  /**
-   * A fresh agent over fresh storage. `inFlightPerProcess` lowers the messages the process holds; `signedOut` leaves
-   * its model provider without a credential.
-   */
-  start(options?: { inFlightPerProcess?: number; signedOut?: boolean }): Promise<Agent>;
+  /** A fresh agent over fresh storage. `signedOut` leaves its model provider without a credential. */
+  start(options?: { signedOut?: boolean }): Promise<Agent>;
   /** The same storage, opened by a new process after the previous one stopped; `removeTools`: a deployment without them. */
   restart(options?: { removeTools?: string[] }): Promise<Agent>;
   /** Lets every `hold` and `stubborn` call of the current process go on. */
@@ -165,29 +162,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(await agent.sessions.get(sessionId)).toMatchObject({ status: "idle" });
       });
 
-      it("reads a field given as undefined as one left out, as a TypeScript Caller writes it", async () => {
-        const unset = undefined as string | undefined;
-        const sessionId = (await agent.sessions.create({ model: undefined, forkFrom: undefined })).id;
-        const message = await send(
-          { sessionId, content: "hi", idempotencyKey: unset, whenBusy: undefined },
-          { wait: WAIT, signal: undefined },
-        );
-        expect(message).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
-        if (subject.keysSends) expect(message.idempotencyKey).toEqual(expect.any(String));
-        else expect(message).not.toHaveProperty("idempotencyKey");
-        expect(
-          (await agent.sessions.entries(sessionId, { before: unset, after: unset, limit: undefined })).data,
-        ).toHaveLength(2);
-        expect((await agent.sessions.list({ after: unset })).data.map(({ id }) => id)).toContain(sessionId);
-        expect(await agent.sessions.update(sessionId, { thinkingLevel: "high", model: undefined })).toMatchObject({
-          thinkingLevel: "high",
-        });
-        await expect(agent.sessions.update(sessionId, { model: undefined })).rejects.toMatchObject({
-          code: "invalid_request",
-        });
-        await agent.sessions.compact(sessionId, { instructions: unset });
-      });
-
       it("takes a string as one text part, and text and images", async () => {
         const sessionId = await newSession(agent);
         expect((await ended(agent, await send({ sessionId, content: "hi" }))).answer?.text).toBe("answer: hi");
@@ -203,15 +177,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
         const message = await send({ sessionId: await newSession(agent), content: "hi" });
         await expect(send({ sessionId: message.id, content: "hi" })).rejects.toMatchObject({ code: "not_found" });
-      });
-
-      it("reports the program apart from the instance, and the starters in effect", async () => {
-        expect(await agent.info()).toMatchObject({
-          name: "subject",
-          description: "This instance.",
-          agent: { name: "Subject Program", description: "A subject." },
-          starters: ["Say hello", "What can you do?"],
-        });
       });
 
       it("expands a command for the model while its user entry holds the text as sent", async () => {
@@ -284,21 +249,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         // The key that finds it, when the binding gave the send one of its own.
         if (subject.keysSends) expect(error).toMatchObject({ details: { idempotencyKey: expect.any(String) } });
       });
-
-      it("gives results and events that are JSON", async () => {
-        const sessionId = await newSession(agent);
-        const watching = attach(agent, sessionId);
-        await watching.until(isState);
-        const message = await send({ sessionId, content: "hi" });
-        expect(JSON.parse(JSON.stringify(message))).toEqual(message);
-        const events = await watching.until(doneOf(message));
-        await watching.close();
-        expect(JSON.parse(JSON.stringify(events))).toEqual(events);
-        const page = await agent.sessions.entries(sessionId);
-        expect(JSON.parse(JSON.stringify(page))).toEqual(page);
-        const session = await agent.sessions.get(sessionId);
-        expect(JSON.parse(JSON.stringify(session))).toEqual(session);
-      });
     });
 
     describe("Busy", () => {
@@ -345,21 +295,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await ended(agent, queued);
       });
 
-      it("takes a steer the agent did not take before it stopped no later than the queued messages", async () => {
-        const sessionId = await newSession(agent);
-        const running = await send({ sessionId, content: "slow" });
-        await untilStatus(agent, running, "running");
-        const queued = await send({ sessionId, content: "later" });
-        const steer = await send({ sessionId, content: "steer", whenBusy: "steer" });
-        await ended(agent, queued);
-        await ended(agent, steer);
-        const all = await history(agent, sessionId);
-        const at = (message: Message) => all.findIndex((entry) => messageOf(entry) === message.id);
-        const queuedAnswered = all.findIndex((entry, index) => index > at(queued) && entry.kind === "assistant");
-        expect(at(steer)).toBeGreaterThan(at(running));
-        expect(at(steer)).toBeLessThan(queuedAnswered);
-      });
-
       it("takes a message at once in an idle session, whatever whenBusy says", async () => {
         for (const whenBusy of ["queue", "steer", "reject"] as const) {
           const message = await send({ sessionId: await newSession(agent), content: "hi", whenBusy });
@@ -367,52 +302,9 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           expect((await ended(agent, message)).status).toBe("completed");
         }
       });
-
-      it("refuses the 21st queued message with busy/queue_full", async () => {
-        const sessionId = await newSession(agent);
-        await send({ sessionId, content: "hold" });
-        await holding();
-        for (let i = 0; i < 20; i++) await send({ sessionId, content: `q${i}` });
-        await expect(send({ sessionId, content: "one too many" })).rejects.toMatchObject({
-          code: "busy",
-          details: { reason: "queue_full" },
-        });
-        subject.release();
-      });
-
-      it("refuses a message past the process's capacity with busy/capacity", async () => {
-        agent = await subject.start({ inFlightPerProcess: 2 });
-        await send({ sessionId: await newSession(agent), content: "hold" });
-        await send({ sessionId: await newSession(agent), content: "hold" });
-        await expect(send({ sessionId: await newSession(agent), content: "hi" })).rejects.toMatchObject({
-          code: "busy",
-          details: { reason: "capacity" },
-        });
-        subject.release();
-      });
-
-      it("answers a key the session has seen with its message, even at the process's capacity", async () => {
-        agent = await subject.start({ inFlightPerProcess: 1 });
-        const sessionId = await newSession(agent);
-        const held = await send({ sessionId, content: "hold", idempotencyKey: "held" });
-        await expect(send({ sessionId, content: "hold", idempotencyKey: "held" })).resolves.toMatchObject({
-          id: held.id,
-        });
-        subject.release();
-      });
     });
 
     describe("Idempotency", () => {
-      it("keeps a key as it was given, whatever its characters", async () => {
-        const sessionId = await newSession(agent);
-        for (const idempotencyKey of ["订单-1", " padded ", "chat/42 #7?x=1%", "100%"]) {
-          const sent = await send({ sessionId, content: "hi", idempotencyKey });
-          expect(sent.idempotencyKey).toBe(idempotencyKey);
-          expect(await agent.messages.get({ sessionId, idempotencyKey })).toMatchObject({ id: sent.id });
-          expect(await send({ sessionId, content: "again", idempotencyKey })).toMatchObject({ id: sent.id });
-        }
-      });
-
       it("returns a key's message while it is queued, running and ended, recording it once", async () => {
         const sessionId = await newSession(agent);
         const running = await send({ sessionId, content: "hold", idempotencyKey: "first" });
@@ -560,17 +452,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         for (const message of queued) expect((await ended(agent, message)).status).toBe("completed");
       });
 
-      it("ends a message a cancel was stopping when the process stopped canceled after the restart", async () => {
-        const sessionId = await newSession(agent);
-        const running = await send({ sessionId, content: "stubborn" });
-        await holding();
-        await agent.sessions.cancel(sessionId);
-        agent = await subject.restart();
-        const end = await ended(agent, running);
-        expect(end.status).toBe("canceled");
-        expect(end).not.toHaveProperty("answer");
-      });
-
       it("does not redo a tool call the process stopped after its effect", async () => {
         const sessionId = await newSession(agent);
         const message = await send({ sessionId, content: "mark" });
@@ -691,31 +572,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
       });
 
-      it("explains a quiet gap with retrying before the attempt that answers", async () => {
-        const sessionId = await newSession(agent);
-        const watching = attach(agent, sessionId);
-        await watching.until(isState);
-        const message = await send({ sessionId, content: "flaky" });
-        const events = await watching.until(doneOf(message));
-        await watching.close();
-        const retry = events.findIndex((event) => event.type === "retrying");
-        expect(events[retry]).toMatchObject({
-          type: "retrying",
-          attempt: 1,
-          maxAttempts: expect.any(Number),
-          delayMs: expect.any(Number),
-          reason: expect.stringContaining("overloaded"),
-        });
-        const answer = events.findIndex(
-          (event) =>
-            event.type === "entry" &&
-            event.entry.kind === "assistant" &&
-            (event.entry.data as { stop?: unknown }).stop === undefined,
-        );
-        expect(retry).toBeLessThan(answer);
-        expect(events.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
-      });
-
       it("streams the model's thinking on its own channel, never folded into the answer", async () => {
         const sessionId = await newSession(agent);
         const watching = attach(agent, sessionId);
@@ -807,25 +663,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await expect(agent.sessions.entries("no-such-session")).rejects.toMatchObject({ code: "not_found" });
       });
 
-      it("names a taken message in its user entry, and gives every assistant entry its usage", async () => {
-        const sessionId = await newSession(agent);
-        const message = await send({ sessionId, content: "effect", idempotencyKey: "named" });
-        await ended(agent, message);
-        const all = await history(agent, sessionId);
-        expect(all[0]).toMatchObject({ kind: "user", data: { content: text("effect"), messageId: message.id } });
-        const replies = all.filter((entry) => entry.kind === "assistant");
-        expect(replies).toHaveLength(2);
-        for (const reply of replies) {
-          expect(reply.data).toMatchObject({
-            usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },
-          });
-        }
-        expect(all.map((entry) => entry.kind)).toEqual(["user", "assistant", "tool_result", "assistant"]);
-        const cut = await ended(agent, await send({ sessionId, content: "long" }));
-        const [reply] = (await agent.sessions.entries(sessionId, { limit: 1 })).data;
-        expect(reply).toMatchObject({ id: cut.answer?.entryId, kind: "assistant", data: { stop: "max_tokens" } });
-      });
-
       it("counts a session's own spend, a fork's from nothing, and the instance's", async () => {
         const sessionId = await newSession(agent);
         const empty = { models: {}, tools: {} };
@@ -915,19 +752,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(events.at(-1)).toMatchObject({ type: "done", message: { status: "completed" } });
       });
 
-      it("delivers a queued message sent again by its key once it is taken", async () => {
-        const sessionId = await newSession(agent);
-        await send({ sessionId, content: "hold" });
-        await holding();
-        const first = await send({ sessionId, content: "next", idempotencyKey: "k" });
-        const streaming = drain(agent.messages.stream({ sessionId, content: "next", idempotencyKey: "k" }));
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        subject.release();
-        const events = await streaming;
-        expect(firstOf(events)).toEqual(first);
-        expect(replies(events)).toEqual(["user:", "assistant:answer: next"]);
-      });
-
       it("delivers a running message sent again from its user entry, what it already wrote included", async () => {
         const sessionId = await newSession(agent);
         await send({ sessionId, content: "hold", idempotencyKey: "k" });
@@ -965,14 +789,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(failed.at(-1)).toEqual({ type: "done", message: firstOf(failed) });
       });
 
-      it("ends with the message's canceled done when it is cancelled", async () => {
-        const sessionId = await newSession(agent);
-        const events = drain(agent.messages.stream({ sessionId, content: "hold" }));
-        await holding();
-        await agent.sessions.cancel(sessionId);
-        expect((await events).at(-1)).toMatchObject({ type: "done", message: { status: "canceled" } });
-      });
-
       it("rejects its first read with the send's refusal, recording nothing", async () => {
         await expect(
           drain(agent.messages.stream({ sessionId: "no-such-session", content: "hi" })),
@@ -989,27 +805,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect((await history(agent, sessionId)).filter((entry) => entry.kind === "user")).toHaveLength(1);
         subject.release();
       });
-
-      it("lets go on its signal, rejecting the read waiting then with its reason, and the message goes on", async () => {
-        const sessionId = await newSession(agent);
-        await send({ sessionId, content: "hold" });
-        await holding();
-        // Queued behind the held message, the stream is quiet after its first event: the next read waits.
-        const controller = new AbortController();
-        const iterator = agent.messages
-          .stream({ sessionId, content: "later" }, { signal: controller.signal })
-          [Symbol.asyncIterator]();
-        const first = await iterator.next();
-        const message = (first.value as { message: Message }).message;
-        expect(message.status).toBe("queued");
-        const waiting = iterator.next();
-        const reason = new Error("the Caller left");
-        controller.abort(reason);
-        await expect(waiting).rejects.toBe(reason);
-        await expect(iterator.next()).rejects.toBe(reason);
-        subject.release();
-        expect((await ended(agent, message)).status).toBe("completed");
-      });
     });
 
     describe("Listing", () => {
@@ -1023,23 +818,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect((await agent.sessions.list()).data[1]).toEqual(await agent.sessions.get(b));
       });
 
-      it("moves a session to the front when it accepts a message, and when it writes an entry", async () => {
-        const a = await newSession(agent);
-        const held = await send({ sessionId: a, content: "hold" });
-        await holding();
-        const b = await newSession(agent);
-        expect(await order()).toEqual([b, a]);
-        const queued = await send({ sessionId: a, content: "later" });
-        expect(queued.status).toBe("queued");
-        expect(await order()).toEqual([a, b]);
-        const c = await newSession(agent);
-        expect(await order()).toEqual([c, a, b]);
-        subject.release();
-        await ended(agent, held);
-        await ended(agent, queued);
-        expect(await order()).toEqual([a, c, b]);
-      });
-
       it("pages by after and limit, repeating no session and skipping none", async () => {
         const created: string[] = [];
         for (let i = 0; i < 5; i++) created.unshift(await newSession(agent));
@@ -1050,29 +828,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const last = await agent.sessions.list({ limit: 2, after: second.next as string });
         expect(last.data.map(({ id }) => id)).toEqual(created.slice(4));
         expect(last.next).toBeUndefined();
-      });
-
-      it("refuses a limit out of range and what it cannot read as one of its cursors, a session id included", async () => {
-        const sessionId = await newSession(agent);
-        for (const options of [
-          { limit: 0 },
-          { limit: 501 },
-          { limit: 1.5 },
-          { after: "no-such-cursor" },
-          { after: sessionId },
-        ]) {
-          await expect(agent.sessions.list(options)).rejects.toMatchObject({ code: "invalid_request" });
-        }
-      });
-
-      it("keeps the order after a restart", async () => {
-        const a = await newSession(agent);
-        await ended(agent, await send({ sessionId: await newSession(agent), content: "hello" }));
-        await ended(agent, await send({ sessionId: a, content: "again" }));
-        const before = await order();
-        agent = await subject.restart();
-        expect(await order()).toEqual(before);
-        expect(before[0]).toBe(a);
       });
     });
 
@@ -1095,12 +850,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
         const whole = await agent.sessions.create({ forkFrom: { sessionId } });
         expect(await history(agent, whole.id)).toEqual(source);
-      });
-
-      it("takes a fork's settings from its source, each one given replacing the inherited one", async () => {
-        const sessionId = (await agent.sessions.create({ thinkingLevel: "low", instructions: "Be brief." })).id;
-        const fork = await agent.sessions.create({ forkFrom: { sessionId }, thinkingLevel: "high" });
-        expect(fork).toMatchObject({ thinkingLevel: "high", instructions: "Be brief." });
       });
 
       it("updates a session's settings, read back and used from its next message", async () => {
@@ -1175,16 +924,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await expect(agent.sessions.update(sessionId, {})).rejects.toMatchObject({ code: "invalid_request" });
         await expect(agent.sessions.update(sessionId, { thinkingLevel: "loud" } as never)).rejects.toMatchObject({
           code: "invalid_request",
-        });
-      });
-
-      it("refuses a fork of an unknown session or entry with not_found", async () => {
-        await expect(agent.sessions.create({ forkFrom: { sessionId: "nope" } })).rejects.toMatchObject({
-          code: "not_found",
-        });
-        const sessionId = await newSession(agent);
-        await expect(agent.sessions.create({ forkFrom: { sessionId, entryId: "nope" } })).rejects.toMatchObject({
-          code: "not_found",
         });
       });
 

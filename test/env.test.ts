@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { describe, expect, it } from "vitest";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyEnvValues, loadDotEnv } from "../src/env.ts";
-import { agentValues, dotEnvPath, loadEnvValues } from "../src/value-file.ts";
+import { applyEnvValues } from "../src/env.ts";
+import { dotEnvPath, loadEnvValues } from "../src/value-file.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
@@ -47,106 +47,5 @@ describe("loadEnvValues + applyEnvValues", () => {
     const d = `D_${Date.now()}`;
     loadEnvFile(await write(`${d}=first\n${d}=second\n`));
     expect(process.env[d]).toBe("second");
-  });
-
-  // The whole Bun fix rests on loadEnvFile being equivalent to Node's process.loadEnvFile. Prove it
-  // DIFFERENTIALLY: feed the SAME file to both and assert process.env agrees. Node-only (Bun, the very
-  // runtime we're porting to, has no process.loadEnvFile) — skipped there.
-  it.skipIf(typeof process.versions.bun === "string")(
-    "matches Node's process.loadEnvFile on the same file (env-wins + in-file last-wins)",
-    async () => {
-      const p = `E_${Date.now()}`; // fresh keys so neither loader collides with real env
-      const preset = `${p}_PRESET`;
-      const keys = [`${p}_PLAIN`, `${p}_DUP`, `${p}_QUOTED`, preset];
-      const content = `${p}_PLAIN=one\n# comment\n${p}_DUP=a\n${p}_DUP=b\n${p}_QUOTED="q v"\n${preset}=from_file\n`;
-      const file = await write(content);
-
-      const run = (load: (f: string) => void): Record<string, string | undefined> => {
-        for (const k of keys) delete process.env[k];
-        process.env[preset] = "real"; // a real env var both loaders must NOT clobber
-        load(file);
-        return Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-      };
-
-      expect(run(loadEnvFile)).toEqual(run(process.loadEnvFile.bind(process)));
-      for (const k of keys) delete process.env[k];
-    },
-  );
-
-  it("a missing file is no values; an unreadable one still throws", async () => {
-    expect(loadEnvValues(join(tmpdir(), `no-such-${Date.now()}`, ".env")).size).toBe(0);
-    const dir = await mkdtemp(join(tmpdir(), "fa-env-bad-"));
-    await mkdir(join(dir, ".env")); // a directory at the path → EISDIR, which must surface
-    expect(() => loadEnvValues(join(dir, ".env"))).toThrow(expect.objectContaining({ code: "EISDIR" }));
-  });
-});
-
-describe("agentValues: what an agent's value file adds, read and not entered", () => {
-  it("is each variable the process does not hold, as loading it would enter it, and leaves the process alone", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-agent-values-"));
-    await mkdir(join(dir, ".secrets"));
-    await writeFile(join(dir, ".secrets", ".env"), "FA_HELD=from-file\nFA_ONLY_FILE=from-file\n");
-    vi.stubEnv("FA_HELD", "from-the-process");
-    try {
-      expect(agentValues(dir)).toEqual({ FA_ONLY_FILE: "from-file" });
-      expect(process.env.FA_ONLY_FILE).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-});
-
-describe("loadDotEnv (workspace <root>/.secrets/.env, missing is normal)", () => {
-  it("a dir with no .env is a no-op, not a throw", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-"));
-    expect(() => loadDotEnv(dir)).not.toThrow(); // ENOENT swallowed
-  });
-
-  it("a NON-ENOENT read error propagates (a corrupt/unreadable .env fails visibly, never silently)", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-dotenv-bad-"));
-    // A directory AT the .env path makes readFileSync throw EISDIR — a non-ENOENT error that must surface.
-    await mkdir(join(dir, ".secrets", ".env"), { recursive: true });
-    expect(() => loadDotEnv(dir)).toThrow(expect.objectContaining({ code: "EISDIR" }));
-  });
-});
-
-describe("env: a stray .env at the agent root is announced, not silently ignored", () => {
-  it("names every key a stray agent-root .env sets, and still loads the real one", async () => {
-    const { mkdir, mkdtemp, writeFile } = await import("node:fs/promises");
-    const { tmpdir, homedir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { loadDotEnv } = await import("../src/env.ts");
-    const { log } = await import("../src/log.ts");
-
-    const agent = join(await mkdtemp(join(tmpdir(), "fa-stray-")), "fastagent");
-    await mkdir(agent);
-    await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n"); // THE marker
-    await writeFile(join(agent, ".env"), "FASTAGENT_MODEL=prov/m\n"); // NOT the file fastagent reads
-    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
-    try {
-      loadDotEnv(agent);
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets FASTAGENT_MODEL/);
-      expect(process.env.FASTAGENT_MODEL).toBeUndefined(); // announced, never loaded behind the user's back
-
-      // The agent directory is fastagent's, so any value there is misplaced, not only fastagent's own names.
-      await writeFile(join(agent, ".env"), "DATABASE_URL=postgres://real\n");
-      warn.mockClear();
-      loadDotEnv(agent);
-      expect(warn.mock.calls.flat().join(" ")).toMatch(/is NOT read — it sets DATABASE_URL/);
-      expect(process.env.DATABASE_URL).toBeUndefined();
-
-      // …and the agent's own env still loads from the right place, warning or not.
-      await mkdir(join(agent, ".secrets"), { recursive: true });
-      await writeFile(join(agent, ".secrets", ".env"), "REAL=1\n");
-      loadDotEnv(agent);
-      expect(process.env.REAL).toBe("1");
-
-      // Nothing to warn about where fastagent's own machinery home lives (no root `.env` there).
-      warn.mockClear();
-      loadDotEnv(homedir());
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
   });
 });

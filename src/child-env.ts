@@ -1,5 +1,5 @@
 /**
- * The environment of the processes an instance starts (agent-artifact.md §5): the shell tool, stdio MCP servers and
+ * The environment of the processes an instance starts: the shell tool, stdio MCP servers and
  * skill scripts. Assembled from inputs, never the host process's whole `process.env`, so a stray variable of the host
  * (an API key, a cloud credential) cannot reach a command, and a declared one reaches every command.
  */

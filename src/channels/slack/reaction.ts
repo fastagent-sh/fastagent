@@ -5,7 +5,7 @@ import type { SlackApi } from "./slack-api.ts";
 const EMOJI_RE = /^(?:[a-z0-9_+-]+)(?:::skin-tone-[2-6])?$/;
 
 /** Normalize a Slack emoji name (strip surrounding colons, lowercase); return null if invalid. */
-export function normalizeSlackEmojiName(value: string): string | null {
+function normalizeSlackEmojiName(value: string): string | null {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return null;
   const name = trimmed.startsWith(":") && trimmed.endsWith(":") ? trimmed.slice(1, -1) : trimmed;
