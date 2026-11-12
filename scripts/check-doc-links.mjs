@@ -1,12 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, extname, resolve } from "node:path";
 
-const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "docs", ".github"];
+const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "llms.txt", "docs", ".github"];
 
-async function markdownFiles(path) {
+async function docFiles(path, explicit = false) {
   const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined);
-  if (!entries) return extname(path) === ".md" ? [path] : [];
-  const nested = await Promise.all(entries.map((entry) => markdownFiles(resolve(path, entry.name))));
+  if (!entries) return explicit || extname(path) === ".md" ? [resolve(path)] : [];
+  const nested = await Promise.all(entries.map((entry) => docFiles(resolve(path, entry.name))));
   return nested.flat();
 }
 
@@ -46,7 +46,20 @@ function anchors(markdown) {
   return out;
 }
 
-const files = (await Promise.all(roots.map(markdownFiles))).flat();
+function resolveTarget(file, target) {
+  if (!target || /^mailto:/.test(target)) return undefined;
+  if (/^https?:/.test(target)) {
+    const siteDoc = /^https:\/\/fastagent\.sh\/docs(?:\/([^#]*))?(?:#(.*))?$/.exec(target);
+    if (!siteDoc) return undefined;
+    const slug = (siteDoc[1] ?? "").replace(/^\/+|\/+$/g, "");
+    const rel = !slug ? "README.md" : extname(slug) ? slug : `${slug}.md`;
+    return { targetFile: resolve("docs", rel), fragment: siteDoc[2] };
+  }
+  const [pathPart, fragment] = target.split("#", 2);
+  return { targetFile: resolve(dirname(file), pathPart || file), fragment };
+}
+
+const files = (await Promise.all(roots.map((root) => docFiles(root, true)))).flat();
 const cache = new Map();
 const errors = [];
 for (const file of files) {
@@ -54,9 +67,9 @@ for (const file of files) {
   const prose = withoutCode(markdown);
   for (const match of prose.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
     const target = match[1].trim().split(/\s+/)[0].replace(/^<|>$/g, "");
-    if (!target || /^(?:https?:|mailto:)/.test(target)) continue;
-    const [pathPart, fragment] = target.split("#", 2);
-    const targetFile = resolve(dirname(file), pathPart || file);
+    const resolved = resolveTarget(file, target);
+    if (!resolved) continue;
+    const { targetFile, fragment } = resolved;
     let targetMarkdown = cache.get(targetFile);
     if (targetMarkdown === undefined) {
       targetMarkdown = await readFile(targetFile, "utf8").catch(() => null);
@@ -74,5 +87,5 @@ if (errors.length > 0) {
   console.error(errors.join("\n"));
   process.exitCode = 1;
 } else {
-  console.log(`Checked ${files.length} Markdown files.`);
+  console.log(`Checked ${files.length} documentation files.`);
 }
