@@ -95,7 +95,7 @@ const ticketsDir = () => join(globalHome(), STATE_DIRNAME, "tickets");
 const ticketPath = (id: string) => join(ticketsDir(), `${id}.json`);
 const addressPath = (id: string) => join(ticketsDir(), `${id}.address`);
 /** What the step's process says while it runs: the place to look when it fails. */
-export const ticketLogPath = (id: string) => join(ticketsDir(), `${id}.log`);
+const ticketLogPath = (id: string) => join(ticketsDir(), `${id}.log`);
 
 const endPath = (id: string) => join(ticketsDir(), `${id}.end.json`);
 
@@ -128,10 +128,9 @@ const ENDS: readonly TicketStatus[] = ["done", "failed", "expired"];
 /**
  * End the ticket `id` with `end`, unless something ended it first: the end is a file created once, by a hard link,
  * which the kernel lets only one writer make, so two that both read the ticket as running (the step finishing as a
- * person stops it) end it once. Answers the ticket as whoever ended it ended it. Not public: `update` ends a ticket,
- * and a test seam.
+ * person stops it) end it once. Answers the ticket as whoever ended it ended it. Not public: `update` ends a ticket.
  */
-export function endTicket(id: string, end: Partial<Ticket>): Ticket {
+function endTicket(id: string, end: Partial<Ticket>): Ticket {
   const draft = `${endPath(id)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync(draft, JSON.stringify(end));
   try {
@@ -163,9 +162,9 @@ function update(id: string, change: Partial<Ticket>): Ticket {
  * Whether the process `pid` still runs: signal 0 delivers nothing and only says whether it could. A process that has
  * exited and that its parent has not reaped answers it too; where /proc says what a process is, one that has exited is
  * taken for stopped. That is Linux, where a container whose PID 1 does not reap keeps an orphaned step a zombie for
- * good; macOS's launchd reaps an orphan at once, so it is not asked there. Not public: a test seam.
+ * good; macOS's launchd reaps an orphan at once, so it is not asked there.
  */
-export function running(pid: number | undefined): boolean {
+function running(pid: number | undefined): boolean {
   if (pid === undefined) return false;
   try {
     process.kill(pid, 0);
@@ -177,9 +176,9 @@ export function running(pid: number | undefined): boolean {
 
 /**
  * Whether `/proc/self/stat` (`selfStat`) is the process `pid`'s, so `/proc/<pid>` names the process `kill(pid, 0)` does:
- * a sandbox may give a process a PID namespace of its own and leave it the host's /proc. Not public: a test seam.
+ * a sandbox may give a process a PID namespace of its own and leave it the host's /proc.
  */
-export function procfsIsOurs(selfStat: string, pid: number): boolean {
+function procfsIsOurs(selfStat: string, pid: number): boolean {
   return selfStat.startsWith(`${pid} `);
 }
 
@@ -192,13 +191,10 @@ const readProcStat = (pid: number): string => readFileSync(`/proc/${pid}/stat`, 
  * process's, where what cannot be read is not a member of a group this user started (another user's, under hidepid=1;
  * one that exited as it was read), and is left out rather than ending the scan.
  */
-function procStat(
-  pid: number,
-  { scanning = false, read = readProcStat } = {},
-): { state: string; group: number } | undefined {
+function procStat(pid: number, { scanning = false } = {}): { state: string; group: number } | undefined {
   let stat: string;
   try {
-    stat = read(pid);
+    stat = readProcStat(pid);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code ?? "";
     if (code === "ENOENT" || (scanning && ["ESRCH", "EPERM", "EACCES"].includes(code))) return undefined;
@@ -222,9 +218,9 @@ function exited(pid: number): boolean {
  * Whether the process group `pid` leads still has a member running: its leader, or what it started, which may outlive
  * the leader by the time it needs to let go. Signal 0 to the group says so, except that a group of exited members
  * nobody has reaped answers it too on Linux (so /proc is asked who the members are) and answers EPERM on macOS (not
- * ours to stop, as `signalGroup` takes it). Not public: a test seam, with the read of a process's stat.
+ * ours to stop, as `signalGroup` takes it).
  */
-export function groupRunning(pid: number, read?: (pid: number) => string): boolean {
+function groupRunning(pid: number): boolean {
   try {
     process.kill(-pid, 0);
   } catch {
@@ -233,7 +229,7 @@ export function groupRunning(pid: number, read?: (pid: number) => string): boole
   if (!PROCFS) return true;
   return readdirSync("/proc").some((entry) => {
     if (!/^\d+$/.test(entry)) return false;
-    const stat = procStat(Number(entry), { scanning: true, ...(read === undefined ? {} : { read }) });
+    const stat = procStat(Number(entry), { scanning: true });
     return stat !== undefined && stat.group === pid && !isDead(stat.state);
   });
 }

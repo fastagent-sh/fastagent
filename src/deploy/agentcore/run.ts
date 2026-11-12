@@ -195,7 +195,7 @@ export function pickStackOutputs(parsed: unknown): Record<string, string> | unde
   return out;
 }
 /** The `--parameter-overrides file://` payload: a JSON array of "Key=Value" strings. */
-export function paramsFileContent(
+function paramsFileContent(
   imageUri: string,
   secretArn: string,
   minted: { ingressSecret: string; wakeSecret: string },

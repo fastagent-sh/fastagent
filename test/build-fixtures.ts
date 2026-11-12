@@ -1,7 +1,7 @@
 import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export const ROOT = join(import.meta.dirname, "fixtures");
+const ROOT = join(import.meta.dirname, "fixtures");
 
 export const made: string[] = [];
 

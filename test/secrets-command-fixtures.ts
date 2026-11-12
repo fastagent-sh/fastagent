@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { agentWorkspace } from "./cli-run.ts";
 import { hostCli } from "./host-cli-double.ts";
 
@@ -17,8 +15,6 @@ export async function agent(files: Record<string, string> = {}) {
     ...files,
   });
 }
-
-export const read = (file: string) => readFile(file, "utf8");
 
 /** A `fly` that answers what the store asks of it and keeps what it was given; `app` is an app that already exists. */
 export function fakeFly(listed: string[] = ["GH_TOKEN"], options: { app?: string } = {}) {
@@ -48,38 +44,6 @@ export function fakeFly(listed: string[] = ["GH_TOKEN"], options: { app?: string
     return {};
   });
   return { calls: () => calls, stdin: () => stdin };
-}
-
-/** An `aws` with one Secrets Manager secret: absent until `create-secret`, as the CLI answers. */
-export function fakeAws(initial?: string) {
-  const calls: string[] = [];
-  let secret = initial;
-  hostCli("aws", ({ args }) => {
-    calls.push(args.join(" "));
-    if (args[0] !== "secretsmanager") return { code: 1 };
-    switch (args[1]) {
-      case "describe-secret":
-        if (secret === undefined) {
-          return { code: 254, stderr: "An error occurred (ResourceNotFoundException) when calling DescribeSecret\n" };
-        }
-        return {
-          stdout: args.join(" ").includes("ARN")
-            ? "arn:aws:secretsmanager:us-west-2:1:secret:fastagent/x-AbCdEf\n"
-            : '{"Name":"x"}\n',
-        };
-      case "create-secret":
-        secret = "{}";
-        return { stdout: '{"Name":"x"}\n' };
-      case "get-secret-value":
-        return { stdout: `${secret ?? ""}\n` };
-      case "put-secret-value":
-        secret = readFileSync((args.at(-1) as string).replace(/^file:\/\//, ""), "utf8");
-        return { stdout: '{"VersionId":"v"}\n' };
-      default:
-        return {};
-    }
-  });
-  return { calls: () => calls, held: () => secret };
 }
 
 export const realStdin = Object.getOwnPropertyDescriptor(process, "stdin");

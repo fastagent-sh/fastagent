@@ -116,7 +116,7 @@ export interface TurnRunner<R, S> {
   idle(): Promise<void>;
 }
 
-export function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
+function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
   options: TurnRunnerOptions<R, S, F>,
   rec: R,
   slot: TurnSlot = unqueuedSlot,

@@ -1144,7 +1144,7 @@ const mcp: CommandSpec = {
  * Registration order = help order — the ORIGINAL usage wall's order, kept verbatim (this is a commander refactor of
  * the same CLI, not a redesign).
  */
-export const specs: readonly CommandSpec[] = [
+const specs: readonly CommandSpec[] = [
   init,
   models,
   mcp,

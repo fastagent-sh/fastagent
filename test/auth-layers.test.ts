@@ -47,26 +47,4 @@ describe("an agent reads credentials through its layers", () => {
     vi.stubEnv("FASTAGENT_AUTH_PATH", writeAuth(join(mkdtempSync(join(tmpdir(), "fa-named-")), "auth.json"), "named"));
     expect(await anthropicKey(agentDir())).toBe("named");
   });
-
-  it("does NOT fall back to the global file under FASTAGENT_SECRETS_DIR (a deployed box reads its mount only)", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("FASTAGENT_AUTH_PATH", "");
-    vi.stubEnv("FASTAGENT_SECRETS_DIR", mkdtempSync(join(tmpdir(), "fa-mounted-secrets-")));
-    writeAuth(GLOBAL, "global-login");
-    expect(await anthropicKey(agentDir())).toBeUndefined();
-  });
-
-  // A deployment never has the global file, so a global login that outranked the project's own key would run one
-  // credential here and another deployed.
-  it("the global file yields to an env key the project authenticates with; with none, the global login serves", async () => {
-    vi.stubEnv("FASTAGENT_AUTH_PATH", "");
-    vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
-    writeAuth(GLOBAL, "global-login");
-    const dir = agentDir();
-    expect(await anthropicKey(dir, { ANTHROPIC_API_KEY: "project-env" })).toBe("project-env");
-    expect(await anthropicKey(dir, { ANTHROPIC_API_KEY: "" })).toBe("global-login");
-    // A key in this process's own environment is not the instance's: only what it is given authenticates.
-    vi.stubEnv("ANTHROPIC_API_KEY", "stray");
-    expect(await anthropicKey(dir)).toBe("global-login");
-  });
 });

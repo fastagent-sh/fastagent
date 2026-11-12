@@ -27,7 +27,7 @@ export interface Tunnel {
 const TUNNEL_URL_RE = /https:\/\/(?!api\.)[a-z0-9-]+\.trycloudflare\.com/i;
 
 /** Extract a Cloudflare quick-tunnel URL from a chunk of cloudflared output, if present. */
-export function parseTunnelUrl(chunk: string): string | undefined {
+function parseTunnelUrl(chunk: string): string | undefined {
   return chunk.match(TUNNEL_URL_RE)?.[0];
 }
 
@@ -35,7 +35,7 @@ export function parseTunnelUrl(chunk: string): string | undefined {
 const TUNNEL_CONNECTED_RE = /Registered tunnel connection/i;
 
 /** Whether cloudflared's output so far reports an edge connection — see {@link TUNNEL_CONNECTED_RE}. */
-export function hasTunnelConnection(output: string): boolean {
+function hasTunnelConnection(output: string): boolean {
   return TUNNEL_CONNECTED_RE.test(output);
 }
 

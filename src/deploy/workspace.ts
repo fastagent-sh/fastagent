@@ -27,7 +27,7 @@ export interface DeploymentRelease {
 }
 
 /** The agent's name is one path segment of letters, digits, `-` and `_`, as a content entry's name is. */
-export function parseDeploymentRelease(raw: string): DeploymentRelease {
+function parseDeploymentRelease(raw: string): DeploymentRelease {
   const r = JSON.parse(raw) as DeploymentRelease;
   if (r?.version !== 1 || typeof r.id !== "string" || !r.id || typeof r.agent !== "string" || !SEGMENT.test(r.agent)) {
     throw new Error("invalid deployment release record");
@@ -52,7 +52,7 @@ export function releaseFromEnv(env: NodeJS.ProcessEnv = process.env): Deployment
  * Call while holding the deployment lease. Records `release` as the one started on the storage at `root`, refusing a
  * storage another agent's deployments started on: its state is that agent's.
  */
-export async function claimDeploymentStorage(root: string, release: DeploymentRelease): Promise<void> {
+async function claimDeploymentStorage(root: string, release: DeploymentRelease): Promise<void> {
   const meta = deploymentMeta(root);
   const appliedPath = join(meta, "applied.json");
   const applied = (await exists(appliedPath)) ? parseDeploymentRelease(await readFile(appliedPath, "utf8")) : undefined;
@@ -76,14 +76,14 @@ async function mountedPaths(): Promise<string[]> {
 }
 
 /** An unmounted directory must never look like a new disk. */
-export async function assertStorageMounted(root: string, paths?: string[]): Promise<void> {
+async function assertStorageMounted(root: string, paths?: string[]): Promise<void> {
   if (!(paths ?? (await mountedPaths())).includes(resolve(root)))
     throw new Error(`persistent storage is not mounted at ${root}`);
 }
 
 /** `waitSeconds` covers a restart overlapping the old process's exit; a test that wants the refusal
  *  passes a short one rather than waiting out the deployment default. */
-export async function leaseDeployment(metadata: string, waitSeconds = 35): Promise<() => Promise<void>> {
+async function leaseDeployment(metadata: string, waitSeconds = 35): Promise<() => Promise<void>> {
   // flock locks the shared open-file description. The parent's raw fd survives GC and closes at exit.
   // Never unlink this inode: another starter may already have it open.
   const fd = openSync(join(metadata, "lock"), "a", 0o600);

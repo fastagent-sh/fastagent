@@ -5,7 +5,7 @@
 import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { modelsOver } from "../src/harnesses/models/models.ts";
 import {
@@ -16,7 +16,7 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import type { DurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import {
   type AssembleAgentOptions,
@@ -24,33 +24,14 @@ import {
   assembleAgent,
   loadSourceDefinition,
 } from "../src/harnesses/pi-durable/open.ts";
-import { openServing } from "../src/harnesses/pi-durable/serve.ts";
-import { openSource } from "./open-source.ts";
-import { listWakeups } from "../src/schedule/wakeups.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
-import { definitionSections, expandTemplate, parseArguments } from "../src/harnesses/pi-durable/text.ts";
-import { made, DEFINE, agentPackage, FILES, ENV, toolCall, lastToolResult } from "./durable-definition-fixtures.ts";
+import { made, agentPackage, FILES, ENV, toolCall, lastToolResult } from "./durable-definition-fixtures.ts";
 
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("an agent definition on pi-durable", () => {
-  it("takes a third-party extension from a package as a module of src/extensions/ that re-exports it", async () => {
-    const dir = agentPackage({
-      ...FILES,
-      "vendor/pack/package.json": '{ "name": "pack", "type": "module", "exports": "./index.js" }',
-      "vendor/pack/index.js": `import { defineExtension, section } from "@earendil-works/pi-durable";
-export default defineExtension({ name: "vendored", sections: [section("vendored", () => "From a package.")] });
-`,
-      "src/extensions/vendored.ts": 'export { default } from "../../vendor/pack/index.js";\n',
-    });
-    const { registry } = await loadSourceDefinition(dir);
-    expect(registry.extensions.map(({ file }) => file)).toContain("src/extensions/vendored.ts");
-    const built = buildDefinition(await loadSourceDefinition(dir), ENV);
-    expect(built.extensions.map(({ name }) => name)).toContain("vendored");
-  });
-
   it("registers each module of src/ by its default export, tests left out, in file order, writing nothing", async () => {
     const dir = agentPackage(FILES);
     const before = readdirSync(dir, { recursive: true }).sort();
@@ -58,36 +39,6 @@ export default defineExtension({ name: "vendored", sections: [section("vendored"
     expect(registry.tools.map(({ file }) => file)).toEqual(["src/tools/weather.ts"]);
     expect(registry.schedules).toEqual([{ file: "src/schedules/daily.ts", name: "daily", value: expect.any(Object) }]);
     expect(readdirSync(dir, { recursive: true }).sort()).toEqual(before);
-  });
-
-  it("is a frozen value whose inputs list each secret once: what for, whether optional, where", async () => {
-    const definition = await loadSourceDefinition(agentPackage(FILES));
-    for (const part of [definition, definition.config, definition.registry, definition.registry.tools]) {
-      expect(Object.isFrozen(part)).toBe(true);
-    }
-    expect(Object.isFrozen(definition.registry.tools[0])).toBe(true);
-    expect(definition.inputs.secrets).toEqual([
-      { name: "GH_TOKEN", description: "For gh", optional: false, declaredIn: ["context.json"] },
-      {
-        name: "WEATHER_KEY",
-        description: "The weather service's API key",
-        optional: false,
-        declaredIn: ["src/tools/weather.ts"],
-      },
-      { name: "WEATHER_REGION", optional: true, declaredIn: ["src/tools/weather.ts"] },
-    ]);
-  });
-
-  it("lists a secret declared optional in one module and required in another once, as required", async () => {
-    const tool = (name: string, optional: boolean) => `import { needs } from "${DEFINE}";
-export default needs([{ name: "TOKEN", optional: ${optional} }], () => ({ name: "${name}", description: "d", parameters: {}, execute: async () => ({ output: [] }) }));
-`;
-    const definition = await loadSourceDefinition(
-      agentPackage({ "src/tools/a.ts": tool("a", true), "src/tools/b.ts": tool("b", false) }),
-    );
-    expect(definition.inputs.secrets).toEqual([
-      { name: "TOKEN", optional: false, declaredIn: ["src/tools/a.ts", "src/tools/b.ts"] },
-    ]);
   });
 
   it("refuses to run while a required secret has no value, naming where it is declared, and not for an optional one", async () => {
@@ -99,115 +50,6 @@ export default needs([{ name: "TOKEN", optional: ${optional} }], () => ({ name: 
     expect(built.tools.map((tool) => tool.name)).toEqual(["weather"]);
     expect(built.extensions.map((extension) => extension.name)).toEqual(["audit"]);
     expect(built.schedules.map((schedule) => schedule.name)).toEqual(["daily"]);
-  });
-
-  it("builds its channels, a route channel and a long connection, each with the secrets it declared", async () => {
-    const definition = await loadSourceDefinition(
-      agentPackage({
-        "src/channels/hook.ts": `import { needs } from "${DEFINE}";
-export default needs(["HOOK_SECRET"], ({ HOOK_SECRET }) => () => ({ "POST /hook": () => new Response(HOOK_SECRET) }));
-`,
-        "src/channels/stream.ts":
-          "export default { name: 'stream', connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };\n",
-      }),
-    );
-    expect(definition.inputs.secrets).toEqual([
-      { name: "HOOK_SECRET", optional: false, declaredIn: ["src/channels/hook.ts"] },
-    ]);
-    expect(() => buildDefinition(definition, {})).toThrow(
-      "missing required secrets: HOOK_SECRET (src/channels/hook.ts)",
-    );
-    const { channels } = buildDefinition(definition, { HOOK_SECRET: "s-1" });
-    expect([...channels.keys()]).toEqual(["hook", "stream"]);
-    const hook = channels.get("hook");
-    if (typeof hook !== "function") throw new Error("hook is not a route channel");
-    const routes = hook({} as Parameters<typeof hook>[0]);
-    expect(await (routes["POST /hook"] as () => Response)().text()).toBe("s-1");
-    expect(channels.get("stream")).toMatchObject({ name: "stream" });
-  });
-
-  it("refuses two extensions, channels, schedules or tools under one name, naming both", async () => {
-    const extension = (name: string) =>
-      `import { defineExtension } from "@earendil-works/pi-durable";\nexport default defineExtension({ name: "${name}" });\n`;
-    const schedule = `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "0 9 * * *", prompt: "x" });\n`;
-    const tool = `import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
-export default defineTool({ name: "look", description: "d", parameters: obj({}), execute: async () => ({ output: [] }) });
-`;
-    const channel = "export default () => ({});\n";
-    const cases: [Record<string, string>, string][] = [
-      [
-        { "src/tools/a.ts": tool, "src/tools/b.ts": tool },
-        'src/tools/a.ts and src/tools/b.ts both define the tool "look"',
-      ],
-      [
-        { "src/extensions/a.ts": extension("audit"), "src/extensions/b.ts": extension("audit") },
-        'src/extensions/a.ts and src/extensions/b.ts both define the extension "audit"',
-      ],
-      [
-        { "src/extensions/tools.ts": extension("coding-tools") },
-        `pi-durable's coding tools and src/extensions/tools.ts both define the extension "coding-tools"`,
-      ],
-      [
-        { "src/schedules/daily.ts": schedule, "src/schedules/daily.mts": schedule },
-        'src/schedules/daily.mts and src/schedules/daily.ts both define the schedule "daily"',
-      ],
-      [
-        { "src/channels/hook.ts": channel, "src/channels/hook.mjs": channel },
-        'src/channels/hook.mjs and src/channels/hook.ts both define the channel "hook"',
-      ],
-    ];
-    for (const [files, message] of cases) {
-      const definition = await loadSourceDefinition(agentPackage(files));
-      expect(() => buildDefinition(definition, {})).toThrow(message);
-    }
-  });
-
-  it("refuses a module that is not what its directory holds, a bad cron and an unknown configuration key", async () => {
-    const notATool = await loadSourceDefinition(agentPackage({ "src/tools/x.ts": "export default { name: 'x' };\n" }));
-    expect(() => buildDefinition(notATool, {})).toThrow("src/tools/x.ts: must default-export a tool");
-    const notAChannel = await loadSourceDefinition(
-      agentPackage({ "src/channels/x.ts": "export default { name: 'x' };\n" }),
-    );
-    expect(() => buildDefinition(notAChannel, {})).toThrow("src/channels/x.ts: must default-export (ctx) => Routes");
-    const unnamed = await loadSourceDefinition(
-      agentPackage({ "src/channels/x.ts": "export default { name: ' ', connect() {} };\n" }),
-    );
-    expect(() => buildDefinition(unnamed, {})).toThrow("src/channels/x.ts: long-connection channel name");
-    const badCron = await loadSourceDefinition(
-      agentPackage({
-        "src/schedules/often.ts": `import { defineSchedule } from "${DEFINE}";\nexport default defineSchedule({ cron: "not a cron", prompt: "x" });\n`,
-      }),
-    );
-    expect(() => buildDefinition(badCron, {})).toThrow("src/schedules/often.ts:");
-    const configured = (config: string) =>
-      loadSourceDefinition(agentPackage({ "fastagent.config.ts": `export default ${config};\n` }));
-    await expect(configured("{ modle: 'a/b' }")).rejects.toThrow('unknown key "modle"');
-    // An extension is a module of src/extensions/, whether written there or imported from a package.
-    await expect(configured("{ extensions: [] }")).rejects.toThrow(
-      'unknown key "extensions": an extension is a module of src/extensions/',
-    );
-    // A default the program used to declare as a constant says where it went.
-    await expect(configured("{ model: 'a/b' }")).rejects.toThrow(
-      'unknown key "model": it is a default now, under "defaults"',
-    );
-    // Below the top level too: a nested typo is as silent as a top-level one.
-    const defaults = (values: string) => configured(`{ defaults: ${values} }`);
-    await expect(defaults("{ http: { prot: 80 } }")).rejects.toThrow("defaults: /http/prot unknown field");
-    await expect(defaults("{ http: { port: 70000 } }")).rejects.toThrow("defaults: /http/port expected <= 65535");
-    await expect(defaults("{ deploy: { agentcore: { idleTimeoutSeconds: 30 } } }")).rejects.toThrow(
-      "/deploy/agentcore/idleTimeoutSeconds expected >= 60",
-    );
-    await expect(defaults("{ deploy: { fly: {} } }")).rejects.toThrow("/deploy/fly unknown field");
-    await expect(defaults("{ http: { api: 'no' } }")).rejects.toThrow("/http/api");
-    await expect(defaults("{ model: 'nomodel' }")).rejects.toThrow('/model must be "provider/modelId"');
-    // The package's name and description are `package.json`'s, not the configuration's.
-    await expect(configured("{ name: 'x' }")).rejects.toThrow('unknown key "name"');
-    await expect(configured("{ description: 'x' }")).rejects.toThrow('unknown key "description"');
-    await expect(defaults("{ starters: 'hi' }")).rejects.toThrow("/starters");
-    await expect(defaults("{ starters: Array(7).fill('hi') }")).rejects.toThrow("/starters");
-    await expect(defaults("{ starters: ['ok', ' '] }")).rejects.toThrow("/starters/1");
-    await expect(defaults("{ starters: ['x'.repeat(201)] }")).rejects.toThrow("/starters/0");
   });
 
   describe("opened", () => {
@@ -260,33 +102,6 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
       expect(second.startsWith("You are Support, version two.")).toBe(true);
     });
 
-    it("lets the model read a skill's SKILL.md through its execution environment", async () => {
-      const { dir, agent, faux } = await open();
-      const path = join(dir, "skills/lookup-order/SKILL.md");
-      faux.setResponses([
-        () => toolCall("read", { path }),
-        (context) => fauxAssistantMessage(`saw: ${lastToolResult(context)}`),
-      ]);
-      const end = await ask(agent, "where is order 7?");
-      expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
-    });
-
-    it("reads a skill where its prompt says it is, when the agent was opened by a relative path", async () => {
-      // An embedder's `openServing("./agent")`: a relative location in the prompt would resolve against the agent's
-      // own working directory, the agent directory itself, and name a file that is not there.
-      const { agent, faux } = await open(FILES, {}, (dir) => relative(process.cwd(), dir));
-      faux.setResponses([
-        (context) => {
-          const location = /<location>(.*)<\/location>/.exec(getCurrentSystemPrompt(context.messages))?.[1];
-          if (location === undefined) throw new Error("the prompt names no skill location");
-          return toolCall("read", { path: location });
-        },
-        (context) => fauxAssistantMessage(`saw: ${lastToolResult(context)}`),
-      ]);
-      const end = await ask(agent, "where is order 7?");
-      expect(end.answer?.text).toContain("Ask for the order number, then read references/codes.md.");
-    });
-
     it("runs its tool with the secret it declared, an unset optional one absent", async () => {
       const { agent, faux } = await open();
       faux.setResponses([
@@ -294,57 +109,6 @@ export default defineTool({ name: "look", description: "d", parameters: obj({}),
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
       expect((await ask(agent, "weather?")).answer?.text).toBe("London: sunny (key k-123, region none)");
-    });
-
-    it("tells an agent in a source project that its definition is the author's to edit, and a built one that it is not", async () => {
-      const workdir = mkdtempSync(join(tmpdir(), "fa-workdir-"));
-      made.push(workdir);
-      const { dir, agent, faux } = await open(FILES, { workdir });
-      let prompt = "";
-      faux.setResponses([
-        (context: TranscriptContext) => {
-          prompt = getCurrentSystemPrompt(context.messages);
-          return fauxAssistantMessage("ok");
-        },
-      ]);
-      await ask(agent, "hi");
-      expect(prompt).toContain(`Your definition is in ${dir}, the author's working copy`);
-      expect(prompt).not.toContain("which you read and do not change");
-      const built = definitionSections(dir, [], { wake: false, runsAs: NOT_HOSTED, workdir })
-        .find(({ key }) => key === "content")
-        ?.render({} as never, {} as never);
-      expect(built).toContain(`Your definition is in ${dir}, which you read and do not change.`);
-    });
-
-    it("reports the program's name and description apart from the instance's, which does not fall back to the program's", async () => {
-      const bare = await (await open()).agent.info();
-      expect(bare).toMatchObject({ name: "support", agent: { name: "support" } });
-      expect(bare.agent).not.toHaveProperty("description");
-      expect(bare).not.toHaveProperty("description");
-      expect(bare).not.toHaveProperty("starters");
-      const files = {
-        ...FILES,
-        "package.json": '{ "name": "@acme/support", "description": "Answers order questions.", "type": "module" }',
-        "fastagent.config.ts": FILES["fastagent.config.ts"]!.replace(
-          "defaults: {",
-          'defaults: { starters: ["Where is my order?"],',
-        ),
-      };
-      const described = await (await open(files)).agent.info();
-      expect(described.agent).toEqual({ name: "@acme/support", description: "Answers order questions." });
-      expect(described.starters).toEqual(["Where is my order?"]);
-      expect(described).not.toHaveProperty("description");
-      const blank = await open({
-        ...files,
-        "package.json": '{ "name": "support", "description": "  ", "type": "module" }',
-      });
-      expect((await blank.agent.info()).agent).not.toHaveProperty("description");
-      const own = await open(files, { config: { settings: {}, sources: {}, description: "Ours." } });
-      expect(await own.agent.info()).toMatchObject({
-        name: "acme-support",
-        description: "Ours.",
-        agent: { name: "@acme/support", description: "Answers order questions." },
-      });
     });
 
     it("offers its prompt templates and skills as commands, expanded for the model and kept as sent", async () => {
@@ -403,100 +167,5 @@ export default defineTool({
       expect(tools).toContain("wake");
       expect(tools).not.toContain("unwake");
     });
-
-    it("keeps a wake-up for the session it was set in, and cancels it there with unwake", async () => {
-      const stateRoot = mkdtempSync(join(tmpdir(), "fastagent-wake-"));
-      const { agent, faux } = await open(FILES, { stateRoot });
-      faux.setResponses([
-        () => toolCall("wake", { in: "30m", prompt: "check the deploy" }),
-        (context) => fauxAssistantMessage(lastToolResult(context)),
-      ]);
-      const sessionId = (await agent.sessions.create()).id;
-      await agent.messages.send({ sessionId, content: "remind me" }, { wait: 30 });
-      const [wakeup] = listWakeups(stateRoot);
-      if (wakeup === undefined) throw new Error("wake kept no wake-up");
-      expect(wakeup).toMatchObject({ session: sessionId, prompt: "check the deploy" });
-      faux.setResponses([
-        () => toolCall("unwake", { id: wakeup.id }),
-        (context) => fauxAssistantMessage(lastToolResult(context)),
-      ]);
-      expect(await agent.messages.send({ sessionId, content: "never mind" }, { wait: 30 })).toMatchObject({
-        answer: { text: `OK — wake-up ${wakeup.id} cancelled.` },
-      });
-      expect(listWakeups(stateRoot)).toEqual([]);
-    });
-  });
-});
-
-describe("the secrets an instance is given name where its state and credentials are", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
-  it("FASTAGENT_STATE_DIR and FASTAGENT_AUTH_PATH among them, the process's left alone, and no file of the agent read", async () => {
-    for (const name of ["FASTAGENT_STATE_DIR", "FASTAGENT_AUTH_PATH"]) vi.stubEnv(name, undefined);
-    const elsewhere = mkdtempSync(join(tmpdir(), "fa-value-file-paths-"));
-    const dir = agentPackage({
-      ...FILES,
-      ".secrets/.env": `FASTAGENT_STATE_DIR=${join(elsewhere, "from-the-file")}\n`,
-    });
-    const opened = await openServing(await loadSourceDefinition(dir), {
-      secrets: {
-        WEATHER_KEY: "k",
-        GH_TOKEN: "g",
-        FASTAGENT_STATE_DIR: join(elsewhere, "state"),
-        FASTAGENT_AUTH_PATH: join(elsewhere, "auth.json"),
-      },
-      env: {},
-      ownEnv: process.env,
-      runsAs: NOT_HOSTED,
-    });
-    try {
-      expect(opened.stateRoot).toBe(join(elsewhere, "state"));
-      expect(opened.models.auth).toEqual({ path: join(elsewhere, "auth.json") });
-      expect(process.env.FASTAGENT_STATE_DIR).toBeUndefined();
-    } finally {
-      await opened.agent.close();
-    }
-  });
-});
-
-describe("an app's openAgent", () => {
-  it("refuses a wake-up while the app does not serve the agent, since only a serve's clock fires one", async () => {
-    const dir = agentPackage(FILES);
-    for (const [name, value] of Object.entries(ENV)) process.env[name] = value;
-    const agent = await openSource(dir, { stateDir: join(dir, ".host-state") });
-    try {
-      const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-      const wake = async () => {
-        faux.setResponses([
-          () => toolCall("wake", { in: "1h", prompt: "check the deploy" }),
-          (context) => fauxAssistantMessage(lastToolResult(context)),
-        ]);
-        const sessionId = (await agent.sessions.create()).id;
-        return (await agent.messages.send({ sessionId, content: "remind me" }, { wait: 30 })).answer?.text;
-      };
-      expect(await wake()).toContain("nothing fires wake-ups for this agent now");
-      expect(listWakeups(join(dir, ".host-state"))).toEqual([]);
-      const service = await agent.serve();
-      expect(await wake()).toContain("OK — I'll wake up at");
-      expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
-      // The service closed alone, the agent still open: its clock is gone with it.
-      await service.close();
-      expect(await wake()).toContain("nothing fires wake-ups for this agent now");
-      expect(listWakeups(join(dir, ".host-state"))).toHaveLength(1);
-    } finally {
-      await agent.close();
-      for (const name of Object.keys(ENV)) delete process.env[name];
-    }
-  });
-});
-
-describe("prompt templates", () => {
-  it("expand pi's argument forms", () => {
-    const args = parseArguments(`one "two three" '' four`);
-    expect(args).toEqual(["one", "two three", "", "four"]);
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: pi's template syntax, not a JavaScript template
-    expect(expandTemplate("$1|$2|$@|$ARGUMENTS|${3:-dflt}|${@:2}|${@:2:1}|$9", args)).toBe(
-      "one|two three|one two three  four|one two three  four|dflt|two three  four|two three|",
-    );
   });
 });

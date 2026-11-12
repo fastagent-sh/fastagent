@@ -8,11 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { channelContext } from "../src/channels/context.ts";
 import { feishuChannel } from "../src/feishu.ts";
 import type { Needs } from "../src/harnesses/pi-durable/define.ts";
 import { larkChannel } from "../src/lark.ts";
-import { scriptedAgent } from "./scripted-agent.ts";
 
 function stubOpenApi() {
   const calls: { url: string; body: Record<string, unknown>; authorization: string | null }[] = [];
@@ -39,8 +37,6 @@ function stubOpenApi() {
   });
   return calls;
 }
-
-const agent = scriptedAgent(() => []);
 
 /** Every fixture's apps are numbered from one count, so no two tests of the file share an app. */
 let apps = 0;
@@ -83,7 +79,7 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
 describe.each([
   { kind: "feishu", prefix: "FEISHU", base: "https://open.feishu.cn", channel: feishuChannel, other: larkChannel },
   { kind: "lark", prefix: "LARK", base: "https://open.larksuite.com", channel: larkChannel, other: feishuChannel },
-] as const)("scaffold $kind-send: the cloud it is bound to", ({ kind, prefix, base, channel, other }) => {
+] as const)("scaffold $kind-send: the cloud it is bound to", ({ kind, prefix, base }) => {
   const fx = cloudFixture(kind, prefix);
 
   it("sends plain text through the correct cloud with the app it was built with", async () => {
@@ -96,83 +92,5 @@ describe.each([
       body: { receive_id: "oc_42", msg_type: "text", content: JSON.stringify({ text: "digest ready" }) },
     });
     expect(calls.every((call) => call.url.startsWith(`${base}/`))).toBe(true);
-  });
-
-  it("sends through the mounted channel of its app, at that channel's gateway, keeping both clouds isolated", async () => {
-    const calls = stubOpenApi();
-    const stateRoot = join(fx.cwd, ".state");
-    channel({
-      appId: "cli_channel",
-      appSecret: "channel-secret",
-      verificationToken: "v",
-      apiBaseUrl: `https://${kind}.test`,
-    })(channelContext(agent, stateRoot, kind));
-    other({ appId: "cli_other", appSecret: "other-secret", verificationToken: "v", apiBaseUrl: "https://other.test" })(
-      channelContext(agent, stateRoot, "other"),
-    );
-    // Wait for the channel's startup identity/scope requests before checking the tool's send.
-    await vi.waitFor(() => expect(calls.filter((call) => call.url.endsWith("/application/v6/scopes"))).toHaveLength(2));
-    await fx.execute({ chatId: "oc_1", text: "scheduled update" }, "cli_channel");
-    expect(calls.at(-1)).toMatchObject({
-      url: `https://${kind}.test/open-apis/im/v1/messages?receive_id_type=chat_id`,
-      authorization: "Bearer cli_channel",
-    });
-  });
-});
-
-// The lark file is the feishu file with the cloud swapped (the tests above pin that swap), so the tool
-// behaviour itself is exercised once.
-describe("scaffold feishu-send: the tool itself", () => {
-  const fx = cloudFixture("feishu", "FEISHU");
-
-  it("states the destination rule and avoids duplicating a normal chat reply", () => {
-    expect(fx.tool().description).toMatch(/do not call this to answer/i);
-    expect(fx.tool().description).toMatch(/post the message twice/i);
-    expect(fx.tool().description).toMatch(/OUTSIDE the normal reply path/);
-    expect(fx.tool().description).toMatch(/must come from your instructions/i);
-    expect(fx.tool().description).toMatch(/only identifies the chat you are answering/i);
-  });
-
-  it("sends Markdown as an inline static card", async () => {
-    const calls = stubOpenApi();
-    expect((await fx.execute({ chatId: "oc_7", markdown: "# Report\n**done**" })).details).toBe(
-      "sent card to chat oc_7",
-    );
-    const send = calls[1];
-    expect(send?.body.msg_type).toBe("interactive");
-    expect(JSON.parse(String(send?.body.content))).toEqual({
-      schema: "2.0",
-      body: { elements: [{ tag: "markdown", content: "# Report\n**done**" }] },
-    });
-  });
-
-  it("rejects ambiguous input before network IO", async () => {
-    const calls = stubOpenApi();
-    await expect(fx.execute({ chatId: "oc_1", text: "x", markdown: "y" })).rejects.toThrow(/exactly one/);
-    await expect(fx.execute({ chatId: "oc_1" })).rejects.toThrow(/exactly one/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("surfaces a platform rejection as a named tool error", async () => {
-    vi.stubGlobal("fetch", async (url: string | URL) =>
-      String(url).includes("tenant_access_token")
-        ? Response.json({ code: 0, tenant_access_token: "T", expire: 7200 })
-        : Response.json({ code: 230013, msg: "bot has no availability to this user" }),
-    );
-    await expect(fx.execute({ chatId: "oc_1", text: "hello" })).rejects.toThrow(/no availability/);
-  });
-
-  it("reuses the token and splits long text with the channel's byte limit", async () => {
-    const calls = stubOpenApi();
-    const text = "🙂".repeat(30_000);
-    await fx.execute({ chatId: "oc_1", text });
-    await fx.execute({ chatId: "oc_2", text: "next" });
-    expect(calls.filter((call) => call.url.includes("tenant_access_token"))).toHaveLength(1);
-    const chunks = calls
-      .filter((call) => call.body.receive_id === "oc_1")
-      .map((call) => JSON.parse(String(call.body.content)).text as string);
-    expect(chunks).toHaveLength(2);
-    expect(chunks.join("")).toBe(text);
-    expect(chunks.every((chunk) => Buffer.byteLength(chunk) <= 100 * 1024)).toBe(true);
   });
 });

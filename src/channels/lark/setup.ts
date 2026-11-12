@@ -16,7 +16,7 @@ import { cloudFor } from "../feishu/cloud.ts";
  * scopes and the event the channel needs arrive with the app, so nothing is ticked in the console afterwards. A tenant
  * may still withhold a scope; the permission check that follows creation names it.
  */
-export function larkLauncherUrl(way: SetupWay): string {
+function larkLauncherUrl(way: SetupWay): string {
   const url = new URL("https://open.larksuite.com/page/launcher");
   url.searchParams.set("from", "backend_oneclick");
   url.searchParams.set("addons", encodeAddons(feishuAppAddons(way)));

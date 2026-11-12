@@ -19,7 +19,7 @@ const CODE_DIR = "src";
 const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, context.json, fastagent.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
-export function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
+function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
   // The `.env` is allow-listed by its RESOLVED path, not by the `.secrets` name.
   const envRel = relative(root, envFile).split(sep);
   return (path: string): boolean => {

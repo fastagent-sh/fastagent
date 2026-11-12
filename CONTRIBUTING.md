@@ -29,6 +29,22 @@ paths only Linux takes (`flock`, `dpkg`, `/proc`) that a run on macOS skips.
 
 Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
 
+## What the suite tests
+
+The suite holds the spec's cases, not the code's. A test shows a contract a user relies on, as `docs/` writes it (the
+Agent API in `docs/SPEC.md`, a command in `docs/cli.md`, a channel in its guide and `docs/design/participant-model.md`,
+a host in `docs/deploy.md`), through the entry that user has: the Agent API, a CLI command, a package export, a
+channel's ingress, the files a command writes.
+
+- One test for a contract's main case, and one for each refusal the docs promise.
+- A security boundary keeps its test: a signature or key checked, a URL refused, a secret kept out of argv, an image
+  and a page.
+- The structure guards the repository's rules name (`package-boundary.test.ts`, `test-tiers.test.ts`) stay, and so does
+  each double's integration test.
+- Not tested: a module on its own, a state file's format, a state written by hand to stand for a crash, the order calls
+  reach a module or a host CLI, retries, races, and wording past what a user acts on. A bug found there is fixed with
+  the case that shows it at an entry, when one does.
+
 ## Test tiers
 
 A test's tier is decided by what it uses, so the test infrastructure can check it, rather than by how much code it
@@ -68,8 +84,8 @@ How the boundary is kept:
 - Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
   in-process CLI (`runInProcess`), a stubbed `fetch`, `test/git-double.ts` for `src/git.ts`, `test/tsc-double.ts` for
   the build's compiler, `test/host-cli-double.ts` for the host CLIs (`src/deploy/runner.ts`), `test/storage-no-wait.ts`
-  for a held database. A ticket's command and step run in process apart (`cli-login-ticket.test.ts`). A double gets one integration test that checks it
-  against the real thing, as `cli-run-parity.integration.test.ts` does for `runInProcess`.
+  for a held database. A ticket's command and step run in process apart (`startTicket` mocked to record, the step as
+  `--ticket <id>`). A double gets one integration test that checks it against the real thing, as `cli-run-parity.integration.test.ts` does for `runInProcess`.
 - A subject tested in both tiers is two files, `<name>.test.ts` and `<name>.integration.test.ts`; what both need is in
   `<name>-fixtures.ts`.
 

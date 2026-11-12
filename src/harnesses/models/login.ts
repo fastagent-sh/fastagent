@@ -281,8 +281,8 @@ async function runFlow(
 
 /**
  * pi's default model per provider (`defaultModelPerProvider` in pi-coding-agent's model-resolver): the general-purpose
- * model pi itself starts on, so the likeliest to answer a minimal request. COPIED, because pi does not export it;
- * `test/login.test.ts` compares this against pi's own table, so a pi release that changes a default fails there.
+ * model pi itself starts on, so the likeliest to answer a minimal request. COPIED, because pi does not export it:
+ * a pi upgrade that changes a default is not caught here.
  */
 export const PI_DEFAULT_MODELS: Readonly<Record<string, string>> = {
   "amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",

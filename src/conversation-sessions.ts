@@ -16,7 +16,7 @@ import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 type SessionsAgent = { sessions: Pick<Agent["sessions"], "get" | "create"> };
 
 /** A new, empty session: what a conversation the agent has not talked in starts with. */
-export async function newSession(agent: SessionsAgent): Promise<string> {
+async function newSession(agent: SessionsAgent): Promise<string> {
   const created = await agent.sessions.create().catch((error: unknown) => {
     if (!(error instanceof AgentError)) throw error;
     throw new AgentError({ ...error, message: `creating a session failed: ${error.message}` });

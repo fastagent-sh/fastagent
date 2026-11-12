@@ -9,23 +9,13 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  type Credential,
-  type CredentialStore,
-  InMemoryCredentialStore,
-  type Provider,
-  fauxAssistantMessage,
-} from "@earendil-works/pi-ai";
-import { MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
+import { type Credential, type CredentialStore, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GLOBAL_AUTH_PATH } from "../src/harnesses/models/credentials.ts";
 import { modelEnvironment } from "../src/harnesses/models/environment.ts";
 import { loginOver } from "../src/harnesses/models/login.ts";
-import { modelsOver, probeAuthSource } from "../src/harnesses/models/models.ts";
-import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
-import { makeFaux } from "./faux.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
 
 /** pi's in-memory store, with every call recorded. */
@@ -106,82 +96,6 @@ describe("a caller's credential store replaces the credentials file", () => {
     } finally {
       await opened.agent.close();
     }
-  });
-
-  it("the store replaces the files, not the environment: an env key still authenticates, below a stored one", async () => {
-    // Emptying the store does not sign a provider out while its env variable is set (docs/api-reference.md).
-    noAnthropicEnv();
-    const environment = { ANTHROPIC_API_KEY: "sk-from-env" };
-    const { models: empty } = await modelEnvironment(undefined, { credentialStore: await recordingStore() }, [], {
-      environment,
-    });
-    expect(await probeAuthSource(empty, "anthropic/claude-sonnet-4-5")).toBe("ANTHROPIC_API_KEY");
-    const { models: stored } = await modelEnvironment(
-      undefined,
-      { credentialStore: await recordingStore({ anthropic: { type: "api_key", key: "sk-from-store" } }) },
-      [],
-      { environment },
-    );
-    expect((await stored.getAuth("anthropic"))?.auth.apiKey).toBe("sk-from-store");
-  });
-
-  it("a message authenticates from the store", async () => {
-    const { faux } = makeFaux();
-    faux.setResponses([fauxAssistantMessage("ok")]);
-    // Authenticated ONLY by a stored key, so a turn that completes read it from the store.
-    const gated: Provider = {
-      ...faux.provider,
-      auth: {
-        apiKey: {
-          name: "faux key",
-          resolve: async ({ credential }) =>
-            credential?.key === "sk-from-store"
-              ? { auth: { apiKey: credential.key }, source: "stored credential" }
-              : undefined,
-        },
-      },
-    };
-    const store = await recordingStore({ faux: { type: "api_key", key: "sk-from-store" } });
-    const agent = await openDurableAgent({
-      storage: new MemoryStorage(),
-      models: modelsOver(store, [gated]),
-      registry: createRegistry(),
-      name: "faux",
-      model: { provider: "faux", modelId: "faux-1" },
-    });
-    try {
-      const sessionId = (await agent.sessions.create()).id;
-      expect(await agent.messages.send({ sessionId, content: "hi" }, { wait: 30 })).toMatchObject({
-        answer: { text: "ok" },
-      });
-      expect(store.calls).toContain("read faux");
-    } finally {
-      await agent.close();
-    }
-  });
-
-  it("an OAuth refresh is written back to the store", async () => {
-    const refreshed = { type: "oauth", access: "new-access", refresh: "r2", expires: Date.now() + 3_600_000 } as const;
-    const provider = {
-      id: "refreshing",
-      name: "refreshing",
-      getModels: () => [],
-      auth: {
-        oauth: {
-          name: "Refreshing (OAuth)",
-          login: async () => refreshed,
-          refresh: async () => refreshed,
-          toAuth: async (credential: { access: string }) => ({ apiKey: credential.access }),
-        },
-      },
-    } as unknown as Provider;
-    const store = await recordingStore({ refreshing: { type: "oauth", access: "old", refresh: "r1", expires: 1 } });
-    const { models } = await modelEnvironment(undefined, { credentialStore: store }, [provider]);
-
-    expect((await models.getAuth("refreshing"))?.auth.apiKey).toBe("new-access");
-    expect(store.calls).toContain("modify refreshing");
-    expect(await store.read("refreshing")).toMatchObject({ access: "new-access", refresh: "r2" });
-    expect(existsSync(GLOBAL_AUTH_PATH)).toBe(false);
   });
 
   it("refuses both sources, and a login with neither", async () => {

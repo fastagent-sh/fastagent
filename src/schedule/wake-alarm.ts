@@ -36,7 +36,7 @@ export function rememberWakeAlarmUrl(stateRoot: string, url: string): void {
 }
 
 /** The persisted forwarder URL, or undefined before the first envelope ever seen. */
-export function readWakeAlarmUrl(stateRoot: string): string | undefined {
+function readWakeAlarmUrl(stateRoot: string): string | undefined {
   try {
     const v = JSON.parse(readFileSync(scheduleFile(stateRoot, URL_FILE), "utf8")) as { url?: unknown };
     if (typeof v?.url !== "string" || v.url === "") throw new Error("expected a nonempty url string");
@@ -51,13 +51,13 @@ export function readWakeAlarmUrl(stateRoot: string): string | undefined {
  * How many times one alarm sync is retried before giving up (each store mutation and every boot restart the cycle, and
  * the pending store is the durable desired state — so "give up" means "until the next mirror", never "lost").
  */
-export const MAX_SYNC_ATTEMPTS = 5;
+const MAX_SYNC_ATTEMPTS = 5;
 const RETRY_BASE_MS = 2_000;
 /**
  * After a whole sync gives up, how long until it is tried again, for as long as this process lives. Outside the busy
  * count, so a container that is only waiting to retry can still be reclaimed; its next start mirrors again.
  */
-export const HEAL_MS = 5 * 60_000;
+const HEAL_MS = 5 * 60_000;
 const SYNC_TIMEOUT_MS = 10_000;
 /** Alarms due within this margin are NOT mirrored. */
 const DUE_MARGIN_MS = 5_000;
@@ -70,7 +70,7 @@ const DUE_MARGIN_MS = 5_000;
  * mirrors its next instant right after: an id reused for it would update the alarm EventBridge is about to delete,
  * and the next instant would be deleted with it. With one id per instant, mirroring again is idempotent.
  */
-export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
+function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
   const earliest = now.getTime() + DUE_MARGIN_MS;
   return pending
     .filter((w) => Date.parse(w.fireAt) > earliest)
@@ -81,7 +81,7 @@ export function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
  * Each armed schedule → the recurring EventBridge schedule that fires it. Discovery admits only a cron that
  * translates (schedule/discover.ts), so one that does not here is a defect, and throws.
  */
-export function toRecurring(schedules: readonly Schedule[]): RecurringSchedule[] {
+function toRecurring(schedules: readonly Schedule[]): RecurringSchedule[] {
   return schedules.map((s) => {
     const translated = toEventBridgeCron(s.cron);
     if ("error" in translated) throw new Error(`schedule "${s.name}" has no EventBridge form: ${translated.error}`);

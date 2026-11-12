@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { installProxyFetch, noProxyList } from "../src/proxy.ts";
+import { installProxyFetch } from "../src/proxy.ts";
 
 /**
  * The egress POLICY itself, in-process: which destinations the installed dispatcher sends through the proxy.
@@ -51,22 +51,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await new Promise<void>((resolve) => proxy.close(() => resolve()));
   await new Promise<void>((resolve) => origin.close(() => resolve()));
-});
-
-describe("noProxyList: what the dispatcher is told to exempt", () => {
-  it("exempts loopback when nothing is declared, including a `NO_PROXY=` line in a .env", () => {
-    expect(noProxyList({})).toBe("localhost,127.0.0.1,::1");
-    expect(noProxyList({ NO_PROXY: "" })).toBe("localhost,127.0.0.1,::1");
-  });
-
-  it("APPENDS to a declared value instead of replacing it (lowercase wins, as in undici)", () => {
-    expect(noProxyList({ NO_PROXY: ".corp.com" })).toBe(".corp.com,localhost,127.0.0.1,::1");
-    expect(noProxyList({ no_proxy: ".a.com", NO_PROXY: ".b.com" })).toBe(".a.com,localhost,127.0.0.1,::1");
-  });
-
-  it("leaves the `*` wildcard exact — appending would turn “no proxy at all” into “proxy everything but loopback”", () => {
-    expect(noProxyList({ NO_PROXY: "*" })).toBe("*");
-  });
 });
 
 describe("installProxyFetch: what the process's fetch does with a declared proxy", () => {

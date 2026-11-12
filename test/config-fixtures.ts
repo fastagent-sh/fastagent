@@ -4,7 +4,7 @@ import { openAgent } from "../src/harnesses/pi-durable/serve.ts";
 
 export const made: string[] = [];
 
-export const SETTINGS = obj({ repo: str(), digestChannel: opt(str()), retries: opt(int({ minimum: 0 })) });
+const SETTINGS = obj({ repo: str(), digestChannel: opt(str()), retries: opt(int({ minimum: 0 })) });
 
 export const program = (config: object) =>
   defineDefinition({

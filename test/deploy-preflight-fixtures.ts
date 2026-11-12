@@ -30,7 +30,7 @@ export async function agent(files: Record<string, string> = {}): Promise<string>
 /** The values of a configuration a test sets; the rest is what an empty one resolves to. */
 export type FastagentConfig = Pick<EffectiveConfig, "model" | "thinkingLevel" | "http" | "deploy">;
 
-export const empty = resolveConfig(
+const empty = resolveConfig(
   defineDefinition({
     format: 1,
     builtWith: "0.0.0",

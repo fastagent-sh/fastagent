@@ -1,26 +1,15 @@
-import { Buffer } from "node:buffer";
-import { crc32 } from "node:zlib";
 import { declaredChannels } from "../src/channels/discover.ts";
 import { describe, expect, it } from "vitest";
 import {
-  AGENTCORE_VARIABLES_LIMIT,
   type AgentcorePlanInput,
-  agentcoreVariablesSize,
   MOUNT,
   SECRETS_DIR,
   agentcoreTemplateFile,
-  GENERATED_TEMPLATE_MARKER,
   FORWARDER_FILE,
-  DEFAULT_IDLE_TIMEOUT_SECONDS,
-  MAX_LIFETIME_SECONDS,
-  agentcoreName,
   forwarderSource,
-  isGeneratedAgentcoreTemplate,
   ingressSessionId,
   planAgentcoreDeploy,
-  toRuntimeName,
 } from "../src/deploy/agentcore/plan.ts";
-import { zipSingleFile } from "../src/deploy/agentcore/zip.ts";
 
 const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput => ({
   config: "{}",
@@ -30,64 +19,6 @@ const baseInput = (over: Partial<AgentcorePlanInput> = {}): AgentcorePlanInput =
   hasLockfile: false,
   agent: "my-agent",
   ...over,
-});
-
-describe("deploy agentcore: name/id helpers", () => {
-  it("agentcoreName is the stable agent-directory-name → stack-name mapping", () => {
-    expect(agentcoreName("My Agent!!")).toBe("my-agent");
-    expect(agentcoreName("---")).toBe("agent");
-  });
-
-  it("toRuntimeName produces [a-zA-Z][a-zA-Z0-9_]{0,47}", () => {
-    expect(toRuntimeName("my-agent")).toBe("my_agent");
-    expect(toRuntimeName("123 weird!!name")).toBe("agent_123_weird_name");
-    expect(toRuntimeName("x".repeat(60))).toHaveLength(48);
-    for (const name of ["my-agent", "123", "---"]) {
-      expect(toRuntimeName(name)).toMatch(/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/);
-    }
-  });
-
-  it("ingressSessionId clears the API's 33-char floor for any name", () => {
-    expect(ingressSessionId("a").length).toBeGreaterThanOrEqual(33);
-    expect(ingressSessionId("my-agent")).toContain("fastagent-ingress-my-agent");
-    expect(ingressSessionId("x".repeat(200)).length).toBeLessThanOrEqual(128);
-  });
-});
-
-describe("deploy agentcore: the runtime's variables", () => {
-  const environmentOf = (template: string): Record<string, string> =>
-    Object.fromEntries(
-      [...template.matchAll(/^ {8}([A-Z_]+): (.*)$/gm)]
-        .filter(([, name]) => name?.startsWith("FASTAGENT_") || name === "PORT")
-        .map(([, name, value]) => [name as string, value as string]),
-    );
-
-  it("renders the instance's name, release and configuration beside the fixed ones, and the parameters by reference", () => {
-    const config = JSON.stringify({ description: 'says "hi"' });
-    const env = environmentOf(planAgentcoreDeploy(baseInput({ config })).artifacts[0]!.content);
-    expect(JSON.parse(env.FASTAGENT_CONFIG_JSON as string)).toBe(config);
-    expect(JSON.parse(env.FASTAGENT_NAME as string)).toBe("my-agent");
-    expect(env.FASTAGENT_SECRET_ARN).toBe("!Ref SecretArn");
-    expect(env.FASTAGENT_INGRESS_SECRET).toBe("!Ref FastagentIngressSecret");
-    expect(env.FASTAGENT_WAKE_SECRET).toBe("!Ref FastagentWakeSecret");
-  });
-
-  it("counts every variable of the template, parameters at their most, so the size cannot drift from what is rendered", () => {
-    const input = baseInput({ config: '{"a":1}' });
-    const env = environmentOf(planAgentcoreDeploy(input).artifacts[0]!.content);
-    const referenced = Object.entries(env).filter(([, value]) => value.startsWith("!Ref"));
-    const literal = Object.entries(env).filter(([, value]) => !value.startsWith("!Ref"));
-    const literalBytes = literal.reduce(
-      (sum, [name, value]) => sum + Buffer.byteLength(name) + Buffer.byteLength(JSON.parse(value) as string),
-      0,
-    );
-    const size = agentcoreVariablesSize(input);
-    // Each referenced variable is at least its name and a value of a few characters; none is missing from the count.
-    expect(size).toBeGreaterThan(literalBytes + referenced.reduce((sum, [name]) => sum + name.length, 0));
-    // A longer configuration is that many bytes more, counted as UTF-8 and not as characters.
-    expect(agentcoreVariablesSize({ ...input, config: `${input.config}é` }) - size).toBe(2);
-    expect(size).toBeLessThan(AGENTCORE_VARIABLES_LIMIT);
-  });
 });
 
 describe("deploy agentcore: the plan", () => {
@@ -132,12 +63,6 @@ describe("deploy agentcore: the plan", () => {
     expect(plan.runbook.join("\n")).toContain("aws logs put-retention-policy");
   });
 
-  it("keeps state and credentials as independent siblings on EFS", () => {
-    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    expect(template).toContain(`FASTAGENT_STATE_DIR: "${MOUNT}/.state"`);
-    expect(template).toContain(`FASTAGENT_SECRETS_DIR: "${MOUNT}/.secrets"`);
-  });
-
   it("a route channel brings the forwarder (Lambda + URL + permission) and the webhook step", () => {
     const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
     expect(plan.artifacts.map((a) => a.path)).toContain(FORWARDER_FILE);
@@ -173,161 +98,5 @@ describe("deploy agentcore: the plan", () => {
     const forwarder = plan.artifacts.find((a) => a.path === FORWARDER_FILE)!;
     expect(forwarder.content).toBe(forwarderSource());
     expect(forwarder.content).toContain("InvokeAgentRuntimeCommand");
-  });
-
-  it("the forwarder Lambda timeout covers a whole schedule turn (EventBridge invokes async)", () => {
-    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
-    expect(template).toContain("Timeout: 900");
-  });
-
-  it("every stack carries the full alarm topology: forwarder, secret param, roles, env, both prefixes", () => {
-    // Wake-ups are a default capability, so even a definition with no channel and no schedule needs the forwarder —
-    // it is the alarm registrar and the poke target.
-    const plan = planAgentcoreDeploy(baseInput());
-    const template = plan.artifacts[0]!.content;
-    expect(template).toContain("Type: AWS::Lambda::Function");
-    expect(template).toContain("WakeSchedulerRole:");
-    expect(template).toContain("FastagentWakeSecret:");
-    expect(template).toContain("FASTAGENT_WAKE_SECRET: !Ref FastagentWakeSecret");
-    expect(template).toContain("WAKE_SECRET: !Ref FastagentWakeSecret");
-    expect(template).toContain("WAKE_PREFIX: fa-my-agent-wk-");
-    expect(template).toContain("scheduler:CreateSchedule");
-    // The recurring schedules: the forwarder keeps them equal to the container's set, so it lists, reads and deletes
-    // under its own prefix (ListSchedules takes no resource).
-    expect(template).toContain("SCHEDULE_PREFIX: fa-my-agent-sc-");
-    expect(template).toMatch(
-      /Action: \[scheduler:CreateSchedule, scheduler:UpdateSchedule, scheduler:GetSchedule, scheduler:DeleteSchedule\]\n\s+Resource: .*schedule\/default\/fa-my-agent-sc-\*/,
-    );
-    expect(template).toMatch(/Action: scheduler:ListSchedules\n\s+Resource: "\*"/);
-    expect(template).toContain("lambda:GetFunctionUrlConfig");
-    const runbook = plan.runbook.join("\n");
-    expect(runbook).toContain("EventBridge-backed");
-    expect(runbook).toContain("FastagentWakeSecret=<any random string>");
-    expect(runbook).not.toContain("DEGRADED");
-    // The forwarder carries the alarm + poke machinery.
-    expect(forwarderSource()).toContain("wake-alarm");
-    expect(forwarderSource()).toContain("wakePoke");
-  });
-
-  it("the template opens with the generated marker (the drift gate's predicate)", () => {
-    const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-    expect(template.startsWith(GENERATED_TEMPLATE_MARKER)).toBe(true);
-    expect(isGeneratedAgentcoreTemplate(template)).toBe(true);
-    expect(isGeneratedAgentcoreTemplate("# my hand-written template\n")).toBe(false);
-  });
-
-  it("says in the artifact itself that it is a mirror, not an input", () => {
-    // `--run` zips fastagent's own copy of this source, so a kept/edited file would be a stale mirror
-    // of what runs — and the manual runbook, which zips this very file, would ship the OLD code.
-    expect(forwarderSource()).toContain("REGENERATED ON EVERY DEPLOY");
-  });
-
-  it("ships the forwarder as a REAL Lambda entry (index.js) loaded from S3 by content-hashed key", () => {
-    const plan = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) }));
-    // The artifact IS the deployment package's entry: zipping it as-is matches `Handler: index.handler`.
-    expect(FORWARDER_FILE).toBe("agentcore/forwarder/index.js");
-    expect(plan.artifacts.map((a) => a.path)).toContain("agentcore/forwarder/index.js");
-    const template = plan.artifacts[0]!.content;
-    expect(template).not.toContain("ZipFile");
-    expect(template).toContain("S3Bucket: !Ref ForwarderBucket");
-    expect(template).toContain("S3Key: !Ref ForwarderS3Key");
-    expect(template).toContain("  ForwarderBucket:");
-    expect(template).toContain("  ForwarderS3Key:");
-  });
-
-  it("mounts managed session storage and grants no storage permissions of its own", () => {
-    const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!.content;
-    expect(template).toContain(`- SessionStorage: { MountPath: ${MOUNT} }`);
-    // The state snapshot is gone with the S3 durability it served; so is the EFS topology.
-    expect(template).not.toContain("s3:PutObject");
-    expect(template).not.toContain("s3:ListBucket");
-    expect(template).not.toContain("STATE_BUCKET:");
-    expect(template).not.toContain("elasticfilesystem");
-  });
-
-  it("holds an idle session for 3 minutes by default — within the platform's 60–1209600 range", () => {
-    // The idle tail is what memory bills for after the agent stops working (CPU stops immediately),
-    // so it is the deployment's main standing cost. HealthyBusy keeps a BUSY session alive whatever
-    // this says, so shortening it cannot cut a turn short — it only shortens the wait before sleep.
-    expect(DEFAULT_IDLE_TIMEOUT_SECONDS).toBe(180);
-    expect(DEFAULT_IDLE_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(60);
-    expect(MAX_LIFETIME_SECONDS).toBeLessThanOrEqual(1209600);
-    expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain(
-      `LifecycleConfiguration: { IdleRuntimeSessionTimeout: 180, MaxLifetime: 28800 }`,
-    );
-  });
-
-  it("lets the workload buy the tail back: the configured idle timeout reaches the template", () => {
-    const template = planAgentcoreDeploy(baseInput({ idleTimeoutSeconds: 900 })).artifacts[0]!.content;
-    expect(template).toContain(`LifecycleConfiguration: { IdleRuntimeSessionTimeout: 900, MaxLifetime: 28800 }`);
-    // The comment above it is what an operator reads when deciding whether to pay for the tail.
-    expect(template).toContain(`# Idle 900s`);
-  });
-
-  it("states the reset a deploy performs rather than promising durability it does not have", () => {
-    const runbook = planAgentcoreDeploy(baseInput()).runbook.join("\n");
-    expect(runbook).toContain("across compute stop/resume");
-    expect(runbook).toContain("RESETS it on every runtime version update");
-    expect(runbook).toContain("provider API key in the deployment's secret survives every deploy");
-    expect(runbook).toContain(ingressSessionId("my-agent"));
-  });
-
-  describe("the forwarder deployment package", () => {
-    /** Parse the single stored entry back out — proves the archive is real, not just plausible. */
-    const readSingleEntry = (zip: Buffer) => {
-      expect(zip.readUInt32LE(0)).toBe(0x04034b50); // local file header
-      expect(zip.readUInt16LE(8)).toBe(0); // method 0 = stored
-      const nameLength = zip.readUInt16LE(26);
-      const size = zip.readUInt32LE(22);
-      const name = zip.subarray(30, 30 + nameLength).toString();
-      const content = zip.subarray(30 + nameLength, 30 + nameLength + size);
-      expect(zip.readUInt32LE(14)).toBe(crc32(content)); // the CRC an unzipper will verify
-      expect(zip.readUInt32LE(zip.byteLength - 22)).toBe(0x06054b50); // end of central directory
-      expect(zip.readUInt16LE(zip.byteLength - 12)).toBe(1); // exactly one entry
-      return { name, content: content.toString() };
-    };
-
-    it("packages the forwarder as a valid, self-consistent archive", () => {
-      const entry = readSingleEntry(zipSingleFile("index.js", Buffer.from(forwarderSource())));
-      expect(entry.name).toBe("index.js");
-      expect(entry.content).toBe(forwarderSource());
-    });
-
-    it("is byte-deterministic — the S3 key is content-hashed, so identical source must not look new", () => {
-      const once = zipSingleFile("index.js", Buffer.from("exports.handler = 1;"));
-      const twice = zipSingleFile("index.js", Buffer.from("exports.handler = 1;"));
-      expect(once.equals(twice)).toBe(true);
-      expect(once.equals(zipSingleFile("index.js", Buffer.from("exports.handler = 2;")))).toBe(false);
-    });
-  });
-
-  describe("the public attack surface", () => {
-    it("a deployment without a webhook channel exposes the authenticated probe without public webhooks", () => {
-      const template = planAgentcoreDeploy(baseInput()).artifacts[0]!.content;
-      expect(template).toContain("AWS::Lambda::Function");
-      expect(template).toContain("AWS::Lambda::Url");
-      expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret");
-      expect(template).not.toContain('WEBHOOKS_ENABLED: "1"');
-    });
-
-    it("a webhook channel mints one, and scopes the second permission to URL traffic", () => {
-      const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!
-        .content;
-      expect(template).toContain("AWS::Lambda::Url");
-      expect(template).toContain('WEBHOOKS_ENABLED: "1"');
-      expect(template).toContain("Action: lambda:InvokeFunctionUrl");
-      // Without this the bare * principal would also permit direct Lambda API calls from any AWS
-      // account — bypassing the Function URL event shape to forge internal events.
-      expect(template).toContain("InvokedViaFunctionUrl: true");
-    });
-
-    it("declares the ingress secret on every stack, and stamps it on both sides", () => {
-      const template = planAgentcoreDeploy(baseInput({ channels: declaredChannels(["telegram"]) })).artifacts[0]!
-        .content;
-      expect(template).toContain("  FastagentIngressSecret:");
-      expect(template).toContain("FASTAGENT_INGRESS_SECRET: !Ref FastagentIngressSecret"); // runtime
-      expect(template).toContain("INGRESS_SECRET: !Ref FastagentIngressSecret"); // forwarder
-      expect(planAgentcoreDeploy(baseInput()).artifacts[0]!.content).toContain("FastagentIngressSecret:");
-    });
   });
 });

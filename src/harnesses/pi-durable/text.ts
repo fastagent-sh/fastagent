@@ -187,7 +187,7 @@ export function openText(dir: string, instance: InstanceConfigSource | undefined
 }
 
 /** Arguments as a shell splits them: by whitespace, with `"…"` or `'…'` keeping one argument together. */
-export function parseArguments(text: string): string[] {
+function parseArguments(text: string): string[] {
   const args: string[] = [];
   let current = "";
   let started = false;
@@ -216,7 +216,7 @@ export function parseArguments(text: string): string[] {
  * A template's text with its arguments, in pi's format: `$1`… positional, `$@` and `$ARGUMENTS` all of them,
  * `${N:-default}` a positional one or its default, `${@:N}` and `${@:N:L}` a slice from the Nth.
  */
-export function expandTemplate(body: string, args: readonly string[]): string {
+function expandTemplate(body: string, args: readonly string[]): string {
   const all = args.join(" ");
   return body.replace(
     /\$\{(\d+|@|ARGUMENTS):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,

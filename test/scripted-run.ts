@@ -24,10 +24,6 @@ export const refused = (code: ErrorCode, message: string = code): RunScript => (
   rejected: errorData(agentError(code, message)),
 });
 
-export const failed = (message: string, code: ErrorCode = "model_error"): RunScript => ({
-  ending: { status: "failed", error: errorData(agentError(code, message)) },
-});
-
 const done = (id: string, ending: Ending, answer?: { entryId: string; text: string }): TurnEvent => ({
   type: "done",
   message: { id, sessionId: "s", ...ending, ...(answer ? { answer } : {}) } satisfies Message,

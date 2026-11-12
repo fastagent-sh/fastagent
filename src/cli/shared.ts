@@ -199,7 +199,7 @@ async function resolveFirstRunModel(
 }
 
 /** The line of `fastagent.config.ts` that keeps a picked model: what the picker prints, and what it must accept. */
-export function pickedModelLine(model: string): string {
+function pickedModelLine(model: string): string {
   return `defaults: { model: ${JSON.stringify(model)} }`;
 }
 

@@ -3,7 +3,7 @@ import type { SecretStore } from "../secret-store.ts";
 import { type CliRunner, readOutput } from "../runner.ts";
 
 /** Whether `railway status --json` shows a linked project: non-empty stdout. */
-export function isLinked(stdout: string): boolean {
+function isLinked(stdout: string): boolean {
   return stdout.trim() !== "";
 }
 
@@ -11,7 +11,7 @@ export function isLinked(stdout: string): boolean {
  * The linked project's name for the gate message, or undefined if it can't be read (still linked — `railway status
  * --json` puts `name` at the top level on 5.15.0).
  */
-export function linkedName(stdout: string): string | undefined {
+function linkedName(stdout: string): string | undefined {
   try {
     const v = JSON.parse(stdout) as { name?: unknown };
     if (typeof v.name === "string") return v.name;

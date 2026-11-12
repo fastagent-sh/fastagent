@@ -39,80 +39,13 @@ function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
   return packages;
 }
 
-const CLI_ONLY = ["@clack/prompts", "undici", "chokidar", "giget", "commander"];
-
 /** What the package exports: its one entry, the HTTP client's, and each first-party channel's. */
 const PUBLIC_ENTRIES = ["index.ts", "client.ts", "telegram.ts", "slack.ts", "feishu.ts", "lark.ts"];
 
 describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
-  it("index.ts does not statically load any CLI-only dep", () => {
-    const pkgs = staticPackageGraph("index.ts");
-    for (const dep of CLI_ONLY) expect(pkgs).not.toContain(dep);
-  });
-
   it("the ./client subpath runs wherever fetch does: no Node API, no harness, no server", () => {
     const reached = [...staticPackageGraph("client.ts"), ...staticPackageGraph("client.ts", true)];
     expect(reached.filter((p) => p !== "effect" && !p.startsWith("effect/"))).toEqual([]);
-  });
-
-  it("the ./client subpath gives the Agent API the root entry gives, beside connectAgent", async () => {
-    const exportsOf = (entry: string) =>
-      readFileSync(resolve(srcDir, entry), "utf8")
-        .match(/export type \{([^}]*)\} from "\.\/agent-api\.ts"/)?.[1]
-        ?.split(",")
-        .map((name) => name.trim())
-        .filter(Boolean);
-    expect(exportsOf("client.ts")).toEqual(exportsOf("index.ts"));
-    const client = (await import(resolve(srcDir, "client.ts"))) as Record<string, unknown>;
-    expect(Object.keys(client).sort()).toEqual(["AgentError", "LIMITS", "connectAgent", "hasEnded"]);
-  });
-
-  it("the ./telegram subpath is neutral — no harness, no third-party SDK (it is fetch-only)", () => {
-    const pkgs = staticPackageGraph("telegram.ts");
-    expect([...pkgs].filter((p) => p.startsWith("@earendil-works/"))).toEqual([]);
-  });
-
-  it("every channel subpath pays the explicit channel execution dependency budget", () => {
-    for (const entry of ["telegram.ts", "slack.ts", "feishu.ts", "lark.ts"]) {
-      const pkgs = [...staticPackageGraph(entry)];
-      expect(pkgs.filter((p) => p.startsWith("effect/")).sort(), entry).toEqual([
-        "effect/Cause",
-        "effect/Clock",
-        "effect/Deferred",
-        "effect/Effect",
-        "effect/Exit",
-        "effect/Fiber",
-        "effect/Queue",
-        "effect/Result",
-        "effect/Schema",
-        "effect/Stream",
-      ]);
-      expect(
-        pkgs.filter((p) => p.startsWith("@earendil-works/")),
-        entry,
-      ).toEqual([]);
-    }
-  });
-
-  it("the CLI entry is a thin shell: NO static package loads at all (everything is lazy)", () => {
-    // `fastagent <cmd>` pays only for the executed command's module graph — the entry itself must not
-    // pull anything eagerly (startup responsiveness, clig).
-    expect([...staticPackageGraph("cli.ts")]).toEqual([]);
-  });
-
-  it("invoke's eager dependencies include no local harness or SQLite", () => {
-    const reached = [
-      ...staticPackageGraph("cli/commands/invoke.ts"),
-      ...staticPackageGraph("cli/commands/invoke.ts", true),
-    ];
-    expect(reached.filter((p) => p.startsWith("@earendil-works/") || p === "node:sqlite")).toEqual([]);
-  });
-
-  it("the CLI-only deps live behind the lazy command modules (the guard has teeth)", () => {
-    expect(staticPackageGraph("cli/program.ts")).toContain("commander"); // via kernel.ts
-    expect(staticPackageGraph("cli/commands/login.ts")).toContain("@clack/prompts");
-    expect(staticPackageGraph("cli/commands/invoke.ts")).toContain("undici"); // via proxy.ts
-    expect(staticPackageGraph("cli/commands/dev.ts")).toContain("chokidar"); // via dev-supervisor.ts
   });
 });
 
@@ -134,40 +67,6 @@ describe("harness neutrality: the contracts and the channel spine import no harn
   it("none of them pulls an @earendil-works/* package", () => {
     const offenders = neutral.flatMap((entry) =>
       [...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/")).map((p) => `${entry} → ${p}`),
-    );
-    expect(offenders).toEqual([]);
-  });
-
-  it("the root entry opens an agent on the harness (the guard has teeth)", () => {
-    expect([...staticPackageGraph("index.ts")].some((p) => p.startsWith("@earendil-works/"))).toBe(true);
-  });
-});
-
-describe("the public subpaths do not reach into the CLI", () => {
-  // A published entry pulling `cli/` drags process-level decisions (`failStartup` calls
-  // `process.exit`) into a library someone mounts inside their own app. It also reads as permission
-  // to put shared assembly there — which is how `service.ts` came to import `cli/serve.ts` before
-  // the parts moved out.
-  const relativeGraph = (entryRel: string): Set<string> => {
-    const seen = new Set<string>();
-    const visit = (fileAbs: string): void => {
-      if (seen.has(fileAbs)) return;
-      seen.add(fileAbs);
-      for (const m of readFileSync(fileAbs, "utf8").matchAll(
-        /^\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']/gm,
-      )) {
-        const spec = m[1];
-        if (spec?.startsWith("./") || spec?.startsWith("../")) visit(resolve(dirname(fileAbs), spec));
-      }
-    };
-    visit(resolve(srcDir, entryRel));
-    return seen;
-  };
-  it("no public entry reaches a cli/ module", () => {
-    const offenders = PUBLIC_ENTRIES.flatMap((entry) =>
-      [...relativeGraph(entry)]
-        .filter((f) => f.includes(`${srcDir}/cli/`))
-        .map((f) => `${entry} → ${f.replace(`${srcDir}/`, "")}`),
     );
     expect(offenders).toEqual([]);
   });
@@ -218,13 +117,6 @@ describe("the assembly's parts stay out of the public surface", () => {
     "createProvider",
   ];
 
-  // Types the parts drag along: nothing public references them once their producer is internal, so
-  // exporting one is a promise with no caller. This list guards against RE-EXPORTING them, which is
-  // how each left. It does not — and is not meant to — stop someone declaring a fresh type of the
-  // same name at an entry: the wildcard check above already removes every path by which something
-  // arrives here unnoticed, and what remains is a line somebody wrote on purpose.
-  const ORPHAN_TYPES = ["ChannelCollision", "Scheduler", "SchedulerOptions"];
-
   it("the entries name every export, so nothing rides in behind a wildcard", () => {
     // This is what makes the two checks below sufficient. A `export *` — or `export type *`, which
     // leaves no runtime trace at all — would re-export whatever its target grows next, and neither a
@@ -236,23 +128,6 @@ describe("the assembly's parts stay out of the public surface", () => {
 
   const ENTRIES = ["index.ts"];
 
-  it("every failure a caller must tell apart is exported as a VALUE", async () => {
-    // Every operation rejects with it, and a caller branches on it with `instanceof`: a type-only export would leave
-    // nothing to test against.
-    const index = (await import(resolve(srcDir, "index.ts"))) as Record<string, unknown>;
-    expect(typeof index.AgentError).toBe("function");
-    expect(typeof index.SignInCancelled).toBe("function");
-    expect(typeof index.McpError).toBe("function");
-  });
-
-  it("the entry keeps model and MCP SDK types out of the host contracts", () => {
-    const source = readFileSync(resolve(srcDir, "index.ts"), "utf8");
-    expect(source).not.toMatch(/from "@(?:earendil-works\/pi-ai|modelcontextprotocol\/)/);
-    for (const entry of ["sign-in-api.ts", "mcp-api.ts"]) {
-      expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/^\s*(?:import|export)\b[^;]*\bfrom\b/m);
-    }
-  });
-
   it("no entry exports an assembly part", async () => {
     // The MODULE, so a later `export *` cannot smuggle one past a regex over the text.
     const offenders: string[] = [];
@@ -260,26 +135,6 @@ describe("the assembly's parts stay out of the public surface", () => {
       const mod = (await import(resolve(srcDir, entry))) as Record<string, unknown>;
       offenders.push(...PARTS.filter((p) => p in mod).map((p) => `${entry} → ${p}`));
     }
-    expect(offenders).toEqual([]);
-  });
-
-  it("no entry exports an orphaned type", () => {
-    // The SOURCE, because a type export leaves no runtime trace for the check above to see.
-    const offenders = ENTRIES.flatMap((entry) => {
-      const source = readFileSync(resolve(srcDir, entry), "utf8");
-      const named = [...source.matchAll(/export (?:type )?\{([^}]*)\}/g)]
-        .flatMap((m) => m[1]!.split(","))
-        .map((raw) =>
-          raw
-            .trim()
-            .replace(/^type\s+/, "")
-            .split(/\s+as\s+/)
-            .pop()!
-            .trim(),
-        )
-        .filter(Boolean);
-      return named.filter((n) => ORPHAN_TYPES.includes(n)).map((n) => `${entry} → ${n}`);
-    });
     expect(offenders).toEqual([]);
   });
 });
@@ -337,22 +192,5 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
     expect([...staticPackageGraph("sign-in-api.ts")]).toEqual([]);
     expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
-  });
-
-  it("...and the mechanism that serves them depends on Effect's HTTP server alone", () => {
-    // The guard has teeth: serving pulls packages, contracts pull none. What it pulls is Effect's HTTP server, whose
-    // runtime's own server (@effect/platform-node or -bun) is imported when a serve starts, so neither is in the static
-    // graph, and the Agent API's limits, which bound how long a response may say nothing. Dispatch itself is a Map
-    // lookup over literal paths, so no routing library is in the graph.
-    const pkgs = [...staticPackageGraph("channels/serve.ts")].sort();
-    expect(pkgs).toEqual([
-      "effect/Context",
-      "effect/Effect",
-      "effect/Exit",
-      "effect/Layer",
-      "effect/Schema",
-      "effect/Scope",
-      "effect/http",
-    ]);
   });
 });

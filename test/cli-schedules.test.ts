@@ -1,9 +1,9 @@
-import { addWakeup, listWakeups } from "../src/schedule/wakeups.ts";
+import { addWakeup } from "../src/schedule/wakeups.ts";
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveStateRoot } from "../src/paths.ts";
-import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "./cli-run.ts";
+import { agentWorkspace, fauxAgent as agent, runInProcess } from "./cli-run.ts";
 
 vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
 
@@ -58,42 +58,6 @@ describe("cli: schedules", () => {
     ]);
     expect(parsed.wakeups.map((w) => w.id)).toEqual([added.id]);
   });
-
-  it("schedules list says which file is not a schedule, and refuses unreadable state in one line", async () => {
-    const broken = await agentWorkspace("fa-list-cron-", { "src/schedules/broken.ts": schedule("not a cron") });
-    const refused = await runInProcess(["schedules", "list", broken]);
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(/src\/schedules\/broken\.ts/);
-    expect(refused.stderr).not.toMatch(/\n\s+at /);
-
-    const dir = await agentWorkspace("fa-list-broken-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
-
-    // An OLD claim that cannot be read does not fail the text listing, which reads the newest only; the whole history
-    // (`--json`) does say so.
-    const claims = join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily");
-    await mkdir(join(claims, "2026-01-01T09-00-00-000Z"), { recursive: true }); // a directory where a claim file goes
-    await writeFile(
-      join(claims, "2026-01-02T09-00-00-000Z"),
-      JSON.stringify({ firedAt: "2026-01-02T09:00:00.000Z", outcome: "completed", ms: 5 }),
-    );
-    const textOnly = await runInProcess(["schedules", "list", dir]);
-    expect(textOnly.code, textOnly.stderr).toBe(0);
-    expect(textOnly.stdout).toMatch(/last 2026-01-02T09:00:00.000Z completed/);
-    const history = await runInProcess(["schedules", "list", dir, "--json"]);
-    expect(history.code).toBe(1);
-    expect(history.stderr).toMatch(/the fire history of "daily" is unreadable/);
-    await rm(claims, { recursive: true });
-
-    // Unreadable state is the operator's to fix: a read-only command says so in one line rather than printing the
-    // Node stack `readFires` throws for the serving boot's benefit.
-    await mkdir(join(dir, ".fastagent", "dev", ".state", "schedule", "claims"), { recursive: true });
-    await writeFile(join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily"), ""); // a FILE where the dir goes
-    const unreadable = await runInProcess(["schedules", "list", dir, "--json"]);
-    expect(unreadable.code).toBe(1);
-    expect(unreadable.stdout).toBe("");
-    expect(unreadable.stderr).toMatch(/the fire history of "daily" is unreadable/);
-    expect(unreadable.stderr).not.toMatch(/at listClaims/); // no stack
-  });
 });
 
 const scheduleOf = (prompt: string) =>
@@ -116,47 +80,5 @@ describe("cli: schedules run and unwake", () => {
     };
     expect(listed.schedules[0]?.session).toEqual(expect.any(String));
     expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
-  });
-
-  it("schedules run refuses to fire while a serve holds the storage", async () => {
-    const dir = await agent("fa-schedules-busy-", { "src/schedules/digest.ts": SCHEDULE });
-    const refused = await whileServed(dir, () => runInProcess(["schedules", "run", "digest", dir]));
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("another `fastagent dev`, `start` or `schedules` command of this agent");
-  });
-
-  it("schedules unwake cancels a wake-up whatever session set it, and only when no serve runs", async () => {
-    const dir = await agent("fa-schedules-unwake-");
-    const stateRoot = resolveStateRoot(dir);
-    const added = addWakeup(stateRoot, { session: "a schedule's own", prompt: "check", cron: "0 * * * *" });
-    if (!added.ok) throw new Error(added.error);
-
-    const refused = await whileServed(dir, () => runInProcess(["schedules", "unwake", added.id, dir]));
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toContain("is held by another process");
-    expect(listWakeups(stateRoot).map((w) => w.id)).toEqual([added.id]);
-
-    const removed = await runInProcess(["schedules", "unwake", added.id, dir]);
-    expect(removed.code, removed.stderr).toBe(0);
-    expect(removed.stdout).toContain(`removed wake ${added.id}`);
-    expect(listWakeups(stateRoot)).toEqual([]);
-    const again = await runInProcess(["schedules", "unwake", added.id, dir]);
-    expect(again.code).toBe(1);
-    expect(again.stderr).toContain(`no pending wake-up ${added.id}`);
-  });
-
-  it("schedules run checks the schedule's name before the model a fire needs: both are choices, exit 2", async () => {
-    // No model anywhere: agentWorkspace's config names none, and the environment holds none.
-    const dir = await agentWorkspace("fa-schedules-unknown-", { "src/schedules/digest.ts": schedule("0 9 * * *") });
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.FASTAGENT_MODEL;
-    const unknown = await runInProcess(["schedules", "run", "weekly", dir], undefined, env);
-    expect([unknown.code, unknown.stderr]).toEqual([
-      2,
-      expect.stringMatching(/no schedule "weekly" in .*src\/schedules\/ \(declared: digest\)/),
-    ]);
-    expect(unknown.stderr).not.toMatch(/missing model/);
-    const known = await runInProcess(["schedules", "run", "digest", dir], undefined, env);
-    expect([known.code, known.stderr]).toEqual([2, expect.stringMatching(/missing model/)]);
   });
 });

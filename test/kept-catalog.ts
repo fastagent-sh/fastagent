@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AnyModel } from "@earendil-works/pi-ai";
 
 /** The pi-ai these tests run, as the catalog asks pi.dev for it. */
-export const PI_AI_VERSION = (
+const PI_AI_VERSION = (
   JSON.parse(readFileSync(new URL("../node_modules/@earendil-works/pi-ai/package.json", import.meta.url), "utf8")) as {
     version: string;
   }

@@ -21,7 +21,7 @@ const CHARS_PER_TOKEN = 2;
 /** The window of a model that declares none, in tokens, and so what its budget is worked out from. */
 const UNKNOWN_WINDOW_TOKENS = 128_000;
 
-export const budgetOfWindow = (windowTokens: number): number => Math.floor(windowTokens * FOLD_SHARE * CHARS_PER_TOKEN);
+const budgetOfWindow = (windowTokens: number): number => Math.floor(windowTokens * FOLD_SHARE * CHARS_PER_TOKEN);
 
 const unknownSaid = new Set<string>();
 

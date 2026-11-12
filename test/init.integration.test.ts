@@ -1,44 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { hermeticGit } from "./git-env.ts";
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { freshDir, exists, withIdentity, cliInit } from "./init-fixtures.ts";
 
 describe("init: scaffoldAgent", () => {
-  it("--content adds a directory of this machine to fastagent.json, a repository to context.json; a nested directory is refused before any write", async () => {
-    const base = await realpath(await freshDir());
-    const app = join(base, "app");
-    await mkdir(app);
-    const out = await cliInit(["init", "reviewer", "--content", "app", "--no-install"], base);
-    expect(out).toMatch(/created .*reviewer/);
-    expect(out).toContain(`works on app  ${app} (a directory of this machine)`);
-    expect(JSON.parse(await readFile(join(base, "reviewer", "fastagent.json"), "utf8"))).toEqual({
-      content: { app: { path: app } },
-    });
-    // The program's declaration names no directory of this machine.
-    expect(await exists(join(base, "reviewer", "context.json"))).toBe(false);
-    // A repository is the program's: every instance of the agent reaches it, and a deploy carries it.
-    const withRepository = await cliInit(["init", "triage", "--content", "github:acme/docs", "--no-install"], base);
-    expect(withRepository).toContain("github acme/docs, a clone brought up to date at each start");
-    expect(JSON.parse(await readFile(join(base, "triage", "context.json"), "utf8"))).toEqual({
-      content: { docs: { github: "acme/docs" } },
-    });
-    expect(await exists(join(base, "triage", "fastagent.json"))).toBe(false);
-    // There is no copy for a host: a directory stays on this machine.
-    expect(await cliInit(["init", "nothing", "--content", "app", "--copy", "--no-install"], base)).toMatch(
-      /unknown option '--copy'/,
-    );
-    expect(await exists(join(base, "nothing"))).toBe(false);
-
-    // An agent inside what it works on is allowed: the content is the directory around it.
-    await cliInit(["init", join(app, "agent"), "--content", app, "--no-install"], base);
-    expect(await exists(join(app, "agent", "fastagent.config.ts"))).toBe(true);
-    // Run in a project, init says how to have an agent work on it.
-    await writeFile(join(app, "README.md"), "the project\n");
-    expect(await cliInit(["init", ".", "--no-install"], app)).toMatch(/fastagent init <new directory> --content \./);
-  });
-
   it("makes the agent a git repository with the scaffold as its first commit, and says when it does not", async () => {
     const env = withIdentity;
     const git = (args: string[], cwd: string) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();

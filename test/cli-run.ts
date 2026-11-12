@@ -5,8 +5,8 @@
 // decides: ~0.5-1s of CPU cheaper per call, and the unit tier's way to run a command.
 import { useValueFile } from "../src/value-file.ts";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -257,25 +257,6 @@ export async function fauxAgent(prefix: string, files: Record<string, string> = 
   const dir = await agentWorkspace(prefix, { "fastagent.config.ts": FAUX_CONFIG, ...files });
   await withRepoModules(dir);
   return dir;
-}
-
-/** How many times the faux model of the agent in `dir` was asked to linger. */
-export async function lingered(dir: string): Promise<number> {
-  const file = join(dir, "lingered");
-  return existsSync(file) ? (await readFile(file, "utf8")).split("\n").filter(Boolean).length : 0;
-}
-
-/** Run the CLI until the faux model of the agent in `dir` is lingering, then kill it, as a timeout would. */
-export async function killWhileLingering(args: string[], dir: string): Promise<void> {
-  const child = spawn(process.execPath, [CLI, ...args]);
-  const closed = new Promise((resolve) => child.on("close", resolve));
-  const before = await lingered(dir);
-  while ((await lingered(dir)) === before) {
-    if (child.exitCode !== null) throw new Error(`the CLI exited ${child.exitCode} before the model lingered`);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  child.kill("SIGKILL");
-  await closed;
 }
 
 /** Hold the instance's storage as a serve of `dir` does, for the length of `during`. */

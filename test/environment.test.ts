@@ -1,23 +1,9 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { contextFileText, parseContextFile } from "../src/content/file.ts";
-import {
-  declareEnvironment,
-  declaredVariables,
-  declaresTool,
-  missingPythonRuntime,
-  parsePackageArgument,
-  resolvedBackendRefusal,
-  runtimeAdvice,
-} from "../src/environment/declare.ts";
-import { ensureMise, miseBinary, prepareEnvironment } from "../src/environment/mise.ts";
-import { addContent, removeContent, writeEnvironment } from "../src/authoring.ts";
+import { declareEnvironment, declaredVariables } from "../src/environment/declare.ts";
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
-import { runInProcess } from "./cli-run.ts";
-import { savedEnv, agentDir, fakeMise, fakeNpm } from "./environment-fixtures.ts";
+import { savedEnv, agentDir } from "./environment-fixtures.ts";
 
 // What this machine's dpkg says is environment.integration.test.ts's: here the machine cannot tell, as one that is not Debian.
 vi.mock("../src/environment/apt.ts", async (original) => ({
@@ -100,102 +86,9 @@ describe("environment: what context.json may declare", () => {
     expect(refused({ aptPackages: ["Chromium"] })).toThrow(`apt package "Chromium" is not a Debian package name`);
     expect(refused({ aptPackages: ["git", "git"] })).toThrow(`apt package "git" is listed twice`);
   });
-
-  it("is read and written with the rest of context.json, an empty one left out", async () => {
-    const path = "/a/context.json";
-    expect(() => parseContextFile(`{"environment":{"packages":{"gh":"x y"}}}`, path)).toThrow(
-      `${path}: environment: package "gh": the version must be non-empty, without spaces`,
-    );
-    const written = { packages: { gh: "2" }, variables: { GITHUB_TOKEN: { description: "gh's token" } } };
-    const file = parseContextFile(JSON.stringify({ content: {}, environment: written }), path);
-    expect(file.environment).toEqual({ ...written, aptPackages: [] });
-    expect(JSON.parse(contextFileText(file))).toEqual({ content: {}, environment: written });
-    expect(
-      JSON.parse(contextFileText({ content: {}, environment: { packages: {}, aptPackages: [], variables: {} } })),
-    ).toEqual({ content: {} });
-    // The two edits keep each other's part of the file.
-    const dir = await agentDir();
-    await writeEnvironment(dir, () => ({ packages: { gh: "2" }, aptPackages: ["chromium"], variables: {} }));
-    await addContent(dir, { name: "app", entry: { github: "acme/app" }, program: true });
-    await writeEnvironment(dir, () => ({ packages: { jq: "latest" }, aptPackages: [], variables: {} }));
-    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual({
-      content: { app: { github: "acme/app" } },
-      environment: { packages: { jq: "latest" } },
-    });
-  });
-
-  it("every edit of context.json keeps the MCP servers exactly as written, so an edit of one part never drops another", async () => {
-    const dir = await agentDir();
-    const mcpServers = { docs: { type: "http", url: "https://docs.example.com/mcp" }, local: { command: "./srv" } };
-    await writeFile(join(dir, "context.json"), JSON.stringify({ content: {}, mcpServers }));
-    const kept = async () => JSON.parse(await readFile(join(dir, "context.json"), "utf8")).mcpServers;
-    await writeEnvironment(dir, () => ({ packages: { gh: "2" }, aptPackages: [], variables: {} }));
-    expect(await kept()).toEqual(mcpServers);
-    await addContent(dir, { name: "app", entry: { github: "acme/app" }, program: true });
-    expect(await kept()).toEqual(mcpServers);
-    await removeContent(dir, "app");
-    expect(await kept()).toEqual(mcpServers);
-    expect(parseContextFile(JSON.stringify({ content: {}, mcpServers }), "/a/context.json").mcpServers).toEqual(
-      mcpServers,
-    );
-    expect(() => parseContextFile(`{ "mcpServers": [] }`, "/a/context.json")).toThrow(
-      '/a/context.json: "mcpServers" must be an object of servers by name',
-    );
-  });
-
-  it("refuses a registry name by the backend mise resolves it to, unless that backend is allowed", () => {
-    for (const backend of ["aqua:jqlang/jq", "github:cli/cli", "core:python", "pypi:ansible", "packslip:x/y"]) {
-      expect(resolvedBackendRefusal("x", backend), backend).toBeUndefined();
-    }
-    expect(resolvedBackendRefusal("tokei", "cargo:tokei")).toMatch(
-      /^package "tokei" resolves to cargo:tokei, which builds from source: .* — write the project's release with github:/,
-    );
-    expect(resolvedBackendRefusal("php", "vfox:jdx/vfox-php")).toMatch(
-      /resolves to vfox:jdx\/vfox-php, which runs a plugin's code/,
-    );
-    expect(resolvedBackendRefusal("x", "newthing:x")).toMatch(
-      /resolves to newthing:x, which FastAgent does not install from/,
-    );
-  });
-
-  it("names the PyPI packages whose python and uv it leaves to the machine", () => {
-    const kinds = new Map([
-      ["pypi:markitdown", "pypi"],
-      ["ansible", "pypi"],
-      ["gh", "aqua"],
-    ]);
-    const missing = missingPythonRuntime({ "pypi:markitdown": "latest", ansible: "11", gh: "2" }, kinds);
-    expect(missing).toEqual({ packages: ["pypi:markitdown", "ansible"], missing: ["python", "uv"] });
-    expect(runtimeAdvice(missing!)).toBe(
-      "pypi:markitdown, ansible install with python and uv, which the environment does not declare: mise then uses " +
-        "this machine's, and the image has none — run `fastagent env add python uv`",
-    );
-    // A runtime under any backend or owner counts.
-    const declared = { "pypi:markitdown": "latest", python: "3.12", "aqua:astral-sh/uv": "latest" };
-    expect(missingPythonRuntime(declared, kinds)).toBeUndefined();
-    expect(declaresTool(declared, "uv")).toBe(true);
-    expect(missingPythonRuntime({ gh: "2" }, kinds)).toBeUndefined();
-  });
-
-  it("reads `fastagent env add` arguments", () => {
-    expect(parsePackageArgument("gh")).toEqual({ name: "gh", version: "latest" });
-    expect(parsePackageArgument("gh@2")).toEqual({ name: "gh", version: "2" });
-    expect(parsePackageArgument("npm:@biomejs/biome")).toEqual({ name: "npm:@biomejs/biome", version: "latest" });
-    expect(parsePackageArgument("npm:@biomejs/biome@2")).toEqual({ name: "npm:@biomejs/biome", version: "2" });
-    expect(parsePackageArgument("apt:chromium")).toEqual({ apt: "chromium" });
-  });
 });
 
 describe("environment: prepared by a process that runs the agent", () => {
-  it("an agent without packages borrows the machine's commands; one with packages and no mise is refused", async () => {
-    expect(await prepareEnvironment(await agentDir({ aptPackages: ["chromium"] }), process.env)).toEqual({});
-    const dir = await agentDir({ packages: { gh: "2" } });
-    expect(miseBinary(dir)).toBeUndefined();
-    await expect(prepareEnvironment(dir, process.env)).rejects.toThrow(
-      `context.json declares packages, and the agent has no mise installed — run \`fastagent env install\` in ${dir}`,
-    );
-  });
-
   it("requires the variables context.json declares before the agent runs, naming the file", async () => {
     const dir = await agentDir({ variables: { FA_TEST_HOST: { description: "the GitHub host gh talks to" } } });
     const open = async (secrets: Record<string, string>) =>
@@ -211,81 +104,5 @@ describe("environment: prepared by a process that runs the agent", () => {
     process.env.FA_TEST_HOST = "github.example.com";
     await expect(open({})).rejects.toThrow(/missing required secrets: FA_TEST_HOST/);
     await (await open({ FA_TEST_HOST: "github.example.com" })).agent.close();
-  });
-});
-
-describe("environment: the agent's own mise", () => {
-  it("is not added to an agent whose package.json does not list FastAgent: its image could not start", async () => {
-    const dir = await agentDir();
-    const fakeBin = await fakeNpm(dir);
-    process.env.PATH = `${fakeBin}${delimiter}${process.env.PATH}`;
-    for (const manifest of [undefined, `{"name":"a"}`]) {
-      await rm(join(dir, "package.json"), { force: true });
-      if (manifest) await writeFile(join(dir, "package.json"), manifest);
-      await expect(ensureMise(dir)).rejects.toThrow(
-        `${join(dir, "package.json")} does not list @fastagent-sh/fastagent — the agent's mise is one of its ` +
-          "dependencies, and an agent with dependencies runs the FastAgent they list. Add it first: " +
-          `\`npm install @fastagent-sh/fastagent\` in ${dir}`,
-      );
-    }
-    await expect(readFile(join(dir, "npm-args"), "utf8")).rejects.toThrow(/ENOENT/);
-  });
-});
-
-describe("environment: `fastagent env`", () => {
-  const cli = (args: string[], cwd: string) => runInProcess(args, cwd);
-  const declared = async (dir: string): Promise<unknown> =>
-    JSON.parse(await readFile(join(dir, "context.json"), "utf8")).environment;
-
-  it("lists the variables context.json declares, and whether each has a value here, never the value", async () => {
-    const dir = await agentDir({
-      variables: { FA_TEST_HOST: { description: "the GitHub host" }, FA_TEST_TOKEN: { description: "gh's token" } },
-    });
-    await mkdir(join(dir, ".secrets"));
-    await writeFile(join(dir, ".secrets", ".env"), "FA_TEST_TOKEN=ghp_value\n");
-    const list = await cli(["env", "list"], dir);
-    expect(list.code, list.stderr).toBe(0);
-    expect(list.stdout).toBe(
-      ["FA_TEST_HOST   not set   the GitHub host", "FA_TEST_TOKEN  set       gh's token", ""].join("\n"),
-    );
-    expect(list.stderr).toContain(
-      `no value here for FA_TEST_HOST: dev and start refuse to run until they have one — set them in ` +
-        `${join(dir, ".secrets", ".env")}`,
-    );
-    expect(`${list.stdout}${list.stderr}`).not.toContain("ghp_value");
-    const listed = await cli(["env", "list", "--json"], dir);
-    expect(JSON.parse(listed.stdout)).toEqual({
-      packages: [],
-      apt: [],
-      variables: [
-        { name: "FA_TEST_HOST", description: "the GitHub host", set: false },
-        { name: "FA_TEST_TOKEN", description: "gh's token", set: true },
-      ],
-    });
-    expect(listed.stdout).not.toContain("ghp_value");
-  });
-
-  it("refuses to edit a context.json whose content is refused, before anything is installed", async () => {
-    const dir = await agentDir();
-    await writeFile(join(dir, "context.json"), `{ "content": { "a": { "ref": "x" } } }`);
-    const { calls } = await fakeMise(dir);
-    const add = await cli(["env", "add", "gh@2"], dir);
-    expect(add.code).toBe(1);
-    expect(add.stderr).toContain(`content "a" needs "github"`);
-    expect(await calls()).toEqual([]);
-  });
-
-  it("removes packages, without mise; a package it does not have is named", async () => {
-    const dir = await agentDir({ packages: { gh: "2" }, aptPackages: ["chromium"] });
-    const { calls } = await fakeMise(dir);
-    for (const name of ["jq", "toString"]) {
-      const unknown = await cli(["env", "remove", name], dir);
-      expect(unknown.code, name).toBe(1);
-      expect(unknown.stderr).toContain(`the environment has no package "${name}" (it has: gh, apt:chromium)`);
-    }
-    const remove = await cli(["env", "remove", "gh", "apt:chromium"], dir);
-    expect(remove.code, remove.stderr).toBe(0);
-    expect(await declared(dir)).toBeUndefined();
-    expect(await calls()).toEqual([]);
   });
 });

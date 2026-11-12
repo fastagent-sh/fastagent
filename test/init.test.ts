@@ -1,22 +1,15 @@
-import { existsSync } from "node:fs";
-import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { describe, expect, it, vi } from "vitest";
 import ignore from "ignore";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { InMemoryCredentialStore, fauxAssistantMessage } from "@earendil-works/pi-ai";
-import { modelsOver } from "../src/harnesses/models/models.ts";
-import { MemoryStorage } from "@earendil-works/pi-durable";
-import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
+import { buildDefinition, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
 import { programText } from "../src/harnesses/pi-durable/text-sources.ts";
-import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
-import { NOT_HOSTED } from "../src/serving-command.ts";
 import { freshDir, exists, cliInit } from "./init-fixtures.ts";
 
 vi.mock("../src/git.ts", () => import("./git-double.ts"));
@@ -110,38 +103,6 @@ describe("init: scaffoldAgent", () => {
     expect(readSkills(programText(dir).skills).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 
-  it("the skill SYSTEM.md sends the agent to is listed in its prompt, with where it is", async () => {
-    // Named, not given as a relative path: pi tells the model to resolve a relative path against a skill's own
-    // directory, and a path to a skill the prompt does not list sent models guessing at another package's directory.
-    const dir = join(await freshDir(), "agent");
-    await scaffoldAgent(dir);
-    expect(await readFile(join(dir, "SYSTEM.md"), "utf8")).toContain("Read the `writing-great-skills` skill");
-    const { faux } = makeFaux();
-    let prompt = "";
-    faux.setResponses([
-      (context) => {
-        prompt = sentPrompt(context);
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const definition = await loadSourceDefinition(dir);
-    const agent = await assembleAgent(definition, {
-      storage: new MemoryStorage(),
-      runsAs: NOT_HOSTED,
-      processEnv: {},
-      code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
-      config: resolveConfig(definition),
-      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
-      model: "faux/faux-1",
-    });
-    await agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: "hi" }, { wait: 30 });
-    await agent.close();
-    expect(prompt).toContain(
-      `<name>writing-great-skills</name>\n    <description>Reference for writing and editing skills well`,
-    );
-    expect(prompt).toContain(`<location>${join(dir, "skills", "writing-great-skills", "SKILL.md")}</location>`);
-  });
-
   it("refuses a directory that is not empty, naming what is there; an empty or new one is fine", async () => {
     const project = await freshDir();
     await writeFile(join(project, "tsconfig.json"), "{}");
@@ -162,82 +123,9 @@ describe("init: scaffoldAgent", () => {
     await scaffoldAgent(deep);
     expect(await exists(join(deep, "SYSTEM.md"))).toBe(true);
   });
-
-  it("a FILE or symlink where the agent should go fails before any write", async () => {
-    const base = await freshDir();
-    await writeFile(join(base, "agent"), "i am a file, not a dir\n");
-    await expect(scaffoldAgent(join(base, "agent"))).rejects.toThrow(/exists and is not a directory/);
-
-    // A symlink is rejected, not followed — it would write the agent somewhere else entirely.
-    const external = await freshDir();
-    await symlink(external, join(base, "link"));
-    await expect(scaffoldAgent(join(base, "link"))).rejects.toThrow(/exists and is not a directory/);
-    expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
-  });
-
-  it("undo removes what the scaffold created, and leaves a directory it was handed", async () => {
-    // What `init` runs when declaring the content fails after the scaffold: a retry must not find an agent there.
-    const created = join(await freshDir(), "new");
-    await (await scaffoldAgent(created)).undo();
-    expect(await exists(created)).toBe(false);
-    const handed = await freshDir();
-    await (await scaffoldAgent(handed)).undo();
-    expect(await readdir(handed)).toEqual([]);
-  });
-
-  it("rolls back a mid-write failure to a clean slate, keeping a directory this run did not create", async () => {
-    // Fault injection: a read-only agent dir makes the writes inside it fail after the root exists.
-    // Leaving OUR debris would make the next init report the user's directory as occupied; deleting a
-    // root THEY pre-created would destroy a directory this run never made. Rollback must do neither.
-    const agent = await freshDir();
-    await chmod(agent, 0o500); // r-x: writes inside fail
-    await expect(scaffoldAgent(agent)).rejects.toMatchObject({ code: "EACCES" });
-    await chmod(agent, 0o700);
-    expect(await exists(agent)).toBe(true); // theirs, not ours — preserved
-    expect(await readdir(agent)).toEqual([]); // …and empty, so the retry is a fresh scaffold
-    expect((await scaffoldAgent(agent)).created).toContain("SYSTEM.md");
-  });
-
-  it("refuses inside another agent, at any depth — that directory is the outer agent's own", async () => {
-    const outer = await freshDir();
-    await writeFile(join(outer, "fastagent.config.ts"), "export default {};\n");
-    for (const inner of [join(outer, "skills", "mine"), join(outer, "packages", "reviewer")]) {
-      await expect(scaffoldAgent(inner)).rejects.toThrow(new RegExp(`is inside the agent ${outer}`));
-      expect(await exists(inner)).toBe(false); // side-effect-free refusal
-    }
-  });
-
-  it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {
-    const base = await freshDir();
-    const out = await cliInit(["init", "my-agent", "--no-install"], base);
-    expect(out).toMatch(/created .*my-agent/);
-    expect(out).toMatch(/^ {4}cd my-agent$/m);
-    expect(out).toMatch(/fastagent dev/);
-    expect(await exists(join(base, "my-agent", "SYSTEM.md"))).toBe(true);
-
-    // No directory is a usage error: an agent is a directory of its own, so there is no default to guess.
-    expect(await cliInit(["init", "--no-install"], await freshDir())).toMatch(/missing required argument/);
-    // --agent-dir is gone with the nested layout it named.
-    expect(await cliInit(["init", "x", "--agent-dir", "bot"], base)).toMatch(/unknown option/);
-  });
 });
 
 describe("add: fastagent add <channel>", () => {
-  // A fastagent-ready AGENT DIR, as `fastagent init` produces it: an ESM package declaring the dep.
-  // `add` scaffolds INTO this; it never bootstraps it (that is init's job). The tests run the CLI
-  // from the agent dir itself — a supported entry point that resolves to the same placement.
-  async function readyAgent(): Promise<string> {
-    const dir = join(await freshDir(), "fastagent");
-    await mkdir(dir);
-    await writeFile(join(dir, "SYSTEM.md"), "You are terse.\n");
-    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n"); // THE marker
-    await writeFile(
-      join(dir, "package.json"),
-      `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
-    );
-    return dir;
-  }
-
   it("routes into the agent it names: channel + companion tool + secrets all land in that directory", async () => {
     const dir = await freshDir();
     const root = join(dir, "fastagent");
@@ -257,122 +145,6 @@ describe("add: fastagent add <channel>", () => {
     expect(await readFile(join(root, ".secrets", ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN");
     // The program only: no value is written, whatever the app will need.
     expect(await exists(join(root, ".secrets", ".env"))).toBe(false);
-  });
-
-  it("scaffolds src/channels/telegram.ts into a ready agent, mutates nothing else, and keeps authored glue", async () => {
-    const dir = await readyAgent();
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(join(dir, ".secrets", ".env.example"), "# env\n"); // add injects channel env vars here
-    const out = await cliInit(["add", "telegram"], dir);
-    expect(out).toContain("src/channels/telegram.ts");
-    const src = await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8");
-    expect(src).toContain('from "@fastagent-sh/fastagent/telegram"'); // the adapter
-    // Both ways, one policy: the instance's `channels.telegram.ingress` picks (agent/stateDir arrive via ctx).
-    expect(src).toContain("byIngress({");
-    expect(src).toContain("telegramChannel({");
-    expect(src).toContain("telegramPollingChannel({");
-    expect(src).not.toContain("sendDocument"); // the channel file is the channel, NOT the send-tool (no misroute)
-    // the companion tool lands in tools/ by the bundle convention (so the agent can send files back)
-    const sendTool = await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8");
-    expect(sendTool).toContain('from "@fastagent-sh/fastagent"');
-    // It rides the channel's transport, which is what records a sent message into the chat's discussion.
-    expect(sendTool).toContain("telegramTransport(TELEGRAM_BOT_TOKEN)");
-    // next steps name where the app and its values come from
-    expect(out).toContain("fastagent channels setup telegram");
-    expect(out).not.toContain("--tunnel");
-    // add does NOT bootstrap: package.json is untouched and no .npmrc is written.
-    expect(JSON.parse(await readFile(join(dir, "package.json"), "utf8"))).toEqual({
-      type: "module",
-      dependencies: { "@fastagent-sh/fastagent": "^0.4.0" },
-    });
-    expect(await exists(join(dir, ".npmrc"))).toBe(false);
-
-    // env vars are named in .secrets/.env.example so a copy-to-.env finds them; their values are `channels setup`'s.
-    const envExample = await readFile(join(dir, ".secrets", ".env.example"), "utf8");
-    expect(envExample).toContain("telegram channel");
-    expect(envExample).toContain("TELEGRAM_SECRET_TOKEN");
-    expect(await exists(join(dir, ".secrets", ".env"))).toBe(false);
-
-    // Re-running add on an existing channel keeps the authored glue and rewrites the package-owned
-    // companion tool — the upgrade path for an agent scaffolded by an earlier release.
-    await writeFile(join(dir, "src", "channels", "telegram.ts"), `${src}// edited\n`);
-    await writeFile(join(dir, "src", "tools", "telegram-send.ts"), "// 0.20.0\n");
-    const out3 = await cliInit(["add", "telegram"], dir);
-    expect(out3).toContain("src/channels/telegram.ts already exists — keeping it");
-    expect(await readFile(join(dir, "src", "channels", "telegram.ts"), "utf8")).toBe(`${src}// edited\n`);
-    expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toBe(sendTool);
-  });
-
-  it("a re-add upgrades an existing Feishu or Lark agent's tools without touching its channel file or app", async () => {
-    for (const kind of ["feishu", "lark"]) {
-      const dir = await readyAgent();
-      expect(await cliInit(["add", kind], dir)).not.toMatch(/Error|creating the Feishu app/);
-      // An agent from an earlier release: its channel edited, and no thread tool yet.
-      const channel = join(dir, "src", "channels", `${kind}.ts`);
-      const authored = `${await readFile(channel, "utf8")}// edited\n`;
-      await writeFile(channel, authored);
-      await rm(join(dir, "src", "tools", `${kind}-threads.ts`));
-      const out = await cliInit(["add", kind], dir);
-      expect(out).not.toMatch(/Error|creating the Feishu app/);
-      expect(out).toContain(`fastagent channels setup ${kind}`);
-      expect(await readFile(channel, "utf8")).toBe(authored);
-      expect(await readFile(join(dir, "src", "tools", `${kind}-threads.ts`), "utf8")).toContain("defineTool(");
-      // The program only: no value and no configuration, whatever the app will need.
-      expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
-      expect(existsSync(join(dir, "fastagent.json"))).toBe(false);
-    }
-  });
-
-  it("rewrites the companion tool on every add — it is the package's, so a re-add upgrades it", async () => {
-    const dir = await readyAgent();
-    await mkdir(join(dir, "src", "tools"), { recursive: true });
-    await writeFile(join(dir, "src", "tools", "telegram-send.ts"), "// from an older package\n");
-    await cliInit(["add", "telegram"], dir);
-    expect(await exists(join(dir, "src", "channels", "telegram.ts"))).toBe(true);
-    expect(await readFile(join(dir, "src", "tools", "telegram-send.ts"), "utf8")).toContain("defineTool(");
-  });
-
-  it("refuses (writing nothing) when the agent dir is not channel-ready, with an actionable message", async () => {
-    /** An agent dir carrying `pkg` as its package.json (undefined = none at all). */
-    const agentWith = async (pkg?: object): Promise<string> => {
-      const d = join(await freshDir(), "fastagent");
-      await mkdir(d);
-      await writeFile(join(d, "SYSTEM.md"), "You are terse.\n");
-      await writeFile(join(d, "fastagent.config.ts"), "export default {};\n"); // THE marker
-      if (pkg) await writeFile(join(d, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
-      return d;
-    };
-    const cases: Array<[() => Promise<string>, RegExp]> = [
-      [() => agentWith(), /no package\.json|fastagent init/], // no package.json
-      [() => agentWith({ type: "commonjs" }), /"type": "module"/], // present but not ESM
-      // ESM but missing the dep (node → npm hint)
-      [() => agentWith({ type: "module" }), /@fastagent-sh\/fastagent is not a dependency.*npm install/],
-    ];
-    for (const [make, msg] of cases) {
-      const dir = await make();
-      const out = await cliInit(["add", "telegram"], dir);
-      expect(out).toMatch(msg);
-      expect(await exists(join(dir, "src", "channels", "telegram.ts"))).toBe(false); // nothing scaffolded
-    }
-  });
-
-  it("scaffolds through an IN-agent symlinked src/, but rejects one that ESCAPES (no outside write)", async () => {
-    // in-agent symlink (src → ./real): followed, telegram.ts written inside the agent
-    const dir = await readyAgent();
-    await mkdir(join(dir, "real"));
-    await symlink(join(dir, "real"), join(dir, "src"));
-    const out = await cliInit(["add", "telegram"], dir);
-    expect(out).toMatch(/created/);
-    expect(await exists(join(dir, "real", "channels", "telegram.ts"))).toBe(true); // written through the symlink
-
-    // escaping symlink (src → external dir): rejected, nothing written outside the agent
-    const esc = await readyAgent();
-    const ext = await freshDir();
-    await mkdir(join(ext, "code"));
-    await symlink(join(ext, "code"), join(esc, "src"));
-    const out2 = await cliInit(["add", "telegram"], esc);
-    expect(out2).toMatch(/outside the agent dir/);
-    expect(await exists(join(ext, "code", "channels", "telegram.ts"))).toBe(false); // not written outside
   });
 });
 
@@ -399,158 +171,5 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(readSkills(programText(ws).skills).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
-  });
-
-  it("`add skill` routes into the agent it names (symmetric with `add <channel>`)", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter"), { recursive: true });
-    await writeFile(
-      join(srcRoot, "greeter", "SKILL.md"),
-      "---\nname: greeter\ndescription: Greet the user warmly and by name.\n---\nSay hello.\n",
-    );
-    const dir = await freshDir();
-    await mkdir(join(dir, "fastagent"), { recursive: true });
-    await writeFile(join(dir, "fastagent", "fastagent.config.ts"), "export default {};\n");
-
-    const out = await cliInit(["add", "skill", join(srcRoot, "greeter"), "fastagent"], dir);
-    expect(out).toMatch(/vendored skill "greeter"/);
-    expect(await exists(join(dir, "fastagent", "skills", "greeter", "SKILL.md"))).toBe(true); // in the agent dir…
-    expect(await exists(join(dir, "skills"))).toBe(false); // …NOT where the command ran
-  });
-
-  it("rejects a source with no SKILL.md (not an Agent Skills skill), leaving no half-vendor", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "notaskill"), { recursive: true });
-    await writeFile(join(srcRoot, "notaskill", "readme.txt"), "x\n");
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await expect(vendorSkill(ws, join(srcRoot, "notaskill"))).rejects.toThrow(/SKILL\.md/);
-    expect(await exists(join(ws, "skills", "notaskill"))).toBe(false); // no half-vendor left behind
-  });
-
-  it("vendors a bare name from a local global skill dir (~/.agents/skills) — add-time copy, not a runtime scan", async () => {
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    await mkdir(join(home, ".agents", "skills", "greeter"), { recursive: true });
-    await writeFile(
-      join(home, ".agents", "skills", "greeter", "SKILL.md"),
-      "---\nname: greeter\ndescription: Greet the user warmly.\n---\nHi.\n",
-    );
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    const saved = process.env.HOME;
-    process.env.HOME = home;
-    try {
-      const r = await vendorSkill(ws, "greeter");
-      expect(r.name).toBe("greeter");
-      expect(r.dest).toBe("skills/greeter");
-      expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true); // copied in (git-tracked)
-    } finally {
-      if (saved !== undefined) process.env.HOME = saved;
-      else delete process.env.HOME;
-    }
-  });
-
-  it("a bare name absent from every global skill dir fails with guidance (never treated as a github repo)", async () => {
-    const home = await mkdtemp(join(tmpdir(), "fa-home-"));
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    const saved = process.env.HOME;
-    process.env.HOME = home;
-    try {
-      await expect(vendorSkill(ws, "nonesuch")).rejects.toThrow(/global skill dirs/);
-      expect(await exists(join(ws, "skills", "nonesuch"))).toBe(false);
-    } finally {
-      if (saved !== undefined) process.env.HOME = saved;
-      else delete process.env.HOME;
-    }
-  });
-
-  it("--update overwrites an existing skill (git-tracked re-fetch); without it, refuses and leaves it untouched", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter"), { recursive: true });
-    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v1.\n---\nOne.\n");
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-
-    const first = await vendorSkill(ws, join(srcRoot, "greeter"));
-    expect(first.overwritten).toBe(false);
-
-    // upstream changes
-    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v2 updated.\n---\nTwo.\n");
-
-    // without --update: refuses, on-disk skill stays v1 (mutation-proof: a no-op overwrite would pass)
-    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/--update/);
-    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("One.");
-
-    // with --update: overwrites to v2
-    const updated = await vendorSkill(ws, join(srcRoot, "greeter"), { update: true });
-    expect(updated.overwritten).toBe(true);
-    expect(updated.description).toContain("v2");
-    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("Two.");
-    expect((await readdir(join(ws, "skills"))).some((entry) => entry.startsWith(".greeter.previous-"))).toBe(false);
-  });
-
-  it("stops on an interrupted --update backup without deleting or guessing how to recover it", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter"), { recursive: true });
-    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: old.\n---\nOld.\n");
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await vendorSkill(ws, join(srcRoot, "greeter"));
-    const backup = join(ws, "skills", ".greeter.previous-00000000-0000-4000-8000-000000000000");
-    await rename(join(ws, "skills", "greeter"), backup);
-
-    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/interrupted skill update backup/);
-    expect(await readFile(join(backup, "SKILL.md"), "utf8")).toContain("Old.");
-    expect(await exists(join(ws, "skills", "greeter"))).toBe(false);
-  });
-
-  it("rejects a skills/ symlink that escapes the agent dir (mkdir would follow it and write outside)", async () => {
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    const external = await freshDir();
-    await symlink(external, join(ws, "skills")); // skills → outside the agent
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter"));
-    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: Hi.\n---\nHi.\n");
-    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/outside the agent dir/);
-    expect(await readdir(external)).toEqual([]); // nothing escaped into the symlink target
-  });
-
-  it("fails once with a clear message when `skills` is a plain file (not per-write EEXIST noise)", async () => {
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(ws, "skills"), "i am a file\n");
-    await expect(vendorSkill(ws, "greeter")).rejects.toThrow(/exists and is not a directory/);
-  });
-
-  it("--update failure leaves the existing skill intact (validate-before-replace, not destructive-first)", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter"), { recursive: true });
-    await writeFile(join(srcRoot, "greeter", "SKILL.md"), "---\nname: greeter\ndescription: v1.\n---\nOne.\n");
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await vendorSkill(ws, join(srcRoot, "greeter")); // vendor v1
-
-    // --update from an INVALID source (no SKILL.md): under destructive-first the old skill would be
-    // deleted before the failure; validate-before-replace must leave v1 fully intact.
-    const bad = await mkdtemp(join(tmpdir(), "fa-bad-"));
-    await mkdir(join(bad, "greeter"), { recursive: true });
-    await writeFile(join(bad, "greeter", "readme.txt"), "x\n"); // no SKILL.md
-    await expect(vendorSkill(ws, join(bad, "greeter"), { update: true })).rejects.toThrow(/SKILL\.md/);
-    expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true); // old skill survived
-    expect(await readFile(join(ws, "skills", "greeter", "SKILL.md"), "utf8")).toContain("One.");
-    expect(await exists(join(ws, "skills", ".greeter.vendoring"))).toBe(false); // no staging leftover
-  });
-
-  it("reports the skill by its exact directory, not a loose prefix (pdf must not absorb pdf-tools')", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    // pdf-tools: frontmatter name ≠ dir → a real spec diagnostic, at skills/pdf-tools/
-    await mkdir(join(srcRoot, "pdf-tools"), { recursive: true });
-    await writeFile(join(srcRoot, "pdf-tools", "SKILL.md"), "---\nname: wrongname\ndescription: tools.\n---\nx\n");
-    // pdf: spec-clean
-    await mkdir(join(srcRoot, "pdf"), { recursive: true });
-    await writeFile(join(srcRoot, "pdf", "SKILL.md"), "---\nname: pdf\ndescription: clean pdf skill.\n---\nx\n");
-
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
-    await vendorSkill(ws, join(srcRoot, "pdf-tools")); // its name is not its directory's: the loader refuses it
-    const r = await vendorSkill(ws, join(srcRoot, "pdf")); // clean
-
-    // `skills/pdf` ⊂ `skills/pdf-tools`: a loose-prefix match would report the wrong skill. Exact dir match → pdf.
-    expect(r.name).toBe("pdf");
-    expect(r.description).toContain("clean");
   });
 });

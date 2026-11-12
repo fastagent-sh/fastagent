@@ -35,7 +35,7 @@ export function parseContent(
 }
 
 /** A stable sender label for attribution. */
-export function senderLabel(sender: FeishuSender | undefined): string | undefined {
+function senderLabel(sender: FeishuSender | undefined): string | undefined {
   const id = senderId(sender);
   return id ? `user ${id}` : undefined;
 }
@@ -77,7 +77,7 @@ export function cloudEnvelope(event: FeishuMessageEvent, tag: FeishuCloudKind): 
 }
 
 /** Whether the parsed mention list contains this bot's app-scoped open_id. */
-export function mentionsBot(message: Pick<FeishuMessage, "mentions">, botOpenId: string | undefined): boolean {
+function mentionsBot(message: Pick<FeishuMessage, "mentions">, botOpenId: string | undefined): boolean {
   if (!botOpenId) return false;
   return (message.mentions ?? []).some((mention) => mention.id?.open_id === botOpenId);
 }

@@ -80,7 +80,7 @@ const MAX_OUTPUTS = 200;
  * own turn, and folding it here would answer it twice — and it needs no record of which messages were asks, so a lost
  * or cold state cannot break it. `C` is the platform's position of a message.
  */
-export interface PlaceRead<C> {
+interface PlaceRead<C> {
   key: string;
   /** The conversation reading: what it posted is in its session, what other conversations posted is discussion. */
   conversation: string;

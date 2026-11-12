@@ -172,11 +172,10 @@ which then retried the consumed token and received `invalid_grant`. The experime
 and persistence; it did not kill a real process or test Kage's secure-storage adapter. The temporary code is not product
 implementation or a new permanent live suite.
 
-Permanent regressions now live in `test/mcp-auth.test.ts`, `test/mcp-agent.test.ts`, `test/mcp-client.test.ts` and
-`test/cli-mcp.integration.test.ts`. They cover shared/aliased storage, callback refusal/cancellation, deletion and persistence races,
-different accounts, close isolation and unsafe replay. A real child process is killed after the fixture rotates a token
-but before its response arrives; recovery refuses the fenced token. That test ages the orphaned lock deterministically
-rather than waiting out the stale-lock window. Removing the fence makes it retry the consumed token and fail.
+The test suite keeps the spec cases of this design (`test/mcp-auth.test.ts`, `test/mcp-client.test.ts`,
+`test/mcp-agent.integration.test.ts`): sign-in with PKCE stored before it returns, a wrong state refused, the grant's
+target checked before a token is sent, required authorization reported instead of a browser opened. The concurrency,
+persistence-race and killed-process cases above were measured, not kept as permanent tests.
 
 The built CLI and public `openAgent` passed Linear read-only acceptance on 2026-11-02: browser sign-in, two instances
 sharing a grant, a call after closing the other instance, automatic refresh after forcing local expiry, and grant/session

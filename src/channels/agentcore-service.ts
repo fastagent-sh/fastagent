@@ -159,7 +159,7 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
  * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's ONLY reachable
  * surface (channels/agentcore.ts).
  */
-export function mountAgentcore(options: {
+function mountAgentcore(options: {
   agent: Agent;
   stateRoot: string;
   schedules: () => readonly Schedule[];

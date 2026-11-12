@@ -38,7 +38,7 @@ export type DockerHealthProbe = (healthUrl: string, stillStarting: () => Promise
  */
 export type HostPortProbe = (host: string, port: number) => Promise<boolean>;
 /** Resolve Docker Compose's `host:port` output to a loopback URL (safe for 0.0.0.0/[::] bindings too). */
-export function localUrlFromComposePort(stdout: string): string | undefined {
+function localUrlFromComposePort(stdout: string): string | undefined {
   const line = stdout
     .split("\n")
     .map((value) => value.trim())
@@ -70,7 +70,7 @@ const defaultHostPortBusy: HostPortProbe = (host, port) =>
  * normalised every short or long syntax into `ports[]`). A port with no fixed host side (`published` unset: Docker picks
  * one) cannot collide and is left out. A wildcard bind is asked on loopback, which is where the URL we report points.
  */
-export function agentPublishedPorts(stdout: string): { host: string; port: number }[] {
+function agentPublishedPorts(stdout: string): { host: string; port: number }[] {
   const config: unknown = JSON.parse(stdout);
   const ports = (config as { services?: { agent?: { ports?: unknown } } } | null)?.services?.agent?.ports;
   if (ports === undefined) return [];

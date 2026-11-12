@@ -10,7 +10,7 @@ import { createFeishuApi, type FeishuApi } from "./feishu-api.ts";
 export type FeishuTransport = Pick<FeishuApi, "sendText" | "sendMessage">;
 
 /** The app a transport signs in as. */
-export interface FeishuAppCredentials {
+interface FeishuAppCredentials {
   appId: string;
   appSecret: string;
 }

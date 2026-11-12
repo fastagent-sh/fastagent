@@ -49,7 +49,7 @@ function regionOf(secretArn: string): string {
 }
 
 /** The secret's JSON object, every value a string. */
-export async function readSecretValues(secretArn: string): Promise<Record<string, string>> {
+async function readSecretValues(secretArn: string): Promise<Record<string, string>> {
   const region = regionOf(secretArn);
   const hostname = `secretsmanager.${region}.amazonaws.com`;
   const body = JSON.stringify({ SecretId: secretArn });
