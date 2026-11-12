@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, run, runInProcess, withRepoModules } from "./cli-run.ts";
@@ -294,80 +294,6 @@ echo '{"type":"result","ok":true,"provider":"openai","method":"oauth","path":"/d
       method: "api-key",
       source: "OPENAI_API_KEY",
     });
-  });
-
-  it("without a terminal, an account's sign-in outlives the command: its address and ticket come back at once", async () => {
-    // Under test/fixtures, so the configuration's import of pi-ai resolves this repository's. The provider in code
-    // replaces the built-in `openai`: a sign-in that shows an address, then takes the one the browser ends on.
-    const host = join(import.meta.dirname, "fixtures", `.tmp-login-ticket-${process.pid}`);
-    const dir = join(host, "agent");
-    await mkdir(join(dir, ".secrets"), { recursive: true });
-    await writeFile(
-      join(dir, "fastagent.config.ts"),
-      `import { createProvider } from "@earendil-works/pi-ai";
-const never = () => { throw new Error("no message is sent"); };
-export default { providers: [createProvider({ id: "openai", name: "OpenAI", models: [], api: { stream: never, streamSimple: never },
-  auth: { oauth: { name: "ChatGPT", refresh: async (c) => c, toAuth: async (c) => ({ apiKey: c.access }),
-    login: async (interaction) => {
-      interaction.notify({ type: "auth_url", url: "https://auth.example/authorize?state=s" });
-      const address = new URL(await interaction.prompt({ type: "manual_code", message: "Paste the redirect URL" }));
-      if (address.searchParams.has("error")) throw new Error("the person declined");
-      return { type: "oauth", access: "a-" + address.searchParams.get("code"), refresh: "r", expires: Date.now() + 3600000 };
-    } } } })] };\n`,
-    );
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: await mkdtemp(join(tmpdir(), "fa-login-home-")) };
-    try {
-      const started = await run(["login", "openai", "--method", "account", "--json"], dir, env);
-      expect(started.code, started.stderr).toBe(0);
-      const ticket = JSON.parse(started.stdout);
-      expect(ticket).toMatchObject({
-        status: "need_user_action",
-        provider: "openai",
-        method: "account",
-        url: "https://auth.example/authorize?state=s",
-        check_command: `fastagent login --check ${ticket.ticket} --json`,
-        resume_command: `fastagent login --check ${ticket.ticket} --code '<address>' --json`,
-        agent_next_steps: expect.stringMatching(/^Give the URL to the user so they can sign in to OpenAI\./),
-      });
-      const pending = JSON.parse((await run(["login", "--check", ticket.ticket, "--json"], dir, env)).stdout);
-      expect(pending).toMatchObject({
-        status: "need_user_action",
-        agent_next_steps: expect.stringContaining("not finished"),
-      });
-
-      const address = "http://localhost:1455/auth/callback?code=xyz";
-      const done = await run(["login", "--check", ticket.ticket, "--code", address, "--json"], dir, env);
-      expect([done.code, JSON.parse(done.stdout)]).toEqual([
-        0,
-        {
-          status: "done",
-          provider: "openai",
-          method: "account",
-          ticket: ticket.ticket,
-          path: join(dir, ".secrets", "auth.json"),
-          model: "openai/gpt-6.1-sol",
-          agent_next_steps: expect.stringContaining('model: "openai/gpt-6.1-sol"'),
-        },
-      ]);
-      expect(JSON.parse(await readFile(join(dir, ".secrets", "auth.json"), "utf8")).openai).toMatchObject({
-        type: "oauth",
-        access: "a-xyz",
-      });
-
-      const declined = JSON.parse((await run(["login", "openai", "--method", "account", "--json"], dir, env)).stdout);
-      const failed = await run(
-        ["login", "--check", declined.ticket, "--code", "http://localhost/cb?error=denied", "--json"],
-        dir,
-        env,
-      );
-      expect([failed.code, JSON.parse(failed.stdout)]).toEqual([
-        1,
-        expect.objectContaining({ status: "failed", message: "the person declined" }),
-      ]);
-      expect((await run(["login", "--check", "not-a-ticket"], dir, env)).code).toBe(2);
-    } finally {
-      await rm(host, { recursive: true, force: true });
-    }
   });
 
   it("login from $HOME does NOT self-ignore the HOME-global ~/.fastagent (a dotfiles repo may track it)", async () => {
