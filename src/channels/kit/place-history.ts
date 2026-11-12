@@ -129,8 +129,10 @@ export function createPlaceHistory<C>(deps: {
   isControl?(key: string, messageId: string): boolean;
   /** The place's messages after `after` (or its newest few, with none) and before `until`, oldest first. */
   read(key: string, from: { after?: C; drop(messageId: string): boolean }, until?: C): Promise<PlaceListing>;
+  /** Places kept (default 2000). */
+  maxPlaces?: number;
 }): PlaceHistory<C> {
-  const { label, path } = deps;
+  const { label, path, maxPlaces = MAX_PLACES } = deps;
   const places = loadOutputs(path, label);
   /** One conversation's outputs in one place. */
   const scope = (key: string, conversation: string): string => `${conversation}\n${key}`;
@@ -159,7 +161,7 @@ export function createPlaceHistory<C>(deps: {
       // Most recently used last: the map's order is the eviction order.
       places.delete(at);
       places.set(at, outputs);
-      for (const victim of [...places.keys()].slice(0, Math.max(0, places.size - MAX_PLACES))) places.delete(victim);
+      for (const victim of [...places.keys()].slice(0, Math.max(0, places.size - maxPlaces))) places.delete(victim);
       try {
         saveStateFile(path, Object.fromEntries(places));
       } catch (error) {

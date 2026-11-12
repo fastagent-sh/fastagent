@@ -1,10 +1,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { installProxyFetch } from "../src/proxy.ts";
-import { agentWorkspace, runInProcess } from "./cli-run.ts";
+import { agentWorkspace, runInProcess, besideAgent } from "./cli-run.ts";
 
 // What reaches the platform goes through the proxy the environment declares: whether it does is asked of this seam.
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
@@ -24,9 +23,9 @@ describe("cli: channels setup --record-url", () => {
     const dir = await agentWorkspace("fa-record-url-", {
       "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
     });
-    const values = join(dir, "..", "prod.env");
+    const values = besideAgent(dir, "prod.env");
     await writeFile(values, "LARK_APP_ID=cli_lark\n");
-    const config = join(dir, "..", "prod.json");
+    const config = besideAgent(dir, "prod.json");
     await writeFile(config, JSON.stringify({ settings: {} }));
 
     const pending = await deployment("manual");
@@ -84,9 +83,9 @@ describe("cli: channels setup --record-url", () => {
     const dir = await agentWorkspace("fa-record-url-own-", {
       "fastagent.config.ts": `export default {};\n`,
     });
-    const config = join(dir, "..", "own.json");
+    const config = besideAgent(dir, "own.json");
     await writeFile(config, JSON.stringify({ http: { publicUrl: "https://agent.acme.com" } }));
-    const values = join(dir, "..", "own.env");
+    const values = besideAgent(dir, "own.env");
     const box = await deployment("registered", "slack");
     const real = globalThis.fetch;
     const slack: string[] = [];
@@ -143,9 +142,9 @@ describe("cli: channels setup --record-url", () => {
 
   it("finds the app by the credentials it was given, never by the shell's: a development token exported there is not the deployment's", async () => {
     const dir = await agentWorkspace("fa-record-url-shell-", { "fastagent.config.ts": `export default {};\n` });
-    const config = join(dir, "..", "shell.json");
+    const config = besideAgent(dir, "shell.json");
     await writeFile(config, JSON.stringify({ http: { publicUrl: "https://agent.acme.com" } }));
-    const values = join(dir, "..", "shell.env");
+    const values = besideAgent(dir, "shell.env");
     await writeFile(values, "SLACK_BOT_TOKEN=xoxb-production\n");
     const box = await deployment("registered", "slack");
     const real = globalThis.fetch;
@@ -187,7 +186,7 @@ describe("cli: channels setup --record-url", () => {
     const dir = await agentWorkspace("fa-record-url-usage-", {
       "fastagent.config.ts": `export default {};\n`,
     });
-    const config = join(dir, "..", "bare.json");
+    const config = besideAgent(dir, "bare.json");
     await writeFile(config, "{}");
     const cases: [string[], string][] = [
       [["channels", "setup", "whatsapp", dir], "sets up telegram, slack, feishu and lark"],

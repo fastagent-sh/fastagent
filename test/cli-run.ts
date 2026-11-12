@@ -5,7 +5,7 @@
 // decides: ~0.5-1s of CPU cheaper per call, and the unit tier's way to run a command.
 import { useValueFile } from "../src/value-file.ts";
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -55,6 +55,16 @@ export async function agentWorkspace(prefix: string, files: Record<string, strin
     await writeFile(join(dir, name), content);
   }
   return dir;
+}
+
+/**
+ * A path for `name` outside the agent directory `dir`, in a directory of that agent's alone. Never `join(dir, "..", name)`:
+ * the parent of a temp agent is the machine's temp directory, which every test process and every run shares.
+ */
+export function besideAgent(dir: string, name: string): string {
+  const beside = `${dir}-beside`;
+  mkdirSync(beside, { recursive: true });
+  return join(beside, name);
 }
 
 /** Run the CLI to completion, its stdin ended at once as a coding agent's shell hands it; capture stdout, stderr, exit code. */

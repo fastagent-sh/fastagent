@@ -583,7 +583,7 @@ describe("the Agent on pi-durable", () => {
       for (let round = 0; round < 10; round++) {
         const sessionId = (await agent.sessions.create()).id;
         const running = await agent.messages.send({ sessionId, content: "hold" });
-        await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+        await vi.waitFor(() => expect(subject.held()).toBe(1), { interval: 5 });
         const [late, { stopped }] = await Promise.all([
           agent.messages.send({ sessionId, content: "hi" }),
           agent.sessions.cancel(sessionId),
@@ -604,7 +604,7 @@ describe("the Agent on pi-durable", () => {
     try {
       const sessionId = (await agent.sessions.create()).id;
       await agent.messages.send({ sessionId, content: "hold" });
-      await vi.waitFor(() => expect(subject.held()).toBe(1), { timeout: 5000, interval: 5 });
+      await vi.waitFor(() => expect(subject.held()).toBe(1), { interval: 5 });
       const conversation = await agent.conversation(sessionId);
       const prototype = Object.getPrototypeOf(conversation) as { abort: (...args: unknown[]) => Promise<void> };
       vi.spyOn(prototype, "abort").mockRejectedValueOnce(new Error("pi-durable refused the stop"));

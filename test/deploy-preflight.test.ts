@@ -13,6 +13,7 @@ import { readInstanceConfigFile } from "../src/harnesses/pi-durable/config.ts";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 import { agent, empty, call } from "./deploy-preflight-fixtures.ts";
+import { besideAgent } from "./cli-run.ts";
 
 vi.mock("../src/git.ts", () => import("./git-double.ts"));
 
@@ -753,7 +754,7 @@ export default needs(["DISCORD_TOKEN"], ({ DISCORD_TOKEN }) => {
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
     await mkdir(join(pkg, "bin"), { recursive: true });
     await writeFile(join(pkg, "package.json"), "{}\n");
-    const runs = join(dir, "..", "mise-runs.log");
+    const runs = besideAgent(dir, "mise-runs.log");
     await writeFile(
       join(pkg, "bin", "mise"),
       `#!/bin/sh\necho "$*" >> "${runs}"\ncase "$1" in\n  tool) printf '{"backend":"aqua:o/%s"}' "$2" ;;\nesac\n`,

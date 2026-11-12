@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { MISE_PACKAGE_NAMES } from "../src/environment/mise.ts";
 import { agent, call } from "./deploy-preflight-fixtures.ts";
+import { besideAgent } from "./cli-run.ts";
 
 describe("deploy/preflight: the host-neutral pre-flight", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -12,7 +13,7 @@ describe("deploy/preflight: the host-neutral pre-flight", () => {
     const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
     await mkdir(join(pkg, "bin"), { recursive: true });
     await writeFile(join(pkg, "package.json"), "{}\n");
-    const runs = join(dir, "..", "mise-runs.log");
+    const runs = besideAgent(dir, "mise-runs.log");
     await writeFile(
       join(pkg, "bin", "mise"),
       `#!/bin/sh\necho "$*" >> "${runs}"\ncase "$1" in\n  tool) printf '{"backend":"aqua:o/%s"}' "$2" ;;\nesac\n`,

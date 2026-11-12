@@ -51,6 +51,11 @@ How the boundary is kept:
   not wait, drive the time with fake timers, or make the wait it must not take longer than the test's timeout (inject
   it, or ask for the longest one there is), so the timeout is the bound with a margin no load closes. A regular
   expression is shown linear the same way: an input on which a backtracking one runs for over a minute.
+- `vi.waitFor` waits 10 s unless told otherwise (`test/setup.ts`; vitest's own default is 1 s). A wait that is met
+  returns at once, so only a failing test pays for the longer budget.
+- A file a test writes outside its temp directory goes in `besideAgent(dir, name)` (`test/cli-run.ts`), never
+  `join(dir, "..", name)`: the parent of a temp directory is the machine's, shared by every test process and every run.
+  `test-tiers.test.ts` refuses the second.
 - Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
   in-process CLI (`runInProcess`), the host CLI runner (`CliRunner`), a stubbed `fetch`, `test/git-double.ts` for
   `src/git.ts`, `test/tsc-double.ts` for the build's compiler, `test/storage-no-wait.ts` for a held database. A double gets one integration test that checks it

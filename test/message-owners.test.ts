@@ -26,12 +26,11 @@ describe("message owners", () => {
   });
 
   it("keeps the newest messages and drops the oldest", () => {
-    const owners = createMessageOwners({ label: "[t]", path: freshPath() });
-    for (let i = 0; i < 1100; i++) owners.record(`m${i}`, { conversation: "c" });
+    const owners = createMessageOwners({ label: "[t]", path: freshPath(), maxMessages: 10 });
+    for (let i = 0; i < 11; i++) owners.record(`m${i}`, { conversation: "c" });
     expect(owners.ownerOf("m0")).toBeUndefined();
-    expect(owners.ownerOf("m99")).toBeUndefined();
-    expect(owners.ownerOf("m100")).toEqual({ conversation: "c" });
-    expect(owners.ownerOf("m1099")).toEqual({ conversation: "c" });
+    expect(owners.ownerOf("m1")).toEqual({ conversation: "c" });
+    expect(owners.ownerOf("m10")).toEqual({ conversation: "c" });
   });
 
   it("starts empty, and says so, when the file has an unexpected shape", () => {

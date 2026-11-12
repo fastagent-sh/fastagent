@@ -57,10 +57,11 @@ describe("slack socket mode over a real WebSocket", () => {
   });
 
   it("keeps a connection whose pings are answered", async () => {
-    const { peers, connection } = await connected({ answerPings: true }, { pingEveryMs: 20, pongWithinMs: 150 });
+    // A window for each pong long enough that a loaded machine still answers within it, and pings past it: a pong that
+    // went unnoticed would have dropped the connection by then.
+    const { peers, connection } = await connected({ answerPings: true }, { pingEveryMs: 20, pongWithinMs: 1_000 });
     await connection.ready;
-    // Past several windows for a pong: one that went unnoticed would have dropped the connection by now.
-    await vi.waitFor(() => expect(peers[0]?.pings).toBeGreaterThanOrEqual(12));
+    await vi.waitFor(() => expect(peers[0]?.pings).toBeGreaterThanOrEqual(60));
     expect(peers).toHaveLength(1);
   });
 

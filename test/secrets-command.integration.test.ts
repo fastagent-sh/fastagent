@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { deploymentName } from "../src/deploy/deployment-name.ts";
 import { toFlyAppName } from "../src/deploy/fly/plan.ts";
-import { run, runInProcess } from "./cli-run.ts";
+import { run, runInProcess, besideAgent } from "./cli-run.ts";
 import { agent, read, fakeFly, fakeAws, realStdin } from "./secrets-command-fixtures.ts";
 
 afterEach(() => {
@@ -62,7 +62,7 @@ describe("secrets push", () => {
   it("sets the declared names a file holds, and says which it did not push because nothing declares them", async () => {
     const fly = await fakeFly([]);
     const dir = await agent();
-    const other = join(dir, "..", "other.env");
+    const other = besideAgent(dir, "other.env");
     await writeFile(other, "GH_TOKEN=ghp_x\nSENTRY_DSN=https://dsn\nUNDECLARED=nope\nEMPTY=\n");
     const result = await runInProcess(["secrets", "push", "fly", dir, "--env-file", other], undefined, fly.env);
     expect(result.code, result.stderr).toBe(0);
@@ -100,7 +100,7 @@ describe("secrets push", () => {
   it("on Fly: each declared name goes in with `NAME=-` over stdin, creating the app first, exactly as the file holds it, restarting once", async () => {
     const fly = await fakeFly([]);
     const dir = await agent();
-    const values = join(dir, "..", "fly.env");
+    const values = besideAgent(dir, "fly.env");
     await writeFile(values, "GH_TOKEN=ghp_x\nSENTRY_DSN=https://dsn.example/a#b\nUNDECLARED=nope\n");
     const result = await runInProcess(["secrets", "push", "fly", dir, "--env-file", values], undefined, fly.env);
     expect(result.code, result.stderr).toBe(0);
@@ -214,7 +214,7 @@ describe("secrets with a github content entry", () => {
   it("knows GITHUB_TOKEN as the host's clone reads it: `push` sets it, and `set` does not warn it is unread", async () => {
     const fly = await fakeFly([]);
     const dir = await agent({ "context.json": JSON.stringify({ content: { app: { github: "acme/app" } } }) });
-    const values = join(dir, "..", "clone.env");
+    const values = besideAgent(dir, "clone.env");
     await writeFile(values, "GH_TOKEN=ghp_x\nGITHUB_TOKEN=ghp_clone\n");
     const listed = await runInProcess(["secrets", "list", "fly", dir, "--json"], undefined, fly.env);
     expect(JSON.parse(listed.stdout).secrets).toContainEqual(
