@@ -246,8 +246,7 @@ describe("the server survives arbitrary channel code", () => {
       await res.body!.getReader().read(); // start it, then stop reading so the socket backs up
       await new Promise((r) => setTimeout(r, 50));
       ac.abort();
-      await new Promise((r) => setTimeout(r, 100));
-      expect(cancelled).toBe(true); // the stream was told to stop — no parked writer left behind
+      await vi.waitFor(() => expect(cancelled).toBe(true)); // the stream was told to stop — no parked writer left behind
     } finally {
       await host.close();
     }

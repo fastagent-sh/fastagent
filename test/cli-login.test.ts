@@ -17,7 +17,7 @@ describe("cli: login and models", () => {
     expect(code).not.toBe(0);
     // The marker names itself, at both positions the lookup checks.
     expect(stderr).toMatch(/no agent here \(no fastagent\.config\.ts\)/);
-    await expect(stat(join(cwd, ".secrets"))).rejects.toThrow(); // nothing created in the non-agent dir
+    await expect(stat(join(cwd, ".secrets"))).rejects.toMatchObject({ code: "ENOENT" }); // nothing created in the non-agent dir
 
     // …and it is silent when FASTAGENT_AUTH_PATH outranks the fallback: an announcement naming a file the
     // run does not write would be worse than none.
@@ -264,7 +264,7 @@ describe("cli: login and models", () => {
     delete env.FASTAGENT_AUTH_PATH;
     const { code } = await runInProcess(["login", "no-such-provider"], home, env);
     expect(code).not.toBe(0);
-    await expect(stat(join(home, ".fastagent", ".gitignore"))).rejects.toThrow(); // home left untouched
+    await expect(stat(join(home, ".fastagent", ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" }); // home left untouched
   });
 
   it("login reads the workspace .secrets/.env (a FASTAGENT_AUTH_PATH set there takes effect)", async () => {
@@ -280,6 +280,6 @@ describe("cli: login and models", () => {
     delete env.FASTAGENT_AUTH_PATH; // must come only from .env
     const { code } = await runInProcess(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
-    await expect(stat(join(cwd, ".secrets", ".gitignore"))).rejects.toThrow(); // external path won → no in-tree self-ignore
+    await expect(stat(join(cwd, ".secrets", ".gitignore"))).rejects.toMatchObject({ code: "ENOENT" }); // external path won → no in-tree self-ignore
   });
 });

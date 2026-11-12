@@ -305,7 +305,7 @@ describe("context-buffer", () => {
   it("fails to open, rather than starting empty, where the directory of places is a file", () => {
     const dir = freshPath();
     writeFileSync(dir, "a file where the directory should be");
-    expect(() => open(dir)).toThrow();
+    expect(() => open(dir)).toThrow(/ENOTDIR/);
   });
 
   it("a failed pre-ACK persist keeps nothing — memory matches disk, a redelivery re-pushes once", () => {
@@ -314,7 +314,7 @@ describe("context-buffer", () => {
     buf.push("place", entry("@alice", "kept", 1));
     rmSync(fileOf(dir, "place"));
     mkdirSync(fileOf(dir, "place")); // make the file unwritable (rename onto a directory fails)
-    expect(() => buf.push("place", entry("@bob", "rolled back", 2))).toThrow();
+    expect(() => buf.push("place", entry("@bob", "rolled back", 2))).toThrow(/EISDIR/);
     expect(fold(buf).text).toBe("@alice (msg 1): kept"); // the failed entry is NOT in memory either
   });
 

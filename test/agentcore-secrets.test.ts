@@ -76,7 +76,7 @@ describe("agentcoreSecretStore", () => {
     const put = aws.calls.find((call) => call.args[1] === "put-secret-value") as { args: string[] };
     expect(put.args.join(" ")).not.toContain("new #");
     expect(put.args.join(" ")).toMatch(/--secret-string file:\/\//);
-    expect(() => readFileSync(aws.written[0] as string)).toThrow();
+    expect(() => readFileSync(aws.written[0] as string)).toThrow(/ENOENT/);
   });
 
   it("a secret that is not an object of strings is refused, quoting none of it", async () => {

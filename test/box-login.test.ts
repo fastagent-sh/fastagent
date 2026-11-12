@@ -55,7 +55,9 @@ describe("catching the browser's redirect on this machine", () => {
       expect(await answer).toBe(`http://localhost:${port}/auth/callback?code=abc&state=s`);
       expect(terminal.aborted()).toBe(true);
       // Caught once: the listener is gone, so nothing else on this port is ours to answer.
-      await expect(fetch(`http://127.0.0.1:${port}/auth/callback?code=again`)).rejects.toThrow();
+      await expect(fetch(`http://127.0.0.1:${port}/auth/callback?code=again`)).rejects.toMatchObject({
+        cause: { code: "ECONNREFUSED" },
+      });
     } finally {
       io.close();
     }
@@ -97,7 +99,9 @@ describe("catching the browser's redirect on this machine", () => {
     const port = await freePort();
     const io = catchingRedirect({ ...waitingTerminal().io, prompt: async () => "pasted" });
     io.openUrl(`https://auth.example/authorize?redirect_uri=${encodeURIComponent(`http://localhost:${port}/cb`)}`);
-    await expect(fetch(`http://127.0.0.1:${port}/cb?code=x`)).rejects.toThrow(); // nothing listens
+    await expect(fetch(`http://127.0.0.1:${port}/cb?code=x`)).rejects.toMatchObject({
+      cause: { code: "ECONNREFUSED" },
+    }); // nothing listens
     expect(await io.prompt("paste", { redirect: true })).toBe("pasted");
     io.close();
   });

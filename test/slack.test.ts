@@ -1280,7 +1280,7 @@ describe("Slack Socket Mode channel", () => {
   });
 
   it("leaves an event unacknowledged while Slack authentication is unusable, as the webhook channel answers 503", async () => {
-    vi.spyOn(log, "error").mockImplementation(() => {});
+    const errors = vi.spyOn(log, "error").mockImplementation(() => {});
     const { agent } = replyingAgent();
     const fetchMock = vi.fn(async (input: string | URL) =>
       String(input).endsWith("/apps.connections.open")
@@ -1305,7 +1305,8 @@ describe("Slack Socket Mode channel", () => {
     handlers?.message(JSON.stringify({ type: "hello" }));
     await connection.ready;
     handlers?.message(JSON.stringify(delivery("E1", message("3.0", { channel: "D1", channel_type: "im" }))));
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Once the event has met the unusable authentication, nothing has acknowledged it.
+    await vi.waitFor(() => expect(errors.mock.calls.flat().join("\n")).toContain("invalid_auth"));
     expect(sent).toEqual([]);
     abort.abort();
   });

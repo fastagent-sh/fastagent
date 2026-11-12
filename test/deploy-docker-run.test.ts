@@ -405,6 +405,6 @@ describe("deploy/docker/run: agentPublishedPorts", () => {
     expect(agentPublishedPorts('{"services":{"agent":{}}}')).toEqual([]);
     expect(agentPublishedPorts('{"services":{}}')).toEqual([]);
     expect(() => read("8787")).toThrow(/not a list/);
-    expect(() => agentPublishedPorts("agent")).toThrow();
+    expect(() => agentPublishedPorts("agent")).toThrow(SyntaxError);
   });
 });

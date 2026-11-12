@@ -526,7 +526,7 @@ describe("durable turn intent (crash recovery)", () => {
     mkdirSync(join(state, "turns.json.tmp")); // make saveStateFile's tmp write fail (EISDIR) on the pre-ACK persist
     // add() throws → submit throws → the handler rejects (never returns the 200 ACK). The Node host maps a
     // rejected handler to 500, so Telegram redelivers the never-ACKed update rather than silently losing it.
-    await expect(ch(tgRequest(MSG))).rejects.toThrow();
+    await expect(ch(tgRequest(MSG))).rejects.toThrow(/EISDIR/);
     expect(existsSync(join(state, "turns.json"))).toBe(false); // rolled back — no phantom intent on disk
   });
 

@@ -147,7 +147,7 @@ describe("secrets set", () => {
     expect(result.stderr).not.toContain(printed);
     // Kept nowhere on this machine: it is shown once, and the person who made it holds it.
     for (const file of [".secrets/.env", ".secrets/production/.env"]) {
-      await expect(read(join(dir, file))).rejects.toThrow();
+      await expect(read(join(dir, file))).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
 

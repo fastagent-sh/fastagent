@@ -380,7 +380,7 @@ describe("a Lark app's credentials are pasted, and checked as a pair", () => {
     expect(outcome.written).toEqual(["LARK_APP_ID", "LARK_APP_SECRET"]);
     expect(await written()).toContain("LARK_APP_SECRET=good-secret");
     expect(carried).toBe(1);
-    await expect(realFetch(first.url)).rejects.toThrow();
+    await expect(realFetch(first.url)).rejects.toMatchObject({ cause: { code: "ECONNREFUSED" } });
     // What is left is the person's step in the console, not a value to type anywhere.
     expect(outcome.after).toEqual([expect.stringContaining("https://open.larksuite.com/app/cli_lark/event?tab=safe")]);
   });

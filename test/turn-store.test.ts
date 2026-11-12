@@ -152,10 +152,10 @@ describe("turn-store", () => {
     const store = createTurnStore(join(sub, "turns.json")); // constructs on an empty (ENOENT) file
     rmSync(sub, { recursive: true });
     writeFileSync(sub, "x"); // the parent is now a FILE — saveStateFile's mkdir/write fails
-    expect(() => store.add(turn("t1"))).toThrow(); // the pre-ACK contract: surface the write failure
+    expect(() => store.add(turn("t1"))).toThrow(/EEXIST|ENOTDIR/); // the pre-ACK contract: surface the write failure
     // Rolled back: the id is NOT left in memory, so a redelivery re-attempts the write (throws again)
     // rather than short-circuiting on turns.has and running the turn with its intent never persisted.
-    expect(() => store.add(turn("t1"))).toThrow();
+    expect(() => store.add(turn("t1"))).toThrow(/EEXIST|ENOTDIR/);
   });
 
   it("remove() swallows a post-ACK write failure (must not abort delivery)", () => {

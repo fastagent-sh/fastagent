@@ -93,7 +93,7 @@ describe("retryWhile", () => {
           onRetry: ({ attempt, attempts, error }) => announced.push(`${attempt}/${attempts} ${String(error)}`),
         },
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow("not yet");
     expect(announced).toEqual(["1/3 Error: not yet", "2/3 Error: not yet"]);
   });
 });

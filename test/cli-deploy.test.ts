@@ -57,7 +57,7 @@ describe("cli: deploy, an instance of its own", () => {
     }
     // The first deploy's file is still its own after the second ran: nothing was shared or overwritten.
     expect(await readFile(join(dir, "fly.acme.toml"), "utf8")).toContain('app = "acme"');
-    await expect(stat(join(dir, "fly.toml"))).rejects.toThrow();
+    await expect(stat(join(dir, "fly.toml"))).rejects.toMatchObject({ code: "ENOENT" });
     const docker = await runInProcess(["deploy", "docker", dir, "--config", config("acme")]);
     expect(docker.code, docker.stderr).toBe(0);
     expect(await readFile(join(dir, "fastagent.acme.compose.yml"), "utf8")).toMatch(/^name: .*acme/m);
@@ -165,7 +165,9 @@ describe("cli: deploy --idle-timeout", () => {
         2,
         expect.stringContaining("--idle-timeout must be a whole number of seconds from 60 to 1209600"),
       ]);
-      await expect(stat(join(dir, agentcoreTemplateFile(await deploymentName(dir))))).rejects.toThrow();
+      await expect(stat(join(dir, agentcoreTemplateFile(await deploymentName(dir))))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }
     const fly = await runInProcess(["deploy", "fly", dir, "--idle-timeout", "900"]);
     expect(fly.stderr).toContain("--idle-timeout: agentcore-only");
@@ -301,7 +303,7 @@ describe("cli: deploy", () => {
       `\`fastagent deploy fly ${dir} --env-file ${file} --run --json\`, which hands their part to its user`,
     );
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).toContain("FEISHU_APP_ID=cli_dev");
-    await expect(stat(join(dir, "Dockerfile"))).rejects.toThrow();
+    await expect(stat(join(dir, "Dockerfile"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("deploy WIRES the ownership rule — the real command keeps a file it did not generate", async () => {

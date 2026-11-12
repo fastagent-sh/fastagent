@@ -32,7 +32,7 @@ describe("cli: info", () => {
     expect(info.tools).toEqual(["lookup"]);
     expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
-    await expect(stat(join(dir, ".state"))).rejects.toThrow(); // read-only: never creates the state root
+    await expect(stat(join(dir, ".state"))).rejects.toMatchObject({ code: "ENOENT" }); // read-only: never creates the state root
   });
 
   it("info reports the configuration a variable sets over the instance's, with its source", async () => {

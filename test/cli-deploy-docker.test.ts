@@ -151,7 +151,9 @@ describe("cli: deploy docker", () => {
     const result = await runInProcess(["deploy", "docker", dir, "--tunnel"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain("unknown option '--tunnel'");
-    await expect(access(join(dir, dockerComposeFile(await deploymentName(dir))))).rejects.toThrow();
+    await expect(access(join(dir, dockerComposeFile(await deploymentName(dir))))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("deploy docker --run checks the names against the environment Compose will run in, with or without --from-env", async () => {

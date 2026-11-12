@@ -185,7 +185,8 @@ it("passes a pinned IP rather than a hostname to the configured proxy", async ()
     { address: "8.8.8.8", family: 4 },
   ]);
   cleanup.push(() => network.close());
-  await expect(network.fetch("https://issuer.test/metadata")).rejects.toThrow();
+  // The stand-in proxy tunnels nowhere: what is checked is the address it was asked for.
+  await expect(network.fetch("https://issuer.test/metadata")).rejects.toThrow("fetch failed");
   expect(targets).toEqual(["8.8.8.8:443"]);
 });
 it("does not follow a redirect even to another permitted local path", async () => {
@@ -196,7 +197,7 @@ it("does not follow a redirect even to another permitted local path", async () =
   });
   const network = await openMcpNetwork(local.url);
   cleanup.push(() => network.close());
-  await expect(network.fetch(local.url)).rejects.toThrow();
+  await expect(network.fetch(local.url)).rejects.toMatchObject({ cause: { message: "unexpected redirect" } });
   expect(paths).toEqual(["/"]);
 });
 it("aborts a pending DNS read without opening a late connection", async () => {
