@@ -352,6 +352,8 @@ src/
 test/                       # vitest; faux models by default; two tiers (CONTRIBUTING.md, "Test tiers")
 ├── forbidden.ts            # what a tier refuses, failed after the test: setup.ts (off-machine connections, both
 │                           # tiers), unit-setup.ts (child processes, unit)
+├── network-guard.ts        # the off-machine connection check itself, free of vitest; child-network-guard.ts loads it
+│                           # into every Node process a test starts (NODE_OPTIONS)
 ├── git-double.ts           # src/git.ts for a unit test: no git, or the answers a test scripts for a directory
 ├── tsc-double.ts           # the build's compiler for a unit test: imports followed, types stripped, nothing checked
 ├── storage-no-wait.ts      # the instance's storage for a unit test: a held database refused at once, not after 5 s

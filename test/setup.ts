@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { vi } from "vitest";
 import { forbidNetwork } from "./forbidden.ts";
+import { CHILD_REFUSALS } from "./network-guard.ts";
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
 
@@ -15,6 +16,14 @@ process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
 process.env.FASTAGENT_OFFLINE = "1";
 
 forbidNetwork();
+// The Node processes a test starts refuse the same, and say what they refused to this file's tests.
+process.env[CHILD_REFUSALS] = join(process.env.HOME, "refused-connections");
+process.env.NODE_OPTIONS = [
+  process.env.NODE_OPTIONS,
+  `--import=${new URL("./child-network-guard.ts", import.meta.url).pathname}`,
+]
+  .filter(Boolean)
+  .join(" ");
 
 // The machine's proxy is the machine's: with it, a fetch a test should not make goes to a proxy on loopback and passes
 // the guard here, and fails it on a machine without one. A test about the proxy declares its own.

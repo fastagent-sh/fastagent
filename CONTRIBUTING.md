@@ -44,13 +44,17 @@ How the boundary is kept:
 
 - `test/setup.ts` refuses a connection to anything but loopback in every tier, and `test/unit-setup.ts` refuses a child
   process in the unit tier. Both throw where the call is made and fail the test afterwards, so product code that
-  catches the error cannot hide it. A name is judged by the address it resolves to. The guard is in the test's own
-  process: a child process an integration test starts is kept off the network by its environment, not by the guard.
+  catches the error cannot hide it. A name is judged by the address it resolves to. The Node processes a test starts
+  (the CLI, a step, an inline script) load the same guard through `NODE_OPTIONS`, and what they refused fails the test
+  that started them; a process that is not Node (git, a stand-in shell script) is kept off the network only by its
+  environment.
 - The machine a test runs on is the same everywhere: `test/setup.ts` gives every file an empty `HOME`,
   `FASTAGENT_OFFLINE=1` (no model catalog fetched) and no proxy variables, and `run`/`runInProcess` keep the first two
   in an environment a test gives them whole. A test whose subject is one of them sets it itself.
 - Unit tests run in a random order within each file, so none leans on another having run first. A run prints its seed
   (`Running tests with seed "<n>"`); `npx vitest run --project unit --sequence.seed=<n>` repeats the order.
+- An assertion on a failure names it: `toThrow("…")`, a pattern, an error class or `toMatchObject({ code: "ENOENT" })`,
+  never a bare `toThrow()`, which passes for any error, the wrong one included.
 - `test/test-tiers.test.ts` refuses a bound on how long something took (`Date.now()` minus a start, below a limit):
   load decides it as much as the code does. A lower bound, that the code waited, is allowed. To show something does
   not wait, drive the time with fake timers, or make the wait it must not take longer than the test's timeout (inject

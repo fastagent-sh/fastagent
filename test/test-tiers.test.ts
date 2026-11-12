@@ -10,6 +10,9 @@ const LOWER_BOUND = /\.toBeGreaterThan(?:OrEqual)?\(/;
 /** A fixed name beside a temp directory: in the machine's temp directory, which every test process and run shares. */
 const SHARED_TEMP = /join\([A-Za-z_$.]+, "\.\.", (?:"[^"]*"|'[^']*'|`[^`$]*`)\)/;
 
+/** A thrown error asserted without saying which: it passes for any error, the wrong one included. */
+const ANY_ERROR = /(?<!\.not)\.toThrow(?:Error)?\(\)/;
+
 const lines = readdirSync(TEST_DIR)
   .filter((file) => file.endsWith(".ts"))
   .flatMap((file) =>
@@ -24,4 +27,8 @@ it('no test bounds how long something took (CONTRIBUTING.md, "Test tiers")', () 
 
 it("no test writes a fixed name beside its temp directory, where other tests and runs write it too (besideAgent)", () => {
   expect(lines.filter(({ line }) => SHARED_TEMP.test(line)).map(({ at }) => at)).toEqual([]);
+});
+
+it('no test asserts that something fails without saying how (CONTRIBUTING.md, "Test tiers")', () => {
+  expect(lines.filter(({ line }) => ANY_ERROR.test(line)).map(({ at }) => at)).toEqual([]);
 });
