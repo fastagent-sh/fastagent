@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -161,17 +161,95 @@ describe("context-buffer", () => {
       mkdirSync(fileOf(dir, "quiet")); // the sweep's rewrite of this place fails
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       expect(() => buf.push("busy", entry("@new", "now", 1))).not.toThrow(); // another chat's push is not failed by it
-      expect(warn.mock.calls.flat().join(" ")).toContain("could not drop what has expired from place quiet");
+      expect(warn.mock.calls.flat().join(" ")).toContain("could not tidy place quiet of what has expired");
       expect(buf.fold("quiet", { until: 1e9, budget: 1e9 }).folded).toEqual([]);
     });
 
-    it("remembers what it dropped across a restart", () => {
-      const path = freshPath();
-      const buf = open(path);
-      buf.push("place", entry("@old", "said long ago", 1));
+    it("tries a failed sweep again at the next one, and the file loses what expired once it can", () => {
+      const dir = freshPath();
+      const buf = open(dir);
+      buf.push("quiet", entry("@old", "SECRET said long ago", 1));
       clock += 15 * DAY;
-      buf.push("place", entry("@new", "said now", 10));
-      expect(fold(open(path)).text).toContain("no longer kept");
+      mkdirSync(`${fileOf(dir, "quiet")}.tmp`); // the atomic rewrite of this file fails; the file itself stays
+      vi.spyOn(log, "warn").mockImplementation(() => {});
+      buf.push("busy", entry("@a", "first sweep, fails", 1));
+      expect(readFileSync(fileOf(dir, "quiet"), "utf8")).toContain("SECRET");
+      rmSync(`${fileOf(dir, "quiet")}.tmp`, { recursive: true }); // the obstacle goes
+      clock += 2 * 60 * 60 * 1000;
+      buf.push("busy", entry("@a", "next sweep", 2));
+      expect(readFileSync(fileOf(dir, "quiet"), "utf8")).not.toContain("SECRET");
+    });
+  });
+
+  describe("a place with nothing left", () => {
+    const HOUR = 60 * 60 * 1000;
+    it("keeps its note of what it lost for one more retention, then its file and record go", () => {
+      const dir = freshPath();
+      const buf = open(dir);
+      buf.push("quiet", entry("@old", "said long ago", 1));
+      clock += 15 * DAY;
+      buf.push("busy", entry("@a", "sweeps: quiet loses its entry", 1));
+      expect(JSON.parse(readFileSync(fileOf(dir, "quiet"), "utf8"))).toMatchObject({ entries: [], expiredThrough: 1 });
+      clock += 13 * DAY; // 13 days after the drop: the note is still kept
+      buf.push("busy", entry("@a", "a", 2));
+      expect(existsSync(fileOf(dir, "quiet"))).toBe(true);
+      expect(buf.fold("quiet", { until: 1e9, budget: 1e9 }).text).toContain("no longer kept");
+      clock += 2 * DAY + HOUR; // past it
+      buf.push("busy", entry("@a", "b", 3));
+      expect(existsSync(fileOf(dir, "quiet"))).toBe(false);
+      expect(buf.fold("quiet", { until: 1e9, budget: 1e9 })).toEqual({ text: "", folded: [] });
+      expect(open(dir).fold("quiet", { until: 1e9, budget: 1e9 }).text).toBe(""); // and a restart does not bring it back
+    });
+
+    it("is forgotten at start too, and a place that still holds entries never is, however old its note", () => {
+      const dir = freshPath();
+      const buf = open(dir);
+      buf.push("gone", entry("@old", "said long ago", 1));
+      buf.push("kept", entry("@old", "said long ago too", 1));
+      clock += 15 * DAY;
+      buf.push("kept", entry("@a", "x: drops the old one, and notes it", 2)); // both places' old entries drop here
+      clock += 12 * DAY;
+      buf.push("kept", entry("@a", "y: said 12 days later", 3));
+      clock += 2 * DAY + HOUR; // the note is now a retention old; "x" has expired, "y" is 2 days old
+      buf.push("busy", entry("@b", "a sweep is due", 1));
+      expect(existsSync(fileOf(dir, "gone"))).toBe(false); // nothing left, and its note a retention old
+      const kept = JSON.parse(readFileSync(fileOf(dir, "kept"), "utf8"));
+      expect(kept.entries.map((e: BufferEntry) => e.body)).toEqual(["y: said 12 days later"]); // never forgotten
+      expect(existsSync(fileOf(dir, "kept"))).toBe(true);
+    });
+
+    it("forgets it at a start as well", () => {
+      const dir = freshPath();
+      const buf = open(dir);
+      buf.push("gone", entry("@old", "said long ago", 1));
+      clock += 15 * DAY;
+      buf.push("busy", entry("@a", "a sweep: gone loses its entry", 1));
+      clock += 15 * DAY;
+      expect(existsSync(fileOf(dir, "gone"))).toBe(true);
+      open(dir);
+      expect(existsSync(fileOf(dir, "gone"))).toBe(false);
+    });
+
+    it("says a file it could not remove, keeps its record, and removes it at the next sweep once it can", () => {
+      const dir = freshPath();
+      const buf = open(dir);
+      buf.push("quiet", entry("@old", "said long ago", 1));
+      clock += 15 * DAY;
+      buf.push("busy", entry("@a", "a", 1));
+      clock += 15 * DAY;
+      const file = fileOf(dir, "quiet");
+      rmSync(file);
+      mkdirSync(file);
+      writeFileSync(join(file, "blocker"), "a directory with a file in it cannot be removed as a file");
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      expect(() => buf.push("busy", entry("@a", "b", 2))).not.toThrow();
+      expect(warn.mock.calls.flat().join(" ")).toContain("could not tidy place quiet");
+      // The obstacle goes and an ordinary file is where it was: only a record kept in memory finds it to remove.
+      rmSync(file, { recursive: true });
+      writeFileSync(file, JSON.stringify({ entries: [] }));
+      clock += 2 * HOUR;
+      buf.push("busy", entry("@a", "c", 3));
+      expect(existsSync(file)).toBe(false);
     });
   });
 

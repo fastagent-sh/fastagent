@@ -18,7 +18,7 @@
  * State files are an IO boundary: valid JSON of the WRONG shape degrades exactly like a corrupt file (warn + empty),
  * never flowing in as trusted data.
  */
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../../log.ts";
 import type { Discussion } from "./place-history.ts";
@@ -64,10 +64,12 @@ export interface ContextBuffer<E> {
   ): Discussion<E>;
 }
 
-/** One place's record: its entries, and the newest position the retention has dropped from it. */
+/** One place's record: its entries, the newest position the retention has dropped from it, and when it last did. */
 interface Place<E> {
   entries: E[];
   expiredThrough?: number;
+  /** When something was last dropped (ms): the note of it is kept one more retention, then the place is forgotten. */
+  droppedAt?: number;
 }
 
 /** How often a quiet place's expired entries are swept from its file: a place is also tidied by its own next push. */
@@ -106,19 +108,32 @@ export function createContextBuffer<E>(options: {
       place !== null &&
       Array.isArray(place.entries) &&
       place.entries.every(isEntry) &&
-      (place.expiredThrough === undefined || typeof place.expiredThrough === "number")
+      (place.expiredThrough === undefined || typeof place.expiredThrough === "number") &&
+      (place.droppedAt === undefined || typeof place.droppedAt === "number")
     );
   };
 
-  /** Drop what is past the retention, recording the newest position the place lost. Whether it changed. */
-  const expire = (place: Place<E>): boolean => {
+  /**
+   * The place with what is past the retention dropped, and a record of the newest position and the time it lost them;
+   * undefined when nothing is. The place itself is not changed: it is replaced once the file is written, so a write that
+   * failed is found due again at the next sweep.
+   */
+  const expired = (place: Place<E>): Place<E> | undefined => {
     const kept = place.entries.filter(alive);
-    if (kept.length === place.entries.length) return false;
+    if (kept.length === place.entries.length) return undefined;
     const lost = place.entries.filter((entry) => !alive(entry)).map(position);
-    place.expiredThrough = Math.max(place.expiredThrough ?? Number.NEGATIVE_INFINITY, ...lost);
-    place.entries = kept;
-    return true;
+    return {
+      entries: kept,
+      expiredThrough: Math.max(place.expiredThrough ?? Number.NEGATIVE_INFINITY, ...lost),
+      droppedAt: now(),
+    };
   };
+  /**
+   * A place with nothing left and a note of what it lost that is itself a retention old: no reader needs it any more
+   * (one that has not read a place in twice the retention is told, if at all, that it is new to it), so its file goes.
+   */
+  const forgotten = (place: Place<E>): boolean =>
+    place.entries.length === 0 && place.droppedAt !== undefined && place.droppedAt < now() - retentionMs;
 
   const fileOf = (placeKey: string): string => join(dir, `${encodeURIComponent(placeKey)}.json`);
   const persist = (placeKey: string, place: Place<E>): void => {
@@ -127,6 +142,18 @@ export function createContextBuffer<E>(options: {
   };
 
   const places = new Map<string, Place<E>>();
+  /** Bring one place's file and record up to the retention: what expired dropped, or a place with nothing left gone. */
+  const tidy = (key: string, place: Place<E>): void => {
+    if (forgotten(place)) {
+      rmSync(fileOf(key), { force: true });
+      places.delete(key);
+      return;
+    }
+    const tidied = expired(place);
+    if (tidied === undefined) return;
+    persist(key, tidied);
+    places.set(key, tidied);
+  };
   if (existsSync(dir)) {
     let unreadable = 0;
     for (const file of readdirSync(dir).filter((name) => name.endsWith(".json"))) {
@@ -143,32 +170,30 @@ export function createContextBuffer<E>(options: {
         `${label} unexpected shape in ${unreadable} place(s) of ${dir} — those start with an empty context buffer`,
       );
     }
-    for (const [key, place] of places) if (expire(place)) persist(key, place);
+    for (const [key, place] of places) tidy(key, place);
   }
   let sweptAt = now();
 
   return {
     push(placeKey, entry) {
       const previous = places.get(placeKey);
-      const place: Place<E> = {
-        entries: [...(previous?.entries ?? []), entry],
-        ...(previous?.expiredThrough === undefined ? {} : { expiredThrough: previous.expiredThrough }),
-      };
-      expire(place);
+      const grown: Place<E> = { ...previous, entries: [...(previous?.entries ?? []), entry] };
+      const place = expired(grown) ?? grown;
       // A failed write throws before the place is replaced in memory: the throw becomes the webhook's 500 and the platform
       // redelivers, so an entry kept here would be appended a second time.
       persist(placeKey, place);
       places.set(placeKey, place);
       if (now() - sweptAt >= SWEEP_EVERY_MS) {
         sweptAt = now();
-        // A quiet place keeps nothing past the retention on disk either. A failed rewrite is said and tried again at the
-        // next sweep: the entries it holds are never folded, since the fold leaves out what has expired.
-        for (const [key, other] of places) {
-          if (key === placeKey || !expire(other)) continue;
+        // A quiet place keeps nothing past the retention on disk either. A failed rewrite is said and, the place being left
+        // as it was, found due again at the next sweep: what it holds is never folded meanwhile, since the fold leaves
+        // out what has expired.
+        for (const [key, other] of [...places]) {
+          if (key === placeKey) continue;
           try {
-            persist(key, other);
+            tidy(key, other);
           } catch (error) {
-            log.warn(`${label} could not drop what has expired from place ${key}: ${String(error)}`);
+            log.warn(`${label} could not tidy place ${key} of what has expired: ${String(error)}`);
           }
         }
       }

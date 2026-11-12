@@ -162,7 +162,7 @@ the way to read more.
   arbitrary chat id.
 - Telegram's local record of a chat is its only copy, so it is bounded by what it is for. It is the un-summoned messages
   a later ask has not read, so it is kept for 14 days and not by size (`BUFFER_RETENTION_MS`), and a turn that reads a
-  chat that lost messages to it is told so ("messages here older than 14 days are no longer kept"). What a turn folded
+  chat that lost messages to it is told so (the note outlives the messages by one more 14 days, then the chat's file goes) ("messages here older than 14 days are no longer kept"). What a turn folded
   is in its session, which has no retention of its own, so the 14 days bound only what no ask has read. Where the state
   does not persist (AgentCore, whose storage a deploy resets), it is gone at the next deploy, which is shorter still.
   **Not built, and why:** a lookup tool over this record. It would read the same messages the fold already hands the

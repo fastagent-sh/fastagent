@@ -236,7 +236,7 @@ Downloaded files are kept: the path the agent was given stays readable for as lo
 
 The channel persists its state under `<state root>/channels/telegram/`:
 
-- `buffers/<chat>.json` — the group-context buffer, one file per chat (the chat id URL-encoded), written before each webhook ACK: that chat's un-summoned messages from the last 14 days (each with the time it was said) and the newest message the 14 days dropped. A push rewrites only its own chat's file, so what it costs depends on that chat and not on how many chats the bot is in. A file that cannot be read as a chat's record, an older shape included, is ignored with a warning and that chat starts empty. A chat's file is also tidied of what has expired when another chat's push comes at least an hour after the last tidy.
+- `buffers/<chat>.json` — the group-context buffer, one file per chat (the chat id URL-encoded), written before each webhook ACK: that chat's un-summoned messages from the last 14 days (each with the time it was said) and the newest message the 14 days dropped. A push rewrites only its own chat's file, so what it costs depends on that chat and not on how many chats the bot is in. A file that cannot be read as a chat's record, an older shape included, is ignored with a warning and that chat starts empty. A chat's file is also tidied of what has expired when another chat's push comes at least an hour after the last tidy; one whose rewrite failed is left as it was, said in the log, and tried again at the next tidy. A chat with nothing left keeps its note of what it lost for one more 14 days, then its file is removed, so a bot does not keep a file for every chat it has ever seen.
 - `asks.json` — per conversation and chat, its newest asks (message key and the message's id, which counts only within its chat); the Agent says which one the session holds, and a turn's fold starts after it. A `buffers.json` entry of an older shape (no message id) costs only its own chat's buffer.
 - `sessions.json` — which session each conversation talks in.
 - `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run.
@@ -263,7 +263,7 @@ The state home lives under `.state/`, which the agent `.gitignore` excludes, so 
 
 | | Kept | Until |
 |---|---|---|
-| Un-summoned messages (`buffers/`) | on the state volume | 14 days after they were said |
+| Un-summoned messages (`buffers/`) | on the state volume | 14 days after they were said; a chat with nothing left, 14 more days |
 | What a turn folded | in the session, in the instance's storage | as long as the session; FastAgent deletes no session |
 | Downloaded files (`files/`) | on the state volume | never pruned (see above) |
 | Docker, Fly, Railway | the `/data` volume | across deploys and restarts |
