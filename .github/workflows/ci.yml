@@ -93,12 +93,17 @@ jobs:
       - name: Pack, install, and import the published surface
         run: |
           tarball=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
+          echo "TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
           mkdir "$RUNNER_TEMP/package-smoke"
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP/$tarball" --ignore-scripts
           node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/client"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu"); await import("@fastagent-sh/fastagent/lark")'
           ./node_modules/.bin/fastagent --version
+
+      # An agent made by `init` from the packed package answers through `invoke`, builds, and its build answers in an app.
+      - name: End to end on the packed package
+        run: node test/e2e/packed.ts "$TARBALL"
 
   bun-smoke:
     name: Bun 1.4 smoke

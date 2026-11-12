@@ -355,11 +355,12 @@ test/                       # vitest; faux models by default; two tiers (CONTRIB
 ├── git-double.ts           # src/git.ts for a unit test: no git, or the answers a test scripts for a directory
 ├── tsc-double.ts           # the build's compiler for a unit test: imports followed, types stripped, nothing checked
 ├── storage-no-wait.ts      # the instance's storage for a unit test: a held database refused at once, not after 5 s
+├── e2e/packed.ts           # the packed package end to end (init, invoke, build, an app opens the build): CI's packed job
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)
 ├── scripted-agent.ts       # an Agent whose answers a test scripts: what channel, schedule and service tests run on
-├── probe-package.ts       # a package built and installed under an app's node_modules: what built-package.integration.test.ts and
+├── probe-package.ts       # a package built and installed under an app's node_modules: what built-package.test.ts and
 │                           # bun/built.ts open as instances (a spawned CLI's `@fastagent-sh/fastagent` is fixtures/fastagent-shim)
 ├── open-source.ts          # `openSource(dir)`: the source project in `dir` opened as an instance rooted there
 └── embedding.test.ts       # the docs/embedding.md snippets against REAL express/fastify (why they are devDeps)

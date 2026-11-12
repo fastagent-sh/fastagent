@@ -1,4 +1,4 @@
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { contextFileText, parseContextFile } from "../src/content/file.ts";
@@ -16,7 +16,8 @@ import { addContent, removeContent, writeEnvironment } from "../src/authoring.ts
 import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
-import { savedEnv, agentDir, fakeNpm } from "./environment-fixtures.ts";
+import { runInProcess } from "./cli-run.ts";
+import { savedEnv, agentDir, fakeMise, fakeNpm } from "./environment-fixtures.ts";
 
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
@@ -222,5 +223,63 @@ describe("environment: the agent's own mise", () => {
       );
     }
     await expect(readFile(join(dir, "npm-args"), "utf8")).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("environment: `fastagent env`", () => {
+  const cli = (args: string[], cwd: string) => runInProcess(args, cwd);
+  const declared = async (dir: string): Promise<unknown> =>
+    JSON.parse(await readFile(join(dir, "context.json"), "utf8")).environment;
+
+  it("lists the variables context.json declares, and whether each has a value here, never the value", async () => {
+    const dir = await agentDir({
+      variables: { FA_TEST_HOST: { description: "the GitHub host" }, FA_TEST_TOKEN: { description: "gh's token" } },
+    });
+    await mkdir(join(dir, ".secrets"));
+    await writeFile(join(dir, ".secrets", ".env"), "FA_TEST_TOKEN=ghp_value\n");
+    const list = await cli(["env", "list"], dir);
+    expect(list.code, list.stderr).toBe(0);
+    expect(list.stdout).toBe(
+      ["FA_TEST_HOST   not set   the GitHub host", "FA_TEST_TOKEN  set       gh's token", ""].join("\n"),
+    );
+    expect(list.stderr).toContain(
+      `no value here for FA_TEST_HOST: dev and start refuse to run until they have one — set them in ` +
+        `${join(dir, ".secrets", ".env")}`,
+    );
+    expect(`${list.stdout}${list.stderr}`).not.toContain("ghp_value");
+    const listed = await cli(["env", "list", "--json"], dir);
+    expect(JSON.parse(listed.stdout)).toEqual({
+      packages: [],
+      apt: [],
+      variables: [
+        { name: "FA_TEST_HOST", description: "the GitHub host", set: false },
+        { name: "FA_TEST_TOKEN", description: "gh's token", set: true },
+      ],
+    });
+    expect(listed.stdout).not.toContain("ghp_value");
+  });
+
+  it("refuses to edit a context.json whose content is refused, before anything is installed", async () => {
+    const dir = await agentDir();
+    await writeFile(join(dir, "context.json"), `{ "content": { "a": { "ref": "x" } } }`);
+    const { calls } = await fakeMise(dir);
+    const add = await cli(["env", "add", "gh@2"], dir);
+    expect(add.code).toBe(1);
+    expect(add.stderr).toContain(`content "a" needs "github"`);
+    expect(await calls()).toEqual([]);
+  });
+
+  it("removes packages, without mise; a package it does not have is named", async () => {
+    const dir = await agentDir({ packages: { gh: "2" }, aptPackages: ["chromium"] });
+    const { calls } = await fakeMise(dir);
+    for (const name of ["jq", "toString"]) {
+      const unknown = await cli(["env", "remove", name], dir);
+      expect(unknown.code, name).toBe(1);
+      expect(unknown.stderr).toContain(`the environment has no package "${name}" (it has: gh, apt:chromium)`);
+    }
+    const remove = await cli(["env", "remove", "gh", "apt:chromium"], dir);
+    expect(remove.code, remove.stderr).toBe(0);
+    expect(await declared(dir)).toBeUndefined();
+    expect(await calls()).toEqual([]);
   });
 });

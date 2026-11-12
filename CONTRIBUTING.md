@@ -37,13 +37,15 @@ covers. Write the smallest tier that can show the behavior.
 | --- | --- | --- | --- | --- | --- |
 | **Unit** | `test/*.test.ts` | This process: real modules working together, temp directories, SQLite on a temp file, loopback sockets, the faux model, the shared doubles (`scripted-agent.ts`, a stubbed `fetch`, `runInProcess`), fake timers | A child process of any kind (the CLI, `git`, `tsc`, a stand-in script), a connection off the machine, a bound on how long something took, waiting out a real timeout | 20 s | `npm test`, on every Node version CI tests |
 | **Integration** | `test/*.integration.test.ts` | This machine: processes and process groups, signals, locks between processes, the project's real build, `git`, `npm pack`, stand-in host CLIs on the `PATH` | A connection off the machine, a real platform or cloud, a bound on how long something took | 30 s | `npm run test:integration`, on the Node floor |
-| **Artifact smoke** | CI's `Packed package smoke` and `Bun smoke`, `test/bun/` | The package as a user installs it, `dist/`, Bun | Anything aliased to `src/` | (the job) | CI |
+| **Artifact smoke and end to end** | CI's `Packed package smoke` (with `test/e2e/packed.ts`: `init`, `invoke`, `build`, and the build opened by an app, on the packed tarball with a faux model) and `Bun smoke` (`test/bun/`) | The package as a user installs it, `dist/`, Bun, npm's registry for its dependencies | Anything aliased to `src/` | (the job) | CI |
 
 How the boundary is kept:
 
 - `test/setup.ts` refuses a connection to anything but loopback in every tier, and `test/unit-setup.ts` refuses a child
   process in the unit tier. Both throw where the call is made and fail the test afterwards, so product code that
   catches the error cannot hide it.
+- Unit tests run in a random order within each file, so none leans on another having run first. A run prints its seed
+  (`Running tests with seed "<n>"`); `npx vitest run --project unit --sequence.seed=<n>` repeats the order.
 - `test/test-tiers.test.ts` refuses a bound on how long something took (`Date.now()` minus a start, below a limit):
   load decides it as much as the code does. A lower bound, that the code waited, is allowed. To show something does
   not wait, drive the time with fake timers, or make the wait it must not take longer than the test's timeout (inject

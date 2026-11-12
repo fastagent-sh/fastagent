@@ -42,6 +42,9 @@ function stubOpenApi() {
 
 const agent = scriptedAgent(() => []);
 
+/** Every fixture's apps are numbered from one count, so no two tests of the file share an app. */
+let apps = 0;
+
 /** Loads one cloud's scaffold tool, built with app credentials, and gives every test a fresh state root. */
 function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
   const state = { declared: undefined as unknown as Needs<ToolRegistration>, cwd: "", appId: "" };
@@ -50,10 +53,9 @@ function cloudFixture(kind: "feishu" | "lark", prefix: "FEISHU" | "LARK") {
     const path = new URL(`../src/channels/${kind}/scaffold/${kind}-send.ts`, import.meta.url).pathname;
     state.declared = ((await import(path)) as { default: Needs<ToolRegistration> }).default;
   });
-  let apps = 0;
   beforeEach(async () => {
     state.cwd = await mkdtemp(join(tmpdir(), `fa-${kind}-send-`));
-    // A process keeps one transport per app: a fresh app per test starts with no token cached.
+    // A process keeps one transport per app: a fresh app per test, in any order, starts with no token cached.
     state.appId = `cli_env_${++apps}`;
   });
   afterEach(async () => {

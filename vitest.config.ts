@@ -27,6 +27,9 @@ export default defineConfig({
         extends: true,
         test: {
           name: "unit",
+          // In a random order, so no test leans on another having run first; a run prints its seed, and
+          // `--sequence.seed=<n>` repeats it.
+          sequence: { shuffle: { files: false, tests: true } },
           include: ["test/**/*.test.ts"],
           exclude: ["test/**/*.integration.test.ts"],
           setupFiles: ["test/setup.ts", "test/unit-setup.ts"],

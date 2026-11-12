@@ -10,6 +10,9 @@ import { mcpFixture } from "./mcp-fixture.ts";
 import { openLockedStorage } from "../src/harnesses/pi-durable/storage.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
+// The disconnect refused while a serve holds the storage is refused at once (the wait is storage.integration.test.ts's).
+vi.mock("../src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"));
+
 it("MCP login gives a browser ticket, saves a grant/binding and disconnects without deleting the grant", async () => {
   let remote: ReturnType<typeof mcpFixture>;
   const server = createServer(
@@ -154,7 +157,7 @@ it("MCP login gives a browser ticket, saves a grant/binding and disconnects with
     "test serving instance",
   );
   try {
-    const refused = await run(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
+    const refused = await runInProcess(["mcp", "disconnect", "test", dir, "--json"], undefined, env);
     expect(refused.code).toBe(1);
     expect(JSON.parse(await readFile(join(dir, ".fastagent", "dev", ".state", "mcp-bindings.json"), "utf8")).test).toBe(
       status.grant_id,

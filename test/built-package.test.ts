@@ -162,7 +162,9 @@ describe("a project's build is the one `start` opens only while the project is w
   });
 
   it("refuses a project nobody built, naming the command", async () => {
-    await expect(loadProjectBuild(project, { checkSources: true })).rejects.toThrow(
+    const unbuilt = scratch(FIXTURES, ".tmp-built-none-");
+    writeFileSync(join(unbuilt, "package.json"), '{"name":"none","type":"module"}');
+    await expect(loadProjectBuild(unbuilt, { checkSources: true })).rejects.toThrow(
       /dist holds no build: run `fastagent build`/,
     );
   });

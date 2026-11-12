@@ -5,7 +5,7 @@
  * arguments, where, in which order, what reaches the process), not mise. What mise itself does is not tested here.
  */
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +22,8 @@ import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { log } from "../src/log.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
-import { savedEnv, FASTAGENT, agentDir, fakeNpm } from "./environment-fixtures.ts";
+import { runInProcess } from "./cli-run.ts";
+import { savedEnv, FASTAGENT, agentDir, fakeMise, fakeNpm } from "./environment-fixtures.ts";
 
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
@@ -41,71 +42,6 @@ async function contents(dir: string): Promise<Record<string, string>> {
       }),
     ),
   );
-}
-
-/** One logged mise run: its arguments, where it ran, the isolation it was given, and its PATH's first entry. */
-interface MiseCall {
-  args: string;
-  cwd: string;
-  /** MISE_OVERRIDE_CONFIG_FILENAMES, MISE_GLOBAL_CONFIG_FILE and MISE_PYTHON_COMPILE, as it saw them. */
-  isolation: string;
-  path: string;
-  /** FAKE_AGENT_VALUE as it saw it: whose environment it ran in. */
-  agentValue: string;
-}
-
-/**
- * A stand-in mise where this machine's platform package puts it. It logs each run, and at `install` what the agent's
- * context.json held then. It keeps what it installed in a file beside the agent: `where <spec>` answers for those and
- * fails for any other, as mise does for a package with no install; `install` adds its specs and says what mise says
- * of a package no configuration names, fails when `FAKE_FAIL_INSTALL` is set (with the reason on the lines after, as
- * mise does for several packages, when it is `many`), and sleeps when `FAKE_SLOW` is. It answers
- * `tool <name> --json` and `env --json`.
- */
-async function fakeMise(
-  dir: string,
-): Promise<{ bin: string; calls: () => Promise<MiseCall[]>; log: () => Promise<string> }> {
-  const pkg = join(dir, "node_modules", "@jdxcode", `mise-${process.platform}-${process.arch}`);
-  await mkdir(join(pkg, "bin"), { recursive: true });
-  await writeFile(join(pkg, "package.json"), `{"name":"@jdxcode/mise-${process.platform}-${process.arch}"}\n`);
-  const logFile = join(dir, "..", `${dir.split("/").at(-1)}-mise.log`);
-  const installed = join(dir, "..", `${dir.split("/").at(-1)}-mise.installed`);
-  const bin = join(pkg, "bin", "mise");
-  await writeFile(
-    bin,
-    `#!/bin/sh
-echo "run|$*|$PWD|$MISE_OVERRIDE_CONFIG_FILENAMES,$MISE_GLOBAL_CONFIG_FILE,$MISE_PYTHON_COMPILE|\${PATH%%${delimiter}*}|$FAKE_AGENT_VALUE" >> "${logFile}"
-case "$1" in
-  where) grep -qxF "$2" "${installed}" 2>/dev/null || { echo "mise ERROR $2 is not installed" >&2; exit 1; } ;;
-  install) shift; [ "$1" = --quiet ] && shift
-    echo "context.json at install: $(cat "${dir}/context.json" 2>/dev/null | tr -d ' \\n')" >> "${logFile}"
-    if [ -n "$FAKE_SLOW" ]; then sleep 2; fi
-    if [ "$FAKE_FAIL_INSTALL" = many ]; then
-      printf 'mise ERROR Failed to install tools: %s\\nGET https://example.com/jq: 404 Not Found\\nmise ERROR Version: 2026.10.8\\nmise ERROR Run with --verbose or MISE_VERBOSE=1 for more information\\n' "$*" >&2; exit 1
-    elif [ -n "$FAKE_FAIL_INSTALL" ]; then echo "mise ERROR no version of jq matches 99" >&2; exit 1; fi
-    for spec in "$@"; do echo "$spec" >> "${installed}"; echo "mise $spec ✓ installed" >&2; done
-    printf 'mise WARN  %s installed but not activated — it is not in any config file.\\nTo install and activate, run:\\n  mise use %s\\n' "$1" "$1" >&2 ;;
-  tool) case "$2" in
-      tokei) echo '{"backend":"cargo:tokei"}' ;;
-      ansible) echo '{"backend":"pypi:ansible"}' ;;
-      nope) echo "mise ERROR nope not found in mise tool registry" >&2; exit 1 ;;
-      *) printf '{"backend":"aqua:owner/%s"}' "$2" ;;
-    esac ;;
-  env) printf '{"PATH":"/fake/tools%s%s","FAKE_TOOL_HOME":"/fake/home"}' "${delimiter}" "$PATH" ;;
-esac
-`,
-  );
-  await chmod(bin, 0o755);
-  const log = async () => readFile(logFile, "utf8").catch(() => "");
-  const calls = async () =>
-    (await log())
-      .split("\n")
-      .filter((line) => line.startsWith("run|"))
-      .map((line) => {
-        const [, args, cwd, isolation, path, agentValue] = line.split("|") as string[];
-        return { args, cwd, isolation, path, agentValue } as MiseCall;
-      });
-  return { bin, calls, log };
 }
 
 describe("environment: apt packages on this machine", () => {
@@ -310,7 +246,10 @@ describe("environment: the agent's own mise", () => {
 
 describe("environment: `fastagent env`", () => {
   const CLI = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-  const cli = (
+  const cli = (args: string[], cwd: string, env: Record<string, string> = {}) =>
+    runInProcess(args, cwd, { ...process.env, ...env });
+  /** The CLI as a process: for what only one shows (a command's own stdio, an interrupt, two at once). */
+  const spawnCli = (
     args: string[],
     cwd: string,
     env: Record<string, string> = {},
@@ -359,44 +298,6 @@ describe("environment: `fastagent env`", () => {
     expect(await declared(dir)).toEqual({ packages: { gh: "2" }, variables });
   });
 
-  it("lists the variables context.json declares, and whether each has a value here, never the value", async () => {
-    const dir = await agentDir({
-      variables: { FA_TEST_HOST: { description: "the GitHub host" }, FA_TEST_TOKEN: { description: "gh's token" } },
-    });
-    await mkdir(join(dir, ".secrets"));
-    await writeFile(join(dir, ".secrets", ".env"), "FA_TEST_TOKEN=ghp_value\n");
-    const list = await cli(["env", "list"], dir);
-    expect(list.code, list.stderr).toBe(0);
-    expect(list.stdout).toBe(
-      ["FA_TEST_HOST   not set   the GitHub host", "FA_TEST_TOKEN  set       gh's token", ""].join("\n"),
-    );
-    expect(list.stderr).toContain(
-      `no value here for FA_TEST_HOST: dev and start refuse to run until they have one — set them in ` +
-        `${join(dir, ".secrets", ".env")}`,
-    );
-    expect(`${list.stdout}${list.stderr}`).not.toContain("ghp_value");
-    const listed = await cli(["env", "list", "--json"], dir);
-    expect(JSON.parse(listed.stdout)).toEqual({
-      packages: [],
-      apt: [],
-      variables: [
-        { name: "FA_TEST_HOST", description: "the GitHub host", set: false },
-        { name: "FA_TEST_TOKEN", description: "gh's token", set: true },
-      ],
-    });
-    expect(listed.stdout).not.toContain("ghp_value");
-  });
-
-  it("refuses to edit a context.json whose content is refused, before anything is installed", async () => {
-    const dir = await agentDir();
-    await writeFile(join(dir, "context.json"), `{ "content": { "a": { "ref": "x" } } }`);
-    const { calls } = await fakeMise(dir);
-    const add = await cli(["env", "add", "gh@2"], dir);
-    expect(add.code).toBe(1);
-    expect(add.stderr).toContain(`content "a" needs "github"`);
-    expect(await calls()).toEqual([]);
-  });
-
   it("refuses a package FastAgent does not install from, and one mise cannot install, changing nothing", async () => {
     const dir = await agentDir({ packages: { gh: "2" } });
     await fakeMise(dir);
@@ -426,20 +327,6 @@ describe("environment: `fastagent env`", () => {
     await exited;
     expect(await declared(dir)).toEqual({ aptPackages: ["chromium"] });
   }, 30_000);
-
-  it("removes packages, without mise; a package it does not have is named", async () => {
-    const dir = await agentDir({ packages: { gh: "2" }, aptPackages: ["chromium"] });
-    const { calls } = await fakeMise(dir);
-    for (const name of ["jq", "toString"]) {
-      const unknown = await cli(["env", "remove", name], dir);
-      expect(unknown.code, name).toBe(1);
-      expect(unknown.stderr).toContain(`the environment has no package "${name}" (it has: gh, apt:chromium)`);
-    }
-    const remove = await cli(["env", "remove", "gh", "apt:chromium"], dir);
-    expect(remove.code, remove.stderr).toBe(0);
-    expect(await declared(dir)).toBeUndefined();
-    expect(await calls()).toEqual([]);
-  });
 
   it("install installs every declared package at the newest release it allows, asking mise each time", async () => {
     const dir = await agentDir({ packages: { gh: "2", jq: "1" }, aptPackages: ["chromium"] });
@@ -482,14 +369,14 @@ describe("environment: `fastagent env`", () => {
   it("runs a command in the environment, and exits as it does", async () => {
     const dir = await agentDir({ packages: { gh: "2" } });
     await fakeMise(dir);
-    const exec = await cli(["env", "exec", "--", "sh", "-c", 'echo "$PATH"; exit 3'], dir);
+    const exec = await spawnCli(["env", "exec", "--", "sh", "-c", 'echo "$PATH"; exit 3'], dir);
     expect(exec.code).toBe(3);
     expect(exec.stdout.split(delimiter)[0]).toBe("/fake/tools");
     // The command's arguments are its own, an empty one included.
-    const empty = await cli(["env", "exec", "--", "sh", "-c", 'printf "[%s]" "$1"', "sh", ""], dir);
+    const empty = await spawnCli(["env", "exec", "--", "sh", "-c", 'printf "[%s]" "$1"', "sh", ""], dir);
     expect(empty.code, empty.stderr).toBe(0);
     expect(empty.stdout).toBe("[]");
-    const missing = await cli(["env", "exec", "--", "no-such-command-here"], dir);
+    const missing = await spawnCli(["env", "exec", "--", "no-such-command-here"], dir);
     expect(missing.code).toBe(1);
     expect(missing.stderr).toContain("no-such-command-here: command not found in the environment");
   });
@@ -497,9 +384,9 @@ describe("environment: `fastagent env`", () => {
   it("two edits at once keep both: each is written to context.json as it is by then", async () => {
     const dir = await agentDir();
     const { log } = await fakeMise(dir);
-    const first = cli(["env", "add", "gh@2"], dir, { FAKE_SLOW: "1" });
+    const first = spawnCli(["env", "add", "gh@2"], dir, { FAKE_SLOW: "1" });
     while (!(await log()).includes("context.json at install")) await new Promise((r) => setTimeout(r, 50));
-    const second = await cli(["env", "add", "jq@1"], dir);
+    const second = await spawnCli(["env", "add", "jq@1"], dir);
     expect(second.code, second.stderr).toBe(0);
     expect((await first).code).toBe(0);
     expect(await declared(dir)).toEqual({ packages: { gh: "2", jq: "1" } });
