@@ -1,5 +1,5 @@
 /**
- * An Agent over HTTP (SPEC.md §8, §9): the interface `openAgent` gives in process, called through the contract the
+ * An Agent over HTTP (SPEC.md §9): the interface `openAgent` gives in process, called through the contract the
  * server answers from. Runs wherever `fetch` does (Node, Bun, Deno, Workers): nothing here needs a runtime's own API.
  */
 import * as Cause from "effect/Cause";
@@ -86,7 +86,7 @@ const said = (error: unknown) => (error instanceof Error ? error.message : Strin
 const whatFailed = (baseUrl: string, error: unknown) => {
   if (reasonOf(error)?._tag === "TransportError") return `could not reach the agent at ${baseUrl}: ${said(error)}`;
   const answered = `the agent at ${baseUrl} answered what this client cannot read: ${said(error)}`;
-  // A serve mounts the API only while it holds a key (SPEC §9.6): a host that is up and has none answers 404 here.
+  // A serve mounts the API only while it holds a key: a host that is up and has none answers 404 here.
   return reasonOf(error)?.response?.status === 404
     ? `${answered} (a deployment serves no Agent API without a FASTAGENT_API_KEY, and AgentCore serves none)`
     : answered;

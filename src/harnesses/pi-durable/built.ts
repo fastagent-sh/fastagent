@@ -19,7 +19,7 @@ const CODE = /\.(ts|mts|cts|tsx|js|mjs|cjs|jsx)$/;
 const TEST = /\.(test|spec)\.[a-z]+$/;
 /** What never leaves the project, wherever it is: secrets, dependencies, history, the build's own output. */
 const NEVER_COPIED = /^(\.env(\..*)?|\.secrets|node_modules|\.git|\.DS_Store)$/;
-/** The program's text and data at the project root (§3.4). */
+/** The program's text and data at the project root. */
 const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", CONTEXT_FILE, "README.md"];
 const ROOT_DIRS = ["skills", "prompts", "assets"];
 const LICENSE = /^LICEN[CS]E(\..*)?$/i;

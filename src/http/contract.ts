@@ -259,4 +259,4 @@ const AgentGroup = HttpApiGroup.make("agent")
 
 export class AgentHttpApi extends HttpApi.make("fastagent")
   .add(AgentGroup)
-  .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "2" })) {}
+  .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "1" })) {}

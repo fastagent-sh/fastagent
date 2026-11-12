@@ -323,7 +323,7 @@ export async function instanceConfigIn(dir: string): Promise<InstanceConfigSourc
   return existsSync(path) ? readInstanceConfigFile(path) : undefined;
 }
 
-/** A channel's platform app, for one whose URL only a person sets (SPEC.md §8, `channels.<name>.app`). */
+/** A channel's platform app, for one whose URL only a person sets (`channels.<name>.app`). */
 interface ChannelApp {
   id: string;
   team?: string;

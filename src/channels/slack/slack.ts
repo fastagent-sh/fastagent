@@ -528,7 +528,7 @@ function createSlackRuntime(
     const structurallyMentionsBot = botUserId !== undefined && mentionsSlackUser(event.text ?? "", botUserId);
     // app_mention and message.* subscriptions can overlap.
     if (!routed && route === undefined && group && event.type === "message" && structurallyMentionsBot) routed = {};
-    // The participant model's thread rule (§3): a bare message reaches the agent while it takes part and has not
+    // The participant model's thread rule: a bare message reaches the agent while it takes part and has not
     // heard a second human.
     if (
       !routed &&
@@ -536,7 +536,7 @@ function createSlackRuntime(
       group &&
       event.thread_ts !== undefined &&
       event.type !== "app_mention" &&
-      // Mentioning only other people is targeted discussion, never an ask (§3) — the same guard Feishu applies with
+      // Mentioning only other people is targeted discussion, never an ask — the same guard Feishu applies with
       // `hasMentions`.
       !addressesSomeone &&
       threadParticipants.admitsBareMessage(threadKey(teamId, event.channel, event.thread_ts))
@@ -551,7 +551,7 @@ function createSlackRuntime(
 
     const targetChannel = routed.channelId ?? event.channel;
     const sameChannel = targetChannel === event.channel;
-    // Answer where asked (participant model §4).
+    // Answer where asked.
     const defaultThread = event.thread_ts ?? event.ts;
     const threadTs =
       routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));

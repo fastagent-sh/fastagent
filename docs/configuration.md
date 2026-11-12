@@ -250,8 +250,9 @@ port   dev:   --port > http.port > 8787           start: --port > PORT > http.po
 bind   dev:   --bind > 127.0.0.1                  start: --bind > all interfaces
 ```
 
-`--bind` takes an IP or `localhost`. A serve answers its channels' routes (each checks its platform) and
-`GET /health`.
+`--bind` takes an IP or `localhost`. A serve answers its channels' routes (each checks its platform), the
+[Agent API](#the-agent-api-over-http) with a key, and `GET /health`: public, `200 {"status": "ok", "webhooks": [...]}`
+once ready and `503 {"status": "starting", …}` before, each webhook channel as `{ channel, outcome }`.
 
 ## The Agent API over HTTP
 

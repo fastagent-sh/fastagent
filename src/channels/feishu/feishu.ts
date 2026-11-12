@@ -454,7 +454,7 @@ function createFeishuRuntimeFactory(
     registerFeishuApi(appId, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
-    // Who the agent has heard in a thread decides whether a bare message addresses it (participant model §3), and it
+    // Who the agent has heard in a thread decides whether a bare message addresses it (the participant model), and it
     // comes from what this channel observed.
 
     let warnedUnidentified = false;
@@ -595,7 +595,7 @@ function createFeishuRuntimeFactory(
       );
 
       // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT bare message
-      // address it without a mention (§3).
+      // address it without a mention.
       if (heard && replyInThread === true && sameTarget && r.conversation === undefined) {
         // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive could otherwise
         // say "answered here, heard nobody".

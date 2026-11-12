@@ -1,5 +1,5 @@
 /**
- * The package's one entry (SPEC.md §8), besides each first-party channel's: the Agent API, opening an agent
+ * The package's one entry, besides each first-party channel's: the Agent API, opening an agent
  * directory and serving it, what a host embedding agents needs beside them (creating one, model credentials and
  * sign-in), and what an author writes.
  */

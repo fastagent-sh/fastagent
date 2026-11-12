@@ -181,7 +181,33 @@ const agent = await openAgent(definition, { root, credentials });
 
 A gateway or self-hosted model is a provider in the agent's config ([custom models](configuration.md#custom-models)).
 
-## 5. A desktop host
+## 5. What an open promises
+
+- **Its inputs, and nothing else.** Of the process's environment FastAgent reads only `FASTAGENT_LOG_LEVEL`: no
+  variable places, configures or serves the instance, and none reaches a process the agent starts. It reads no file its
+  inputs do not name, the machine's model credentials included, and writes neither `process.env` nor the package. A
+  model provider's SDK still reads its own credential chain. Installing packages and cloning content run in `env`
+  plus `secrets`: an app that clones over SSH adds `SSH_AUTH_SOCK` to `env`.
+- **Refusals at open, never later.** A relative path, a required secret or setting without a value, a `config` the
+  schema refuses, a name the program already declares (content, MCP server, skill, template), a second open over the
+  same state, and a definition built for another FastAgent format each refuse the open, naming what to fix.
+- **What a started process gets**: `env`, the declared packages' commands ahead on its `PATH`, the declared secrets, a
+  stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
+- **Not `dev`, not a deployment.** A channel that names no way of receiving receives by webhook.
+- **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
+  `sessions.cancel` was stopping it.
+- **`serve()`.** `listen` defaults to `http.port`, else 8787, and with `http.publicUrl` registers the webhook channels
+  once ready. `registerWebhooks(baseUrl?)` sets the URL on every call and rejects only a `baseUrl` that is not an
+  absolute http(s) URL; a platform's refusal is a `failed` outcome in `service.webhooks`. Slack's Request URL (and
+  Lark's without its config API) counts as `registered` once `channels.<name>.app.url` is the URL needed, or once the
+  platform sent an authenticated request to it; otherwise it is `manual`, with the URL to set. `close()` ends the
+  API's event streams, gives requests in flight 500 ms, then stops the channels and schedules. With
+  `http.api: false`, `serve` refuses `apiKeys`.
+- **Users kept apart are yours.** An app serving its own users over one instance checks every session id a request
+  names, a fork's source included, and that holds only for an agent whose tools reach neither its storage nor its
+  files.
+
+## 6. A desktop host
 
 An app that runs agents for a person on their machine:
 

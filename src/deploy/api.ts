@@ -1,5 +1,5 @@
 /**
- * A deployment's Agent API (SPEC.md §9.5, §9.6): served under `/v1` on every host but AgentCore, unless the
+ * A deployment's Agent API: served under `/v1` on every host but AgentCore, unless the
  * definition turns it off (`http.api: false`), behind a key the deploy mints and sets on the target the first time
  * neither the target nor the values the deploy was given has one. And what a deploy reports of it.
  */
