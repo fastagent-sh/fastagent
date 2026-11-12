@@ -3,13 +3,12 @@
  * test/fixtures so their imports resolve this repository's packages, TypeScript included, as an installed agent's do.
  */
 import { execFile } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { buildDefinition } from "../src/harnesses/pi-durable/open.ts";
-import { runInProcess } from "./cli-run.ts";
 import { ROOT, made, project, FILES, listing } from "./build-fixtures.ts";
 
 afterAll(() => {
@@ -17,42 +16,6 @@ afterAll(() => {
 });
 
 describe("fastagent build", () => {
-  it("writes dist/: the compiled code, its text and resources, and nothing of the machine's", async () => {
-    const dir = project(FILES);
-    const { dist } = await buildProject(dir);
-    expect(listing(dist)).toEqual([
-      "AGENTS.md",
-      "LICENSE",
-      "SYSTEM.md",
-      "build.json",
-      "context.json",
-      "fastagent.config.d.ts",
-      "fastagent.config.js",
-      "fastagent.schema.json",
-      "index.d.ts",
-      "index.js",
-      "lib/shout.js",
-      "package.json",
-      "prompts/review.md",
-      "skills/lookup/SKILL.md",
-      "src/tools/lookup.js",
-      "src/tools/lookup/data.json",
-      "src/tools/lookup/note.txt",
-    ]);
-    expect(JSON.parse(readFileSync(join(dist, "package.json"), "utf8"))).toEqual({
-      name: "@acme/support",
-      version: "1.2.0",
-      description: "Answers support questions.",
-      type: "module",
-      exports: {
-        ".": { types: "./index.d.ts", default: "./index.js" },
-        "./fastagent.schema.json": "./fastagent.schema.json",
-      },
-      dependencies: { lodash: "^4" },
-      peerDependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0" },
-    });
-  });
-
   it("exports the definition from the generated entry, its modules running from dist/", async () => {
     const { dist } = await buildProject(project(FILES));
     const built = (await import(join(dist, "index.js"))).default;
@@ -117,22 +80,6 @@ describe("fastagent build", () => {
     expect(readdirSync(join(shared, "dist"))).toEqual(["index.d.ts", "index.js"]);
   });
 
-  it("copies a symlinked skill as the files it names, and refuses a link back into what it copies", async () => {
-    const shared = join(ROOT, `.tmp-skills-${process.pid}`);
-    made.push(shared);
-    mkdirSync(join(shared, "review"), { recursive: true });
-    writeFileSync(join(shared, "review/SKILL.md"), "---\nname: review\ndescription: Review\n---\nReview.\n");
-    const dir = project(FILES);
-    symlinkSync(join(shared, "review"), join(dir, "skills/review"));
-    const { dist } = await buildProject(dir);
-    expect(readFileSync(join(dist, "skills/review/SKILL.md"), "utf8")).toContain("Review.");
-    expect(lstatSync(join(dist, "skills/review")).isSymbolicLink()).toBe(false);
-    symlinkSync(join(dir, "skills"), join(dir, "skills/loop"));
-    await expect(buildProject(dir)).rejects.toThrow(
-      /skills\/loop links back to .*skills, a directory this build is copying/,
-    );
-  });
-
   it("leaves the dist/ before it as it was when a build fails", async () => {
     const dir = project(FILES);
     const { dist } = await buildProject(dir);
@@ -155,17 +102,5 @@ describe("fastagent build", () => {
     const packed = files.map((file) => file.path).sort();
     expect(packed).toEqual(listing(dist));
     expect(packed.filter((file) => /(^|\/)(\.env|\.secrets)/.test(file))).toEqual([]);
-  });
-
-  it("is the build command, which prints where dist/ is", async () => {
-    const dir = project(FILES);
-    const { code, stdout, stderr } = await runInProcess(["build", dir, "--json"]);
-    expect(code, stderr).toBe(0);
-    expect(JSON.parse(stdout)).toEqual({
-      dist: join(dir, "dist"),
-      name: "@acme/support",
-      version: "1.2.0",
-      warnings: [],
-    });
   });
 });

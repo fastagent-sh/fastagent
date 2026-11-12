@@ -1,9 +1,8 @@
 import { existsSync } from "node:fs";
 import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
-import { withGitIdentity } from "./git-env.ts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ignore from "ignore";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,27 +12,14 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { buildDefinition, assembleAgent, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../src/harnesses/pi-durable/text.ts";
 import { programText } from "../src/harnesses/pi-durable/text-sources.ts";
-import { runInProcess } from "./cli-run.ts";
 import { makeFaux, sentPrompt } from "./faux.ts";
 import { scaffoldAgent } from "../src/scaffold/init.ts";
 
 import { vendorSkill } from "../src/scaffold/vendor-skill.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
+import { freshDir, exists, cliInit } from "./init-fixtures.ts";
 
-const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
-async function exists(p: string): Promise<boolean> {
-  return access(p).then(
-    () => true,
-    () => false,
-  );
-}
-
-const withIdentity = withGitIdentity;
-
-/** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
-async function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
-  return (await runInProcess(args, cwd, env)).stderr;
-}
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
 
 describe("init: scaffoldAgent", () => {
   it("scaffolds a COMPLETE agent INTO the directory it names", async () => {
@@ -219,6 +205,20 @@ describe("init: scaffoldAgent", () => {
       await expect(scaffoldAgent(inner)).rejects.toThrow(new RegExp(`is inside the agent ${outer}`));
       expect(await exists(inner)).toBe(false); // side-effect-free refusal
     }
+  });
+
+  it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {
+    const base = await freshDir();
+    const out = await cliInit(["init", "my-agent", "--no-install"], base);
+    expect(out).toMatch(/created .*my-agent/);
+    expect(out).toMatch(/^ {4}cd my-agent$/m);
+    expect(out).toMatch(/fastagent dev/);
+    expect(await exists(join(base, "my-agent", "SYSTEM.md"))).toBe(true);
+
+    // No directory is a usage error: an agent is a directory of its own, so there is no default to guess.
+    expect(await cliInit(["init", "--no-install"], await freshDir())).toMatch(/missing required argument/);
+    // --agent-dir is gone with the nested layout it named.
+    expect(await cliInit(["init", "x", "--agent-dir", "bot"], base)).toMatch(/unknown option/);
   });
 });
 

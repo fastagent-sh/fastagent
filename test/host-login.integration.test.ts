@@ -3,50 +3,14 @@
  * carries on once the CLI says it is signed in. The CLIs are stand-in scripts speaking as `fly auth login` and
  * `railway login --browserless` do with no terminal.
  */
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type BrowserLogin, hostLogin } from "../src/cli/commands/deploy/host-login.ts";
-import type { TicketStep } from "../src/cli/ticket.ts";
+import { cli, step, flyLike, signIn } from "./host-login-fixtures.ts";
 
 afterEach(() => vi.restoreAllMocks());
-
-async function cli(body: string): Promise<string> {
-  const path = join(await mkdtemp(join(tmpdir(), "fa-host-cli-")), "host");
-  await writeFile(path, `#!/bin/sh\n${body}\n`);
-  await chmod(path, 0o755);
-  return path;
-}
-
-/** A ticket's step whose person's part is recorded; `handOver` is what `--check --code` brings. */
-function step() {
-  const said: string[] = [];
-  let handOver: (code: string) => void = () => {};
-  const handed = new Promise<string>((resolve) => {
-    handOver = resolve;
-  });
-  const fake: TicketStep = {
-    signal: new AbortController().signal,
-    person: { waitsOn: () => {}, carriesOn: () => said.push("carries on"), afterwards: () => {} },
-    waits: (on) => said.push(`waits ${JSON.stringify(on)}`),
-    address: () => handed,
-  };
-  return { fake, said, handOver };
-}
-
-const flyLike = (bin: string): BrowserLogin => ({
-  bin,
-  atTerminal: ["auth", "login"],
-  unattended: ["auth", "login"],
-  address: /https:\/\/fly\.example\/cli\/[a-z0-9]+/,
-  withCode: (code) => ["auth", "login", "--code", code],
-});
-
-const signIn = (login: BrowserLogin, fake: TicketStep) => {
-  const { hostLogin: run } = hostLogin(login, { kind: "ticket", step: fake }, tmpdir());
-  return (run as () => Promise<string | undefined>)();
-};
 
 it("waits on the person at the address the CLI prints, and carries on once it says it is signed in", async () => {
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -109,10 +73,6 @@ it("a login that fails says so with what the CLI said", async () => {
   expect(await signIn(flyLike(bin), fake)).toBe(
     `\`${bin} auth login\` did not sign in (exit 1): Error: network unreachable`,
   );
-});
-
-it("nobody gets no sign-in: the deploy stops at the host's own gate", () => {
-  expect(hostLogin(flyLike("fly"), { kind: "nobody" }, tmpdir())).toEqual({});
 });
 
 it("at a terminal the host's own login runs there, and one that does not sign in says so", async () => {

@@ -3,49 +3,28 @@
  * them, the settings checked against the program's schema, each value with its source. What a reader of the resolved
  * configuration does with it is that reader's test.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { compile, int, map, obj, opt, str, unknown } from "@earendil-works/pi-schema";
-import { afterAll, describe, expect, it } from "vitest";
+import { compile, map, obj, opt, unknown } from "@earendil-works/pi-schema";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { buildProject } from "../src/harnesses/pi-durable/build.ts";
 import { instanceConfigSchema, resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { environmentConfig } from "../src/harnesses/pi-durable/environment-config.ts";
-import { type AgentDefinition, defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
+import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
 import { openAgent, openServing } from "../src/harnesses/pi-durable/serve.ts";
 import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { pickedModelLine } from "../src/cli/shared.ts";
 import { buildable, runInProcess } from "./cli-run.ts";
 import { FIXTURES } from "./probe-package.ts";
 import { NOT_HOSTED } from "../src/serving-command.ts";
+import { made, SETTINGS, program, reviewer, instance, typedSettings } from "./config-fixtures.ts";
 
-const made: string[] = [];
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
+
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });
 });
-
-const SETTINGS = obj({ repo: str(), digestChannel: opt(str()), retries: opt(int({ minimum: 0 })) });
-
-const program = (config: object) =>
-  defineDefinition({
-    format: 1,
-    builtWith: "0.0.0",
-    name: "reviewer",
-    version: "1.0.0",
-    dir: "/program",
-    config,
-    registry: { tools: [], extensions: [], channels: [], schedules: [] },
-  });
-
-const reviewer = program({
-  settings: SETTINGS,
-  defaults: {
-    model: "openai/gpt-5.5",
-    thinkingLevel: "high",
-    http: { port: 8787, api: true },
-    settings: { digestChannel: "#general" },
-  },
-});
-
-const instance = (values: unknown) => ({ values, label: "fastagent.json" });
 
 describe("environmentConfig", () => {
   const base = program({ defaults: { thinkingLevel: "high", http: { api: true } } });
@@ -397,16 +376,68 @@ export default needs([], (_secrets, settings: { repo: string; digestChannel?: st
       { type: "text", text: "undefined #general" },
     ]);
   });
-});
 
-// Checked by `tsc`, which runs over the tests: a definition typed by its settings types an embedder's `config`.
-declare const typed: AgentDefinition<{ repo: string; digestChannel?: string }>;
-const typedSettings = () => [
-  openAgent(typed, { root: "/instance", config: { settings: { repo: "acme/api" } } }),
-  // @ts-expect-error a setting the program does not declare
-  openAgent(typed, { root: "/instance", config: { settings: { repoo: "acme/api" } } }),
-  // @ts-expect-error a setting of the wrong type
-  openAgent(typed, { root: "/instance", config: { settings: { repo: 7 } } }),
-];
+  it("is opened by `openAgent` from an object or an absolute path, and refuses a relative one", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const { loadBuiltDefinition } = await import("../src/harnesses/pi-durable/built.ts");
+    const definition = await loadBuiltDefinition(dist);
+    const root = mkdtempSync(join(tmpdir(), "fa-config-open-"));
+    made.push(root);
+    await expect(openAgent(definition, { root })).rejects.toThrow("/repo missing");
+    await expect(openAgent(definition, { root, config: "fastagent.json" })).rejects.toThrow(
+      "config must be an absolute path",
+    );
+    writeFileSync(join(root, "instance.json"), JSON.stringify({ settings: { repo: "acme/api" } }));
+    const agent = await openAgent(definition, { root, config: join(root, "instance.json"), offline: true });
+    await agent.close();
+    const second = await openAgent(definition, { root, config: { settings: { repo: "acme/web" } }, offline: true });
+    await second.close();
+    await expect(openAgent(definition, { root, config: join(root, "missing.json") })).rejects.toThrow(
+      "cannot read the instance configuration",
+    );
+  });
+
+  it("`openAgent` given a root and no config reads the fastagent.json there, and nothing else is read or made", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const { loadBuiltDefinition } = await import("../src/harnesses/pi-durable/built.ts");
+    const definition = await loadBuiltDefinition(dist);
+    const root = mkdtempSync(join(tmpdir(), "fa-config-root-"));
+    made.push(root);
+    const file = join(root, "fastagent.json");
+    // No file is the program's defaults, and opening makes none.
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow("/repo missing");
+    expect(existsSync(file)).toBe(false);
+    // An open that succeeds without a file makes none either: a program that needs no settings.
+    const plain = project({ "fastagent.config.ts": "export default {};\n" });
+    await buildable(plain);
+    const plainDefinition = await loadBuiltDefinition((await buildProject(plain)).dist);
+    await (await openAgent(plainDefinition, { root, offline: true })).close();
+    expect(existsSync(file)).toBe(false);
+    writeFileSync(file, JSON.stringify({ settings: { repo: "acme/api" } }));
+    await (await openAgent(definition, { root, offline: true })).close();
+    // A config that is given is used as it is, and the file is not read.
+    writeFileSync(file, "{ not json");
+    await (await openAgent(definition, { root, config: { settings: { repo: "acme/web" } }, offline: true })).close();
+    await expect(openAgent(definition, { root, offline: true })).rejects.toThrow(`${file} is not JSON`);
+    // Only the root form: a workdir's fastagent.json is another instance's (the development one).
+    writeFileSync(file, JSON.stringify({ settings: { repo: "acme/api" } }));
+    const stateDir = join(root, "state");
+    await expect(openAgent(definition, { workdir: root, stateDir, offline: true })).rejects.toThrow("/repo missing");
+  });
+
+  it("publishes the JSON Schema of an instance's file beside the package, settings included", async () => {
+    const dir = project({ "fastagent.config.ts": CONFIG });
+    await buildable(dir);
+    const { dist } = await buildProject(dir);
+    const schema = JSON.parse((await import("node:fs")).readFileSync(join(dist, "fastagent.schema.json"), "utf8"));
+    expect(schema.properties.settings.properties).toHaveProperty("repo");
+    expect(schema.properties.settings.required).toBeUndefined();
+    expect(schema.additionalProperties).toBe(false);
+  });
+});
 
 void typedSettings;

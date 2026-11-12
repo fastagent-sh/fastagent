@@ -4,57 +4,16 @@
  * promises: an agent it creates runs as created, an edit writes the shared declaration and this machine's binding
  * each where it belongs, and its refusals are thrown, a name problem as its own class.
  */
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useGitIdentity, withGitIdentity } from "./git-env.ts";
 import { ContentNameError, addContent, createAgent, initAgent, listContent, removeContent } from "../src/authoring.ts";
-import { type SourceOptions, readContentSource } from "../src/content/source.ts";
+import { readContentSource } from "../src/content/source.ts";
 import { defineDefinition } from "../src/harnesses/pi-durable/definition.ts";
-
-/** What `content add <dir>` adds. */
-const directory = (dir: string, options: SourceOptions = {}) => readContentSource(dir, "/", options).addition;
-
-const SRC = fileURLToPath(new URL("../src/", import.meta.url));
-
-/**
- * Create an agent and open it in a plain Node process. vitest aliases `@fastagent-sh/fastagent` to this checkout's
- * source, which would make every import resolve; a child process run from a temp directory resolves it the way an
- * app that never ran `npm install` there does: not at all.
- */
-function createAndOpen(dir: string): Promise<string> {
-  const script = `
-    import { createAgent } from ${JSON.stringify(join(SRC, "authoring.ts"))};
-    import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/open.ts"))};
-    import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
-    await createAgent(${JSON.stringify(dir)});
-    await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { secrets: {}, env: {}, ownEnv: process.env, runsAs: { dev: false, deployed: false, agentcore: false }, storage: "memory" })).then(
-      async (opened) => {
-        await opened.agent.close();
-        console.log("opened");
-      },
-      (e) => console.log(e.message),
-    );
-  `;
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
-      cwd: tmpdir(),
-      env: withGitIdentity,
-    });
-    let out = "";
-    let err = "";
-    child.stdout.on("data", (d) => (out += String(d)));
-    child.stderr.on("data", (d) => (err += String(d)));
-    child.on("error", reject);
-    // The script reports the open's outcome on stdout and exits 0; anything else failed before it got there.
-    child.on("close", (code) =>
-      code === 0 ? resolve(out.trim()) : reject(new Error(`child exited ${code}:\n${err}`)),
-    );
-  });
-}
+import { directory, createAndOpen } from "./authoring-fixtures.ts";
 
 describe("authoring API", () => {
   // createAgent commits the scaffold.
@@ -217,26 +176,6 @@ describe("authoring API", () => {
     expect((await listContent(agentDir)).content.map((entry) => entry.name)).toEqual(["notes"]);
   });
 
-  it("a clone in content/ outlives its entry, and is said to; nothing is cloned over it", async () => {
-    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-clone-")));
-    const agentDir = join(base, "agent");
-    await createAgent(agentDir);
-    const repository = readContentSource("github:acme/app", base).addition;
-    await addContent(agentDir, repository);
-    // What the first start makes there; the agent may have worked in it since.
-    await mkdir(join(agentDir, "content", "app"), { recursive: true });
-    await writeFile(join(agentDir, "content", "app", "work.md"), "unpushed\n");
-    const removed = await removeContent(agentDir, "app");
-    expect(removed.notes).toEqual([
-      "content/app is left as it is: it may hold the agent's work — delete it once nothing in it is needed",
-    ]);
-    expect(await readFile(join(agentDir, "content", "app", "work.md"), "utf8")).toBe("unpushed\n");
-    // Added again while it is there: refused, rather than cloned over.
-    await expect(addContent(agentDir, repository)).rejects.toThrow(
-      `content/app already exists in ${agentDir}: move it away first`,
-    );
-  });
-
   it("an entry that does not resolve refuses an edit until removed, a directory that is gone included", async () => {
     const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-broken-")));
     const agentDir = join(base, "agent");
@@ -256,17 +195,6 @@ describe("authoring API", () => {
     const mended = await removeContent(agentDir, "moved");
     expect(mended.content.map((c) => c.name)).toEqual(["c"]);
     await addContent(agentDir, directory(join(base, "b")));
-  });
-
-  it("a refused edit on an agent without context files leaves none", async () => {
-    const base = await realpath(await mkdtemp(join(tmpdir(), "fa-authoring-none-")));
-    const agentDir = join(base, "agent");
-    await createAgent(agentDir);
-    await expect(removeContent(agentDir, "app")).rejects.toThrow('no content named "app" (this agent has: none)');
-    await expect(addContent(agentDir, directory(join(base, "missing")))).rejects.toThrow(/does not exist/);
-    for (const file of ["context.json", "fastagent.json"]) {
-      await expect(access(join(agentDir, file))).rejects.toThrow(/ENOENT/);
-    }
   });
 
   it("a built definition is the agent: its program is read from a directory that may be read-only, the instance is edited", async () => {

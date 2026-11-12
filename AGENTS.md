@@ -312,6 +312,7 @@ src/
     │   │                   # them, each value with its source; `fastagent.schema.json`
     │   ├── definition.ts   # a definition as one frozen value: what dev loads and a build exports, its declared inputs
     │   ├── build.ts        # `fastagent build`: the project's tsc into dist/, the text and resources, the generated entry
+    │   ├── tsc.ts          # the project's TypeScript as the build runs it (a process per call), apart so a test can stand in
     │   ├── built.ts        # what dist/ is: which files go into it, the build record `start` checks the project against,
     │   │                   # and the opener of a built package (`loadProjectBuild`, `loadBuiltDefinition`)
     │   ├── registry.ts     # the modules of src/ by directory, imported in file order
@@ -352,6 +353,7 @@ test/                       # vitest; faux models by default; two tiers (CONTRIB
 ├── forbidden.ts            # what a tier refuses, failed after the test: setup.ts (off-machine connections, both
 │                           # tiers), unit-setup.ts (child processes, unit)
 ├── git-double.ts           # src/git.ts for a unit test: no git, or the answers a test scripts for a directory
+├── tsc-double.ts           # the build's compiler for a unit test: imports followed, types stripped, nothing checked
 ├── agent-api-conformance.ts # the Agent API's conformance suite (docs/SPEC.md §11), run in process by
 │                           # durable-agent.test.ts over durable-subject.ts, and over HTTP by http-api.test.ts
 │                           # (http-subject.ts: the same subject served, called through connectAgent)

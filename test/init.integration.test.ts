@@ -1,25 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { hermeticGit, withGitIdentity } from "./git-env.ts";
+import { hermeticGit } from "./git-env.ts";
 import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runInProcess } from "./cli-run.ts";
-
-const freshDir = () => mkdtemp(join(tmpdir(), "fa-init-"));
-async function exists(p: string): Promise<boolean> {
-  return access(p).then(
-    () => true,
-    () => false,
-  );
-}
-
-const withIdentity = withGitIdentity;
-
-/** Run `fastagent <args>` from `cwd` to completion; return stderr (the [fastagent] report stream). */
-async function cliInit(args: string[], cwd: string, env: NodeJS.ProcessEnv = withIdentity): Promise<string> {
-  return (await runInProcess(args, cwd, env)).stderr;
-}
+import { freshDir, exists, withIdentity, cliInit } from "./init-fixtures.ts";
 
 describe("init: scaffoldAgent", () => {
   it("--content adds a directory of this machine to fastagent.json, a repository to context.json; a nested directory is refused before any write", async () => {
@@ -103,19 +87,5 @@ describe("init: scaffoldAgent", () => {
     const out = await cliInit(["init", "plain", "--no-install"], base, { ...env, PATH: "/nonexistent" });
     expect(out).toContain("git: git is not installed: no repository was created");
     expect(await exists(join(base, "plain", "fastagent.config.ts"))).toBe(true);
-  });
-
-  it("the CLI takes the directory, says what it created, and leads the next steps with `cd`", async () => {
-    const base = await freshDir();
-    const out = await cliInit(["init", "my-agent", "--no-install"], base);
-    expect(out).toMatch(/created .*my-agent/);
-    expect(out).toMatch(/^ {4}cd my-agent$/m);
-    expect(out).toMatch(/fastagent dev/);
-    expect(await exists(join(base, "my-agent", "SYSTEM.md"))).toBe(true);
-
-    // No directory is a usage error: an agent is a directory of its own, so there is no default to guess.
-    expect(await cliInit(["init", "--no-install"], await freshDir())).toMatch(/missing required argument/);
-    // --agent-dir is gone with the nested layout it named.
-    expect(await cliInit(["init", "x", "--agent-dir", "bot"], base)).toMatch(/unknown option/);
   });
 });

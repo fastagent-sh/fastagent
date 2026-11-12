@@ -4,11 +4,9 @@
  * unbundled, with the options FastAgent sets; the text and resources are copied; the entry is generated, the
  * definition's modules as static imports.
  */
-import { spawn } from "node:child_process";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
 import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../../mcp/config.ts";
@@ -18,6 +16,7 @@ import { HARNESS_PACKAGES } from "../../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "./definition.ts";
 import { loadSourceDefinition } from "./open.ts";
 import { REGISTRY_KINDS } from "./registry.ts";
+import { type ProjectCompiler, projectCompiler } from "./tsc.ts";
 
 const STAGING_DIR = join(".fastagent", "build");
 
@@ -26,7 +25,6 @@ const SCHEMA_FILE = "fastagent.schema.json";
 const FASTAGENT_PACKAGE = "@fastagent-sh/fastagent";
 /** A declaration file: types only, so the compiler emits nothing for it, wherever it is (a workspace package's). */
 const DECLARATION = /\.d\.[cm]?ts$/;
-const MIN_TYPESCRIPT = 7;
 
 export interface BuildOptions {
   /** Type-check the project (default). Without it, `tsc --noCheck` only emits. */
@@ -80,70 +78,20 @@ async function requireModulePackage(dir: string): Promise<void> {
   }
 }
 
-/** The project's `tsc`, by the package's own `bin`: FastAgent does not carry a compiler, as Next.js does not. */
-function projectTsc(dir: string): string {
-  try {
-    const manifest = createRequire(join(dir, "package.json")).resolve("typescript/package.json");
-    const { bin, version } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string }; version?: string };
-    if (bin?.tsc === undefined) throw new Error(`${manifest} has no tsc`);
-    // The options the build sets (--ignoreConfig, --erasableSyntaxOnly, --rewriteRelativeImportExtensions) are 7's.
-    if (!(Number.parseInt(version ?? "", 10) >= MIN_TYPESCRIPT)) {
-      throw new Error(
-        `fastagent build needs TypeScript ${MIN_TYPESCRIPT} or newer; ${dir} has ${version ?? "an unknown version"}`,
-      );
-    }
-    return join(dirname(manifest), bin.tsc);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
-    throw new Error(
-      `fastagent build compiles with the project's TypeScript, and ${dir} has none: npm install --save-dev typescript`,
-      { cause: error },
-    );
-  }
-}
-
-/** What the compiler is run with: FastAgent sets it, and the author's `tsconfig.json` is the editor's. */
-function tscArguments(dir: string, outDir: string, roots: readonly string[], more: readonly string[]): string[] {
-  return [
-    projectTsc(dir),
-    "--ignoreConfig",
-    "--pretty",
-    "false",
-    "--target",
-    "es2022",
-    "--module",
-    "nodenext",
-    "--moduleResolution",
-    "nodenext",
-    "--strict",
-    "--skipLibCheck",
-    "--verbatimModuleSyntax",
-    // What `dev` runs is Node's type stripping: the build compiles only what it would run.
-    "--erasableSyntaxOnly",
-    "--allowImportingTsExtensions",
-    "--rewriteRelativeImportExtensions",
-    "--resolveJsonModule",
-    "--allowJs",
-    "--rootDir",
-    dir,
-    "--outDir",
-    outDir,
-    ...more,
-    ...roots.map((file) => join(dir, file)),
-  ];
-}
-
 /**
  * The source files the compiler reads, split into the project's (relative, what the build records) and those outside
  * it, which `dist/` cannot hold: `tsc` reports one (TS6059) yet writes its output beside it, and with `--noCheck`
  * reports nothing and succeeds, so the files are listed first and the build refuses before anything is emitted.
  * Dependencies (`node_modules`, the compiler's own libraries) and declaration files, which emit nothing, are neither.
  */
-async function programFiles(dir: string, roots: readonly string[]): Promise<{ inside: string[]; outside: string[] }> {
-  const { output } = await run(process.execPath, tscArguments(dir, dir, roots, ["--listFilesOnly"]), dir);
+async function programFiles(
+  compiler: ProjectCompiler,
+  dir: string,
+  roots: readonly string[],
+): Promise<{ inside: string[]; outside: string[] }> {
   const inside: string[] = [];
   const outside: string[] = [];
-  for (const file of output.split("\n").map((line) => line.trim())) {
+  for (const file of await compiler.files(roots)) {
     if (!isAbsolute(file) || file.split(sep).includes("node_modules")) continue;
     const rel = relative(dir, file);
     if (rel.startsWith("..")) {
@@ -165,41 +113,23 @@ async function compile(dir: string, outDir: string, definition: AgentDefinition,
     ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
   ];
   if (roots.length === 0) return [];
-  const { inside, outside } = await programFiles(dir, roots);
+  const compiler = projectCompiler(dir);
+  const { inside, outside } = await programFiles(compiler, dir, roots);
   if (outside.length > 0) {
     throw new Error(
       `the project imports source from outside ${dir}, which ${DIST_DIR}/ cannot hold: ${outside.join(", ")}`,
     );
   }
-  const { code, output } = await run(
-    process.execPath,
-    tscArguments(dir, outDir, roots, check ? [] : ["--noCheck"]),
-    dir,
-  );
+  const { code, output } = await compiler.emit(outDir, roots, check);
   if (code !== 0) throw new Error(`tsc refused the project (exit ${code}):\n${output.trim()}`);
   // The configuration's declaration alone: it types the package's entry by the program's settings.
   if (roots.includes(AGENT_CONFIG_FILE)) {
-    const declared = await run(
-      process.execPath,
-      tscArguments(dir, outDir, [AGENT_CONFIG_FILE], ["--declaration", "--emitDeclarationOnly", "--noCheck"]),
-      dir,
-    );
+    const declared = await compiler.declare(outDir, AGENT_CONFIG_FILE);
     if (declared.code !== 0) {
       throw new Error(`tsc could not write the declaration of ${AGENT_CONFIG_FILE}:\n${declared.output.trim()}`);
     }
   }
   return inside;
-}
-
-function run(command: string, args: string[], cwd: string): Promise<{ code: number | null; output: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let output = "";
-    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (output += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, output }));
-  });
 }
 
 /** `index.js`, the package's default export: the definition, its modules imported statically. */

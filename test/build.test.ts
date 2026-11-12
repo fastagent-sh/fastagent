@@ -1,29 +1,83 @@
-import { chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildProject } from "../src/harnesses/pi-durable/build.ts";
-import { made, project, FILES, listing } from "./build-fixtures.ts";
+import { runInProcess } from "./cli-run.ts";
+import { ROOT, made, project, FILES, listing } from "./build-fixtures.ts";
+
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
 
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("fastagent build", () => {
+  it("writes dist/: the compiled code, its text and resources, and nothing of the machine's", async () => {
+    const dir = project(FILES);
+    const { dist } = await buildProject(dir);
+    expect(listing(dist)).toEqual([
+      "AGENTS.md",
+      "LICENSE",
+      "SYSTEM.md",
+      "build.json",
+      "context.json",
+      "fastagent.config.d.ts",
+      "fastagent.config.js",
+      "fastagent.schema.json",
+      "index.d.ts",
+      "index.js",
+      "lib/shout.js",
+      "package.json",
+      "prompts/review.md",
+      "skills/lookup/SKILL.md",
+      "src/tools/lookup.js",
+      "src/tools/lookup/data.json",
+      "src/tools/lookup/note.txt",
+    ]);
+    expect(JSON.parse(readFileSync(join(dist, "package.json"), "utf8"))).toEqual({
+      name: "@acme/support",
+      version: "1.2.0",
+      description: "Answers support questions.",
+      type: "module",
+      exports: {
+        ".": { types: "./index.d.ts", default: "./index.js" },
+        "./fastagent.schema.json": "./fastagent.schema.json",
+      },
+      dependencies: { lodash: "^4" },
+      peerDependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0" },
+    });
+  });
+
   it("refuses what a dev serve refuses, before writing anything", async () => {
     const dir = project({ "src/tools/bad.ts": "throw new Error('boom at import');\n" });
     await expect(buildProject(dir)).rejects.toThrow("src/tools/bad.ts: boom at import");
     expect(readdirSync(dir)).not.toContain("dist");
   });
 
-  it("names the TypeScript it needs when the project's is older", async () => {
+  it("copies a symlinked skill as the files it names, and refuses a link back into what it copies", async () => {
+    const shared = join(ROOT, `.tmp-skills-${process.pid}`);
+    made.push(shared);
+    mkdirSync(join(shared, "review"), { recursive: true });
+    writeFileSync(join(shared, "review/SKILL.md"), "---\nname: review\ndescription: Review\n---\nReview.\n");
     const dir = project(FILES);
-    const old = join(dir, "node_modules/typescript");
-    mkdirSync(join(old, "bin"), { recursive: true });
-    writeFileSync(
-      join(old, "package.json"),
-      JSON.stringify({ name: "typescript", version: "5.9.2", bin: { tsc: "./bin/tsc" } }),
+    symlinkSync(join(shared, "review"), join(dir, "skills/review"));
+    const { dist } = await buildProject(dir);
+    expect(readFileSync(join(dist, "skills/review/SKILL.md"), "utf8")).toContain("Review.");
+    expect(lstatSync(join(dist, "skills/review")).isSymbolicLink()).toBe(false);
+    symlinkSync(join(dir, "skills"), join(dir, "skills/loop"));
+    await expect(buildProject(dir)).rejects.toThrow(
+      /skills\/loop links back to .*skills, a directory this build is copying/,
     );
-    await expect(buildProject(dir)).rejects.toThrow(/needs TypeScript 7 or newer; .* has 5\.9\.2/);
   });
 
   it("warns of a literal credential in the program's mcpServers, which the package publishes", async () => {
@@ -116,6 +170,18 @@ describe("fastagent build", () => {
       for (const command of ["npx", "/opt/mcp/server", "$" + "{MCP_HOME}/server"]) {
         await expect(buildProject(project({ "context.json": servers(command) })), command).resolves.toBeDefined();
       }
+    });
+  });
+
+  it("is the build command, which prints where dist/ is", async () => {
+    const dir = project(FILES);
+    const { code, stdout, stderr } = await runInProcess(["build", dir, "--json"]);
+    expect(code, stderr).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      dist: join(dir, "dist"),
+      name: "@acme/support",
+      version: "1.2.0",
+      warnings: [],
     });
   });
 });

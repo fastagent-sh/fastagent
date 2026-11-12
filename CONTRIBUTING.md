@@ -48,8 +48,8 @@ How the boundary is kept:
   event instead, or drive the time with fake timers or an injected timeout.
 - Where a unit test needs what a process or a tool would answer, it goes through the seam the code already has: the
   in-process CLI (`runInProcess`), the host CLI runner (`CliRunner`), a stubbed `fetch`, `test/git-double.ts` for
-  `src/git.ts`. A double gets one integration test that checks it against the real thing, as
-  `cli-run-parity.integration.test.ts` does for `runInProcess` and `git-double.integration.test.ts` for git.
+  `src/git.ts`, `test/tsc-double.ts` for the build's compiler. A double gets one integration test that checks it
+  against the real thing, as `cli-run-parity.integration.test.ts` does for `runInProcess`.
 - A subject tested in both tiers is two files, `<name>.test.ts` and `<name>.integration.test.ts`; what both need is in
   `<name>-fixtures.ts`.
 

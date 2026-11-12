@@ -8,6 +8,8 @@ import { runDestroy } from "../src/cli/commands/destroy.ts";
 import { runLogs } from "../src/cli/commands/logs.ts";
 import { runLogin } from "../src/cli/commands/login.ts";
 
+vi.mock("../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"));
+
 const ports = vi.hoisted(() => ({ deploy: vi.fn(), shell: vi.fn(), logs: vi.fn(), destroy: vi.fn() }));
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 vi.mock("../src/cli/shared.ts", async (importOriginal) => ({

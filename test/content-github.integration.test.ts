@@ -1,78 +1,24 @@
-import { resolveConfig } from "../src/harnesses/pi-durable/config.ts";
 import { runInProcess } from "./cli-run.ts";
 /**
  * GitHub content against a local stand-in for GitHub (github-standin.ts): a repository is cloned into the instance's
  * working directory, and brought up to date at each start while that loses nothing.
  */
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cloneContent, resolveContent } from "../src/content/resolve.ts";
+import { cloneContent } from "../src/content/resolve.ts";
 import { readContentSource } from "../src/content/source.ts";
-import { declareContent } from "../src/content/declare.ts";
-import { githubRepoOf } from "../src/content/git.ts";
-import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import { modelsOver } from "../src/harnesses/models/models.ts";
-import { MemoryStorage } from "@earendil-works/pi-durable";
-import {
-  assembleAgent,
-  buildDefinition,
-  loadDevProject,
-  loadSourceDefinition,
-} from "../src/harnesses/pi-durable/open.ts";
-import { openServing } from "../src/harnesses/pi-durable/serve.ts";
 
-/** The agent in `dir` as a serve opens it, with no storage of its own: what its content resolves to. */
-async function openedContent(dir: string, secrets: Record<string, string> = {}) {
-  const { definition, instance } = await loadDevProject(dir);
-  const opened = await openServing(definition, {
-    secrets,
-    env: {},
-    ownEnv: process.env,
-    runsAs: NOT_HOSTED,
-    storage: "memory",
-    ...(instance === undefined ? {} : { config: instance }),
-  });
-  await opened.agent.close();
-  return opened.content;
-}
 import { git, githubStandIn } from "./github-standin.ts";
 import { log } from "../src/log.ts";
-import { makeFaux, sentPrompt } from "./faux.ts";
-import { NOT_HOSTED } from "../src/serving-command.ts";
+import { openedContent, agent, resolveOne } from "./content-github-fixtures.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
-async function agent(): Promise<{ root: string; agentDir: string }> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "fa-ghctx-")));
-  const agentDir = join(root, "agent");
-  await mkdir(agentDir);
-  return { root, agentDir };
-}
-
-/** The github entry `entry` declares, named after its repository or `name`, resolved and narrowed. */
-function resolveOne(agentDir: string, { name, ...entry }: { github: string; ref?: string; name?: string }) {
-  const key = name ?? (entry.github.split("/")[1] as string);
-  const declared = declareContent({ [key]: entry }, { origin: "program", file: "context.json" });
-  const [resolved] = resolveContent(declared, { workdir: agentDir });
-  if (resolved?.kind !== "github") throw new Error("not github content");
-  return resolved;
-}
-
 describe("github content: resolved, without touching the network or the disk", () => {
-  it("is a clone fastagent makes at content/<name> in the working directory", async () => {
-    const { agentDir } = await agent();
-    const bare = resolveOne(agentDir, { github: "acme/app" });
-    expect(bare).toMatchObject({ location: join(agentDir, "content", "app"), kind: "github", repo: "acme/app" });
-    expect(bare.notices).toEqual(["not cloned yet: it is cloned when the agent starts"]);
-    expect(existsSync(join(agentDir, ".state"))).toBe(false);
-    expect(existsSync(join(agentDir, "content"))).toBe(false);
-  });
-
   it("refuses, naming it, when git is not installed", async () => {
     const { root } = await agent();
     await mkdir(join(root, "app"));
@@ -391,65 +337,9 @@ describe("github content: what runs the agent clones, what reports on it does no
     // What fastagent puts in content/ stays out of the agent's own repository.
     expect(readFileSync(join(agentDir, "content", ".gitignore"), "utf8")).toBe("*\n");
   });
-
-  it("the agent is told what it changes in a clone stays, and that a directory is the user's", async () => {
-    const { root, agentDir } = await agent();
-    const docs = join(root, "docs");
-    await mkdir(docs);
-    const content = resolveContent(
-      [
-        ...declareContent(
-          { app: { github: "acme/app", ref: "main", description: "The product. Open pull requests against main." } },
-          { origin: "program", file: "context.json" },
-        ),
-        ...declareContent({ docs: { path: docs } }, { origin: "instance", file: "fastagent.json", base: root }),
-      ],
-      { workdir: agentDir },
-    );
-    const { faux } = makeFaux();
-    let prompt = "";
-    faux.setResponses([
-      (context) => {
-        prompt = sentPrompt(context);
-        return fauxAssistantMessage("ok");
-      },
-    ]);
-    const definition = await loadSourceDefinition(agentDir);
-    const running = await assembleAgent(definition, {
-      storage: new MemoryStorage(),
-      runsAs: NOT_HOSTED,
-      processEnv: {},
-      code: { ...buildDefinition(definition, {}), providers: [faux.provider] },
-      config: resolveConfig(definition),
-      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
-      model: "faux/faux-1",
-      content,
-    });
-    await running.messages.send({ sessionId: (await running.sessions.create()).id, content: "hi" }, { wait: 30 });
-    await running.close();
-    expect(prompt).toContain(
-      `- app: ${join(agentDir, "content", "app")} (a shallow clone of github acme/app (declared main) in your own storage: what you change in it stays, and each time you start it is brought up to date where that touches nothing of yours; push to share a change) The product. Open pull requests against main.`,
-    );
-    expect(prompt).toContain(`- docs: ${docs} (a directory on this machine)`);
-  });
 });
 
 describe("github content: what a command's <source> adds", () => {
-  it("a remote names a GitHub repository in any of the spellings git takes", () => {
-    for (const url of [
-      "https://github.com/acme/app.git",
-      "https://github.com/acme/app",
-      "https://token@github.com/acme/app.git",
-      "git@github.com:acme/app.git",
-      "ssh://git@github.com/acme/app.git",
-    ]) {
-      expect(githubRepoOf(url), url).toBe("acme/app");
-    }
-    for (const url of ["https://gitlab.com/acme/app.git", "git@github.example.com:acme/app.git", "/srv/app.git"]) {
-      expect(githubRepoOf(url), url).toBeUndefined();
-    }
-  });
-
   it("a directory is itself, a checkout's root included, and a checkout is said", async () => {
     const github = githubStandIn();
     github.repo("acme/app").commit({ "src/index.ts": "x\n" });
