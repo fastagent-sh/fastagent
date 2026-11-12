@@ -6,7 +6,8 @@
       "src/deploy/agentcore/forwarder.js",
       "test/**/*.ts",
       "!src/scaffold/templates/**",
-      "!src/channels/*/scaffold/**"
+      "!src/channels/*/scaffold/**",
+      "!test/fixtures/.tmp-*"
     ]
   },
   "formatter": {

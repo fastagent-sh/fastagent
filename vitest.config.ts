@@ -31,7 +31,7 @@ export default defineConfig({
           // `--sequence.seed=<n>` repeats it.
           sequence: { shuffle: { files: false, tests: true } },
           include: ["test/**/*.test.ts"],
-          exclude: ["test/**/*.integration.test.ts"],
+          exclude: ["test/**/*.integration.test.ts", "test/fixtures/.tmp-**"],
           setupFiles: ["test/setup.ts", "test/unit-setup.ts"],
           testTimeout: 20_000,
           hookTimeout: 20_000,
@@ -42,6 +42,7 @@ export default defineConfig({
         test: {
           name: "integration",
           include: ["test/**/*.integration.test.ts"],
+          exclude: ["test/fixtures/.tmp-**"],
           setupFiles: ["test/setup.ts"],
           testTimeout: 30_000,
           hookTimeout: 30_000,

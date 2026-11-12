@@ -30,7 +30,7 @@ In scope:
 
 - the `@fastagent-sh/fastagent` package (CLI, library API, reference implementation),
 - the first-party channel adapters (`/telegram`, `/slack`, `/feishu`, `/lark`),
-- credential handling in the project-level `<state root>/auth.json` (default `<dir>/.fastagent/auth.json`; global `~/.fastagent/auth.json` is opt-in) and the OAuth/env auth resolution path.
+- credential and grant handling in `<secrets dir>/auth.json` and `<secrets dir>/mcp-auth.json` (default `<dir>/.secrets/`, or `<dir>/.secrets/production/` for `start`), the global `~/.fastagent/.secrets/auth.json`, `<state>/auth.json` and `<state>/mcp-auth.json` when embedded with `openAgent`, and the OAuth/env auth resolution path.
 
 Out of scope:
 
@@ -40,10 +40,10 @@ Out of scope:
 
 ## Handling secrets
 
-FastAgent treats credentials and environment as deployment config, never as part of the agent definition:
+FastAgent treats credentials and environment as instance config, never as part of the agent definition:
 
-- keep `.env`, provider keys, and the credentials file (`<dir>/.fastagent/auth.json` by default, or `~/.fastagent/auth.json`) out of version control,
-- the scaffolded `.gitignore` excludes `.env`; `fastagent init` warns when a pre-existing `.gitignore` does not,
+- keep `.secrets/` (`.env`, `auth.json`, `mcp-auth.json`), `~/.fastagent/.secrets/auth.json`, `.state/`, and provider keys out of version control,
+- `.secrets/` carries its own `.gitignore` (allowing only `.gitignore` and `.env.example`), and the scaffolded root `.gitignore` excludes `.fastagent`, `.state`, `.env` and `.env.*`; if you point `--env-file`, `FASTAGENT_SECRETS_DIR` or `FASTAGENT_AUTH_PATH` at another path inside a repository, exclude that path in `.gitignore` yourself,
 - webhook channels require a verification secret (e.g. `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
 
 If you find a case where a secret can leak into the agent definition, logs, or the deployable artifact, report it through the process above.
