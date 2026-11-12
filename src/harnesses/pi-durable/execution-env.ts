@@ -3,7 +3,7 @@
  * outright. Its own `inheritEnv` would add this process's whole environment to a command's, and the bash tool asks for
  * it on every call, so it is forced off here.
  */
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 
 type Exec = NodeExecutionEnv["exec"];
