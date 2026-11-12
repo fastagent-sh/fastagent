@@ -20,6 +20,7 @@ import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import type { ForkSource } from "../../channel.ts";
 import { threadForkSource } from "../kit/thread-fork.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { foldBudget } from "../kit/fold-budget.ts";
 import { createMessageOwners } from "../kit/message-owners.ts";
 import { senderConversation } from "../kit/sender-conversation.ts";
 import type { PlaceMessage } from "../kit/place-history.ts";
@@ -352,6 +353,7 @@ function createFeishuRuntimeFactory(
         const fold = await history.fold({
           key: rec.historyKey,
           conversation: rec.conversation,
+          budget: await foldBudget(agent, recordedSession(rec.conversation)),
           ...(start.after === undefined ? {} : { after: start.after }),
           until,
         });
@@ -403,6 +405,7 @@ function createFeishuRuntimeFactory(
           return history.fold({
             key: rec.roomKey,
             conversation: rec.conversation,
+            budget: await foldBudget(agent, recordedSession(rec.conversation)),
             ...(after === undefined ? {} : { after }),
           });
         }).pipe(

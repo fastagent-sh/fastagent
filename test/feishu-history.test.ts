@@ -76,7 +76,7 @@ function setup(opts: { names?: MemberNames; path?: string; controls?: string[] }
       const until = { at: Number(ask.create_time), id: ask.message_id as string };
       const after = sent.get(key);
       if (!lost) sent.set(key, until);
-      return { key, conversation: "c", ...(after === undefined ? {} : { after }), until };
+      return { key, conversation: "c", budget: 4000, ...(after === undefined ? {} : { after }), until };
     },
     listMessages,
     chatMemberNames,
@@ -313,9 +313,9 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_1", "room talk"));
     const asked = place.ask(); // the room's session was last sent this ask
     place.messages.push(msg("om_2", "said since"));
-    const room = await place.history.fold({ key: "oc_1", conversation: "c", after: asked.until });
+    const room = await place.history.fold({ key: "oc_1", conversation: "c", budget: 4000, after: asked.until });
     expect(room.text).toBe("Alice (msg om_2): said since");
-    expect((await place.history.fold({ key: "oc_1", conversation: "c" })).text).toContain("room talk"); // a room nothing was asked in
+    expect((await place.history.fold({ key: "oc_1", conversation: "c", budget: 4000 })).text).toContain("room talk"); // a room nothing was asked in
   });
 
   it("an outputs file of the wrong shape is reported, and every place reads afresh", async () => {
@@ -335,7 +335,12 @@ describe("Feishu place history", () => {
     place.messages.push(msg("om_secret", "the other group's plan", { chat_id: "oc_2", thread_id: "omt_9" }));
     const key = feishuHistoryKey({ chatId: "oc_1", threadId: "omt_9" });
     await expect(place.history.snapshot(key)).rejects.toThrow("thread omt_9 is not in chat oc_1");
-    const folded = await place.history.fold({ key, conversation: "c", until: { at: Date.now(), id: "om_ask" } });
+    const folded = await place.history.fold({
+      key,
+      conversation: "c",
+      budget: 4000,
+      until: { at: Date.now(), id: "om_ask" },
+    });
     expect(folded.text).toContain("could not read the recent discussion here");
     expect(folded.text).not.toContain("plan");
   });

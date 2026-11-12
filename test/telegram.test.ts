@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelContext } from "../src/channels/context.ts";
 import { type Asked, type Prompt, asked, promptOf, scriptedAgent, stoppedRun, withStop } from "./scripted-agent.ts";
 import { ev, refused, scriptedRun } from "./scripted-run.ts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -68,6 +68,20 @@ function tgRequest(update: unknown, opts: { secret?: string } = {}): Request {
 }
 
 const MSG: TelegramUpdate = { update_id: 5, message: { message_id: 1, text: "hi", chat: { id: 42, type: "private" } } };
+/** Everything the group buffer holds under `state`: one file per chat, read together. */
+const bufferedText = (state: string): string => {
+  const dir = join(state, "buffers");
+  return existsSync(dir)
+    ? readdirSync(dir)
+        .map((file) => readFileSync(join(dir, file), "utf8"))
+        .join("\n")
+    : "";
+};
+/** One chat's record in the group buffer, as the channel wrote it. */
+const bufferedChat = (state: string, chat: string): { entries: unknown[] } | undefined => {
+  const file = join(state, "buffers", `${encodeURIComponent(chat)}.json`);
+  return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : undefined;
+};
 const callsTo = (m: ReturnType<typeof vi.fn>, method: string) =>
   m.mock.calls.filter((c) => String(c[0]).endsWith(`/${method}`)) as [string, RequestInit][];
 const bodyOf = (call: [string, RequestInit] | undefined) => {
@@ -188,7 +202,7 @@ describe("durable group buffer (single-process restarts)", () => {
     await Promise.all([...channelIdles].map((idle) => idle()));
     expect(JSON.parse(readFileSync(join(state, "turns.json"), "utf8"))).toEqual({});
     // Nothing is consumed: the buffer keeps both, and what a turn folds is decided by the ask its session last held.
-    const buffered = readFileSync(join(state, "buffers.json"), "utf8");
+    const buffered = bufferedText(state);
     expect(buffered).toContain("later arrival");
     expect(buffered).toContain("earlier discussion");
     const sessionId = JSON.parse(readFileSync(join(state, "sessions.json"), "utf8"))["-100#7"];
@@ -203,8 +217,7 @@ describe("durable group buffer (single-process restarts)", () => {
     const ch1 = telegramChannel(a1.agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });
     expect((await ch1(tgRequest(group(1, "the deploy is broken")))).status).toBe(200);
     // durable by the time the 200 exists — an ACKed update is never redelivered
-    const onDisk = JSON.parse(readFileSync(join(state, "buffers.json"), "utf8")) as Record<string, unknown[]>;
-    expect(onDisk["-100"]?.length).toBe(1);
+    expect(bufferedChat(state, "-100")?.entries.length).toBe(1);
     // "restart": a NEW channel instance over the same state dir
     const a2 = replyingAgent("second");
     const ch2 = telegramChannel(a2.agent, { secretToken: SECRET, botToken: "1:A", route, stateDir: state });
@@ -225,9 +238,8 @@ describe("durable group buffer (single-process restarts)", () => {
     expect((await ch(tgRequest(group(1, "hello state root")))).status).toBe(200);
     // The buffer landed under the DERIVED channel home, not the root itself and not process.cwd().
     const home = join(root, "channels", "telegram");
-    const onDisk = JSON.parse(readFileSync(join(home, "buffers.json"), "utf8")) as Record<string, unknown[]>;
-    expect(onDisk["-100"]?.length).toBe(1);
-    expect(existsSync(join(root, "buffers.json"))).toBe(false);
+    expect(bufferedChat(home, "-100")?.entries.length).toBe(1);
+    expect(existsSync(join(root, "buffers"))).toBe(false);
   });
 
   it("a turn that FAILED after its message was sent has the discussion in its session: the next summon does not fold it again", async () => {
@@ -319,9 +331,10 @@ describe("durable group buffer (single-process restarts)", () => {
   it("a corrupt or wrong-shaped state file degrades to empty — the channel still boots and answers", async () => {
     vi.stubGlobal("fetch", okFetch());
     const state = freshStateDir();
-    // buffers.json AND turns.json: syntactically valid JSON of the WRONG SHAPE — each must degrade to
+    // a chat's buffer file AND turns.json: syntactically valid JSON of the WRONG SHAPE — each must degrade to
     // empty (its IO-boundary shape guard), not boot-fail.
-    writeFileSync(join(state, "buffers.json"), JSON.stringify(["not", "a", "record"]));
+    mkdirSync(join(state, "buffers"), { recursive: true });
+    writeFileSync(join(state, "buffers", `${encodeURIComponent("-100")}.json`), JSON.stringify(["not", "a", "record"]));
     writeFileSync(join(state, "turns.json"), JSON.stringify(["not", "a", "record"]));
     const { agent, calls } = replyingAgent("ok");
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "1:A", route: () => ({}), stateDir: state });
@@ -2032,20 +2045,81 @@ describe("telegram channel", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not recorded into place -100: Error: disk full/));
   });
 
-  it("keeps the group buffer under the char budget (drops the oldest un-summoned messages)", async () => {
-    const { agent, calls } = replyingAgent("ok");
+  /** A model whose window is `tokens`: what a turn's fold budget is worked out from. */
+  const withWindow = <A extends Agent>(agent: A, tokens: number): A => ({
+    ...agent,
+    info: async () => ({
+      name: "scripted",
+      agent: { name: "scripted" },
+      commands: [],
+      tools: [],
+      models: [{ provider: "p", modelId: "m", contextWindow: tokens, thinkingLevels: ["off" as const] }],
+      defaultModel: { provider: "p", modelId: "m" },
+    }),
+  });
+  const quietChat = (agent: Agent, extra: { stateDir?: string; envelope?: number } = {}) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
     );
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
-    for (let i = 0; i < 30; i++) await ch(tgRequest(groupMsg(i, "alice", `M${i}-${"x".repeat(290)}`))); // ~9000 chars
+    return telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: onlyCommands,
+      ...(extra.stateDir === undefined ? {} : { stateDir: extra.stateDir }),
+    });
+  };
+
+  it("folds all of a place's un-summoned messages when the model's window holds them, whatever their number", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    const ch = quietChat(withWindow(agent, 200_000)); // 40,000 characters
+    for (let i = 0; i < 30; i++) await ch(tgRequest(groupMsg(i, "alice", `M${i}-${"x".repeat(250)}`))); // ~8,000
     await ch(tgRequest(groupMsg(99, "alice", "/bot go")));
     await groupSettle();
     const p = calls[0]?.text ?? "";
-    expect(p).toMatch(/recent discussion here/);
+    expect(p).toMatch(/M0-/); // the oldest is still there: nothing evicts by size
+    expect(p).toMatch(/M29-/);
+    expect(p).not.toMatch(/not shown/);
+  });
+
+  it("cuts the fold to what the model's window lets one turn carry, newest first, and says so", async () => {
+    const { agent, calls } = replyingAgent("ok");
+    const ch = quietChat(withWindow(agent, 10_000)); // 2,000 characters
+    for (let i = 0; i < 30; i++) await ch(tgRequest(groupMsg(i, "alice", `M${i}-${"x".repeat(250)}`)));
+    await ch(tgRequest(groupMsg(99, "alice", "/bot go")));
+    await groupSettle();
+    const p = calls[0]?.text ?? "";
+    expect(p).toMatch(/\(\d+ earlier messages here not shown\)/);
     expect(p).toMatch(/M29-/); // newest kept
-    expect(p).not.toMatch(/M0-/); // oldest dropped over budget
+    expect(p).not.toMatch(/M0-/); // oldest left out, said
+    expect(p.length).toBeLessThan(2000 + 600);
+  });
+
+  it("keeps un-summoned messages for two weeks, then drops them and says so to the next turn that reads the chat", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.UTC(2026, 10, 1));
+      const { agent, calls } = replyingAgent("ok");
+      const state = freshStateDir();
+      const ch = quietChat(withWindow(agent, 200_000), { stateDir: state });
+      await ch(tgRequest(groupMsg(1, "alice", "said a fortnight and a day ago")));
+      vi.setSystemTime(Date.UTC(2026, 10, 1) + 13 * 24 * 3600 * 1000);
+      await ch(tgRequest(groupMsg(2, "bob", "said 13 days later")));
+      vi.setSystemTime(Date.UTC(2026, 10, 1) + 15 * 24 * 3600 * 1000);
+      await ch(tgRequest(groupMsg(3, "carol", "said yesterday")));
+      await ch(tgRequest(groupMsg(99, "alice", "/bot go")));
+      await groupSettle();
+      const p = calls[0]?.text ?? "";
+      expect(p).toContain("(messages here older than 14 days are no longer kept)");
+      expect(p).toContain("said 13 days later"); // 2 days old
+      expect(p).toContain("said yesterday");
+      expect(p).not.toContain("a fortnight and a day ago"); // 15 days old
+      // And it is gone from the disk, not only from the fold.
+      expect(bufferedText(state)).not.toContain("a fortnight and a day ago");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the buffer when a pre-agent failure (attachment download) aborts the summoned turn", async () => {
@@ -2598,7 +2672,7 @@ describe("telegram /stop command", () => {
       await flush();
       expect(aborted, text).toEqual(["session-group"]);
       expect(invoked, text).toEqual([]);
-      expect(existsSync(join(stateDir, "buffers.json")), text).toBe(false);
+      expect(bufferedText(stateDir), text).toBe("");
       expect(stopFeedback(fetchMock), text).toEqual(["\u23f9 Stopped."]);
     }
   });
@@ -2704,7 +2778,7 @@ describe("telegram /stop command", () => {
       expect(aborted, text).toEqual([]);
       expect(invoked, text).toEqual([]);
       expect(stopFeedback(fetchMock), text).toEqual([]);
-      expect(readFileSync(join(stateDir, "buffers.json"), "utf8"), text).toContain(text);
+      expect(bufferedText(stateDir), text).toContain(text);
     }
   });
 

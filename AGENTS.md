@@ -185,7 +185,8 @@ src/
 │   │   ├── sender-conversation.ts # a group's main timeline: one conversation per sender (the one place the rule is written)
 │   │   ├── ask-log.ts      # where a conversation's session read to: its recent asks, the Agent saying which it holds
 │   │   ├── message-owners.ts # which conversation a platform message belongs to (asks and the agent's posts): a reply to it is steered there
-│   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer, folded by message-id range, never cleared
+│   │   ├── fold-budget.ts  # how much discussion a turn folds: a share of the model's context window, and the newest-first cut with its notice
+│   │   ├── context-buffer.ts # generic durable un-summoned-discussion buffer (Telegram's only copy), folded by message-id range, kept 14 days and says what it dropped
 │   │   ├── thread-participants.ts # who the agent has HEARD in a thread (the summon rule)
 │   │   ├── seen.ts         # bounded durable delivery dedup
 │   │   ├── signature.ts    # replay window for a signed webhook ingress

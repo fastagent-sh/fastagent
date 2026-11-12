@@ -27,6 +27,8 @@ export interface TelegramMessage {
   message_thread_id?: number;
   /** The message this one replies to, if any — inject its text/media so the agent has the referent. */
   reply_to_message?: TelegramMessage;
+  /** When it was sent, in seconds since the epoch. */
+  date?: number;
   chat: { id: number; type: string; [k: string]: unknown };
   from?: { id: number; username?: string; is_bot?: boolean; first_name?: string; [k: string]: unknown };
   [k: string]: unknown;
