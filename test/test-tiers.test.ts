@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { UNSORTED } from "./tiers.ts";
 
 const TEST_DIR = new URL(".", import.meta.url).pathname;
 
@@ -20,14 +19,14 @@ const ASSERTS_ELAPSED = [
   "strip-edges.test.ts",
   "telegram-api.test.ts",
   "telegram.test.ts",
-  "ticket.test.ts",
+  "ticket.integration.test.ts",
 ];
 
 const files = readdirSync(TEST_DIR).filter((file) => file.endsWith(".ts"));
 
 describe('the test tiers (CONTRIBUTING.md, "Test tiers")', () => {
-  it("lists only files that exist, and no test asserts elapsed time beyond its list", () => {
-    const stale = [...UNSORTED, ...ASSERTS_ELAPSED].filter((file) => !existsSync(`${TEST_DIR}${file}`));
+  it("no test asserts elapsed time beyond the files listed, and every one listed still does", () => {
+    const stale = ASSERTS_ELAPSED.filter((file) => !existsSync(`${TEST_DIR}${file}`));
     const timed = files.filter((file) => ELAPSED.test(readFileSync(`${TEST_DIR}${file}`, "utf8")));
     expect({ stale, unlisted: timed.filter((file) => !ASSERTS_ELAPSED.includes(file)) }).toEqual({
       stale: [],

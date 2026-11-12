@@ -35,6 +35,8 @@ import { openDurableAgent } from "../src/harnesses/pi-durable/agent.ts";
 import { makeFaux } from "./faux.ts";
 import { keepCatalog } from "./kept-catalog.ts";
 
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
+
 /** A host's own store, in FastAgent's types: a map, with `modify` run one at a time. */
 function hostStore(initial: Record<string, Credential> = {}): CredentialStore & { calls: string[] } {
   const held = new Map(Object.entries(initial));
@@ -286,12 +288,6 @@ describe("an agent's own content, from the package entry", () => {
       ContentNameError,
     );
     expect(existsSync(refused)).toBe(false);
-  });
-
-  it("reads a folder as the CLI does: named for it, used as it is", async () => {
-    const { notes } = await folders();
-    const { addition } = readContentSource(notes, process.cwd(), { description: "My notes." });
-    expect(addition).toEqual({ name: "notes", entry: { path: notes, description: "My notes." } });
   });
 
   it("reads a GitHub repository as an entry fastagent clones", () => {

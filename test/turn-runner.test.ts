@@ -1,8 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import * as Fiber from "effect/Fiber";
@@ -10,17 +6,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Discussion } from "../src/channels/kit/place-history.ts";
 import { createTurnRunner, runQueuedTurn, type TurnRunnerOptions } from "../src/channels/kit/turn-runner.ts";
 import type { SeenRing } from "../src/channels/kit/seen.ts";
-import { type TurnRecordBase, type TurnStore, createTurnStore } from "../src/channels/kit/turn-store.ts";
+import type { TurnStore } from "../src/channels/kit/turn-store.ts";
 import { createTurnQueue } from "../src/channels/turn-queue.ts";
 import { PortFailure, portJoin } from "../src/effect-port.ts";
 import type { TurnEvent } from "../src/channels/kit/invoke-turn-kit.ts";
 import { activeWork } from "../src/channels/busy.ts";
 import * as atomic from "../src/atomic-write.ts";
 import { log } from "../src/log.ts";
+import { type Stored, dirs, durable } from "./turn-runner-fixtures.ts";
 
-interface Stored extends TurnRecordBase {
-  text: string;
-}
 interface Pending extends Omit<Stored, "attempts"> {
   notice?: string;
 }
@@ -96,94 +90,12 @@ const runner = (
   overrides: Partial<TurnRunnerOptions<Pending, Stored, string>> = {},
 ) => createTurnRunner(runnerOptions(store, calls, overrides));
 
-const dirs: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
-function durable() {
-  const dir = mkdtempSync(join(tmpdir(), "turn-runner-"));
-  dirs.push(dir);
-  const storePath = join(dir, "turns.json");
-  const openStore = () =>
-    createTurnStore<Stored>(storePath, {
-      label: "[t]",
-      isRecord: (r): r is Stored => typeof r === "object" && r !== null && "attempts" in r,
-      order: (a, b) => a.id.localeCompare(b.id),
-    });
-  return { dir, storePath, openStore, store: openStore() };
-}
 
 describe("turn runner: the lifecycle order every chat channel shares", () => {
-  it("SIGTERM preserves the durable state, running or answered", async () => {
-    for (const phase of ["running", "committed"]) {
-      const { dir, openStore } = durable();
-      const source = new URL("../src/channels/kit/", import.meta.url).href;
-      const child = spawn(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
-        import { createTurnRunner } from ${JSON.stringify(`${source}turn-runner.ts`)};
-        import { portJoin } from ${JSON.stringify(new URL("../src/effect-port.ts", import.meta.url).href)};
-        import { createTurnStore } from ${JSON.stringify(`${source}turn-store.ts`)};
-        const root = ${JSON.stringify(dir)};
-        const store = createTurnStore(root + '/turns.json', { label: '[child]', isRecord: () => true, order: () => 0 });
-        const runner = createTurnRunner({
-          label: '[child]', store, discussion: async () => ({ text: '', folded: [] }), toStored: r => ({ ...r, attempts: 0 }), fromStored: r => r,
-          discussionKey: () => 'place:s', where: () => 'child', onDeferred: () => {}, notifyDropped: () => {},
-          deliverAnswer: () => portJoin(async () => {}),
-          execute: (_rec, _discussion, onAnswered) => portJoin(async () => {
-            process.on('message', () => {
-              onAnswered('the answer');
-              process.send('answered');
-            });
-            process.send('running');
-            await new Promise(() => {});
-          }),
-        });
-        runner.submit({ id: 'a', conversation: 's', text: '' }, true);
-      `,
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-      );
-      let stderr = "";
-      child.stderr?.on("data", (data) => {
-        stderr += data;
-      });
-      const exited = once(child, "exit");
-      const message = () =>
-        Promise.race([
-          once(child, "message").then(([value]) => value),
-          exited.then(() => {
-            throw new Error(`child exited before the expected message: ${stderr}`);
-          }),
-        ]);
-      try {
-        expect(await message(), phase).toBe("running");
-        if (phase === "committed") {
-          const answered = message();
-          child.send("complete");
-          expect(await answered, phase).toBe("answered");
-        }
-      } finally {
-        child.kill("SIGTERM");
-        await exited;
-      }
-      // Killed mid-delivery, the answer is on disk to re-deliver; killed mid-run, only the intent is.
-      expect(openStore().recover(), phase).toEqual([
-        {
-          id: "a",
-          conversation: "s",
-          text: "",
-          attempts: 1,
-          ...(phase === "committed" ? { answer: "the answer" } : {}),
-        },
-      ]);
-    }
-  });
-
   it("interruption joins work and keeps the record, answered or not", async () => {
     for (const completed of [false, true]) {
       const { store, openStore } = durable();

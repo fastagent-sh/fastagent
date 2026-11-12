@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,6 +9,9 @@ import { checkTicket, createTicket } from "../src/cli/ticket.ts";
 import { scaffoldChannel } from "../src/scaffold/add-channel.ts";
 import { useValueFile } from "../src/value-file.ts";
 import { agentWorkspace } from "./cli-run.ts";
+import { gitAnswersIn } from "./git-double.ts";
+
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
 
 // At a terminal, so `--json` alone says a coding agent runs this (the ticket's own run asks nothing either way).
 vi.mock("../src/cli/shared.ts", async (original) => ({
@@ -296,11 +298,11 @@ describe("channels setup at a terminal", () => {
     ]);
   });
 
-  it("says a value file in a git checkout is not ignored, once, and nothing when it is ignored or outside the directory", async () => {
+  it("says a value file git would track, once, and nothing once git ignores it", async () => {
     const dir = await workspace("fa-setup-tracked-");
     // What `init` scaffolds: a `.gitignore` of the author's own, whose rules name `.env` and not this file.
     await writeFile(join(dir, ".gitignore"), ".env\n.env.*\n");
-    execFileSync("git", ["init", "-q"], { cwd: dir });
+    gitAnswersIn(dir, { "rev-parse --is-inside-work-tree": "true", "check-ignore -q prod.env": undefined });
     platforms();
     const file = join(dir, "prod.env");
     prompts.answers.push(GOOD_BOT);
@@ -309,7 +311,7 @@ describe("channels setup at a terminal", () => {
     expect(said.filter((line) => line.includes("holds secrets and is not ignored by git"))).toHaveLength(1);
 
     vi.mocked(console.error).mockClear();
-    await writeFile(join(dir, ".gitignore"), ".env\nprod.env\n");
+    gitAnswersIn(dir, { "rev-parse --is-inside-work-tree": "true", "check-ignore -q prod.env": "" });
     await rm(file);
     prompts.answers.push(GOOD_BOT);
     await ends(setup("telegram", dir, { envFile: file }));

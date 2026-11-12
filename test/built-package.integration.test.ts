@@ -1,7 +1,7 @@
 /**
  * A built package opened as an app opens one (agent-artifact.md §3, §10 delivery 1): installed under `node_modules`,
  * read-only, once per instance, two instances at a time. What the package is made of is build.test.ts's; that a
- * project's `dist/` is the one `start` opens is cli.test.ts's.
+ * project's `dist/` is the one `start` opens is cli.integration.test.ts's.
  */
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";

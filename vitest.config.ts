@@ -1,13 +1,10 @@
 import { defineConfig } from "vitest/config";
-import { UNSORTED } from "./test/tiers.ts";
 
 // Two tiers (CONTRIBUTING.md, "Test tiers"). Unit runs in one process, which test/unit-setup.ts enforces, and its
 // ceiling finds a hung test fast. Integration runs real processes and builds on this machine. Both are hermetic
 // (test/setup.ts).
 //
 // `pool: "forks"` is explicit, not left to the default: it is the process isolation these process.env tests assume.
-const unsorted = UNSORTED.map((file) => `test/${file}`);
-
 export default defineConfig({
   // Scaffold templates import the PUBLISHED "@fastagent-sh/fastagent" (they are copied verbatim into user
   // workspaces — data to tsc, excluded from the program). Tests that EXECUTE a template resolve that
@@ -31,7 +28,7 @@ export default defineConfig({
         test: {
           name: "unit",
           include: ["test/**/*.test.ts"],
-          exclude: ["test/**/*.integration.test.ts", ...unsorted],
+          exclude: ["test/**/*.integration.test.ts"],
           setupFiles: ["test/setup.ts", "test/unit-setup.ts"],
           testTimeout: 10_000,
           hookTimeout: 10_000,
@@ -41,7 +38,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: "integration",
-          include: ["test/**/*.integration.test.ts", ...unsorted],
+          include: ["test/**/*.integration.test.ts"],
           setupFiles: ["test/setup.ts"],
           testTimeout: 30_000,
           hookTimeout: 30_000,

@@ -6,6 +6,8 @@ import { setUpMissingChannels } from "../src/cli/first-run-channels.ts";
 import { scaffoldChannel } from "../src/scaffold/add-channel.ts";
 import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
+
 let interactive = true;
 vi.mock("../src/cli/shared.ts", async (original) => ({
   ...(await original<typeof import("../src/cli/shared.ts")>()),

@@ -1,48 +1,11 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { log } from "../src/log.ts";
-import { openMcpClients, type McpClients } from "../src/mcp/client.ts";
-import { mcpGrantFile } from "../src/mcp/grants.ts";
-import { mcpFixture } from "./mcp-fixture.ts";
-const roots: string[] = [];
-const clients: McpClients[] = [];
+import { openMcpClients } from "../src/mcp/client.ts";
+import { roots, clients, fixture } from "./mcp-client-fixtures.ts";
 afterEach(async () => {
   for (const client of clients.splice(0)) await client.close();
   for (const dir of roots.splice(0)) await rm(dir, { recursive: true, force: true });
   vi.restoreAllMocks();
-});
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "mcp-client-"));
-  roots.push(root);
-  const remote = mcpFixture();
-  const store = mcpGrantFile(join(root, "grants.json"));
-  const record = remote.grant("one", false);
-  await store.withGrant("g", (tx) => tx.write(record));
-  const auth = { store, bindings: { server: "g" } };
-  const servers = [{ name: "server", type: "http" as const, url: remote.url, headers: {} }];
-  return { remote, store, record, auth, servers };
-}
-it("distinguishes a missing executable from a server that exits without exposing args or stderr", async () => {
-  const { auth } = await fixture();
-  const secret = "DO_NOT_PRINT_CHILD_SECRET";
-  const warnings = vi.spyOn(log, "warn").mockImplementation(() => {});
-  const open = (command: string, args: string[]) =>
-    openMcpClients([{ name: "local", type: "stdio", command, args, env: {}, cwd: process.cwd() }], {
-      ...auth,
-      bindings: {},
-    });
-  const failures = await Promise.allSettled([
-    open("/nonexistent/mcp-server", [secret]),
-    open(process.execPath, ["-e", `console.error("${secret}");process.exit(1)`]),
-  ]);
-  expect(failures.map((result) => result.status)).toEqual(["rejected", "rejected"]);
-  const messages = failures.map((result) => (result.status === "rejected" ? String(result.reason) : ""));
-  expect(messages[0]).toContain("ENOENT");
-  expect(messages[1]).toContain("CONNECTION_CLOSED");
-  expect(messages[1]).not.toContain("ENOENT");
-  expect(messages.join(" ") + JSON.stringify(warnings.mock.calls)).not.toContain(secret);
 });
 
 it("reports required authorization instead of trying to open a browser", async () => {

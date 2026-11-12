@@ -1,6 +1,6 @@
 /**
  * A built package opened on Bun, where vitest does not run: CI's Bun job runs this file (`bun test/bun/built.ts`), and
- * test/built-package.test.ts holds the same contract on Node. The package is built, installed under an app's
+ * test/built-package.integration.test.ts holds the same contract on Node. The package is built, installed under an app's
  * `node_modules`, made read-only, and opened as two instances that each answer a message.
  */
 import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";

@@ -173,7 +173,7 @@ and persistence; it did not kill a real process or test Kage's secure-storage ad
 implementation or a new permanent live suite.
 
 Permanent regressions now live in `test/mcp-auth.test.ts`, `test/mcp-agent.test.ts`, `test/mcp-client.test.ts` and
-`test/cli-mcp.test.ts`. They cover shared/aliased storage, callback refusal/cancellation, deletion and persistence races,
+`test/cli-mcp.integration.test.ts`. They cover shared/aliased storage, callback refusal/cancellation, deletion and persistence races,
 different accounts, close isolation and unsafe replay. A real child process is killed after the fixture rotates a token
 but before its response arrives; recovery refuses the fenced token. That test ages the orphaned lock deterministically
 rather than waiting out the stale-lock window. Removing the fence makes it retry the consumed token and fail.

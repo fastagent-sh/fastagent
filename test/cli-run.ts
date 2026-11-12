@@ -1,8 +1,8 @@
-// Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has: exit codes
-// and stdout/stderr discipline across a real pipe (cli.test.ts, cli-kernel.test.ts's end-to-end block), a command that
-// outlives its caller (the ticket tests in cli-login/cli-deploy), a signal, a kill. `runInProcess` calls the same entry
-// in this process, for everything that is about what a COMMAND decides: ~0.5-1s of CPU cheaper per call.
-// Rule of thumb: reach for `runInProcess`; use `run` when the test would be wrong if no process were involved.
+// Two ways to run the CLI in a test. `run` spawns it as a PROCESS, for the contracts only a process has, and so only in an
+// integration test: exit codes and stdout/stderr discipline across a real pipe (cli.integration.test.ts,
+// cli-kernel.integration.test.ts), a command that outlives its caller (the ticket tests in cli-login/cli-deploy), a
+// signal, a kill. `runInProcess` calls the same entry in this process, for everything that is about what a COMMAND
+// decides: ~0.5-1s of CPU cheaper per call, and the unit tier's way to run a command.
 import { useValueFile } from "../src/value-file.ts";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -93,7 +93,7 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  *
  * NOT for a test that is about the process itself: a command that outlives it (a ticket's background process,
  * which signals its process group on exit), stdout/stderr discipline across a real pipe, a signal, a crash.
- * Those stay on {@link run}; `cli-run-parity.test.ts` pins that the two agree.
+ * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
  */
 export function runInProcess(
   args: string[],

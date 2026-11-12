@@ -233,7 +233,7 @@ tool call. Never replay an operation after a timeout/disconnection that may have
 
 ## 7. Verification
 
-The implemented subset is covered by `test/mcp-*.test.ts`, `test/cli-mcp.test.ts`, and the deployment/watcher checks.
+The implemented subset is covered by `test/mcp-*.test.ts`, `test/cli-mcp.integration.test.ts`, and the deployment/watcher checks.
 The built public entry also passed a Node 26.11.1 and Bun 1.4.4 stdio two-instance smoke test on macOS. A real Linear
 browser authorization through the CLI, public-agent calls, close isolation, forced-expiry refresh and new-process reuse
 passed on 2026-11-02; see [authorization evidence](mcp-auth.md#6-evidence-and-remaining-validation).

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendChannelEnv,
   channelSetup,
@@ -10,6 +10,8 @@ import {
   scaffoldCompanionTools,
 } from "../src/scaffold/add-channel.ts";
 import { writeValues } from "../src/value-file.ts";
+
+vi.mock("../src/git.ts", () => import("./git-double.ts"));
 
 describe("channel setup guidance", () => {
   it("Slack's channel is scaffolded for both ways, and its names are listed for whoever fills them", async () => {

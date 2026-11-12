@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type CommandSpec, buildProgram } from "../src/cli/kernel.ts";
 import { buildCliProgram, specs } from "../src/cli/program.ts";
-import { agentWorkspace, built, run } from "./cli-run.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the
@@ -338,13 +337,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 // End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
 
 describe("cli end to end: the thin entry", () => {
-  it("models --help renders the generated per-command help (exit 0)", async () => {
-    const { code, stdout, stderr } = await run(["models", "--help"]);
-    expect(code).toBe(0);
-    expect(stdout).toMatch(/Usage: fastagent models/);
-    expect(stderr).toBe("");
-  });
-
   it("destroy names the other hosts' commands where they can be READ, not in an unreachable branch", async () => {
     // `<host>` has `choices`, so commander rejects `destroy fly` before the command body runs — the useful
     // part (which command those hosts use instead) has to live in the help text.
@@ -355,33 +347,5 @@ describe("cli end to end: the thin entry", () => {
     const help = await parse(["destroy", "--help"]);
     expect(help.out).toContain("fly apps destroy");
     expect(help.out).toContain("railway down");
-  });
-
-  it("schedules list on an empty dir reads cleanly: data to stdout, message to stderr, exit 0", async () => {
-    const dir = await agentWorkspace("fa-kernel-sched-");
-    const { code, stdout, stderr } = await run(["schedules", "list", dir]);
-    expect(code).toBe(0);
-    expect(stdout).toBe("");
-    expect(stderr).toMatch(/nothing scheduled/);
-  });
-
-  it("invoke with no message is a usage error from the kernel: exit 2", async () => {
-    const { code, stderr } = await run(["invoke"]);
-    expect(code).toBe(2);
-    expect(stderr).toMatch(/missing required argument 'message'/);
-  });
-
-  it("exit codes follow responsibility: bad --port flag → 2 (usage), bad PORT env → 1 (config)", async () => {
-    const dir = await built(await agentWorkspace("fa-kernel-port-"));
-    const flag = await run(["start", dir, "--port", "abc"]);
-    expect(flag.code).toBe(2);
-    expect(flag.stderr).toMatch(/invalid --port/);
-    const env = await run(["start", dir], undefined, {
-      ...process.env,
-      PORT: "abc",
-      FASTAGENT_MODEL: "openai/gpt-5.5",
-    });
-    expect(env.code).toBe(1);
-    expect(env.stderr).toMatch(/invalid PORT env/);
   });
 });
