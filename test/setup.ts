@@ -16,6 +16,21 @@ process.env.FASTAGENT_OFFLINE = "1";
 
 forbidNetwork();
 
+// The machine's proxy is the machine's: with it, a fetch a test should not make goes to a proxy on loopback and passes
+// the guard here, and fails it on a machine without one. A test about the proxy declares its own.
+for (const key of [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+  "no_proxy",
+]) {
+  delete process.env[key];
+}
+
 // vi.waitFor gives up after 1 s unless told otherwise: a bound on how long something took, which load decides as much as
 // the code does. A wait that is met returns as soon as it is, so a longer budget costs only a failing test's time.
 const WAIT_FOR_MS = 10_000;

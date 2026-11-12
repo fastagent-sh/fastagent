@@ -19,6 +19,12 @@ import { NOT_HOSTED } from "../src/serving-command.ts";
 import { runInProcess } from "./cli-run.ts";
 import { savedEnv, agentDir, fakeMise, fakeNpm } from "./environment-fixtures.ts";
 
+// What this machine's dpkg says is environment.integration.test.ts's: here the machine cannot tell, as one that is not Debian.
+vi.mock("../src/environment/apt.ts", async (original) => ({
+  ...(await original<typeof import("../src/environment/apt.ts")>()),
+  missingAptPackages: () => undefined,
+}));
+
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in savedEnv)) delete process.env[key];
   Object.assign(process.env, savedEnv);

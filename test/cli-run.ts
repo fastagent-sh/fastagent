@@ -67,6 +67,17 @@ export function besideAgent(dir: string, name: string): string {
   return join(beside, name);
 }
 
+/**
+ * The environment a command is given, on the clean machine `test/setup.ts` makes: a test that names the whole environment
+ * still runs with the test's HOME and no model catalog fetched, unless it names those itself. Without HOME a command finds
+ * the user's own home directory, and its credentials; without FASTAGENT_OFFLINE it fetches pi.dev's catalog.
+ */
+function onCleanMachine(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const clean: NodeJS.ProcessEnv = {};
+  for (const key of ["HOME", "FASTAGENT_OFFLINE"]) if (process.env[key] !== undefined) clean[key] = process.env[key];
+  return { ...clean, ...env };
+}
+
 /** Run the CLI to completion, its stdin ended at once as a coding agent's shell hands it; capture stdout, stderr, exit code. */
 export function run(
   args: string[],
@@ -74,7 +85,10 @@ export function run(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { ...(cwd ? { cwd } : {}), env: env ?? process.env });
+    const child = spawn(process.execPath, [CLI, ...args], {
+      ...(cwd ? { cwd } : {}),
+      env: onCleanMachine(env ?? process.env),
+    });
     child.stdin.end();
     let stdout = "";
     let stderr = "";
@@ -110,7 +124,7 @@ export function runInProcess(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const turn = inProcessQueue.then(() => runOnce(args, cwd, env ?? process.env));
+  const turn = inProcessQueue.then(() => runOnce(args, cwd, onCleanMachine(env ?? process.env)));
   inProcessQueue = turn.catch(() => undefined);
   return turn;
 }
@@ -277,7 +291,7 @@ export async function whileRunning<T>(
   during: (stderr: string) => Promise<T>,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<T> {
-  const child = spawn(process.execPath, [CLI, ...args], { env });
+  const child = spawn(process.execPath, [CLI, ...args], { env: onCleanMachine(env) });
   const closed = new Promise((resolve) => child.on("close", resolve));
   let stderr = "";
   try {

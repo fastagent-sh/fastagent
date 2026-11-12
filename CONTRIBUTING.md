@@ -24,7 +24,8 @@ npm test               # the unit tier
 ```
 
 Run `npm run test:integration` as well when the change touches what that tier tests (processes, signals, locks
-between processes, the build, git, the host CLIs); CI runs it on every PR.
+between processes, the build, git, the host CLIs); CI runs it on every PR. CI runs on Linux: `npm run test:linux` runs
+both tiers in a Linux container (Docker), for a change whose tests take a path only Linux takes (`flock`, `dpkg`, `/proc`).
 
 Tests use faux models by default, so they validate serving mechanics without network or credentials. A live-model smoke test against a real provider is optional and manual; use a temporary agent from `fastagent init`, and authenticate with `fastagent login` or provider API keys. Behind a proxy, set a working `HTTPS_PROXY`.
 
@@ -43,7 +44,11 @@ How the boundary is kept:
 
 - `test/setup.ts` refuses a connection to anything but loopback in every tier, and `test/unit-setup.ts` refuses a child
   process in the unit tier. Both throw where the call is made and fail the test afterwards, so product code that
-  catches the error cannot hide it.
+  catches the error cannot hide it. A name is judged by the address it resolves to. The guard is in the test's own
+  process: a child process an integration test starts is kept off the network by its environment, not by the guard.
+- The machine a test runs on is the same everywhere: `test/setup.ts` gives every file an empty `HOME`,
+  `FASTAGENT_OFFLINE=1` (no model catalog fetched) and no proxy variables, and `run`/`runInProcess` keep the first two
+  in an environment a test gives them whole. A test whose subject is one of them sets it itself.
 - Unit tests run in a random order within each file, so none leans on another having run first. A run prints its seed
   (`Running tests with seed "<n>"`); `npx vitest run --project unit --sequence.seed=<n>` repeats the order.
 - `test/test-tiers.test.ts` refuses a bound on how long something took (`Date.now()` minus a start, below a limit):
