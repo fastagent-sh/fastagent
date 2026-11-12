@@ -16,211 +16,73 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-A file-defined agent directory can become a live service. FastAgent takes it out of the terminal and serves it in your Next/Astro app, Telegram, Slack, Feishu, on a clock, or behind your own channel.
-
-Leave the terminal. Become a live service.
-
-- **Add it to your app** — one route, your auth, your database, your host.
-- **Run it as a live service** — Telegram, Slack or Feishu bot, webhook handler, schedule, or custom channel.
-
-FastAgent is not a new agent-authoring DSL. You bring the existing definition and project layout; FastAgent provides the serving runtime and adapters around it.
+FastAgent serves an agent directory (`SYSTEM.md`, `skills/`, TypeScript tools) as a live service: inside your app,
+as a Telegram, Slack or Feishu bot, on a schedule, or behind your own channel. You keep the files you have. There is no
+new framework to learn.
 
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy fly --run ships it to a live URL." width="860">
 </p>
 
-## Why FastAgent
+## Get started
 
-Coding agents made it cheap to vibe useful agent directories. The hard part is the next step: local agents live in terminals, but real services receive webhooks, join chats, run on a clock, and keep their conversations across restarts.
-
-FastAgent is the missing bridge from local agent directory to live service.
-
-## Features
-
-- **Vibe first — an agent is a directory of its own.** A `SYSTEM.md` prompt, reusable skills, and TypeScript tools stay as files you inspect, edit, and commit — no new DSL, no framework rewrite. The projects it works on are declared beside it as its content, which it reads and changes but which never becomes part of its definition.
-- **Channels.** Serve the same agent as a Telegram bot, a Slack app, a Feishu or Lark bot, or your own adapter: verified webhooks, streaming replies, group-aware.
-- **Durable by default.** Every conversation lives in the instance's storage, and an accepted message is answered after a restart. Built on the open-source [pi](https://github.com/earendil-works/pi) durable harness.
-- **Models, tools & skills.** Any model provider (OpenAI, Anthropic, Google, …) via OAuth or API key, plus your own providers in code; typed tools in `src/tools/` (TypeBox-validated); Agent Skills loaded on demand.
-- **App embedding — your stack, we plug in.** Open the agent in your own process and call it like any function, behind your auth, with your database and infra; mount its channels in your Next / Astro / Hono / Bun / Node app with one handler. FastAgent composes with your app, never owns it.
-- **Deploy anywhere.** No application build step — the directory is the deployable unit. `fastagent deploy docker|fly|railway|agentcore` generates the container + target config and a runbook (`--run` drives it to completion). Local Docker gets user-owned Compose + durable state; AWS Bedrock AgentCore gets a one-stack CloudFormation topology (webhooks via a forwarder Lambda, schedules via EventBridge). Durable ingress remains yours.
-
-## Design philosophy
-
-FastAgent is built around a small serving contract, app-owned runtime concerns, typed boundaries, and composable adapters.
-
-- **One API, in process and over HTTP** — the [Agent API](docs/SPEC.md) is what every channel, schedule and app calls, and what a program calls a deployed agent with.
-- **App-owned runtime** — no takeover of your auth, database, routes, or deployment.
-- **Typed edges** — typed tools, explicit events, boundary validation.
-- **Agent-native shape** — the directory is the deployable unit, and every check is a command a coding agent can run.
-
-Read the [Design principles](https://fastagent.sh/docs/principles/) for the full rationale.
-
-## What we didn't build
-
-FastAgent stays a small serving layer, so it never dictates your stack. Capabilities other agent frameworks bake into a platform, we leave to your app, your infra, or the agent itself — composed in, not locked in.
-
-- **No platform to move to.** No dashboard, no control plane, no runtime you deploy *into* — run it locally, embed it in your app, or ship the directory anywhere.
-- **No new format or DSL.** `AGENTS.md`, Agent Skills, TypeScript modules — FastAgent consumes the standards you already use instead of a parallel ecosystem.
-- **No workflow engine.** The agent decides its own steps; for deterministic multi-step orchestration, send messages from your own queue or workflow.
-- **One key, no auth system.** A served agent answers its channels, each of which verifies its platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`: one key for the whole instance, kept on a server, that keeps everyone but its customer out. Users, roles and per-session access are your app's, in front of it.
-- **No model or cloud lock-in.** Any provider pi-ai supports, or your own; any host that runs a container.
-
-## Install
-
-Start with the [agent development guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md), the authoring entry point for both humans and coding agents. It covers responsibilities, TypeScript tools, verification, channels, scheduling, and deployment. FastAgent's repository `AGENTS.md` is for maintainers.
-
-To work with Claude Code, Codex, Cursor, or another coding agent, paste:
+With a coding agent (Claude Code, Codex, Cursor, …), paste:
 
 > Read https://fastagent.sh/start.md and build an agent in this project.
 
-For humans:
+By hand (Node ≥ 24.15 or Bun ≥ 1.4):
 
 ```bash
-npm i -g @fastagent-sh/fastagent   # CLI: fastagent init/dev/start/...
-npm i @fastagent-sh/fastagent      # library API for embedding or code tools
+npm i -g @fastagent-sh/fastagent
+fastagent init my-agent && cd my-agent
+fastagent dev                 # serve locally, reloading on edits
+fastagent invoke "hello"      # send it one message
 ```
 
-Requires **Node >= 24.15** or **Bun >= 1.4**, both set by the agent's storage, `node:sqlite`: Node stops calling it experimental in 24.15, and Bun ships it from 1.4 (smoke-tested in CI on 1.4.0; its native fetch replaces the undici path). The npm package ships compiled JavaScript and type declarations.
+Then add a channel (`fastagent add telegram && fastagent channels setup telegram`) or deploy it
+(`fastagent deploy fly --run`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
-## Quickstart
-
-```bash
-fastagent init my-agent
-cd my-agent
-fastagent dev
-```
-
-Then send it a message:
-
-```bash
-fastagent invoke "hello"
-```
-
-For production-style local serving:
-
-```bash
-fastagent start
-```
-
-There is no FastAgent build step: the agent folder is the deployable unit.
-
-## Embed in an app
+## Embed it in your app
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
-import support from "@acme/support-agent"; // the default export of a package `fastagent build` made
+import support from "@acme/support-agent"; // a package `fastagent build` made
 
 const agent = await openAgent(support, {
   root: "/var/lib/myapp/support",
   env: baseEnv(process.env),
   model: "openai/gpt-5.5",
 });
-
 const session = await agent.sessions.create();
 for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
   if (event.type === "delta" && event.channel === "text") render(event.text);
 }
 ```
 
-`await agent.serve()` adds the agent's channels and schedules to your app: a Fetch handler for its webhooks, mounted
-where your framework routes them, or a server of its own (`listen`) ([Embedding](docs/embedding.md)). Served with a key
-(`FASTAGENT_API_KEY` for `start`), the same API is reachable over HTTP under `/v1`, and another program calls it with
-`connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client` as it would the opened agent.
+Your app keeps its auth, database and routes. See [Embedding](https://fastagent.sh/docs/embedding/).
 
 ## Documentation
 
-| Document | Purpose |
-|---|---|
-| [Agent development guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md) | Canonical authoring path for humans and coding agents |
-| [Documentation index](https://fastagent.sh/docs/) | Documentation map |
-| [Quickstart](https://fastagent.sh/docs/quickstart/) | Scaffold, run, add a tool, and start |
-| [Configuration](https://fastagent.sh/docs/configuration/) | Configure model, auth, ports, sessions, tools, and channels |
-| [Design principles](https://fastagent.sh/docs/principles/) | Design choices, core primitives, and non-goals |
-| [CLI reference](https://fastagent.sh/docs/cli/) | CLI commands and flags |
-| [Embedding](https://fastagent.sh/docs/embedding/) | Use FastAgent as a library inside your own app |
-| [Channels](https://fastagent.sh/docs/channels/) | Add webhook/bot channels |
-| [Deploy](https://fastagent.sh/docs/deploy/) | Ship the directory to Fly, Railway, or any Docker host |
-| [Telegram](https://fastagent.sh/docs/telegram/) / [Slack](https://fastagent.sh/docs/slack/) / [Feishu and Lark](https://fastagent.sh/docs/feishu/) | First-party channel guides |
-| [Channel development](https://fastagent.sh/docs/channel-development/) | Build custom channel adapters |
-| [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
-| [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
-| [Agent API SPEC](https://fastagent.sh/docs/spec/) | The Agent API every Caller uses |
-
-## Public API surface & stability
-
-The package exports the supported surface only, from one entry per kind of user, and names every export (no
-`export *`), which CI asserts:
-
-| Area | Examples | Stability |
-|---|---|---|
-| The Agent API | `Agent`, `AgentError` ([Agent API](docs/SPEC.md)) | Stable within its version |
-| Directory → agent → service | `openAgent`, `LocalAgent`, `serve()`'s `Service` (`fetch`, `listen`) | Usable now, may tighten before 1.0 |
-| Over HTTP | `connectAgent` (`/client`), the `/v1` routes ([Agent API](docs/SPEC.md) §9) | Stable within its version |
-| A host embedding agents | `createAgent`, `addContent`, `removeContent`, `listContent`, `CredentialStore`, `credentialFile`, `signIn`, `signInOptions`, `providerAuth` ([embedding](docs/embedding.md#6-a-desktop-host)) | Usable now, may tighten before 1.0 |
-| MCP tools and authorization | `inspectMcp`, `signInMcp`, `mcpGrantFile`, `McpGrantStore` ([MCP servers](docs/mcp.md)) | Usable now, may tighten before 1.0 |
-| Authoring | `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, `readBodyCapped`, `text`, `secretEquals` | Usable now, may tighten before 1.0 |
-| Not exported | The assembly's parts (`router`, `createScheduler`), the environment's edit (`writeEnvironment`), the model environment, harness internals | No compatibility promise |
-
-A tool or an extension is pi-durable's own (`defineTool`, `defineExtension` from `@earendil-works/pi-durable`), and a
-custom provider is pi-ai's (`createProvider` from `@earendil-works/pi-ai`): `init` adds both packages to the agent.
-
-Entry points (`./package.json` is also exported, for tools that read the version):
-
-- `@fastagent-sh/fastagent` — the Agent API, `openAgent`, what a host embedding agents needs, and what an author writes;
-- `@fastagent-sh/fastagent/client` — `connectAgent`, the Agent API over HTTP, for a program anywhere `fetch` runs;
-- `@fastagent-sh/fastagent/telegram` — Telegram bot channel;
-- `@fastagent-sh/fastagent/slack` — Slack Events API bot channel;
-- `@fastagent-sh/fastagent/feishu` — canonical Feishu bot channel (飞书, open.feishu.cn);
-- `@fastagent-sh/fastagent/lark` — Lark-international compatibility profile over the Feishu engine.
-
-## Repository layout
-
-```txt
-src/     the npm package: CLI, library API, reference implementation
-test/    vitest suite (faux models by default) + the Agent API's conformance suite
-docs/    user docs, SPEC, and maintainer design notes
-```
-
-One package; subpath exports are the module boundary.
+Everything is at **[fastagent.sh/docs](https://fastagent.sh/docs/)**. Start with the
+[agent development guide](https://fastagent.sh/docs/ai-start/).
 
 ## Status
 
-FastAgent is pre-1.0. The stable design center is the Agent API in `docs/SPEC.md`; the package API may still tighten before 1.0. Notable changes are recorded in the [GitHub Releases](https://github.com/fastagent-sh/fastagent/releases).
+Pre-1.0. The [Agent API](https://fastagent.sh/docs/spec/) is the stable center; the rest of the package may still
+change. Changes are in the [releases](https://github.com/fastagent-sh/fastagent/releases).
 
-## Designed for more
-
-The Agent API leaves room for capabilities that are not complete product features yet:
-
-- **Scale-out**: one process holds an instance's storage today; spreading one instance over several processes is future work.
-- **Sandboxed execution** — the coding tools, channels, and author-written code reach the local process directly; a sandbox around the complete agent process is future work.
-- **Observability export** — leveled logs exist today; an OpenTelemetry exporter does not.
-- **More channels** — community channels can use the channel kit. External tools can also use [MCP servers](docs/mcp.md).
-- **More deploy targets** — local Docker, Fly, Railway, and AWS Bedrock AgentCore ship today; the generated container is the portable path for other hosts.
-
-See [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) if one of these is the problem you want to work on.
-
-> ☁️ **Prefer these managed?** FastAgent Cloud will run your agents with multi-instance durability, scale-to-zero, and observability built in — and self-hosting stays free forever. [Join the waitlist →](https://tally.so/r/44DVMB)
+> ☁️ **Prefer these managed?** FastAgent Cloud will run your agents with multi-instance durability, scale-to-zero, and
+> observability built in, and self-hosting stays free. [Join the waitlist →](https://tally.so/r/44DVMB)
 
 ## Project
 
-- [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md)
-- [Security policy](https://github.com/fastagent-sh/fastagent/blob/main/SECURITY.md)
+[Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) · [Security policy](https://github.com/fastagent-sh/fastagent/blob/main/SECURITY.md) · [MIT license](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE)
 
-## Acknowledgements
+Built on **[pi](https://github.com/earendil-works/pi)** (pi-durable's durable agent loop, pi-ai's model API), with
+[Effect](https://github.com/Effect-TS/effect), [undici](https://github.com/nodejs/undici),
+[chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget),
+[@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore) and
+[croner](https://github.com/Hexagon/croner). The scaffolded `writing-great-skills` skill is vendored from
+[mattpocock/skills](https://github.com/mattpocock/skills), with its license.
 
-FastAgent stands on open source. The harness is **[pi](https://github.com/earendil-works/pi)** ([pi.dev](https://pi.dev)) — pi-durable's durable agent loop and pi-ai's multi-provider LLM API.
-
-It also depends on, and is grateful to, [Effect](https://github.com/Effect-TS/effect), [undici](https://github.com/nodejs/undici), [chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget), [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore), and [croner](https://github.com/Hexagon/croner).
-
-The scaffolded `writing-great-skills` skill is vendored from [mattpocock/skills](https://github.com/mattpocock/skills), with its license included.
-
----
-
-<p align="center">
-  <b>FastAgent is built in the open.</b><br/>
-  If it saves you from rewriting an agent into yet another framework, <a href="https://github.com/fastagent-sh/fastagent">give it a ⭐</a> — it's the fastest way to help other devs find it.
-</p>
-
-## License
-
-[MIT](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE). Runtime dependencies use permissive open-source licenses and are installed as separate npm packages; the vendored `writing-great-skills` scaffold includes its own license.
+If FastAgent saves you from rewriting an agent into another framework, [give it a ⭐](https://github.com/fastagent-sh/fastagent).

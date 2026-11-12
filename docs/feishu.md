@@ -1,199 +1,106 @@
 ---
 title: Feishu channel (Lark compatibility)
+description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, WebSocket or webhook, scopes, when it answers, threads, cards, files, and sending from schedules."
 status: current
 ---
 
 # Feishu channel (Lark compatibility)
 
-These channels turn a Feishu/Lark `im.message.receive_v1` event—received by webhook or WebSocket long connection—into a message to the agent and send the reply back to the chat.
+The agent answers as a Feishu or Lark bot, streaming its answer into a Markdown card.
 
-Feishu and Lark international are **one protocol on two clouds**—and each remains its own channel kind, the unit of ingress identity, env namespace, state home, and onboarding:
-
-| | `feishu` | `lark` |
+| | Feishu (飞书) | Lark (international) |
 |---|---|---|
-| Cloud / console | `open.feishu.cn` (飞书) | `open.larksuite.com` (Lark international) |
-| Webhook factory | `feishuChannel` from `@fastagent-sh/fastagent/feishu` | `larkChannel` from `@fastagent-sh/fastagent/lark` |
-| WebSocket factory | `feishuWebSocketChannel` | `larkWebSocketChannel` |
-| Ingress | WebSocket long connection, or webhook at `POST /feishu` | WebSocket long connection, or webhook at `POST /lark` |
-| Always required | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | `LARK_APP_ID`, `LARK_APP_SECRET` |
-| Webhook only | `FEISHU_VERIFICATION_TOKEN`; optional `FEISHU_ENCRYPT_KEY` | `LARK_VERIFICATION_TOKEN`; optional `LARK_ENCRYPT_KEY` |
-| State home | `<state root>/channels/feishu/` | `<state root>/channels/lark/` |
-| Prompt envelope tag | `[feishu: chat …]` | `[lark: chat …]` |
-| Send tool | `src/tools/feishu-send.ts` | `src/tools/lark-send.ts` |
+| Console | `open.feishu.cn` | `open.larksuite.com` |
+| Add | `fastagent add feishu` | `fastagent add lark` |
+| Variables | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (+ `FEISHU_VERIFICATION_TOKEN`, optional `FEISHU_ENCRYPT_KEY` for webhooks) | the same with `LARK_` |
+| Webhook path | `POST /feishu` | `POST /lark` |
 
-**Feishu is the reference implementation.** Lark international reuses Feishu's event format, crypto,
-cards, and turn engine through a compatibility profile, while degrading control-plane capabilities
-that lag behind the primary cloud (currently app creation and application-config/webhook automation).
-A tenant lives on exactly one cloud — pick the matching kind. One agent can mount **both** (two
-apps, two credential sets); they never share state.
+Pick the cloud your tenant is on. One agent can serve both, with two apps.
 
-Both ingress modes feed the same request/reply engine: the channel holds the app credentials, streams a **live card** while the turn runs, and settles the same card into the final answer. Replies render as **Markdown** (an interactive card), so code blocks, tables, and links render properly.
-
-## Add the channel
-
-`add` changes the program; `channels setup` binds an instance to its platform app and keeps the credentials in that
-instance's value file: `.secrets/.env` for `dev`, excluded by the `.secrets/.gitignore` that `init` scaffolds. It refuses
-to write platform credentials into a committable file:
+## Set it up
 
 ```bash
-fastagent add feishu                    # the channel file and its tools (lark: fastagent add lark)
-fastagent channels setup feishu         # scan-to-create the app, keep its credentials
-fastagent channels setup lark           # guided console setup, credentials pasted
-fastagent channels setup feishu --config prod.json --env-file prod.env   # another instance's app (a deployment's), its values in prod.env
+fastagent add feishu              # src/channels/feishu.ts, and the feishu-send and feishu-threads tools
+fastagent channels setup feishu   # scan or open the link to create the app; credentials are kept for you
+fastagent dev                     # WebSocket: no public URL needed
 ```
 
-The Agent takes part in its group chats like a colleague: bare human replies in a thread it is part of invoke
-it, and each turn reads what was said in its place since the ask its session was last sent. That takes the app
-scopes below, and there is no mention-only variant. The created app asks for all of them (Feishu); setup
-then checks what the app actually holds and names any scope your tenant withheld.
+- **Feishu** creates the app for you (scan-to-create): confirm it in the browser or the Feishu app, then **create a
+  version and publish it** in the console.
+- **Lark** opens a link that creates the app with the right scopes; paste its App ID and App Secret (on a local page
+  for a coding agent's `--json` run), then publish.
+
+Setup checks the app's scopes and names any your tenant withheld, with a link to request it:
 
 | Scope | Without it |
 |---|---|
-| `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in the Agent's threads, no group discussion as context |
-| `im:message:readonly` (or `im:message`) | the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker |
-| `im:message.reactions:write_only` (or `im:message`) | a message waiting behind a running task gets no 👀 while it waits |
-| `im:chat.members:read` | people in the discussion the Agent reads are shown by open_id, not by name |
+| `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in threads, no group discussion |
+| `im:message:readonly` | earlier discussion and quoted messages cannot be read |
+| `im:message.reactions:write_only` | no 👀 on a message waiting behind a running task |
+| `im:chat.members:read` | people show as open_ids instead of names |
 
-What a scope is for is the Agent's, not only the channel's: the Agent can call the Open API with the app's
-credentials.
+<details><summary>Creating the app by hand</summary>
 
-### How the channel receives
+1. Create a custom app and enable the bot capability.
+2. Add the scopes `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`, `im:message:send_as_bot`,
+   `im:resource`, the card scope ("Create and update card"), and the ones in the table above.
+3. Subscribe to `im.message.receive_v1`, choosing long connection (for `dev`) or webhook (copy the Verification
+   Token; an Encrypt Key is recommended).
+4. Put the values in `.secrets/.env`, then create a version and publish.
 
-One channel file serves both ways of receiving (`byIngress`), and each instance's configuration chooses between
-them: `channels.feishu.ingress` (`channels.lark.ingress`) in its `fastagent.json`, `"webhook"` or `"connection"` (the long connection).
-Unset, the command decides:
+</details>
 
-| `channels.feishu.ingress` | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
-|---|---|---|
-| Unset | WebSocket long connection | webhook at `POST /feishu` |
-| `"connection"` | WebSocket | WebSocket |
-| `"webhook"` | webhook (`dev --tunnel` gives it a public URL) | webhook |
-
-A deployment receives by webhook because the hosts that scale to zero wake on an inbound request: a long connection
-keeps them awake or dies when they sleep. WebSocket is for a process that stays up and has no public URL: `dev`, or
-a machine of your own, given a configuration that says so (`deploy --config`, `start --config`).
+## WebSocket or webhook
 
 | | WebSocket | Webhook |
 |---|---|---|
-| Public URL / `--tunnel` | Not needed | Required |
-| Runtime credentials | App ID + Secret | App ID + Secret + Verification Token; Encrypt Key optional |
-| Deploy targets | local, Docker, Fly, Railway — one always-on process | all, AgentCore included |
-| Scale-to-zero / App Sleeping | Not supported; keep one process running | Supported when no other always-on producer exists |
-| App-config permission (`application:application:patch`) | Not needed | Needed to register the Request URL and capture the Verification Token; a tenant that reviews it holds the app's version in review once |
+| Needs | App ID + Secret, an always-on process | also the Verification Token, a public URL |
+| Default for | `dev` | `start` and deployments |
+| Scale to zero | no | yes |
 
-`channels setup feishu` sets the app up for `dev`'s WebSocket and asks for no `patch`, so a tenant that reviews it does not
-hold the first setup. `deploy --run` creates a separate production app when credentials are missing, at a terminal or,
-with `--json`, through a coding agent's user (without either it stops, naming the `--json` command): the same
-`channels setup`, aimed at the file `deploy --env-file` names (a deployment has no default one: make it with `channels setup feishu --env-file <file>` first, or pass `--env-file` to the deploy). It requests webhook scopes including `patch`, then captures the
-Verification Token. The instance registers its own Request URL once readiness and model login pass.
-Lark uses guided setup and sets the Request URL by hand when its config API answers 404.
-`channels setup feishu --ingress webhook|connection` writes `channels.feishu.ingress` to the development instance's
-`fastagent.json`, or to the file `--config` names (the one `deploy --config` delivers, for a deployment). It refuses an
-existing channel file that names its factory instead of offering both ways.
-A Docker deployment has no public URL of its own: name your ingress as `http.publicUrl`, or choose `connection`.
+Change it with `channels.feishu.ingress` (`connection` or `webhook`). **Use separate apps for dev and production**:
+two instances on one app split its events. `deploy --run` creates the production app (asking for the extra
+`application:application:patch` scope, which lets it register the Request URL and read the Verification Token), or
+pass one made with `fastagent channels setup feishu --config prod.json --env-file prod.env`. On Lark, set the Request
+URL in the console when its API does not allow it.
 
-**Dev and production use independent apps.** `dev` reads `.secrets/.env`; `start` reads `.secrets/production/.env`, and
-`deploy` reads the environment it runs in and the file `--env-file` names, with no dev fallback. Copy required provider keys explicitly, not the dev app
-credentials: an app is one receiver, so two instances on the same app split its events (two WebSocket clients) or
-overwrite each other's Request URL, and nothing refuses it. `channels setup` for another instance creates a new app
-(Feishu) or asks for another app's credentials (Lark). Both apps can receive at the same time: `dev --tunnel` changes only
-dev's Request URL, and the production instance changes only production's. One app has only one subscription mode and
-Request URL.
+Webhook events are checked by the Verification Token, or, with an Encrypt Key, by signature (plaintext is then
+refused). Set an Encrypt Key: without it there is no replay protection, and startup warns.
 
-Setup differs by cloud: Feishu supports CLI app creation (scan-to-create); Lark uses the unbound launcher plus
-guided credential input, because its bound confirmation flow does not work. The launcher link carries the same
-`addons` as Feishu's, so a Lark app is created with the scopes and the event the channel needs; nothing is ticked in
-the console afterwards, except a scope the tenant withholds.
-In a coding agent's run (`channels setup lark --json`, or a deploy that needs the app) the App ID and App Secret are
-pasted on a page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks the pair
-against Lark and saves accepted credentials before attempting webhook setup. A refused pair stays on the form; other
-failures stop setup with their actual cause. A remote CLI needs local port forwarding: the ticket gives the SSH command
-for its page's port. See `fastagent channels setup --help`.
-Within either cloud, the way the channel receives determines the remaining work. For a long connection (what `dev`
-sets up), the runtime credential set stops at the validated App ID/Secret pair; setup continues through the permission
-check and names what is left: publish the version (a Feishu app made by scan-to-create is on a long connection already; for Lark, choose it in Events & Callbacks first).
-For webhook (`deploy --run`, or `--ingress webhook`), it continues through the temporary-tunnel challenge to
-capture the Verification Token (a webhook registration that is thrown away, which also switches the app's draft to
-webhook mode). A token that cannot be captured (no config API, a withheld `patch` scope, a tunnel that does not come up)
-is asked for, and where to find it is named. Setup then reads the App's scopes and, for any that is missing, names it with
-the console page that requests it, pre-filled. Re-running a partial setup reuses the App ID/Secret already kept rather
-than creating or attaching a different app, and a Verification Token kept from another app is never kept with new
-credentials.
+## When it answers
 
-This creates (for the feishu kind; lark mirrors it):
+| Place | Answers | Conversation (one session each) |
+|---|---|---|
+| Direct message | every message | the chat |
+| Group | an `@bot` mention | one per sender |
+| Thread in a group | a mention; then bare replies while only one person talks there | the thread |
 
-```txt
-src/channels/feishu.ts        # inbound event adapter + routing policy
-src/tools/feishu-send.ts      # optional outbound send tool for the agent (text or markdown card)
-src/tools/feishu-threads.ts   # reads the threads of the group a message was asked in
-```
+- A thread opened on one of the bot's answers starts from that conversation's history.
+- Before answering, it reads what was said in the place since its last answer (by name, bounded). A thread's first
+  turn also reads the room. The `feishu-threads` tool lets it read other threads of the group.
+- A reply to one of its answers continues the session that answer came from.
+- A message that arrives while it works is passed to the running work and may share its answer. A waiting message
+  shows a reaction until it is answered.
+- Other bots never trigger it. A quoted message is always read, up to 8 messages up its reply chain.
 
-It also appends the required env vars to `.env.example` when possible.
+## Stopping a turn
 
-## How `channels setup feishu` creates the app
+A mention whose whole text is `stop` or `cancel` stops the running turn.
 
-`fastagent channels setup feishu` runs the platform's **scan-to-create** flow (its official name; an OAuth 2.0
-device-authorization grant). The CLI opens a one-time confirmation link in your browser (valid ~10 minutes) — also
-printed, so you can open it in the app or scan it as a QR code instead — and you confirm; the platform
-creates an app from its agent template—bot capability, messaging scopes, and event subscriptions
-pre-configured—and adds `im.message.receive_v1` and the scopes in the table above. It does not ask for
-`application:application:patch`: a tenant that reviews that scope holds the app's whole first version in review,
-for a scope `dev`'s WebSocket never uses. Creating a production webhook app requests it at creation;
-when the app is not granted it, setup names it, asks for the Verification Token instead of capturing it, and leaves the Request URL to the
-console. A tenant may withhold any requested scope; setup names what it withheld. The CLI immediately persists App ID/Secret to
-the instance's value file before starting later network work.
+## Files and images
 
-For WebSocket, those two values are the complete runtime credential set. For webhook, the platform-
-generated Verification Token has no read API; its only programmatic delivery is the `url_verification`
-challenge, so the CLI captures it through a throwaway tunnel and persists it as a second stage. If that
-stage is interrupted, re-running resumes Token capture for the same App rather than minting another.
+Images reach the model as images (it must support vision). Files, audio and video are saved under
+`<state root>/channels/feishu/files/` and their paths given to the agent. A failed download of the message's own
+attachment fails the turn visibly. Without `im:message.group_msg`, a bare image in a group is not delivered: send the
+question and the image together, or reply to the image with a mention.
 
-What is left for the console depends on the tenant. A tenant that grants the requested scopes at creation
-gets an app that holds them at once; one that withholds some needs them requested (the CLI opens that page)
-and approved, then a version created and published. A long connection keeps the template's long-connection mode;
-webhook flips it and registers a Request URL. Mode and scope changes take effect only after publish, while
-later webhook URL changes apply immediately. Version publishing and tenant-admin approval have no general
-automatic completion path.
+## Sending from schedules (`feishu-send` / `lark-send`)
 
-## Configure the app by hand (developer console)
+A schedule or a wake-up has no chat to reply in: its prompt names the chat id, and the agent sends text or a Markdown
+card with the send tool. It cannot target a thread yet. In a chat turn the reply is sent for you; calling the tool too
+posts twice. `fastagent add feishu` again updates the tools and keeps your channel file.
 
-Create a **custom app** in the developer console ([open.feishu.cn/app](https://open.feishu.cn/app) or [open.larksuite.com/app](https://open.larksuite.com/app)), then:
-
-1. **Enable the bot capability** (App Features → Bot).
-2. **Permissions** — add:
-   - `im:message.p2p_msg:readonly` — receive direct messages,
-   - `im:message.group_at_msg:readonly` — receive group messages that @mention the bot,
-   - the agent scopes in the table under [Add the channel](#add-the-channel),
-   - `im:message:send_as_bot` — send replies,
-   - `im:resource` — download message images/files,
-   - the card scope ("Create and update card") — the live preview streams through a card entity.
-3. **Events & Callbacks** — subscribe to `im.message.receive_v1`, then choose the mode the app serves now:
-   - **WebSocket** (`dev`): choose long connection. No Verification Token, Encrypt Key, or Request URL is needed.
-   - **Webhook** (a deployment): choose webhook, copy the Verification Token, and optionally set an Encrypt Key;
-     for fastagent to register the Request URL, also grant `application:application:patch`.
-4. Put the matching credentials in the agent's `.secrets/.env`:
-
-```bash
-# Both modes
-FEISHU_APP_ID=cli_...
-FEISHU_APP_SECRET=...
-
-# Webhook only
-FEISHU_VERIFICATION_TOKEN=...
-FEISHU_ENCRYPT_KEY=...   # optional but recommended; must match the console exactly
-```
-
-5. For webhook, `deploy … --run` (and `fastagent dev --tunnel` with `channels.feishu.ingress` set to `"webhook"`)
-   register the Request URL.
-   Feishu's API path needs `application:application:patch`; Lark may require manual mode/URL setup when its config
-   API returns 404. WebSocket runs with ordinary `fastagent dev` and makes no registration call.
-6. **Create a version and publish** the app, then add the bot to a chat.
-
-## Scaffolded channel
-
-The scaffold (`src/channels/feishu.ts`; the lark kind mirrors it with `larkChannel` and `larkWebSocketChannel` from
-`@fastagent-sh/fastagent/lark`, and `LARK_*` vars) default-exports both ways with `byIngress`, so one file serves
-`dev`'s WebSocket and a deployment's webhook:
+## The channel file
 
 ```ts
 import { byIngress, needs } from "@fastagent-sh/fastagent";
@@ -226,262 +133,15 @@ export default byIngress({
 });
 ```
 
-Each way declares its own secrets, and an instance is asked only for its way's, so `dev` never asks for a token it
-does not use. `deploy` chooses the way as the box will (not `dev`, with the configuration it delivers), so it plans
-for the ingress the deployment serves. A channel file that names one factory receives that way only; a
-configuration naming the other way is refused at open. Re-scaffold the file (move it aside, then
-`add feishu`) to get this one.
+`route(event)` replaces the answering policy: return `null` to ignore, or `{ conversation?, chatId?, text? }`. A custom
+route reads no place history. `onError(failed)` sets what the user sees when a turn fails; show `failed.details` only
+to developers.
 
-Credentials are checked when serving starts, before the host reports ready. Deployment planning can
-therefore import the module and inspect its function/object shape before secrets have been provisioned.
+## Data and limits
 
-## WebSocket lifecycle
-
-`feishuWebSocketChannel` / `larkWebSocketChannel` wrap the official SDK lifecycle. `connect()` starts
-`WSClient`, `ready` settles on its first successful handshake, and the SDK owns ordinary reconnects.
-A transient disconnect therefore does not settle `closed` or make the already-ready health probe flap.
-Exhausted retries or a non-retryable setup error reject `closed` and fail serving visibly. Framework
-shutdown aborts the supplied signal; the adapter translates that single command into `WSClient.close()`
-and resolves `closed`. See Feishu's
-[long-connection guide](https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/event-subscription-guide/long-connection-mode).
-
-## Webhook event verification
-
-WebSocket authentication happens once while establishing the official-SDK connection. Webhook has two
-security modes, decided by the console's Encrypt Key setting and mirrored by `encryptKey`:
-
-- **Encrypt Key set (recommended):** ordinary events arrive AES-256-CBC encrypted with `X-Lark-Signature` headers. The channel verifies the signature over the raw body, decrypts, and **refuses plaintext events entirely** — accepting both would let a forger skip the stronger check. It also refuses an `X-Lark-Request-Timestamp` more than 7 hours from now: a signature commits to its timestamp but does not make it recent. The window covers the platform's whole retry chain (15s / 5min / 1h / 6h), so a redelivery is never rejected as stale.
-- **No Encrypt Key:** events arrive in plaintext and are authenticated by the Verification Token (constant-time compare). There is no signature and therefore no replay window — the channel warns about this at startup.
-
-Request URL verification is the platform-documented narrow exception to event signatures. With an
-Encrypt Key, its `url_verification` body is encrypted but carries no event-signature headers: the
-channel decrypts it, admits only that exact type, constant-time checks the Verification Token, and
-returns the challenge. Every ordinary encrypted event still requires a valid signature. See Feishu's
-[webhook setup](https://open.feishu.cn/document/event-subscription-guide/event-subscriptions/event-subscription-configure-/choose-a-subscription-mode/send-notifications-to-developers-server)
-and [event security](https://open.feishu.cn/document/server-docs/event-subscription-guide/event-subscription-configure-/encrypt-key-encryption-configuration-case)
-documentation.
-
-## Routing policy
-
-The channel consumes only `im.message.receive_v1`; every other event type is ACKed and dropped before `route` runs.
-
-By default, Feishu uses the canonical `defaultFeishuRoute`; the Lark subpath exposes the same policy as
-its branded `defaultLarkRoute` compatibility alias:
-
-- **p2p chats always answer**,
-- **an explicit group @mention always answers** — matched from the platform's `mentions` array by the bot's `open_id` (resolved once at startup via `bot/v3/info`), never a text scan, so a pasted `@bot` in a code block does not summon,
-- in an **Agent-created group thread**, a bare user continuation answers without another @mention; a message that explicitly mentions only other people is instead left as discussion, while `@bot + @others` still answers,
-- in a main group chat or a thread the Agent did not create, human messages without `@bot` are left as discussion, which the next explicit `@bot` turn in that same place reads (see [Place history](#place-history)),
-- all non-user senders are ignored, preventing two bots from answering each other forever.
-
-Override `route(event)` to customise; it returns:
-
-```ts
-type FeishuRoute = {
-  conversation?: string; // which conversation, and so which session; default: the place
-  chatId?: string;
-  text?: string;
-} | null;
-```
-
-Return `null` to ignore the event. Omitted fields default from the message. A custom route is
-authoritative: its `null` does not fall through to the built-in thread rule, and a routed turn reads no place
-history (the router decides what a conversation's place is). The canonical `feishuEnvelope(event)` builds the default prompt envelope (chat/sender metadata, group note, reply
-marker, decoded body) for custom Feishu routes. The Lark subpath exposes `larkEnvelope(event)`, which
-reuses that builder with the `[lark: …]` compatibility tag.
-
-### Group visibility is scope-gated
-
-With only `im:message.group_at_msg:readonly`, the platform delivers **only messages that @mention the bot** — unmentioned group/thread discussion never reaches the channel. The sensitive `im:message.group_msg` scope (custom apps only; some tenants approve it by hand) delivers all group messages once the app holds it. FastAgent then invokes explicit `@bot` turns, plus bare messages in a thread where it takes part and has not heard a second human — both facts being what the channel itself observed, so a thread it joined before this deployment takes one mention to re-enter. Everything else is discussion, which that place's next answered turn reads from the platform.
-
-Practical consequences in groups:
-
-- without `im:message.group_msg`, a **bare image/file** cannot summon (it has no mention) and is not delivered — put the ask and attachment in one rich-text `post`, or reply to the attachment and @mention the bot,
-- with that scope, a bare attachment inside a thread the Agent is part of is primary input and answered immediately; elsewhere it is discussion, and its image/file rides the next `@bot` turn in that place as background input,
-- background attachment failures degrade per resource with a visible prompt note; primary attachment failures still fail the turn visibly.
-
-### Place history
-
-A place is a chat (a group or a DM) or a thread in one. When a turn runs, the channel reads the place's messages from
-the platform (`GET /im/v1/messages`) and folds what was said since the ask its session was last sent into the prompt, as
-`[recent discussion here: …]`. The first turn in a place reads its newest 20 messages. The read ends at the turn's
-own ask: an ask queued behind it, and anything said after it, are read by their own turn. Within that, the read leaves
-out what the session already holds: every message the channel posted as a turn's output (answers, stop
-feedback), and the messages it took as input (`/stop`). What the Agent posted itself, with `feishu-send` from a
-schedule for example, stays, labelled `you`, so a later "what did point 3 mean?" has it.
-
-- People are named from the chat's member list (`im:chat.members:read`), other bots as `bot <app_id>`. Only the speakers
-  a fold shows are looked up, and names are reused for 10 minutes. A chat larger than 1,000 members may leave a speaker
-  unnamed (shown by open_id, with a warning); a failed name read is retried after the 10 minutes, not on every turn.
-- Cards are read as they were sent (`card_msg_content_type=user_card_content`), so a Card 2.0 digest reads as its text.
-- In a topic group, the main chat's history is each topic's first post; a reply inside a topic belongs to that topic.
-- A thread's first turn also reads its room's discussion, read-only: the room's own next turn still reads it.
-- The fold is bounded: 4,000 characters, 280 per message (2,000 for the Agent's own post), the newest kept, and what it
-  leaves out is counted in the prompt. A place with more than 50 messages since its last answer says earlier ones
-  are not shown.
-- A read that fails costs the turn its discussion, never the turn: the prompt says the discussion could not be read,
-  a warning is logged, and the next turn reads the same messages again. A rate-limited read is not waited out, since
-  the turn waits for it.
-- A direct message is a place too: its turns read what was posted there since the last answer, which in practice is
-  what the agent sent there itself with a send tool (a schedule's digest). Turns from a custom `route` read no history.
-
-### Reading threads
-
-`fastagent add feishu` (lark: `add lark`) also scaffolds `src/tools/feishu-threads.ts` (`src/tools/lark-threads.ts`). In a
-group turn, the agent calls it with no arguments to list the group's recent threads, and with a thread id to read one.
-That is how a question in the group about a topic ("was the deploy failure resolved?") reaches what a person wrote
-in that topic.
-
-- Only the group the turn was asked in: the tool takes no chat id, and a thread id from another chat is refused. In a
-  DM, a scheduled turn or a turn from a custom `route` it answers that it cannot read threads.
-- The list is the threads among the group's newest 50 messages, newest first, at most 20. Feishu lists an ordinary
-  group's thread by its first message only, so the list shows when such a thread started, not its last reply (it may
-  have gone on since, and the list says so), and a thread started before those 50 messages does not appear. A topic
-  group lists every message, so there a thread shows its last activity.
-- A read is the thread's newest 20 messages, bounded like the place history above, the agent's own answers included.
-- An agent created before this release gets the tool with `fastagent add feishu`: it keeps the channel
-  file and writes the package's tools.
-
-## Threads and conversations
-
-The Agent behaves as a participant in the room, so where it answers and what it remembers follow the
-place rather than the individual ask:
-
-| Place | Conversation | Where the answer appears | Bare messages (no @) |
-|---|---|---|---|
-| Direct message | `<kind>:<chat_id>` | in the chat, unquoted | always answered |
-| Group main timeline | `<kind>:<chat_id>` | in the room, quoting the ask | never — mention the bot |
-| Group thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
-| Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
-
-Each conversation has its own session, which the channel creates the first time it is asked there. There are no session modes to choose. In a group's main timeline each
-sender has a session of their own (`<kind>:<chat_id>#<sender>`), so one person's long task does not hold up another's
-question; the others' discussion and the agent's answers to them reach a session as attributed context, not as its own
-history. A sender the platform gave no id (a tenant whose events carry none) shares the chat's session. A thread is a separate place with its own —
-**started from the exchange it was opened on**: a new thread's session is a fork of the session that holds the
-message the thread was opened on (the one it replies to, an answer of the Agent or a request it took, whoever sent the
-request), up to that exchange's answer, including images and tool results. The channel finds that session in the
-messages it remembers, the newest ~1000. A thread opened on any other message, or on one
-older than that, starts empty. The fork happens once, when the thread's session is created; after that the two places
-are independent, and the main timeline never sees what the thread discusses.
-
-The fork cannot carry what the room said since, so the thread's first turn reads that discussion instead, attachments
-included: the room's messages after the exchange it forked at, or the room's newest messages when it started empty. The
-fork's own answer is read again, since the session it came from may have answered more after it. Nothing is consumed by
-reading it: the thread's session holds what its first turn folded, and the room's own next turn reads what that
-session was last sent up to.
-
-**Starting a thread.** Mention the Agent inside a thread once (typically by replying to one of its
-messages and creating a topic). It answers there, which makes it a participant, and every later bare
-message in that thread reaches it. When a second person speaks in the thread, addressing becomes
-ambiguous again and the Agent goes back to requiring a mention — while still listening, so the
-discussion is folded into its next answered turn there.
-
-Both halves are what the Agent HEARD, not a claim about who is really in the thread: nothing is read
-back from the platform, so a thread it joined before this deployment takes one mention to re-enter. Observations accumulate and are never
-shed, so a thread in which two people have spoken keeps requiring a mention. A consequence worth
-knowing: a thread where several people are present but only one has spoken *while the Agent was
-listening* counts as two-party.
-
-The thread's identity is `thread_id`. Feishu's `root_id` is NOT stable within a thread — it tracks the
-reply chain and can differ between messages of one thread — so it is used for neither the conversation key
-nor the context bucket. A message that quotes another always loads it as referenced input,
-inside a thread or out of it — a quote is the user pointing at something that may predate the session.
-An unreadable referent degrades to a marker instead of failing the turn.
-
-A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
-next step, after its current tool calls. A group's main timeline is a session per sender, so a second person's `@Agent` does not reach the first's run; a second message from the **same** sender is steered into it, can end that run and shares its answer (delivered once), and gets a short "Answered together with an earlier message above" reply under it, since the answer quotes their first. Different places run concurrently, which is why a thread is the way to
-start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. A reply in the main timeline to an answer, or to a request the Agent took, is steered into the session that holds it, whoever sends it: the channel remembers the most recent ~1000 such messages, and a reply to any other message is an ordinary message of its sender. While a
-message waits for that answer, the Agent marks it with an `OnIt` reaction and swaps it for `DONE` when it is answered
-(a failed turn just takes the mark off); the first message of a run shows its own card instead.
-
-## Streaming behavior
-
-Every answered turn uses ONE **streaming card** (a card entity in streaming mode):
-
-- an immediate "💭 Thinking…" card, reply-quoted under the asker in groups,
-- tool-call previews + partial answer text, pushed as full-text snapshots (the client renders the typewriter effect),
-- on completion, the same card settles into the final answer as Markdown (streaming off).
-
-Card snapshots use the cardkit quota (50 QPS per app, 10 QPS per card, no edit cap), not the 5 QPS per-chat message quota or the 20-edit cap on text messages.
-
-Degrade tiers, all visible in the operator log:
-
-- card creation/mount fails → a static text placeholder; the final answer lands as ONE text edit (or fresh sends),
-- the platform closes streaming mid-turn (idle timeout) → the preview freezes; the settle still lands,
-- an answer longer than one card (~20 KB) settles the card with the first chunk and sends the rest as follow-up messages,
-- an empty answer leaves `(no reply)`; a suppressed error notice deletes the card, leaving no residue.
-
-## Failures
-
-Two audiences, like the Telegram channel:
-
-- **Operator log**: always receives the full diagnostic details.
-- **Chat user**: every answered turn receives `onError(failed)` if provided, otherwise a neutral default keyed on `retryable`.
-
-A summon whose whole message is "stop" or "cancel" aborts the session's active turn instead of
-becoming a turn (queued asks keep running). No configuration is needed: stopping the running turn is
-part of serving.
-
-## Files and images
-
-Message payloads are resolved by the channel before the agent turn runs — all as **primary** inputs (a load failure ends the turn with a visible error, never a silent drop):
-
-- images (`image` messages, or images inside a rich-text `post`) are downloaded and passed as `prompt.images` — the selected model must support vision,
-- files / audio / video are downloaded to `<state root>/channels/<kind>/files/c-<chat>/` — `c-` plus the URL-encoded chat id, so a thread id keeps its `:` and `/` as one directory (`oc_x:thread/1` → `c-oc_x%3Athread%2F1`) — and listed in the prompt so the agent reads them with its tools,
-- a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
-- the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like background attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
-
-## Restarts and stored data
-
-- A message accepted before a restart or a deploy is answered after it, and an answer made but not delivered is sent
-  then without asking the model again. Delivery is at least once: a tool may run twice, and an answer may arrive twice
-  rather than not at all. A turn interrupted again and again is dropped, and its asker is told to ask again.
-- The channel's state is under `<state root>/channels/feishu/` (`channels/lark/` for Lark): machine state, git-ignored, that wants a volume.
-  Downloaded files are kept there and never pruned; size and prune it yourself.
-- One process owns the state root: a second `dev` or `start` of the same agent is refused.
-- A message Feishu delivers twice, as it may even after an ACK, is taken once.
-
-## Sending messages back (`feishu-send` / `lark-send`)
-
-`fastagent add feishu` also scaffolds `src/tools/feishu-send.ts` (lark: `src/tools/lark-send.ts`): the agent can send plain text or a Markdown card to any chat by id. It is the delivery path for turns no channel is carrying — a cron schedule or a self-scheduled wake-up; those turns have no `[feishu: chat …]` envelope line, so the schedule's prompt must name the target chat id.
-
-**Use it for proactive delivery only.** The channel delivers the current turn's reply; calling the tool
-as well posts it twice.
-
-The tools use `feishuTransport({ appId, appSecret })` / `larkTransport(…)` from their respective package
-subpaths, with the app credentials the tool declares through `needs`. Within a serving process, they share the
-mounted channel's client for that app: its custom gateway, token cache, bounded retries, and UTF-8 text splitting.
-Feishu and Lark remain isolated even in one agent. With no channel mounted (`fastagent invoke`, or an embedded agent
-with no channels mounted), the transport is built from those credentials against that cloud's default gateway.
-
-`src/tools/feishu-send.ts` / `src/tools/lark-send.ts` are the package's, not authored glue: re-running
-`fastagent add feishu|lark` rewrites the tool and keeps `src/channels/<kind>.ts`. That is how an agent scaffolded by an earlier release
-picks up the current tool.
-
-## Limits
-
-- One app uses one subscription mode; dev and production need different apps (see
-  [How the channel receives](#how-the-channel-receives)). A mode change made by hand in the console takes effect
-  only after a published version.
-- WebSocket requires one continuously running process. Fly disables scale-to-zero and Railway forbids
-  App Sleeping. Multiple clients for one app are cluster/load-balanced, not broadcast.
-- The official SDK currently carries event subscriptions over long connection; callback subscriptions
-  are not part of this FastAgent ingress. Card streaming remains outbound HTTP and is unaffected.
-- Subscription mode cannot travel as creation-link config, and a tenant may withhold any requested scope.
-  Setup names a withheld scope and the page that requests it; tenant-admin approval and version
-  publishing remain console actions.
-- Bound CLI app creation is feishu-only: the intl cloud's confirm-page ack endpoint is broken (every
-  ack renders as "Link expired"). `channels setup lark` therefore uses the unbound launcher + guided credential
-  paste (the launcher link carries `addons`, so the app is created holding the agent scopes: checked on a real
-  international tenant, where an app created from it held all of them with none ticked), then probes the config API: automatic mode/token capture on success; a pasted Token and a Subscription mode/URL
-  set by hand only on an explicit route-level 404.
-- Without the sensitive `im:message.group_msg` scope the platform never delivers unsummoned messages, so only @mentions summon.
-- A read of a place's history adds about 300–400 ms before a group turn starts.
-- Sessions are one per chat and one per thread, never deleted, so the instance's storage grows with the number of chats and threads the Agent has taken part in. Thread participation is capped and evicts BYSTANDER threads first (ones the Agent only listened to — losing one costs nothing, since the summon rule refuses such a thread anyway); age decides only among threads it takes part in. The rest is unbounded.
-- `feishu-send` / `lark-send` currently target only `chatId`; schedules and wake-ups cannot select a thread until those tools accept a reply target plus `reply_in_thread`.
-- The sender in events carries only ids (no display name), so the ask's own envelope attributes it as `user <open_id>`; only the discussion read from history is named. A custom `route` can enrich the envelope.
-- Events must be ACKed within ~3 seconds in either mode. The channel persists/enqueues synchronously;
-  webhook returns HTTP 200 and the SDK returns its ACK frame without waiting for the Agent turn. A
-  persistence throw becomes HTTP/WS 500 and asks the platform to re-push.
-- Rate-limit rejects are retried (bounded); message sends to one chat are capped by the platform at 5 QPS.
+- An accepted message is answered after a restart, at least once: a tool may run twice. A message Feishu delivers twice
+  is taken once.
+- Sessions are never deleted, so storage grows with the chats and threads the bot has joined.
+- Messages show the asker as `user <open_id>`: events carry no display name.
+- Reading a place's history adds about 300–400 ms before a group turn.
+- Feishu limits sends to one chat to 5 per second.

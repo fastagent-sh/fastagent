@@ -1,49 +1,20 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: open an agent directory in your app, call the Agent API in process, put it on your own routes, and mount its channels in Next.js, Hono, Express, Fastify, Bun, or Node."
-type: doc
+description: "Use FastAgent as a library: open an agent in your app, send it messages, serve its channels from your server, keep its credentials, and run it in a desktop host."
 status: current
 ---
 
 # Embedding
 
-Use FastAgent as a **library**: the agent is one capability inside a product you already have, in your own process,
-behind your own auth, on your own host. For the CLI path (`init` / `dev` / `start`), see [quickstart](quickstart.md);
-both run the **same** agent.
+Run the agent inside your own app, behind your own auth. It is the same agent the CLI runs.
 
-## Prerequisites
-
-- **Node ≥ 24.15** (or Bun ≥ 1.4). Ships compiled JS + types; no build step for FastAgent itself.
-- **Install as a dependency** of your app: `npm i @fastagent-sh/fastagent`. The agent directory has its own
-  `package.json` too ([init](cli.md#commands)); keep the versions aligned.
-- **Model credentials**: a provider API key in `secrets` (e.g. `OPENAI_API_KEY`), a `credentials` store of your own, or
-  an `auth.json` in the instance's state directory. `fastagent login` writes the project's `.secrets/auth.json`, which
-  an app's instance does not read. See [Auth](#4-auth).
-
-## The one mental model
-
-An agent is the [Agent API](SPEC.md): sessions the Agent names, messages whose end outlives whoever sent
-them, and a durable history of entries. It is TypeScript, in process, and the same over HTTP (`connectAgent`).
-
-```ts
-interface Agent {
-  info(): Promise<AgentInfo>;
-  usage(): Promise<Usage>;
-  sessions: { create, get, list, update, entries, events, cancel, compact, attachment };
-  messages: {
-    send(request: { sessionId: string; content: string | ContentPart[]; idempotencyKey?: string; whenBusy?: "queue" | "steer" | "reject" },
-         options?: { wait?: number; signal?: AbortSignal }): Promise<Message>;
-    stream(request, options?): AsyncIterable<MessageStreamEvent>; // the message, then its events through its done
-    get(key, options?): Promise<Message>; // by its id or its key, with `wait` too
-  };
-}
+```bash
+npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4
 ```
 
-`send` answers once the message is recorded, and with `wait` (seconds) once it has ended: its `status`, and its
-`answer`. A message for a busy session queues behind the ones before it. A refused operation rejects with an
-`AgentError`. See the [Agent API](SPEC.md).
+Build the agent with `fastagent build`; your app imports the package that makes.
 
-## 1. Open the agent
+## 1. Open it
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
@@ -59,34 +30,15 @@ const agent = await openAgent(support, {
 await agent.close(); // on shutdown: releases the instance's storage
 ```
 
-`close()` interrupts a message that is still running; it does not cancel it. As when a process stops (SPEC §5.4), the
-message is answered when the agent is next opened, and a tool it cut off is not run again unless it declares a second
-run safe. To end the message for good, `await agent.sessions.cancel(sessionId)` for each running session before
-`close()`: the stop is recorded at once and holds after a restart.
-
-`openAgent` is what `dev` and `start` run before they serve. The definition is a package's default export, read where
-it is installed and never written to: an installed package is read-only, and one definition opens as any number of
-instances. The instance is where `root` is: its working directory (what the agent writes lands there) with its state in
-`<root>/.state`; `{ stateDir, workdir }` puts the two apart ([below](#6-a-desktop-host)). Every path is absolute; a
-relative one is refused. The open builds the definition's code with the secrets it declares, installs its declared
-[environment](configuration.md#environment) where it has no install yet and puts it first on the `PATH` of the
-commands the agent runs, clones its content, refreshes its [model lists](configuration.md#model-lists) (a request to
-`https://pi.dev` of at most 5 s, and to a provider that fetches its own list, unless what `<state>/models/` keeps is
-less than 4 hours old; `offline: true` makes none), and opens the instance's storage (`<state>/agent.sqlite`),
-which one process holds at a time. Without a
-`model`, the config's is the default; with none at all the agent still
-opens, and a session needs a model of its own (`sessions.create({ model })`, `sessions.update`) before a message is
-answered. Nothing reaches the agent until `serve`.
-
-A definition is made from a project directory: the prompt is its `SYSTEM.md`, and its tools are modules of
-`src/tools/`. To assemble one in code, write the directory and `fastagent build` it.
-
-### MCP servers
-
-The agent's `mcpServers` (its `context.json`, and `config.mcpServers` for an instance) add stdio or Streamable HTTP tools. Use `inspectMcp` and `signInMcp`, giving them the same `config` (or the same `root`), to drive browser OAuth in
-the host before opening an agent, then pass `mcp: { store, bindings }` to `openAgent`. Each open owns its clients;
-sharing a grant is explicit and closing an agent does not sign the user out. See [MCP servers](mcp.md) for the host
-interaction/store contract, instance variables, proxy policy and supported protocol subset.
+- Paths are absolute. `root` is the agent's working directory, with its state in `<root>/.state`; pass
+  `{ stateDir, workdir }` to put them apart.
+- The agent reads only the `secrets` and `env` you give it, never your process's environment. `baseEnv(process.env)`
+  passes `PATH`, `HOME`, locale and proxy.
+- Opening installs its declared environment, clones its content, and refreshes model lists (`offline: true` skips the
+  network).
+- One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
+  stop work for good, `agent.sessions.cancel(sessionId)` first.
+- MCP servers: sign in with `inspectMcp` and `signInMcp`, then pass `mcp: { store, bindings }` ([MCP servers](mcp.md)).
 
 ## 2. Send a message
 
@@ -103,16 +55,14 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 }
 ```
 
-Keep the session's `id` to continue the conversation. An `idempotencyKey` (your request's id) makes a resend return the
-same message rather than a second one. Leaving the iteration detaches; the agent goes on, and
-`agent.sessions.cancel(sessionId)` stops it.
+Keep `session.id` to continue the conversation. Pass your request's id as `idempotencyKey` so a resend returns the same
+message. Leaving the loop detaches; the agent goes on until `agent.sessions.cancel(sessionId)`. The calls are the
+[Agent API](SPEC.md).
 
-### Putting it on your network
+### Exposing it to your users
 
-Another service reaches the agent through the Agent API over HTTP: serve it with a key (below) and call it with
-`connectAgent`. A browser does not: the key opens the whole instance. To give a browser the agent, write the routes
-your product needs over these calls, behind your own authentication. Every result and event is JSON, so you can send
-them on as they are, for example as Server-Sent Events:
+Do not give a browser the API key: it opens the whole instance. Write your own routes over these calls, behind your
+auth. Results and events are JSON, so you can forward them, for example as Server-Sent Events:
 
 ```ts
 app.post("/chat/:session", requireUser, async (req, res) => {
@@ -129,14 +79,10 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 });
 ```
 
-**An instance is one trust domain.** The agent's tools reach every session of its instance, whichever user asked, so
-keeping users apart by session id works only for an agent whose tools reach neither its storage nor its files. Users
-who must not see each other's conversations get an instance each
-([security model](SPEC.md#10-security-model)).
+**One instance is one trust domain**: the agent's tools can reach every session in it. Give users who must not see each
+other an instance each ([security model](SPEC.md#10-security-model)).
 
-## 3. The whole agent, as a service
-
-To serve the agent's channels, schedules and wake-ups from your app too, serve it:
+## 3. Serve its channels and schedules
 
 ```ts
 const service = await agent.serve();
@@ -147,26 +93,18 @@ const port = await service.listen(8787);
 await agent.close(); // closes the service, then releases the storage
 ```
 
-`serve()` is the assembly `dev`/`start` perform, minus the process: no signal handlers are installed, nothing calls
-`process.exit`. Its `fetch` answers the channels' routes, each of which verifies its platform, and `GET /health`; with
-`serve({ apiKeys: [key] })` it also answers the Agent API under `/v1`, which another service calls with
-`connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`. `listen` starts a server of its own, on Node's
-`http` server or `Bun.serve`; `close()` ends the API's event streams, gives the requests in flight 500 ms, then ends
-them and stops the channels and schedules.
+- `service.fetch` answers the channels' routes and `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
+  under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
+  `@fastagent-sh/fastagent/client`.
+- `listen` points Telegram, Feishu and Lark webhooks at `http.publicUrl` once ready. If you mount `fetch` on your own
+  server, call `service.registerWebhooks("https://example.com/agent")` once it answers. Slack's Request URL is yours
+  to set.
 
-A webhook channel (Telegram, Feishu, Lark) is pointed at its platform by the instance itself. `listen` does it once the
-serve is ready, at the configuration's `http.publicUrl`. An app that mounts `fetch` on its own server calls
-`service.registerWebhooks()` once that server answers and the serve is ready, since a platform checks the URL as it is
-set; give it the public base, mount prefix included, if the configuration names none
-(`service.registerWebhooks("https://example.com/agent")`). It answers each channel's outcome, and
-`service.webhooks` keeps the last one. Slack's Request URL is the app's own setting: its outcome is `manual`, with the
-URL to set.
+### Mounting `fetch`
 
-### Mounting `fetch` in your app
-
-`service.fetch` mounts wherever your host speaks `(Request) => Response`. On a host that speaks Node's `(req, res)`,
-`getRequestListener` from `@hono/node-server` (`npm i @hono/node-server`) bridges it. It routes on the request's path
-(`/telegram`, `/health`), so mount it under a prefix your host strips, or strip it yourself.
+`service.fetch` takes a `Request` and returns a `Response`. It routes on the path (`/telegram`, `/health`), so mount it
+under a prefix your framework strips. On Node's `(req, res)`, bridge it with `getRequestListener` from
+`@hono/node-server`.
 
 > **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
 > webhook channels verify signatures over the raw body:
@@ -211,20 +149,14 @@ app.register(async (scope) => {
 });
 ```
 
-## 4. Auth
+## 4. Credentials
 
-`openAgent` reads the model credentials from `credentials`, else from `auth.json` in the instance's state directory
-(`<root>/.state/auth.json`), and the provider's variable from `secrets`. It reads nothing else: not the project's
-`.secrets/`, not `FASTAGENT_AUTH_PATH` or `FASTAGENT_SECRETS_DIR`, not the machine's `~/.fastagent`, so a person's own
-`fastagent login` never becomes an app's credential. MCP grants are kept the same way: the `mcp` store you give, else
-`mcp-auth.json` in the state directory. The state directory holds secrets (these two files) beside the conversation
-history, and FastAgent writes no `.gitignore` into it: an app whose `root` is a git repository, or whose agent commits
-its working directory, keeps `.state/` out of version control itself.
+The agent reads model credentials from `credentials`, else `<state>/auth.json`, and provider keys from `secrets`.
+Never from the project's `.secrets/` or `~/.fastagent`, so a developer's own login never becomes your app's. The state
+directory holds secrets: keep `.state/` out of git.
 
-`credentials` replaces the file with a `CredentialStore` of your own, refreshes included; the provider variables in `secrets` and a
-provider's own auth still apply. Implement one over an OS keychain or Electron `safeStorage`, or keep FastAgent's file
-somewhere of your choosing with `credentialFile(path)`. To sign a person in from your own UI, list the ways with
-`signInOptions(store)` and run one with `signIn`, which asks and tells through your interaction:
+Use `credentialFile(path)`, or your own `CredentialStore` (an OS keychain, Electron `safeStorage`). Sign a person in from
+your UI with `signInOptions(store)` and `signIn`:
 
 ```ts
 import { join } from "node:path";
@@ -247,62 +179,18 @@ try {
 const agent = await openAgent(definition, { root, credentials });
 ```
 
-Every store is FastAgent's own type, declared in the package.
+A gateway or self-hosted model is a provider in the agent's config ([custom models](configuration.md#custom-models)).
 
-## 5. Your own model source
+## 5. A desktop host
 
-A gateway or a self-hosted model is a provider in the agent's `fastagent.config.ts` (`providers`), so every path
-(`dev`, `start`, `invoke`, `deploy`, and your app) picks it up: see [custom models](configuration.md#custom-models).
-Its `auth.apiKey.resolve()` runs per request, which is where a token you mint or rotate goes.
+An app that runs agents for a person on their machine:
 
-## 6. A desktop host
-
-An app that runs agents for a person on their machine (a desktop client, an editor) opens each with `openAgent` and
-calls the Agent API; `createAgent(dir, { content })` makes a new one, as `fastagent init` does, with the folders and
-repositories it works on. `addContent` and `removeContent` edit those declarations later; `listContent` reads them. An
-app that opens a built definition passes it (not a source directory) with `{ config }`, the instance's `fastagent.json`.
-
-- **Its own instance.** `openAgent(definition, { credentials, workdir, stateDir })` with a `stateDir` of the app's
-  (one per agent, under its data directory) is an instance of the agent separate from the one `fastagent dev` opens in
-  the same project, so both run at once. They share the definition and nothing else: each has its own sessions. Only one of
-  them serves the definition's channels and schedules (two would fire every schedule twice and compete for the
-  channels' messages); an app beside `dev` does not call `serve()`. An instance nothing serves has no clock, so the
-  agent's `wake` tool refuses a wake-up there instead of keeping one nothing would fire.
-- **The instance configuration.** Opened with `root` and no `config`, an instance reads `<root>/fastagent.json` when
-  it holds one, which is where `createAgent` and `addContent` write by default. The root is the agent's workspace, so
-  the agent can write that file too, and what it writes takes effect at the next open: its `mcpServers` can name a
-  server, with `${VAR}` headers that expand to any secret the app opened it with. An app that does not want its agent
-  to hold its configuration passes `config` (an object, `{}` included) or keeps the file outside the root and passes
-  its path.
-- **Models.** `agent.info().models` are the models a session may name, each with its `contextWindow` and the
-  `thinkingLevels` it supports; a provider signed in to while the agent is open is in the next answer. The lists are
-  refreshed when the agent opens, at most every 4 hours.
-- **Content changes.** `openAgent` resolves the content declarations once and prepares GitHub clones at startup.
-  Adding or removing entries, or changing their paths or descriptions, takes effect at the next open, not in a new
-  session of the already-open agent. `addContent`, `removeContent` and `listContent` return the current on-disk
-  declaration resolved for this machine, not the running agent's snapshot; `agent.content` is that snapshot, so a host
-  that compares the two knows a reopen is due. There is no hot reload: a desktop host
-  can wait for current work to finish, then `close()` and reopen with the same `root` or `stateDir`. Cancel first only if it
-  intends to stop that work. Files inside an already-bound directory are different: their changes are visible when
-  a tool next reads them, without reopening.
-- **Changes to the agent.** A package is immutable: a new version is a new `fastagent build`, installed and opened
-  again after `close()`.
-- **Each agent's own secrets.** An agent's code (`needs()`), its MCP `${VAR}` references, its model keys and its model
-  requests read the `secrets` it is opened with, and nothing of this process's environment or of a `.env` file. The
-  processes it starts (commands, stdio MCP servers, skill scripts) get the `env` it is opened with, its declared
-  packages' commands ahead on the `PATH`, the declared secrets and a git ceiling at the workspace's parent: a stray
-  variable in your app's environment cannot reach them. `openAgent` writes nothing into `process.env`, so agents
-  opened in one process keep their values and packages apart. Code that reads `process.env` itself sees the process's
-  alone: an agent's code takes its values with `needs()`. The process is still one: a tool that blocks it or crashes
-  it does so for every agent in it.
-
-## How embed and CLI relate
-
-`fastagent dev` / `start` are `openAgent` plus `serve()` and `listen` plus process concerns (the proxy and the log
-level `.env` may set, the dev watcher, the port, the signal handlers). The agent they serve is the one `openAgent` returns to your app.
-
-## Where next
-
-- [Agent API](SPEC.md): the API the whole thing rests on.
-- [API reference](api-reference.md): every export.
-- [quickstart](quickstart.md): the CLI path (`init` / `dev` / `start`).
+- `createAgent(dir, { content })` makes an agent as `fastagent init` does. `addContent`, `removeContent` and
+  `listContent` edit what it works on; changes apply at the next open (`agent.content` is what the open agent has).
+- Open with a `stateDir` of your own to run beside `fastagent dev` on the same project. Each instance has its own
+  sessions. Only one of them should `serve()`, or schedules fire twice; an instance nobody serves refuses `wake`.
+- Without `config`, an instance reads `<root>/fastagent.json`, which the agent itself can write (MCP servers
+  included). Pass `config` (even `{}`) to prevent that.
+- `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
+- A new agent version is a new build: `close()` and open it again.
+- Agents in one process keep their secrets and packages apart, but share the process: one that crashes it crashes all.

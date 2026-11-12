@@ -8,63 +8,37 @@ status: current
 
 ```bash
 fastagent <command> [args] [options]
+fastagent <command> --help     # every argument, flag and example, generated from the code
 ```
 
-Most commands take an optional `[agent]`: the agent directory, the one holding `fastagent.config.ts`. The default is
-the current directory. Run inside an agent's subdirectory, a command refuses and names the agent's root; anywhere
-else that is not an agent, it refuses and points at `fastagent init`. Nothing is searched for.
+`[agent]` is the agent directory (the one with `fastagent.config.ts`), by default the current one. Nothing is searched
+for: from a subdirectory, a command names the agent's root and stops.
 
 ## Commands
 
-Each command's arguments, flags and examples are its help, `fastagent <command> --help`, which is generated from
-the code and so always current. This page is the index, and the rules every command follows.
-
-| Command | Purpose |
+| Command | Does |
 |---|---|
-| `init <dir>` | Create an agent in a directory of its own; `--content` declares what it works on: a directory or a GitHub repository. |
-| `info [agent]` | Show what an agent assembles into, without serving. |
-| `build [agent]` | Compile the agent into `dist/`, the package an app or a host opens. |
-| `content list\|add\|remove` | List, add or remove what the agent works on. |
-| `env add\|remove\|list\|install\|exec` | Add, remove or list the commands the agent runs: its environment. |
-| `models [search]` | List the model specs the agent can name. |
-| `login [provider]` | Sign in to a model provider (an account or an API key) into `<agent dir>/.secrets/auth.json`; `--deployment` logs the deployed box in. |
-| `logout [provider]` | Remove a credential `login` stored. |
-| `auth check` | Whether a provider is ready: `ready`, `not_ready` or `invalid`, for scripts and agents. |
-| `dev [agent]` | Serve locally, restarting on code edits. |
-| `invoke <message> [agent]` | Send one message, print its answer (`--json`: its events), and exit; `--session <id>` continues an earlier run's session. |
-| `schedules list [agent] [--json]` | Every schedule (next instant, last run, session) plus pending wake-ups. |
-| `schedules run <name> [agent]` | Fire one schedule now, as its clock would. |
-| `schedules unwake <id> [agent]` | Cancel a pending wake-up, whatever session set it. |
-| `add telegram\|slack\|feishu\|lark [agent]` | Scaffold a first-party channel: the channel file (if missing) and its tools, which is how an existing agent picks up a new tool. It changes the program only; the platform app is `channels setup`'s. |
-| `add skill <source> [agent]` | Vendor an Agent Skills skill into `skills/`. |
-| `channels setup <name> [agent]` | Set up one instance's platform app (`telegram`, `slack`): guide the person through creating it, check each pasted credential with the platform, and keep it in the instance's value file. `--ingress`, `--config` and `--env-file` say which instance it is and how it receives. |
-| `channels setup <name> --record-url --config <file> (--env-file <file> \| --from-env) [--url <url>]` | Record, in the configuration a deploy delivers, the URL a person saved on a Slack or Lark app's page once the deployment's `/health` reports the channel reached there (`channels.<name>.app.url`; `--url` is where `/health` is read), so later deploys report it registered. |
-| `secrets list\|set\|push <host> [agent]` | A deployment's values on the target that keeps them (`fly`, `railway`, `agentcore`; Docker holds none): the declared names and which the target holds, one value typed without echo or generated, or every declared value a file (`--env-file`) or the environment (`--from-env`) holds. |
-| `deploy docker [agent]` | Generate `fastagent.<name>.compose.yml`, `Dockerfile` and `.dockerignore` for local Docker (one `agent` service, loopback port, `/data` volume). |
-| `deploy fly [agent]` | Generate `fly.<name>.toml`, `Dockerfile` and `.dockerignore` and print a flyctl runbook. `--run` drives flyctl to completion. |
-| `deploy railway [agent]` | Generate `Dockerfile` and `.dockerignore` and print a railway runbook. `--run` provisions an unlinked dir end to end and continues the project that holds the agent's service; a dir linked to another project needs `--into-linked`. |
-| `deploy agentcore [agent]` | Generate `agentcore.<name>.template.yaml`, `agentcore/forwarder/index.js` and image artifacts. `--run` builds and pushes an arm64 image, deploys the stack, registers webhooks, and stops the runtime session so the next call uses the new image. `--idle-timeout <seconds>` (60–1209600) sets how long an idle session keeps its microVM, over the program's `defaults.deploy.agentcore.idleTimeoutSeconds`; the other hosts report it as ignored. |
-| `deploy <host> --env-file <file>`, `--from-env` | The values to give the target: the file, and the environment the command runs in only with `--from-env` (a CI job's variables, `op run -- fastagent deploy … --from-env`), as for `secrets push`. A deployment has **no default value file** (not `.secrets/.env`, not `.secrets/production/.env`), and the shell alone is not a source. Docker's Compose always takes the environment it runs in. `logs`, `destroy` and `login --deployment` take `--env-file` for the host account (`AWS_PROFILE`, `AWS_REGION`), which they read from their environment as before. |
-| `deploy <host> --config <file>` | Every host: deliver an instance configuration (a `fastagent.json`) the deployment runs on, set on the host as the variable `FASTAGENT_CONFIG_JSON` ([deploy](deploy.md)); the image holds none of it. Its `name` is the deployment's name: the host's resources and the generated manifests carry it ([deploy](deploy.md#an-instance-of-its-own)), and `secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to address it. Without it, the program's defaults; the project's own `fastagent.json` is never carried. |
-| `logs agentcore [agent]` | Tail the deployed Runtime's CloudWatch logs; `--source forwarder` selects the forwarder Lambda. `--since <duration>`, `--follow`. |
-| `destroy agentcore [agent] [--run]` | Delete what `deploy agentcore` created: stack, artifact bucket, ECR repository, both log groups, pending wake alarms. Without `--run` it only lists them. A stack that does not reach `DELETE_COMPLETE` stops the rest. |
-| `start [agent]` | Serve without watch. |
+| `init <dir>` | create an agent (`--content` adds what it works on) |
+| `info` | show what the agent loads, without serving |
+| `dev` | serve locally, restarting on code edits |
+| `invoke <message>` | send one message and print the answer (`--url` for a deployment) |
+| `build` | compile the agent into `dist/` |
+| `start` | serve the build |
+| `models [search]` | list model specs |
+| `login [provider]`, `logout`, `auth check` | manage model credentials (`login --deployment <host>` signs a deployment in) |
+| `content list\|add\|remove` | what the agent works on |
+| `env add\|remove\|list\|install\|exec` | the commands the agent needs |
+| `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
+| `add skill <source>` | copy an Agent Skills skill into `skills/` |
+| `channels setup <name>` | create or connect the platform app and keep its credentials |
+| `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
+| `mcp list\|login\|disconnect` | MCP servers and their sign-in |
+| `secrets list\|set\|push <host>` | a deployment's values on its host |
+| `deploy docker\|fly\|railway\|agentcore` | write deployment files; `--run` deploys ([Deploy](deploy.md)) |
+| `logs agentcore`, `destroy agentcore` | AgentCore logs, and tearing it down |
 
-`deploy` writes artifacts and prints a runbook; only `--run` touches a host. Existing artifacts are kept unless
-`--force`; a generated one that no longer matches the definition is flagged stale and gates `--run`. See
-[Deploy](deploy.md).
-
-`deploy <host> --run --json` is a coding agent's deploy. What this machine can refuse (a missing value, a stale
-artifact, a Lark app without its credentials) is answered at once; the deploy then runs in a process of its own, and
-the command returns its ticket. `deploy <host> --check <ticket>` reads it, always as JSON: `working` with the `log`,
-`need_user_action` for each step only the person can take (signing the host's CLI in, confirming a production
-Feishu app, the box's model login), then `done` with the `url`, the Agent API's `notes` and what is left for the
-person (`afterwards`: a channel whose Request URL only the console can set, say), or `failed` with why. Fly's
-approval page can show a one-time code instead of finishing: `--check <ticket> --code <code>` hands it over. A second
-`--run --json` while one runs answers with that one's ticket. `--timeout` (default 3600 s) bounds the person's steps,
-never the host's work: a deploy is never cut halfway by it. One that hangs there ends on request,
-`--check <ticket> --stop` (the report's `stop_command`), which can leave the host half-changed. Without `--json` and
-without a terminal (CI), such a step stops the deploy, naming how to give it.
+`deploy`, `secrets`, `logs`, `destroy` and `login --deployment` read no value file by default: pass `--env-file` or
+`--from-env`, and `--config` for the instance.
 
 ## Global options
 
@@ -73,7 +47,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 
 | Option | Commands | Meaning |
 |---|---|---|
-| `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#bind-address). |
+| `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
 | `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
