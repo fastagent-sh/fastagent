@@ -33,7 +33,7 @@ export type SignInMethod = Credential["type"];
 /** One way to sign in to one provider, with what authenticates the provider now. */
 export interface SignInOption {
   provider: string;
-  /** The provider's name: "OpenAI", "OpenAI Codex (legacy)". */
+  /** The provider's name: "OpenAI", "OpenAI Codex". */
   name: string;
   method: SignInMethod;
   /** What signing in this way is called: the provider's own label ("Sign in with ChatGPT"), else a generic one. */

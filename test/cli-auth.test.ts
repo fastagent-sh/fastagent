@@ -89,11 +89,11 @@ describe("logout: removing what login stored, as pi's /logout does", () => {
     const agent = await agentHolding({ "openai-codex": OAUTH, anthropic: { type: "api_key", key: "sk" } });
     const said: string[] = [];
     vi.spyOn(console, "error").mockImplementation((line: unknown) => void said.push(String(line)));
-    await runLogout("OpenAI Codex (legacy)", {});
+    await runLogout("OpenAI Codex", {});
     await runLogout("anthropic", {});
     expect(JSON.parse(await readFile(join(agent, ".secrets", "auth.json"), "utf8"))).toEqual({});
     expect(said).toEqual([
-      `[fastagent] logged out of OpenAI Codex (legacy) — removed from ${join(agent, ".secrets", "auth.json")}`,
+      `[fastagent] logged out of OpenAI Codex — removed from ${join(agent, ".secrets", "auth.json")}`,
       `[fastagent] removed the stored API key for Anthropic from ${join(agent, ".secrets", "auth.json")}; ` +
         "environment variables are unchanged",
     ]);
