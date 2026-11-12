@@ -21,6 +21,11 @@ function refuse(what: string): Error {
   return error;
 }
 
+/** What was refused since the last test, cleared: for the test of this file's own guards. */
+export function takeRefused(): string[] {
+  return refused.splice(0);
+}
+
 function failIfRefused(): void {
   if (refused.length === 0) return;
   const found = refused.splice(0).join("\n\n");
@@ -33,7 +38,8 @@ afterAll(failIfRefused);
 const LOOPBACK = /^(localhost|.*\.localhost|127(\.\d{1,3}){3}|::1|::ffff:127(\.\d{1,3}){3})$/i;
 
 function hostOf(args: unknown[]): string | undefined {
-  const [first, second] = args;
+  // `net.connect` hands `Socket#connect` its arguments already normalized, as one array.
+  const [first, second] = Array.isArray(args[0]) ? (args[0] as unknown[]) : args;
   if (typeof first === "object" && first !== null) {
     const options = first as { host?: string; path?: string };
     return options.path ? undefined : (options.host ?? "localhost");
@@ -42,12 +48,24 @@ function hostOf(args: unknown[]): string | undefined {
   return typeof second === "string" ? second : "localhost";
 }
 
-/** No connection leaves the machine: a test that needs a server serves one on loopback. */
+/**
+ * No connection leaves the machine: a test that needs a server serves one on loopback. A name is judged by the address it
+ * resolves to, since a dispatcher may resolve it to somewhere else (undici's HTTP proxy resolves the origin to the proxy).
+ */
 export function forbidNetwork(): void {
   const connect = net.Socket.prototype.connect;
   net.Socket.prototype.connect = function (this: net.Socket, ...args: unknown[]) {
     const host = hostOf(args);
-    if (host !== undefined && !LOOPBACK.test(host)) throw refuse(`a connection to ${host}, which is not loopback`);
+    if (host !== undefined && net.isIP(host) !== 0 && !LOOPBACK.test(host)) {
+      throw refuse(`a connection to ${host}, which is not loopback`);
+    }
+    if (host !== undefined && net.isIP(host) === 0) {
+      this.once("lookup", (error: Error | null, address: string) => {
+        if (error === null && !LOOPBACK.test(address)) {
+          this.destroy(refuse(`a connection to ${host} (${address}), which is not loopback`));
+        }
+      });
+    }
     return (connect as (...a: unknown[]) => net.Socket).apply(this, args);
   } as typeof connect;
 }
