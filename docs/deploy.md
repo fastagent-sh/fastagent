@@ -57,7 +57,7 @@ fastagent deploy fly --run --config globex.json    # { "name": "globex" }
 
 ## The Agent API
 
-Docker, Fly and Railway serve the [Agent API](SPEC.md#9-http) under `/v1`, behind `FASTAGENT_API_KEY`. When the target
+Docker, Fly and Railway serve the [Agent API](agent-api.md#over-http) under `/v1`, behind `FASTAGENT_API_KEY`. When the target
 has no key, `--run` at a terminal makes one and prints it once. Without a terminal it stops and names
 `fastagent secrets set <host> FASTAGENT_API_KEY --generate`. Check it:
 

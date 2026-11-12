@@ -57,7 +57,7 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 
 Keep `session.id` to continue the conversation. Pass your request's id as `idempotencyKey` so a resend returns the same
 message. Leaving the loop detaches; the agent goes on until `agent.sessions.cancel(sessionId)`. The calls are the
-[Agent API](SPEC.md).
+[Agent API](agent-api.md).
 
 ### Exposing it to your users
 
@@ -80,7 +80,7 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 ```
 
 **One instance is one trust domain**: the agent's tools can reach every session in it. Give users who must not see each
-other an instance each ([security model](SPEC.md#10-security-model)).
+other an instance each ([security model](agent-api.md#security)).
 
 ## 3. Serve its channels and schedules
 

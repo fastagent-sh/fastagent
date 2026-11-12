@@ -317,7 +317,7 @@ export interface LocalAgent extends Agent {
 }
 
 export interface ServeAgentOptions {
-  /** The keys a Caller of the Agent API may present (SPEC.md §9.1). */
+  /** The keys a Caller of the Agent API may present. */
   apiKeys?: readonly string[];
 }
 

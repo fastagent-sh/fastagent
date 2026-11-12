@@ -40,7 +40,7 @@ message.
 | **Instance** | One running copy of the agent, with its own storage, secrets and settings. |
 
 Everything (a channel, a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
-interface, the [Agent API](SPEC.md).
+interface, the [Agent API](agent-api.md).
 
 ## What FastAgent leaves to you
 
@@ -49,7 +49,7 @@ interface, the [Agent API](SPEC.md).
 | host you on a platform or dashboard | it runs locally, inside your app, or in a container on any host |
 | invent a format | it reads `AGENTS.md`, Agent Skills and TypeScript modules |
 | run workflows | the agent decides its own steps; drive fixed sequences from your own queue |
-| manage users | one key guards a whole instance; give each customer an instance ([security model](SPEC.md#10-security-model)) |
+| manage users | one key guards a whole instance; give each customer an instance ([security model](agent-api.md#security)) |
 | tie you to a model or cloud | any provider pi-ai supports, or your own; any host that runs a container |
 
 ## Not built yet

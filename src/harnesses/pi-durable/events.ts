@@ -1,5 +1,5 @@
 /**
- * `sessions.events` (SPEC.md §6.1) over pi-durable's view of one conversation: the entries asked for, a `state`
+ * `sessions.events` over pi-durable's view of one conversation: the entries asked for, a `state`
  * snapshot, then what each commit changes. The view is observed synchronously, one revision per commit, so the
  * replay ends at the first revision's newest entry and the live part, diffed from one revision to the next, starts
  * after it. Every revision is kept: a message that is placed and answered between two reads still gets its `done`.

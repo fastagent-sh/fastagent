@@ -7,7 +7,7 @@ status: current
 # Channel development
 
 A channel is a file in `src/channels/` (or a package such as `fastagent-channel-acme`) that receives a platform's
-events, checks they come from that platform, and sends the agent messages through the [Agent API](SPEC.md). To use the
+events, checks they come from that platform, and sends the agent messages through the [Agent API](agent-api.md). To use the
 built-in ones, see [Channels](channels.md).
 
 ## The module
@@ -35,7 +35,7 @@ What it is handed:
 
 | | |
 |---|---|
-| `agent` | The [Agent API](SPEC.md), in process: besides `messages.send` and `messages.stream`, a channel reads a session (`sessions.entries`, `sessions.events`), finds the message a platform message became (`messages.get` by `idempotencyKey`) and stops the agent (`sessions.cancel`: the built-in channels map a user's "stop" onto it) |
+| `agent` | The [Agent API](agent-api.md), in process: besides `messages.send` and `messages.stream`, a channel reads a session (`sessions.entries`, `sessions.events`), finds the message a platform message became (`messages.get` by `idempotencyKey`) and stops the agent (`sessions.cancel`: the built-in channels map a user's "stop" onto it) |
 | `sessionFor(key, { forkFrom? })` | The session the conversation `key` talks in: the one recorded, or a new one, created and recorded before it is returned. `forkFrom` answers what a new one forks from (a thread's room, say), asked only when `key` has no session yet. Calls for one key are taken one at a time, so two first messages of a new conversation get one session |
 | `recordedSession(key)` | The session recorded for `key`, without making one: what a stop command asks of a place nothing was said in |
 | `turn(place, work)` | `work` run after the route has answered, one at a time per place (a chat, a thread) in the order they arrived, and counted as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which the platform's message id as `idempotencyKey` makes safe |

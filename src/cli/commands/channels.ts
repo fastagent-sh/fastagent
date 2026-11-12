@@ -2,7 +2,7 @@
  * `fastagent channels setup <name>`: set up one channel's platform app for one instance: ask a
  * person for the values only they have, check them with the platform, and keep them in the instance's value file.
  * With `--record-url`: record, in the configuration a deploy delivers, the URL a person set on a Slack or Lark app's
- * page, once the deployment confirms the platform reaches it there (§5).
+ * page, once the deployment confirms the platform reaches it there.
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";

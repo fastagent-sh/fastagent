@@ -11,14 +11,16 @@ Agent API.
   `src/index.ts` (the package), `src/agent-api.ts` (the Agent API), `src/http/contract.ts` (the API over HTTP) and
   `src/cli/program.ts` (the CLI).
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
-  (`docs/SPEC.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
+  (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
   state file, call order or history.
 - When a doc and the code disagree, the code is right. Fix the doc or delete the passage. A change in what a user does
   or sees updates its guide in the same PR. A CLI command's flags are its `--help`, generated from `src/cli/program.ts`.
 - Do not commit design notes, plans, measurements or progress logs. They go in the PR description. Anything that
   stays true goes into the code: a name, a header, a test.
-- The Agent API's semantics change only by explicit decision. `test/agent-api-conformance.ts` holds the code to
-  `docs/SPEC.md`.
+- There is no specification document: one implementation and the client it ships need none. The Agent API is
+  `src/agent-api.ts` and `src/http/contract.ts`; what it promises is `docs/agent-api.md`, and
+  `test/agent-api-conformance.ts` and `test/http-api.test.ts` test those promises. Changing them is an explicit
+  decision. A second implementation is when a specification would earn its place.
 
 ## Decisions the code cannot show
 

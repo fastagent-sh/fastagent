@@ -111,7 +111,7 @@ One branch = one focused change. If a branch grows several unrelated changes, sp
 A maintainer is a collaborator with write or admin access. The project is open source: every change lands through a reviewed PR, without exception.
 
 - **Merging is an explicit maintainer decision.** A maintainer decides to land a PR; branch protection makes sure CI is green when it does. An agent opens the PR, reports its local check result and stops. It runs `gh pr merge <N> --squash --auto` only when a maintainer says so, and returns without waiting for CI.
-- Maintainer-authored PRs require green CI before merging. Review by a second maintainer is recommended for SPEC and public API changes.
+- Maintainer-authored PRs require green CI before merging. Review by a second maintainer is recommended for changes to the Agent API or the public exports.
 - A PR from an external contributor must be reviewed and merged by a maintainer; external contributors do not have merge permission.
 - `CODEOWNERS` routes changes to the relevant maintainers.
 

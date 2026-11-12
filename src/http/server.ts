@@ -1,5 +1,5 @@
 /**
- * The Agent API served over HTTP (SPEC.md §9): the contract's routes answered by an in-process Agent, behind the
+ * The Agent API served over HTTP: the contract's routes answered by an in-process Agent, behind the
  * instance's keys. A Fetch handler, so it mounts beside the channels' routes on whatever server serves them.
  */
 import * as ByteSize from "effect/ByteSize";
@@ -26,7 +26,7 @@ import {
   SessionEventFrame,
 } from "./contract.ts";
 
-/** The instance's keys: several, separated by commas, so a key is replaced without a gap (§9.1). */
+/** The instance's keys: several, separated by commas, so a key is replaced without a gap. */
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
 /**
@@ -47,11 +47,11 @@ export function apiKeysFrom(value: string | undefined): string[] {
 }
 
 const MAX_BODY = ByteSize.mebibytes(32);
-/** Proxies close a connection that says nothing for a minute or so; a comment keeps an event stream open (§9.3). */
+/** Proxies close a connection that says nothing for a minute or so; a comment keeps an event stream open. */
 const KEEP_ALIVE_MS = 15_000;
 /** A stream told to end does in a millisecond; this bounds the wait for one whose Caller stopped reading. */
 const STREAMS_END_MS = 100;
-/** How soon a refused Caller may try again; the same for every refusal that says so (§9.4). */
+/** How soon a refused Caller may try again; the same for every refusal that says so. */
 const RETRY_AFTER_SECONDS = "1";
 
 export interface ApiHandler {
@@ -232,7 +232,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("events", ({ params, query, headers }) =>
         serverSent("sessions.events", SessionEventFrame, () =>
-          // An EventSource reconnects to the URL it opened and says where it got to in this header (§9.3).
+          // An EventSource reconnects to the URL it opened and says where it got to in this header.
           agent.sessions.events(params.sessionId, { after: headers["last-event-id"] ?? query.after }),
         ),
       )

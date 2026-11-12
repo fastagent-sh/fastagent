@@ -32,12 +32,12 @@ import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 
 /**
  * What a turn reads, in order: the message as it was recorded, or why there is none (`rejected`), then the events of
- * its session that belong to it through its `done` (SPEC.md §6.2).
+ * its session that belong to it through its `done`.
  */
 export type TurnEvent = { type: "rejected"; error: AgentErrorData } | MessageStreamEvent;
 
 /**
- * A turn that steers its message into a running session (SPEC.md §5.3) instead of queueing it behind the turn before,
+ * A turn that steers its message into a running session instead of queueing it behind the turn before,
  * and what it tells the runner about that message.
  */
 export interface SteeredTurn {
