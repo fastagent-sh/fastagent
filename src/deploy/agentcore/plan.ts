@@ -95,7 +95,7 @@ export function recurringSchedulePrefix(name: string): string {
 export function deploymentBucketName(name: string, account: string): string {
   return `fa-${name}-${account}`;
 }
-/** The Secrets Manager secret holding a deployment's values: one JSON object of NAME → value (agent-artifact.md §6.2). */
+/** The Secrets Manager secret holding a deployment's values: one JSON object of NAME → value. */
 export function agentcoreSecretName(name: string): string {
   return `fastagent/${name}`;
 }
@@ -105,7 +105,7 @@ export const SECRET_ARN_ENV = "FASTAGENT_SECRET_ARN";
 
 /**
  * What the runtime's environment variables may add up to, as keys and values in UTF-8 bytes. AWS's quota says 4 KB
- * and its template reference says 2048 without a unit; neither is measured here (configuration-layout.md §7), so
+ * and its template reference says 2048 without a unit; neither is measured here, so
  * this is the first, taken as the whole set's.
  */
 export const AGENTCORE_VARIABLES_LIMIT = 4096;

@@ -169,7 +169,7 @@ tool call launches a browser implicitly.
 
 A host can supply its own `McpGrantStore`, for example over encrypted application storage. Its `withGrant` operation must
 serialize every caller sharing a grant, including distinct store objects. Writes inside the scope must be durable as
-soon as they resolve, and must not roll back if a later step fails. See the [grant-store contract](design/mcp-auth.md).
+soon as they resolve, and must not roll back if a later step fails.
 `list()` exposes summaries, while `read()` and the exclusive access methods handle secret records and belong only in the
 trusted host process. There is no automatic global-account fallback.
 

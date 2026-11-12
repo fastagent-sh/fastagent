@@ -1,6 +1,6 @@
 /**
  * A schedule: a prompt the definition runs on a cron, written in TypeScript as `defineSchedule` in `src/schedules/`
- * (architecture.md §2), its name its file's. It is code, so it changes with a build and a deployment; the clock that
+ *, its name its file's. It is code, so it changes with a build and a deployment; the clock that
  * fires it is scheduler.ts, or on AgentCore the recurring EventBridge schedule the container sets (wake-alarm.ts).
  *
  * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts). A

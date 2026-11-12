@@ -1,6 +1,6 @@
 /**
- * A channel the development instance has no credentials for yet is set up the first time `dev` runs (channel-setup.md
- * §2), the way the first run picks a model: in the parent process, at a terminal, once per project. Without a terminal
+ * A channel the development instance has no credentials for yet is set up the first time `dev` runs,
+ * the way the first run picks a model: in the parent process, at a terminal, once per project. Without a terminal
  * nothing is asked and nothing waits: the command that does it for a coding agent is named.
  */
 import { codeSecrets } from "../harnesses/pi-durable/definition.ts";

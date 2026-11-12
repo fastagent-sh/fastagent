@@ -1,7 +1,7 @@
 /**
  * The ids the Agent hands out: the storage's incarnation, then pi-durable's id. pi-durable counts ids per storage and a
  * new storage counts from the start again, so an id kept from a storage that is gone must not name what the new one
- * gives the same number (architecture.md §2). An encoding, not a lookup: nothing is stored per id.
+ * gives the same number. An encoding, not a lookup: nothing is stored per id.
  */
 import { randomBytes } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";

@@ -16,7 +16,7 @@ FastAgent is the serving layer for local agent directories. It takes a directory
 4. Pick the integration path you need: [Embedding](embedding.md) or [Channels](channels.md).
 5. Ship the directory with [Deploy](deploy.md) when the agent should run on a host.
 
-Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGENTS.md` and the maintainer notes below describe FastAgent development, not how to author an agent.
+Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGENTS.md` and `CONTRIBUTING.md` are about developing FastAgent itself; its code is the only description of how FastAgent works inside.
 
 ## Guides
 
@@ -58,22 +58,5 @@ Give a coding agent the same [`ai-start.md`](ai-start.md). The repository's `AGE
 - **Channels are adapters.** A channel receives external events (Telegram, Slack, a webhook, …), verifies its platform, sends the agent messages, and returns host-specific responses.
 - **The instance holds the state.** Sessions live in its storage (`.state/agent.sqlite`), credentials in `.secrets/`; neither is part of the agent definition.
 - **Small core, typed edges.** One API, in process and over HTTP, app-level composition, and validation at the boundaries.
-
-## Maintainer notes
-
-These are not required to use FastAgent, but they explain public architecture decisions and tradeoffs:
-
-| Document | Purpose |
-|---|---|
-| [Design notes](design/README.md) | What belongs in public design docs |
-| [Architecture](design/architecture.md) | One harness (pi-durable), one API, the definition and its assembly, the artifact, context packages, and hosts |
-| [Core design](design/core.md) | The code as it is now: the agent directory and its content, the assembly onto pi-durable, channels, schedules, state, and deployment |
-| [Where configuration, secrets and credentials live](design/configuration-layout.md) | **Proposed.** The named instance with one committed configuration file, delivered to a host as variables so one image serves every instance; secrets, local `.env` and credentials |
-| [Deployment and credential ownership](design/configuration.md) | The convention boundary, the order a deployment follows, and why a model credential is created on the deployment |
-| [Distribution and provenance](design/distribution.md) | Why an agent directory has no manifest, and where a vendored skill's origin should be recorded |
-| [Participant model](design/participant-model.md) | When a chat channel speaks, where it answers, and what it remembers — the authority behind Feishu/Lark and Slack routing |
-| [Place history](design/place-history.md) | In progress: what a chat place said, read from the platform when a turn needs it instead of copied into a buffer |
-| [Channels across environments](design/channel-environments.md) | A deployment receives Feishu/Lark by webhook by default and `dev` keeps WebSocket (`channels.<name>.ingress`); one app serves one environment at a time until per-environment apps (#749) |
-| [Security boundary](design/security-boundary.md) | What a serve exposes (routes that verify their caller, and the Agent API behind the instance's keys), and why an instance is one trust domain, so people who must be kept apart get an instance each |
 
 For contribution workflow, see [../CONTRIBUTING.md](../CONTRIBUTING.md).

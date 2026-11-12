@@ -1,5 +1,5 @@
 /**
- * What `dist/` is, as a project and an opener both see it (agent-artifact.md §3.4): which of the project's files go
+ * What `dist/` is, as a project and an opener both see it: which of the project's files go
  * into it, the fingerprint the build records of what it read, and the opener that refuses a `dist/` the project has
  * moved on from.
  */

@@ -1,5 +1,5 @@
 /**
- * A Feishu/Lark place's history, read from `im/v1/messages` when a turn runs (docs/design/place-history.md). What a
+ * A Feishu/Lark place's history, read from `im/v1/messages` when a turn runs. What a
  * place remembers between turns, and what a read leaves out, is the kit's (`createPlaceHistory`); this is the read:
  * newest first up to the turn's own ask (`end_time` in seconds, then `(create_time, message_id)`), back to where its
  * session last read to, with senders named from the chat's members.

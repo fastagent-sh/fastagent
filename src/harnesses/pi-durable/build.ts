@@ -1,5 +1,5 @@
 /**
- * `fastagent build` (agent-artifact.md §3.4): a source project compiled into `dist/`, a package that holds everything
+ * `fastagent build`: a source project compiled into `dist/`, a package that holds everything
  * an open reads and nothing of the machine that built it. The project's own TypeScript compiles it, per file and
  * unbundled, with the options FastAgent sets; the text and resources are copied; the entry is generated, the
  * definition's modules as static imports.

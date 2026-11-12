@@ -15,7 +15,7 @@ both run the **same** agent.
 
 - **Node ≥ 24.15** (or Bun ≥ 1.4). Ships compiled JS + types; no build step for FastAgent itself.
 - **Install as a dependency** of your app: `npm i @fastagent-sh/fastagent`. The agent directory has its own
-  `package.json` too ([init](cli.md#fastagent-init)); keep the versions aligned.
+  `package.json` too ([init](cli.md#commands)); keep the versions aligned.
 - **Model credentials**: a provider API key in `secrets` (e.g. `OPENAI_API_KEY`), a `credentials` store of your own, or
   an `auth.json` in the instance's state directory. `fastagent login` writes the project's `.secrets/auth.json`, which
   an app's instance does not read. See [Auth](#4-auth).
@@ -41,7 +41,7 @@ interface Agent {
 
 `send` answers once the message is recorded, and with `wait` (seconds) once it has ended: its `status`, and its
 `answer`. A message for a busy session queues behind the ones before it. A refused operation rejects with an
-`AgentError`. See the [API reference](api-reference.md#the-agent-api).
+`AgentError`. See the [Agent API](SPEC.md).
 
 ## 1. Open the agent
 
@@ -132,7 +132,7 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 **An instance is one trust domain.** The agent's tools reach every session of its instance, whichever user asked, so
 keeping users apart by session id works only for an agent whose tools reach neither its storage nor its files. Users
 who must not see each other's conversations get an instance each
-([security boundary](design/security-boundary.md#3-people-who-must-be-kept-apart)).
+([security model](SPEC.md#10-security-model)).
 
 ## 3. The whole agent, as a service
 
@@ -247,7 +247,7 @@ try {
 const agent = await openAgent(definition, { root, credentials });
 ```
 
-Every store is FastAgent's own type; see the [API reference](api-reference.md#what-a-host-embedding-agents-needs).
+Every store is FastAgent's own type, declared in the package.
 
 ## 5. Your own model source
 
@@ -306,4 +306,3 @@ level `.env` may set, the dev watcher, the port, the signal handlers). The agent
 - [Agent API](SPEC.md): the API the whole thing rests on.
 - [API reference](api-reference.md): every export.
 - [quickstart](quickstart.md): the CLI path (`init` / `dev` / `start`).
-- [core design](design/core.md): how a directory is opened onto pi-durable.

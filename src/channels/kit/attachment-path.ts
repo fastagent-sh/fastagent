@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 /**
  * THE inbound-attachment root inside a channel's state home. One spelling because three channels write here and a
  * conversation id becomes a directory under it; nothing else reads it, and nothing removes it — an attachment is
- * durable conversation data, and this directory grows with the agent's inbound traffic (docs/design/core.md §9).
+ * durable conversation data, and this directory grows with the agent's inbound traffic.
  */
 export const attachmentsDir = (stateHome: string): string => join(stateHome, "files");
 

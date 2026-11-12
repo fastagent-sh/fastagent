@@ -1,5 +1,5 @@
 /**
- * The definition's text (architecture.md §3) and the instance's (agent-artifact.md §4.2), read for each request so an
+ * The definition's text and the instance's, read for each request so an
  * edit takes effect on the next answer: `SYSTEM.md` and `AGENTS.md` as prompt sections, `skills/` as Agent Skills
  * (agentskills.io) and `prompts/` as prompt templates, each with the files and directories the instance adds
  * (text-sources.ts). A skill is loaded as pi does it: the prompt lists each one's name, description and location, the model
@@ -361,7 +361,7 @@ function contentKind(c: ResolvedContent): string {
 }
 
 /**
- * Where the agent is and what it works on (agent-model.md §4): its own directory is itself, and each content entry is named
+ * Where the agent is and what it works on: its own directory is itself, and each content entry is named
  * with its location and where a change there goes. A result written where it does not last is how knowledge gets
  * lost, so the agent is told which is which.
  */

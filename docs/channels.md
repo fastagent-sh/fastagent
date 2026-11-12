@@ -78,7 +78,7 @@ through the two promises.
 **A channel MUST verify its caller**, by checking the platform's signature or secret
 (`X-Telegram-Bot-Api-Secret-Token`, Slack's `v0` HMAC, Feishu's token and signature). A serve has no API and no
 authentication of its own: its routes are the channels' and `GET /health`, so a custom channel that verifies nothing
-can be driven by anyone who finds its URL ([security boundary](design/security-boundary.md)).
+can be driven by anyone who finds its URL.
 
 Rename a channel file to e.g. `telegram.ts.disabled` to keep it without mounting it. A channel that fails to load, or
 collides with another channel's route, makes `dev` / `start` fail.

@@ -1,5 +1,5 @@
 /**
- * The MCP servers an instance opens (agent-artifact.md §3.3, §4.2): the program's, the `mcpServers` map of its
+ * The MCP servers an instance opens: the program's, the `mcpServers` map of its
  * `context.json`, and what the instance adds, the `mcpServers` map of its `fastagent.json`. One list, read once, that
  * every reader (the open, `inspectMcp`, sign-in, the secrets list, the build's warning) is given.
  */

@@ -1,5 +1,5 @@
 /**
- * An instance's instructions, skills and prompt templates (agent-artifact.md §4.2, §7): what its configuration declares
+ * An instance's instructions, skills and prompt templates: what its configuration declares
  * is read for each message and nothing else is, and a declaration the program's own text or another entry's name
  * contradicts refuses the open.
  */

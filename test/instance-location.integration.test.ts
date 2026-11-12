@@ -1,5 +1,5 @@
 /**
- * Where an instance is, as a command's flags and the environment place it (agent-artifact.md §4.1): the resolvers'
+ * Where an instance is, as a command's flags and the environment place it: the resolvers'
  * precedence, and that each command that opens or reads an instance follows them. The merge of what the configuration
  * says is config.test.ts's.
  */

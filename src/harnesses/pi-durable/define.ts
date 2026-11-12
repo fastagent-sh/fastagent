@@ -1,5 +1,5 @@
 /**
- * What an agent's author writes (architecture.md §3): `defineAgent()` in `fastagent.config.ts`, `needs()` around the
+ * What an agent's author writes: `defineAgent()` in `fastagent.config.ts`, `needs()` around the
  * code that reads a secret, and `defineSchedule()` in `src/schedules/`. Each returns what it was given, typed; the
  * assembly (open.ts) reads them back.
  */
@@ -8,7 +8,7 @@ import type { Schema } from "@earendil-works/pi-schema";
 import { isEnvName } from "../../declared-secrets.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
-/** What an instance may set over the program's `defaults`, and what a program's `defaults` are (agent-artifact.md §3.2). */
+/** What an instance may set over the program's `defaults`, and what a program's `defaults` are. */
 export interface AgentDefaults<Settings = unknown> {
   /** Example first messages a client may offer as drafts, up to six: `info().starters`. */
   starters?: readonly string[];

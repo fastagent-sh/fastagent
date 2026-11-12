@@ -1,5 +1,5 @@
 /**
- * Where a NEW thread starts from (docs/design/place-sessions.md): a fork of the session that holds the message the
+ * Where a NEW thread starts from: a fork of the session that holds the message the
  * thread was opened on, at the exchange that message belongs to, or an empty session when nothing names one. A thread
  * that already exists is left alone.
  *

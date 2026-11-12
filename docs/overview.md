@@ -64,7 +64,7 @@ FastAgent stays a small serving layer, so it never dictates your stack. Capabili
 - **No platform to move to**: no dashboard, no hosted control plane, no runtime you deploy *into*; run it locally, embed it, or ship the directory to any host.
 - **No new format or DSL**: `AGENTS.md`, Agent Skills, TypeScript modules; FastAgent consumes the standards you already use, not a parallel ecosystem.
 - **No workflow engine**: the agent decides its own steps; for deterministic orchestration, send messages from your own queue or workflow.
-- **One key, no auth system**: a served agent answers its channels, which verify their platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`, behind one key for the whole instance that keeps everyone but its customer out. Users, roles and per-session access are the app's, in its own routes over the Agent API ([security boundary](design/security-boundary.md)).
+- **One key, no auth system**: a served agent answers its channels, which verify their platform, and, given `FASTAGENT_API_KEY`, the Agent API under `/v1`, behind one key for the whole instance that keeps everyone but its customer out. Users, roles and per-session access are the app's, in its own routes over the Agent API ([security model](SPEC.md#10-security-model)).
 
 ## Two main use cases
 
@@ -101,28 +101,6 @@ fastagent add slack && fastagent channels setup slack
 fastagent add feishu && fastagent channels setup feishu   # 飞书; Lark international: lark
 ```
 
-## Documentation map
-
-| If you want to… | Read |
-|---|---|
-| Develop an agent from responsibilities through verification | [Agent development guide](ai-start.md) |
-| Get running quickly | [Quickstart](quickstart.md) |
-| Configure an agent | [Configuration](configuration.md) |
-| Understand design choices | [Design principles](principles.md) |
-| Use CLI commands | [CLI reference](cli.md) |
-| Embed in an app | [Embedding](embedding.md) |
-| Add webhooks/bots | [Channels](channels.md) |
-| Run the agent on a cron / let it wake itself | [Quickstart §8](quickstart.md#8-run-on-a-clock), [CLI reference](cli.md) |
-| Ship to Fly, Railway, AWS Bedrock AgentCore, or any Docker host | [Deploy](deploy.md) |
-| Use Telegram bots | [Telegram channel](telegram.md) |
-| Use Slack apps | [Slack channel](slack.md) |
-| Use Feishu bots / Lark compatibility | [Feishu channel (Lark compatibility)](feishu.md) |
-| Build a channel adapter | [Channel development](channel-development.md) |
-| Look up public TypeScript exports | [API reference](api-reference.md) |
-| Fix common issues | [Troubleshooting](troubleshooting.md) |
-| Look up the Agent API | [Agent API SPEC](SPEC.md) |
-| Understand implementation tradeoffs | [Design notes](design/README.md) |
-
 ## Current status
 
 Implemented today:
@@ -141,5 +119,5 @@ Implemented today:
 
 Not implemented yet:
 
-- Context packages ([architecture.md](design/architecture.md) §4).
+- Context packages.
 - One instance spread over several processes (one process holds an instance's storage).

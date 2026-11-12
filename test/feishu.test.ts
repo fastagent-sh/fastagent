@@ -488,7 +488,7 @@ describe("turn flow", () => {
     expect(calls[1]?.prompt.text).not.toContain("recent discussion here");
   });
 
-  // ── The participant model's summon rule (docs/design/participant-model.md §3) ────────────────────
+  // ── The participant model's summon rule ────────────────────
   //
   // The agent speaks unprompted only where it takes part AND exactly one human does. Participation is
   // bootstrapped the way a user does it: @ the bot inside a thread once; every later bare message in

@@ -145,7 +145,6 @@ where your framework routes them, or a server of its own (`listen`) ([Embedding]
 | [API reference](https://fastagent.sh/docs/api-reference/) | Public TypeScript API reference |
 | [Troubleshooting](https://fastagent.sh/docs/troubleshooting/) | Common setup/runtime issues |
 | [Agent API SPEC](https://fastagent.sh/docs/spec/) | The Agent API every Caller uses |
-| [Core design](https://fastagent.sh/docs/design/core/) | Maintainer architecture notes |
 
 ## Public API surface & stability
 

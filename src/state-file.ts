@@ -2,7 +2,7 @@
  * A Caller's durable state under the state root, with no cross-instance locking: a channel's files are in its own
  * directory (`<stateRoot>/channels/<the channel file's name>/`) and the schedules' in `schedule/`, so what must not
  * happen is two processes serving the SAME channel — which also means one ingress credential in two places, and no
- * local guard can see that (docs/design/core.md §9).
+ * local guard can see that.
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic-write.ts";

@@ -188,4 +188,3 @@ clock would fire it, `fastagent schedules run <name>`. Agents can also schedule 
 - [Channels](channels.md) — webhook and bot adapters.
 - [Deploy](deploy.md) — ship the directory to Fly, Railway, AWS Bedrock AgentCore, or any Docker host.
 - [Agent API SPEC](SPEC.md) — the API every Caller uses.
-- [Core design](design/core.md) — maintainer architecture notes.

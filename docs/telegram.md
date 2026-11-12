@@ -102,7 +102,7 @@ A slash command does **not** summon in a group (bare or directed like `/cmd@botn
 
 A group's main timeline is one conversation per sender (`<chat>#<sender>`), each with a session of its own, and a topic (`<chat>:<thread>`) is one shared conversation. A sender is told what the others said (the buffer below) and what the agent answered them, attributed, but another sender's request is not part of their task. To keep it coherent:
 
-- **A reply belongs to the session of the message it replies to.** A reply in a group's main timeline to an answer, or to a request the agent took, is steered into the session that holds it, whoever sends it: Carol replying "what time?" to Bob's answer reaches Bob's session. The channel remembers the most recent ~1000 such messages (`owners.json`); a reply to anything else, or to a message older than that, is an ordinary message of its sender. A topic and a private chat have one session already.
+- **A reply belongs to the session of the message it replies to.** A reply in a group's main timeline to an answer, or to a request the agent took, is steered into the session that holds it, whoever sends it: Carol replying "what time?" to Bob's answer reaches Bob's session. The channel remembers the most recent ~1000 such messages; a reply to anything else, or to a message older than that, is an ordinary message of its sender. A topic and a private chat have one session already.
 - **A stop is the sender's own.** `/stop` stops the sender's session in a group's main timeline, not another sender's task.
 - **Steered turns.** A summon that lands while the session is busy is sent at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its next step, after its current tool calls. If it takes it before the run ends, the two messages end with one shared answer, which is delivered once; a message taken after the run ended gets its own answer. In a group the answer quotes the first asker's message, so a later asker whose input was answered with it gets a short "Answered together with an earlier message above" reply under their own message. The discussion a steered input would fold is read once, by the turn that started first; what arrived since is read by the next turn. While an input waits for that answer, the bot marks its message with 👀 and replaces it with 👌 when it is answered (a failed turn clears the mark); Telegram does not let a bot react with ✅, and the first message of a run shows its own preview instead. Different conversations run in parallel.
 - **Sender attribution.** Each message is prefixed with its sender, and a group is flagged in the prompt, so the model can tell participants apart and answer "summarize the discussion".
@@ -169,8 +169,7 @@ Telegram Threaded Mode is handled automatically:
   on behalf of the group carries a fake `from` that is the same for every such admin, so they share one session,
   `<chat>#<that id>`, and can hold each other up like any one sender's follow-ups.
 
-Each conversation has its own session, which the channel creates the first time it is asked there and records in
-`<state root>/channels/telegram/sessions.json`. A new topic starts a session of its own.
+Each conversation has its own session, which the channel creates the first time it is asked there. A new topic starts a session of its own.
 
 Replies are sent back to the same thread unless `route` overrides `threadId`.
 
@@ -232,32 +231,14 @@ Telegram media are handled by the channel before the agent turn runs.
 
 Downloaded files are kept: the path the agent was given stays readable for as long as the conversation can refer back to it, and nothing removes them. Treat `<state root>/channels/telegram/` like session state — git-ignored machine state that wants a volume, and a cleanup policy you choose, on a long-running bot that receives a lot of files.
 
-## State & restarts
+## Restarts and stored data
 
-The channel persists its state under `<state root>/channels/telegram/`:
-
-- `buffers/<chat>.json` — the group-context buffer, one file per chat (the chat id URL-encoded), written before each webhook ACK: that chat's un-summoned messages from the last 14 days (each with the time it was said) and the newest message the 14 days dropped. A push rewrites only its own chat's file, so what it costs depends on that chat and not on how many chats the bot is in. A file that cannot be read as a chat's record, an older shape included, is ignored with a warning and that chat starts empty. A chat's file is also tidied of what has expired when another chat's push comes at least an hour after the last tidy; one whose rewrite failed is left as it was, said in the log, and tried again at the next tidy. A chat with nothing left keeps its note of what it lost for one more 14 days, then its file is removed, so a bot does not keep a file for every chat it has ever seen.
-- `asks.json` — per conversation and chat, its newest asks (message key and the message's id, which counts only within its chat); the Agent says which one the session holds, and a turn's fold starts after it. A `buffers.json` entry of an older shape (no message id) costs only its own chat's buffer.
-- `sessions.json` — which session each conversation talks in.
-- `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run.
-- `files/c-<chat>/` — downloaded inbound files, one directory per chat. Kept across restarts, and never pruned by FastAgent (see above).
-
-Each accepted turn is recorded in `turns.json` before the webhook ACK, and the answers already delivered in `delivered.json`:
-
-- A crash or rolling deploy mid-turn replays the turn on the next start. Its message was sent with the update's id as
-  its key, so the replay finds the message already sent and reads its end rather than sending it again; the agent
-  answers an accepted message after a restart too. In a narrow pre-ACK window a turn can still be accepted twice, and
-  a message the agent was answering when the process died may run its tools again: this is **at-least-once**.
-- A turn interrupted repeatedly is dropped after a few attempts and its asker is told to ask again (or, if its
-  answer was already recorded, the answer is sent).
-- An answer produced but not delivered is re-sent on the next start without re-running the model. When Telegram
-  cannot confirm a send, it may be sent twice rather than lost.
-- If a state write fails (disk full), the turn is deferred to the next start, which can reorder it after later
-  turns.
-
-Exactly-once execution is not provided.
-
-The state home lives under `.state/`, which the agent `.gitignore` excludes, so buffered chat content is not committable.
+- A message accepted before a restart or a deploy is answered after it, and an answer made but not delivered is sent
+  then without asking the model again. Delivery is at least once: a tool may run twice, and an answer may arrive twice
+  rather than not at all. A turn interrupted again and again is dropped, and its asker is told to ask again.
+- The channel's state is under `<state root>/channels/telegram/`: machine state, git-ignored, that wants a volume.
+  Downloaded files are kept there and never pruned; size and prune it yourself.
+- One process owns the state root: a second `dev` or `start` of the same agent is refused.
 
 **What stays where, and for how long.** The buffer is a copy of what Telegram will not show a bot again, kept only so a later ask can read what was said before it. It is not the chat's history: the Bot API has no way to read that, and FastAgent does not become its store.
 
@@ -269,7 +250,7 @@ The state home lives under `.state/`, which the agent `.gitignore` excludes, so 
 | Docker, Fly, Railway | the `/data` volume | across deploys and restarts |
 | AgentCore | managed storage at `/mnt/data` | reset by every deploy: the buffer and the sessions go together |
 
-A person who asks the bot to forget what a group said cannot do it from the chat: delete `buffers/` (or one chat's file in it) and, for what a turn already folded, the session in the instance's storage. A corrupt `buffers.json` or `turns.json` logs a warning and starts empty — the bot boots, the loss is visible. One process owns the state root: a second `dev` or `start` of the same agent is refused.
+A person who asks the bot to forget what a group said cannot do it from the chat: delete `buffers/` (or one chat's file in it) and, for what a turn already folded, the session in the instance's storage.
 
 ## Sending messages and files back (`telegram-send`)
 

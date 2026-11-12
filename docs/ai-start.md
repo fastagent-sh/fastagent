@@ -283,7 +283,7 @@ stderr, and exits non-zero unless the message completed: verify the tool use and
 `--json` prints the message's events as JSON lines instead (each tool call with its arguments and result, then the
 outcome), for a check that asserts on them. Every run prints its session's id; `--session <id>` sends the next message into it, for
 behavior that needs a second message. It opens the agent on storage of its own, so it runs beside a `dev` of the same agent
-([CLI](cli.md#fastagent-invoke)). For continuous local
+([CLI](cli.md#commands)). For continuous local
 development, ask the owner to run:
 
 ```bash
@@ -320,8 +320,8 @@ answer, your run cannot) and it exits 2 instead, naming `channels setup <name> -
 with the address, what to write where, and a `check_command`; relay it, wait for the owner to say it is done, and run
 the command it names. The setup's ticket ends `done` with the variables it wrote, the next steps, and what is left for
 the owner (such as publishing a version, in `next_steps`). Never ask for a token in the conversation: the response names
-the file or page the owner enters it in ([`fastagent channels setup`](cli.md#fastagent-channels-setup),
-[`fastagent add`](cli.md#fastagent-add-telegramslackfeishulark)).
+the file or page the owner enters it in ([`fastagent channels setup`](cli.md#commands),
+[`fastagent add`](cli.md#commands)).
 
 After owner-approved setup, run `fastagent dev --no-input`: Telegram, Slack and Feishu/Lark receive over a connection the process
 opens, so no tunnel is needed (`dev --tunnel` is for trying a webhook path, with a channel set to `webhook`). Confirm
@@ -417,7 +417,7 @@ separate scheduler. Nothing in the assembly isolates the process.
 One agent instance is one trust domain. Recording which user owns which session does not keep users apart: the
 coding tools (`read`, `bash`) reach every session in the instance's storage, whichever user's message asked them to.
 Users who must not see each other's conversations get an instance each, or an agent without tools that reach its
-instance's storage and files ([security boundary](design/security-boundary.md#3-people-who-must-be-kept-apart)).
+instance's storage and files ([security model](SPEC.md#10-security-model)).
 
 ## 9. Deploy and preserve the right data
 

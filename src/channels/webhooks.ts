@@ -1,5 +1,5 @@
 /**
- * A serve pointing its platforms at itself (SPEC.md §8, `Service.registerWebhooks`; channel-setup.md §5): which of its
+ * A serve pointing its platforms at itself (SPEC.md §8, `Service.registerWebhooks`): which of its
  * channels take a webhook, the step a person takes for each one the instance cannot set, and the registration that
  * sets what the app's own credentials can set, on every call and without reading it first.
  */

@@ -21,7 +21,7 @@ const policy: Pick<SlackChannelOptions, "rendering" | "onError"> = {
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: a generic greeting)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
   // An answer attaches to its question with a thread (Slack has no quote primitive), and that thread is
-  // one conversation, with a session of its own: see docs/design/participant-model.md.
+  // one conversation, with a session of its own.
   // Dev/personal bot: surface raw errors. Remove this for a customer-facing bot; details remain in logs.
   onError: (failed) => `⚠️ ${failed.details}`,
 };

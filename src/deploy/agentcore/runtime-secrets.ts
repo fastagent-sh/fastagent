@@ -1,6 +1,6 @@
 /**
  * What the AgentCore container does with its deployment's values: read the Secrets Manager secret `FASTAGENT_SECRET_ARN`
- * names and put each name it holds into the environment (agent-artifact.md §6.2).
+ * names and put each name it holds into the environment.
  *
  * The runtime has no way to reference a secret from an environment variable, so the container reads it itself, on its
  * first invocation. Its credentials are the execution role's, from the microVM's instance-metadata service (IMDSv2); the

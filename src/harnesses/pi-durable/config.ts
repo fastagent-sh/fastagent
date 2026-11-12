@@ -1,5 +1,5 @@
 /**
- * The configuration of an instance (agent-artifact.md §3.2, §4.2): what the program declares as its `defaults` and
+ * The configuration of an instance: what the program declares as its `defaults` and
  * its `settings` schema, what an instance sets over them, and the one value they resolve to, each leaf with the place
  * it came from. One JSON Schema describes the shape: it checks the program's defaults and an instance's file alike,
  * and `fastagent build` publishes it as `fastagent.schema.json`.

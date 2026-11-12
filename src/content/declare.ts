@@ -3,7 +3,6 @@
  * the program's `context.json`, which holds only repositories every instance reaches, and the `content` map of an
  * instance's `fastagent.json`, which adds repositories and directories of its own. An instance only adds: a name the
  * program declares is not one it may take. Pure: what is on the disk is resolve.ts's question.
- * docs/design/agent-artifact.md §3.3 and §4.2 are the rule.
  */
 import { CONTEXT_FILE, configurationPath } from "../paths.ts";
 

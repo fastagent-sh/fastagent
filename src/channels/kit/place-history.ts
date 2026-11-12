@@ -1,6 +1,6 @@
 /**
  * What a turn learns about its place (a chat, or a thread in one) beyond its own ask — and the fold that renders it,
- * shared by every channel whose platform can be read (docs/design/place-history.md).
+ * shared by every channel whose platform can be read.
  *
  * Two sources fill a turn's discussion: the context buffer (`context-buffer.ts`), for a platform with no history read,
  * and the place's own history, read from the platform when the turn runs ({@link createPlaceHistory}). Neither keeps a
@@ -114,7 +114,7 @@ export interface PlaceHistory<C> {
 }
 
 /**
- * A place's history read from its platform (docs/design/place-history.md): what was said in a chat or a thread since
+ * A place's history read from its platform: what was said in a chat or a thread since
  * the ask its session was last sent, up to the turn's own ask. The platform owns the read; this owns the messages a
  * conversation's turns posted into the place (`recordOutput`: answers, stop feedback), which that conversation's read
  * leaves out because its session holds them. Everything else stays, other people's asks and the answers to them

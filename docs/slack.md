@@ -175,8 +175,7 @@ Bot messages, edits, deletes, hidden events, and service subtypes are ignored. `
 `thread_broadcast` are new human content and remain eligible. Overlapping `app_mention` and `message.*`
 deliveries are deduplicated by logical message identity `(team, channel, ts)`, not only `event_id`.
 
-Default conversations, each with a session of its own, which the channel creates the first time it is asked there and
-records in `<state root>/channels/slack/sessions.json`:
+Default conversations, each with a session of its own, which the channel creates the first time it is asked there:
 
 | Message | Conversation |
 |---|---|
@@ -187,7 +186,7 @@ records in `<state root>/channels/slack/sessions.json`:
 
 There are no session modes. Slack has no quote primitive, so the only way to attach an answer to its
 question is a thread on it (`thread_ts = incoming.thread_ts ?? incoming.ts`) — and that thread is then
-the *place*, so it carries the memory ([design note](design/participant-model.md)). Native streaming
+the *place*, so it carries the memory. Native streaming
 additionally requires a thread, but the shape does not depend on the renderer: `classic` attaches its
 answer the same way.
 
@@ -201,8 +200,8 @@ custom route is then the complete authority.
 
 ## Group context
 
-Given the group message subscriptions (the default app), the Agent behaves as a participant of the channel
-([design note](design/participant-model.md)): it answers a bare message in a thread while it takes part
+Given the group message subscriptions (the default app), the Agent behaves as a participant of the channel:
+it answers a bare message in a thread while it takes part
 and **has not heard a second human** there. Mentioning it inside a thread is the bootstrap — it answers,
 which makes it a participant, and later bare replies reach it without the name. When a second person
 speaks in that thread, addressing is ambiguous again and it returns to requiring a mention while still
@@ -214,7 +213,7 @@ and the message reaches it, like any other unsummoned one, in the next turn it a
 
 Both halves are what this channel *heard*, not a claim about who is really in the thread: nothing is
 read back from Slack before the ACK, so acceptance stays synchronous and a thread the Agent joined before this
-deployment — or before a lost `thread-participants.json` — takes one mention to re-enter. That is the
+deployment takes one mention to re-enter. That is the
 same bootstrap every thread starts with and it self-heals in one message. A consequence worth knowing:
 a thread where several people are present but only one has spoken *while the Agent was listening*
 counts as two-party.
@@ -373,44 +372,14 @@ A DM or @mention whose whole message is "stop" or "cancel" aborts that conversat
 instead of becoming a turn. Asks not yet taken are independent and keep running — stop the next one when it
 starts. No configuration is needed: stopping the running turn is part of serving.
 
-## Durability and state
+## Restarts and stored data
 
-Slack state lives under:
-
-```txt
-<state root>/channels/slack/
-├── turns.json
-├── seen.json
-├── thread-participants.json
-├── asks.json
-├── history.json
-└── files/
-```
-
-`asks.json` holds, per conversation, its newest asks (message key and `ts`); the Agent says which one the session holds,
-and a turn's read starts after it. Losing it costs one re-read of a place's newest 20 messages. `history.json` holds,
-per place, the messages turns posted there, which the next read leaves out; losing it costs the Agent's earlier answers
-in one read.
-
-`files/` holds downloaded inbound files, one directory per channel. They are kept — the path the agent
-was given stays readable for as long as the conversation can refer back to it — and FastAgent never
-prunes them, so a workspace that receives a lot of files wants a volume sized for that.
-
-`thread-participants.json` records what the Agent HEARD in each group thread — the humans it saw speak
-(capped at two, since the rule only asks whether a second one exists) and whether it has answered
-there. It is written for **every group thread the channel can see**, including behind a custom route,
-where the summon rule never reads it: a route is configuration and the record outlives a change to it,
-so gating the write would leave a thread marked as answered-in while the humans who spoke in the
-intervening window went unrecorded, and the Agent would then speak into a crowd. Deleting the file is
-safe; each thread then costs one mention to re-enter.
-
-An accepted turn is persisted before the 200 ACK and replayed after an interrupted process. Its message was sent with
-the Slack message's identity as its key, so a replay reads the message already sent instead of sending a second one.
-Replay is still at-least-once: side-effecting Agent tools must be idempotent or tolerate duplication. A turn whose reply
-was already generated is not re-run — the answer is recorded before it is sent, so an interrupted or
-failed delivery is re-sent on the next start (a duplicate is preferred to a lost
-answer). The execution ceiling drops a turn that repeatedly starts without finishing and notifies the
-thread instead of crash-looping forever — unless its answer was already recorded, which is sent instead. One process owns the state root: a second `dev` or `start` of the same agent is refused.
+- A message accepted before a restart or a deploy is answered after it, and an answer made but not delivered is sent
+  then without asking the model again. Delivery is at least once: a tool may run twice, and an answer may arrive twice
+  rather than not at all. A turn interrupted again and again is dropped, and its asker is told to ask again.
+- The channel's state is under `<state root>/channels/slack/`: machine state, git-ignored, that wants a volume.
+  Downloaded files are kept there and never pruned; size and prune it yourself.
+- One process owns the state root: a second `dev` or `start` of the same agent is refused.
 
 ## Production
 

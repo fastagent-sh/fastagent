@@ -111,7 +111,7 @@ export async function openStartService(dirArg: string, opts: StartOptions): Prom
 
 /** Stage two: open the built definition in `dirArg` and serve it. */
 export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  // The build, never the source (agent-artifact.md §8): refused when there is none or the project has moved on.
+  // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<Project> | undefined;
   // A start never reads the development `fastagent.json`: its instance configuration is the one `--config` names.
   const loadBuilt = (dir: string) =>

@@ -1,5 +1,5 @@
 /**
- * Where an instance's text is (agent-artifact.md §4.2, §7): the program's own `skills/` and `prompts/`, then what the
+ * Where an instance's text is: the program's own `skills/` and `prompts/`, then what the
  * instance configuration's `instructions`, `skills` and `prompts` name. Resolved once, at open, into absolute paths, so
  * the readers (text.ts) read exactly these for each message and scan nothing else.
  */

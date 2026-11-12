@@ -29,7 +29,7 @@ import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fas
 // Your policy, the same whichever way the channel receives.
 const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
   // A chat is one conversation and a thread is another, each with a session of its own, and where the
-  // answer goes follows from that (docs/design/participant-model.md).
+  // answer goes follows from that.
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.

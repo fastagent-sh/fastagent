@@ -64,7 +64,7 @@ export interface CreatedAgent {
 /**
  * Where an agent's content is declared and kept: which instance configuration is edited, and where clones go. For a
  * built definition, which has no instance of its own, `config` is required and `workdir` defaults to the directory
- * of `config`, the instance root (agent-artifact.md §4.6).
+ * of `config`, the instance root.
  */
 export interface ContentInstance {
   /** The instance configuration to edit, absolute. Default: `fastagent.json` in the agent directory. */

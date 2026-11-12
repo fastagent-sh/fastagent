@@ -1,5 +1,5 @@
 /**
- * The network guard of every test tier (CONTRIBUTING.md, "Test tiers"), free of vitest so a child process a test starts
+ * The network guard of every test tier (AGENTS.md, "Tests"), free of vitest so a child process a test starts
  * can load it too (child-network-guard.ts). A connection to an address off the machine is refused where it is made; a
  * name is judged by the address it resolves to, since a dispatcher may resolve it to somewhere else (undici's HTTP proxy
  * resolves the origin to the proxy).

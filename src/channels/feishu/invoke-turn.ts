@@ -125,7 +125,7 @@ interface ReplyChain {
  * is what makes the walk bounded by STRUCTURE rather than by a level count someone picked.
  *
  * This is pointer resolution, not history. Session memory — what this place already knows — is a
- * different track (design/participant-model.md §8), so this walk does only the pointer's job, which is also
+ * different track, so this walk does only the pointer's job, which is also
  * why it walks through ANY author's message — the chain is the platform's structure, not a conversation the
  * agent took part in. The repetition this implies (an established session re-reads chain text it may
  * already hold, each reply turn) is accepted deliberately and bounded: ancestors are CONTEXT, not

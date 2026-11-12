@@ -1,5 +1,5 @@
 /**
- * A Slack place's history, read when a turn runs (docs/design/place-history.md): a channel's top level from
+ * A Slack place's history, read when a turn runs: a channel's top level from
  * `conversations.history`, a thread from `conversations.replies`. What a place remembers between turns, and what a
  * read leaves out, is the kit's (`createPlaceHistory`). A message's `ts` is its id and its position at once: the
  * turn's ask is the read's exclusive `latest`. Each read lists the newest page before the ask and stops where its

@@ -188,7 +188,7 @@ async function deploy(
       run: !!opts.run,
       force: !!opts.force,
       noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
-      // Every AgentCore deployment starts the storage over (core.md §9).
+      // Every AgentCore deployment starts the storage over.
       storageResets: host === "agentcore",
       servesApi: api.served,
       fromEnv: !!opts.fromEnv,

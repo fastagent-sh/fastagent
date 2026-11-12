@@ -2,7 +2,7 @@
  * Which Agent session each of a Caller's conversations talks in: a channel's chats and threads (its `sessionFor`), a
  * schedule's runs. The Agent names sessions, so a Caller keeps this map, in its own state (a channel's
  * `<stateDir>/sessions.json`, the schedules' `schedule/sessions.json`), and creates a conversation's session in one
- * order (architecture.md §2): the session, then the record, then the message. The map takes one conversation's calls
+ * order: the session, then the record, then the message. The map takes one conversation's calls
  * one at a time, so two messages for one new conversation meet it one after the other and get one session. A crash
  * between the session and the record leaves a session nothing refers to, which the retry does not reuse; no message is
  * answered twice, since a message is sent only once its session is recorded.

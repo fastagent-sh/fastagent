@@ -13,7 +13,7 @@ A channel is an ingress adapter. It receives an external event, verifies that it
 whether to send the agent a message, and returns an HTTP response appropriate for that external system.
 
 > This page is the AUTHOR's view: building an adapter. Using the existing channels is covered in
-> [Channels](channels.md); the first-party chat channels' internal architecture is in [design/core.md §7](design/core.md).
+> [Channels](channels.md).
 
 ## The two layers
 
@@ -92,7 +92,7 @@ another method answers 405; an unknown path, 404.
 
 **A channel MUST verify that a request comes from its platform**, with the credential the platform issued: a
 signature over the raw body, a secret token header, a verification token. Nothing in front of the channel does it:
-a serve has no authentication of its own, and its routes are the channels' ([security boundary](design/security-boundary.md)).
+a serve has no authentication of its own, and its routes are the channels'.
 A channel that verifies nothing lets anyone who finds its URL send the agent a message, with the agent's full tools.
 
 - Verify before parsing any field you trust.
@@ -123,9 +123,8 @@ the Agent API alone.
 ## Sessions: the channel's map
 
 The Agent names sessions; a channel's `sessionFor` keeps which session each of its conversations talks in (a chat, a
-thread, an issue), in `<stateDir>/sessions.json`. It creates a conversation's session in one order: the session, then
-the record, then the message the channel sends. A crash between the first two leaves a session nothing refers to, which
-the retry does not reuse; no message is answered twice, since it is sent only once its session is recorded.
+thread, an issue). A conversation's session is recorded before its first message is sent, so no message is answered
+twice.
 
 | Channel type | Typical conversation |
 |---|---|

@@ -1,6 +1,6 @@
 /**
  * `fastagent env add|remove|list|install|exec`: the agent's environment, declared under `environment` in context.json
- * and installed by the agent's own mise (docs/design/agent-service.md §4), in the agent directory, the current one.
+ * and installed by the agent's own mise, in the agent directory, the current one.
  */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";

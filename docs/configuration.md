@@ -296,7 +296,7 @@ reads it, never the token itself), and so does the agent's own `git push` in the
 missing credential fails the start instead of waiting.
 
 `fastagent init <dir> --content <source>` and `fastagent content add/remove` edit both files
-([CLI](cli.md#fastagent-content)); they can be edited by hand too. The entries' order means nothing. A directory may
+([CLI](cli.md#commands)); they can be edited by hand too. The entries' order means nothing. A directory may
 contain the agent directory or sit inside it; keeping the agent beside the projects it works on keeps a project's files out of the definition's releases.
 
 What each entry gives the agent:
@@ -378,7 +378,7 @@ needs, installed on every machine that runs it and in its image:
   stages, like an enterprise host, goes in each stage's value file; `.secrets/.env.example` is the committed template.
   Names the deployment sets itself (`PORT`, `FASTAGENT_MODEL`, the state and storage paths) cannot be declared.
 
-Change it with [`fastagent env`](cli.md#fastagent-env): `fastagent env add gh@2` installs the package here, then
+Change it with [`fastagent env`](cli.md#commands): `fastagent env add gh@2` installs the package here, then
 declares it. The first change adds mise to the agent's `package.json`, as one optional dependency per platform at the
 newest version; the package manager installs only this machine's, and the lockfile pins it. mise publishes no package
 for Windows, so an agent that declares packages does not run there.
@@ -509,7 +509,7 @@ With `FASTAGENT_API_KEY` set (in `.secrets/.env` for `dev`, on the target for a 
 answers the [Agent API](SPEC.md#9-http) under `/v1`, to a request that presents one of its keys as
 `Authorization: Bearer <key>`; without it, `/v1` is not served, and the startup report says which. Several keys,
 separated by commas, let a key be replaced without a gap: add the new one, move the Callers, remove the old. The key is
-a credential for the whole instance ([security boundary](design/security-boundary.md)): keep it on a server, never in a
+a credential for the whole instance ([security model](SPEC.md#10-security-model)): keep it on a server, never in a
 browser.
 
 ```bash
@@ -622,7 +622,7 @@ export default defineTool({
 
 `parameters` is a TypeBox schema: the harness validates a call's arguments against it before `execute`. A tool of the
 definition's own with a coding tool's name replaces it. Every serve also gives the agent `wake` and `unwake`
-([self-scheduling](api-reference.md#self-scheduling)). [MCP servers](mcp.md) are declared under `mcpServers` in `context.json` (the program's) and `fastagent.json` (an
+([self-scheduling](#self-scheduling)). [MCP servers](mcp.md) are declared under `mcpServers` in `context.json` (the program's) and `fastagent.json` (an
 instance's), not in a tool. `fastagent info` lists authored tools and declared MCP servers; MCP tool discovery occurs when the agent opens.
 
 A tool that needs to know which session it runs in asks `await sessionIdOf(api, context)` (from
@@ -684,8 +684,7 @@ export default defineSchedule({
   the agent sees what its earlier runs did, and nothing of users' chats.
 - **It delivers nothing.** The agent's tools send output; name the target (a chat or channel id) in the prompt.
   What the agent said is in the schedule's session.
-- **Each instant fires at most once**: a claim under `<stateRoot>/schedule/claims/<name>/` is taken before the message
-  is sent. After downtime one overdue run is caught up, not one per missed instant; a schedule that has never fired
+- **Each instant fires at most once.** After downtime one overdue run is caught up, not one per missed instant; a schedule that has never fired
   starts at its next instant. A run still going when the next instant arrives makes that one `skipped`.
 - **Where the clock is.** `dev` and `start` run it while they serve. On AgentCore the container mirrors each schedule
   into a recurring EventBridge schedule, which fires it on EventBridge's own clock and wakes the container, once an
@@ -696,7 +695,18 @@ export default defineSchedule({
 
 `fastagent schedules list` shows each schedule's next instant, how its last run ended and its session, and the
 agent's own pending wake-ups. A wake-up is work the agent schedules for itself with the `wake` tool, on every serve
-([API reference](api-reference.md#self-scheduling)).
+([self-scheduling](#self-scheduling)).
+
+### Self-scheduling
+
+Every serve (`dev`, `start`, an app's `serve()`; not `fastagent invoke`) gives the agent the `wake` and `unwake` tools:
+
+- `wake({ in: "30m", prompt })` records a one-shot wake-up; `wake({ cron: "0 9 * * *", tz?, prompt })` a recurring
+  one. A wake-up fires back into the session that set it, its prompt marked as the agent's own scheduled message, and
+  survives a restart.
+- Limits: a minimum delay, at least 10 minutes between recurring fires, and at most 20 pending per session.
+- `unwake({ id })` cancels one, from the session that set it. `fastagent schedules unwake <id>` cancels any, while
+  no serve runs.
 
 ## Logging
 

@@ -1,5 +1,5 @@
 /**
- * Whether a steered turn renders its own reply live, or waits for the end of its message first (docs/design/place-sessions.md).
+ * Whether a steered turn renders its own reply live, or waits for the end of its message first.
  *
  * Inputs steered into a running session can end with one shared answer, which the earlier turn delivers. A turn that
  * began while an earlier one was still running, or that runs again after a restart, may hold that very answer: it is

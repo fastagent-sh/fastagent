@@ -61,7 +61,7 @@ credentials.
 
 One channel file serves both ways of receiving (`byIngress`), and each instance's configuration chooses between
 them: `channels.feishu.ingress` (`channels.lark.ingress`) in its `fastagent.json`, `"webhook"` or `"connection"` (the long connection).
-Unset, the command decides ([design note](design/channel-environments.md)):
+Unset, the command decides:
 
 | `channels.feishu.ingress` | `fastagent dev` (dev app) | `fastagent start`, every deployment (production app) |
 |---|---|---|
@@ -108,7 +108,7 @@ In a coding agent's run (`channels setup lark --json`, or a deploy that needs th
 pasted on a page the setup serves on this machine (`127.0.0.1`, no tunnel), not typed into a file: the page checks the pair
 against Lark and saves accepted credentials before attempting webhook setup. A refused pair stays on the form; other
 failures stop setup with their actual cause. A remote CLI needs local port forwarding: the ticket gives the SSH command
-for its page's port. See [remote setup instructions](cli.md#fastagent-channels-setup).
+for its page's port. See `fastagent channels setup --help`.
 Within either cloud, the way the channel receives determines the remaining work. For a long connection (what `dev`
 sets up), the runtime credential set stops at the validated App ID/Secret pair; setup continues through the permission
 check and names what is left: publish the version (a Feishu app made by scan-to-create is on a long connection already; for Lark, choose it in Events & Callbacks first).
@@ -345,7 +345,7 @@ in that topic.
 ## Threads and conversations
 
 The Agent behaves as a participant in the room, so where it answers and what it remembers follow the
-place rather than the individual ask ([design note](design/participant-model.md)):
+place rather than the individual ask:
 
 | Place | Conversation | Where the answer appears | Bare messages (no @) |
 |---|---|---|---|
@@ -354,15 +354,14 @@ place rather than the individual ask ([design note](design/participant-model.md)
 | Group thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | answered while the Agent takes part and no second human has been heard |
 | Direct-message thread | `<kind>:<chat_id>:<thread_id>` | inside the thread | always answered — a p2p chat has one human, so there is nothing to disambiguate and no participation is recorded |
 
-Each conversation has its own session, which the channel creates the first time it is asked there and records in
-`<state root>/channels/<kind>/sessions.json`. There are no session modes to choose. In a group's main timeline each
+Each conversation has its own session, which the channel creates the first time it is asked there. There are no session modes to choose. In a group's main timeline each
 sender has a session of their own (`<kind>:<chat_id>#<sender>`), so one person's long task does not hold up another's
 question; the others' discussion and the agent's answers to them reach a session as attributed context, not as its own
 history. A sender the platform gave no id (a tenant whose events carry none) shares the chat's session. A thread is a separate place with its own —
 **started from the exchange it was opened on**: a new thread's session is a fork of the session that holds the
 message the thread was opened on (the one it replies to, an answer of the Agent or a request it took, whoever sent the
 request), up to that exchange's answer, including images and tool results. The channel finds that session in the
-message table it keeps (`owners.json`, the newest ~1000 messages). A thread opened on any other message, or on one
+messages it remembers, the newest ~1000. A thread opened on any other message, or on one
 older than that, starts empty. The fork happens once, when the thread's session is created; after that the two places
 are independent, and the main timeline never sees what the thread discusses.
 
@@ -379,8 +378,7 @@ ambiguous again and the Agent goes back to requiring a mention — while still l
 discussion is folded into its next answered turn there.
 
 Both halves are what the Agent HEARD, not a claim about who is really in the thread: nothing is read
-back from the platform, so a thread it joined before this deployment — or before a lost
-`thread-participants.json` — takes one mention to re-enter. Observations accumulate and are never
+back from the platform, so a thread it joined before this deployment takes one mention to re-enter. Observations accumulate and are never
 shed, so a thread in which two people have spoken keeps requiring a mention. A consequence worth
 knowing: a thread where several people are present but only one has spoken *while the Agent was
 listening* counts as two-party.
@@ -393,7 +391,7 @@ An unreadable referent degrades to a marker instead of failing the turn.
 
 A message is sent to its conversation's session at once, in arrival order, with `whenBusy: "steer"`: the agent takes it at its
 next step, after its current tool calls. A group's main timeline is a session per sender, so a second person's `@Agent` does not reach the first's run; a second message from the **same** sender is steered into it, can end that run and shares its answer (delivered once), and gets a short "Answered together with an earlier message above" reply under it, since the answer quotes their first. Different places run concurrently, which is why a thread is the way to
-start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. A reply in the main timeline to an answer, or to a request the Agent took, is steered into the session that holds it, whoever sends it: the channel remembers the most recent ~1000 such messages (`owners.json`), and a reply to any other message is an ordinary message of its sender. While a
+start work that should not mix with the room's. A message the Agent takes after the run ended gets its own answer. A reply in the main timeline to an answer, or to a request the Agent took, is steered into the session that holds it, whoever sends it: the channel remembers the most recent ~1000 such messages, and a reply to any other message is an ordinary message of its sender. While a
 message waits for that answer, the Agent marks it with an `OnIt` reaction and swaps it for `DONE` when it is answered
 (a failed turn just takes the mark off); the first message of a run shows its own card instead.
 
@@ -434,23 +432,15 @@ Message payloads are resolved by the channel before the agent turn runs — all 
 - a **reply summon** fetches the replied-to message (its content is not in the event), injects its text into the prompt, and loads its attachments too — "@bot summarize this" as a reply to a file works,
 - the **reply chain above** the quoted message is resolved as background context: up to 8 ancestors, oldest first, sharing one referent-sized text budget; their images/files load degradably like background attachments (a failure becomes a note, not an error). A chain cut short for any reason — cap, budget, an unreadable message — is marked visibly in the prompt so a partial chain never reads as the whole conversation.
 
-## State & restarts
+## Restarts and stored data
 
-The channel persists its state under `<state root>/channels/<kind>/` (`channels/feishu/` or `channels/lark/` — two mounted kinds never share stores):
-
-- `turns.json` — accepted turn intent, persisted pre-ACK and removed once the reply has been delivered; an entry a crash (or a SIGTERM deploy) leaves behind is replayed on the next start, and one that already carries its answer is re-delivered instead of re-run (L1, at-least-once, with a poison-turn ceiling — the same lifecycle semantics as Telegram, see [design/core.md](design/core.md)),
-- `seen.json` — the most recent 2,000 `message_id`s the channel took as input (a turn, a `/stop`); Feishu/Lark document duplicate pushes even after a successful ACK and recommend this idempotency key. A place's history read leaves these out,
-- `asks.json` — per conversation, its newest asks (message key and position in the place); the Agent says which one the session holds, and a turn's read starts after it. Losing it costs one re-read of a place's newest 20 messages,
-- `history.json` — per place, the messages turns posted there (answers, stop feedback; the next read leaves them out). Losing it costs the Agent's own earlier answers, labelled `you`, in one read,
-- `bot.json` — the bot's own `open_id`, bound to its `appId` and cached from `bot/v3/info` so a cold start recognizes @mentions immediately,
-- `thread-participants.json` — per thread, the humans the Agent heard (at most two) and whether it has answered there. Losing the file costs one mention per thread to re-enter it,
-- `files/c-<chat>/` — downloaded inbound resources, one directory per chat. Never pruned by FastAgent; size and prune it yourself.
-
-The seen ring is best-effort dedup, not exactly-once: a crash between writes, a failed ring write, or a duplicate
-older than the cap can still re-run a turn. Interrupted-turn recovery is at-least-once and can repeat tool side
-effects.
-
-The state home lives under `.state/`, which the agent `.gitignore` excludes. One process owns the state root: a second `dev` or `start` of the same agent is refused.
+- A message accepted before a restart or a deploy is answered after it, and an answer made but not delivered is sent
+  then without asking the model again. Delivery is at least once: a tool may run twice, and an answer may arrive twice
+  rather than not at all. A turn interrupted again and again is dropped, and its asker is told to ask again.
+- The channel's state is under `<state root>/channels/feishu/` (`channels/lark/` for Lark): machine state, git-ignored, that wants a volume.
+  Downloaded files are kept there and never pruned; size and prune it yourself.
+- One process owns the state root: a second `dev` or `start` of the same agent is refused.
+- A message Feishu delivers twice, as it may even after an ACK, is taken once.
 
 ## Sending messages back (`feishu-send` / `lark-send`)
 
