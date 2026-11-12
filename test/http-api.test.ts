@@ -68,6 +68,29 @@ describe("the Agent API over HTTP", () => {
       "/v1/usage",
     ]);
   });
+
+  it("gives an entry event its id and no other event one, and continues from Last-Event-ID over ?after=start", async () => {
+    const { id } = await agent.sessions.create();
+    await agent.messages.send({ sessionId: id, content: "hi" }, { wait: 30 });
+    const [first, second] = (await agent.sessions.entries(id)).data;
+    const frames = async (headers: Record<string, string>) => {
+      const response = await fetch(`${server.url}/v1/sessions/${id}/events?after=start`, { headers });
+      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+      let text = "";
+      while (!text.includes("event: state")) text += new TextDecoder().decode((await reader.read()).value);
+      await reader.cancel();
+      return text.split("\n\n").filter((frame) => frame.startsWith("id:") || frame.startsWith("event:"));
+    };
+    expect(await frames(auth())).toEqual([
+      expect.stringMatching(new RegExp(`^id: ${first?.id}\nevent: entry\n`)),
+      expect.stringMatching(new RegExp(`^id: ${second?.id}\nevent: entry\n`)),
+      expect.stringMatching(/^event: state\n/),
+    ]);
+    expect(await frames({ ...auth(), "last-event-id": first?.id as string })).toEqual([
+      expect.stringMatching(new RegExp(`^id: ${second?.id}\n`)),
+      expect.stringMatching(/^event: state\n/),
+    ]);
+  });
 });
 
 describe("refusals over HTTP", () => {
@@ -92,6 +115,39 @@ describe("refusals over HTTP", () => {
     for (const [code, details, status] of cases) {
       const error = { code, message: code, retryable: false, ...(details === undefined ? {} : { details }) };
       expect([code, statusOf(error as AgentErrorData)]).toEqual([code, status]);
+    }
+  });
+});
+
+describe("the Agent API's HTTP limits", () => {
+  const subject = durableSubject();
+  afterEach(() => subject.stop());
+
+  it("caps a wait at the server's limit, which connectAgent asks again past until its Caller's wait is met", async () => {
+    const agent = await subject.start();
+    let asked = 0;
+    const server = await served(agent, { waitCapSeconds: 0.2, heard: () => asked++ });
+    try {
+      const { id: sessionId } = await agent.sessions.create();
+      const message = await agent.messages.send({ sessionId, content: "hold" });
+      // The longest wait a request may name: uncapped, it would outlast the test's timeout.
+      const capped = await fetch(`${server.url}/v1/sessions/${sessionId}/messages/${message.id}?wait=60`, {
+        headers: auth(),
+      });
+      expect(await capped.json()).toMatchObject({ status: "running" });
+      asked = 0;
+      const started = Date.now();
+      // A wait many caps long: past the first, it is asked again, however slowly each request comes back.
+      const waited = await connectAgent(server.url, { apiKey: KEY }).messages.get(
+        { sessionId, messageId: message.id },
+        { wait: 1.5 },
+      );
+      expect(waited.status).toBe("running");
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1450);
+      expect(asked).toBeGreaterThanOrEqual(2);
+      subject.release();
+    } finally {
+      await server.close();
     }
   });
 });
