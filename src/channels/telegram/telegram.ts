@@ -34,6 +34,7 @@ import { dispatchStop } from "../kit/stop-command.ts";
 import { createTaskTracker } from "../kit/tasks.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { foldBudget } from "../kit/fold-budget.ts";
 import { createMessageOwners } from "../kit/message-owners.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
 import { isSenderConversation, senderConversation } from "../kit/sender-conversation.ts";
@@ -127,7 +128,7 @@ function createTelegramRuntime(
   const decide =
     route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
-  const buffer = createContextBuffer(join(stateHome, "buffers.json"));
+  const buffer = createContextBuffer(join(stateHome, "buffers"));
   // Whose a message is, so a reply to it reaches that conversation's session. A message id counts within its chat.
   const owners = createMessageOwners({ label: "[telegram]", path: join(stateHome, "owners.json") });
   const ownerKey = (chatId: number | string, messageId: number): string => `${chatId}:${messageId}`;
@@ -201,6 +202,7 @@ function createTelegramRuntime(
       const fold = buffer.fold(rec.placeKey, {
         ...(start.after === undefined ? {} : { after: start.after }),
         until,
+        budget: await foldBudget(agent, recordedSession(rec.conversation)),
         // What this conversation's own turns answered is in its session; other senders' answers are discussion.
         skip: (entry) => entry.conversation === rec.conversation,
       });
@@ -282,6 +284,7 @@ function createTelegramRuntime(
           sender: fromLabel(m.from) ?? "someone",
           body: bodyLine,
           messageId: m.message_id,
+          date: m.date === undefined ? Date.now() : m.date * 1000,
           replyTo: m.reply_to_message?.message_id,
           fileIds: fileIds.length ? fileIds : undefined,
           imageIds: imageIds.length ? imageIds : undefined,

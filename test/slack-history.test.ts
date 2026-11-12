@@ -88,7 +88,7 @@ function setup(opts: { userName?: SlackApi["userName"]; controls?: string[] } = 
       messages.push(ask);
       const after = sent.get(key);
       sent.set(key, ask.ts);
-      return { key, conversation: "c", ...(after === undefined ? {} : { after }), until: ask.ts };
+      return { key, conversation: "c", budget: 4000, ...(after === undefined ? {} : { after }), until: ask.ts };
     },
   };
 }

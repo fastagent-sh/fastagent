@@ -1893,6 +1893,57 @@ describe("turn flow", () => {
     expect(text).not.toContain("om_stop");
   });
 
+  it("folds as much of the room's discussion as the model's window lets one turn carry", async () => {
+    const withWindow = (agent: ScriptedAgent, tokens: number): ScriptedAgent => ({
+      ...agent,
+      info: async () => ({
+        name: "scripted",
+        agent: { name: "scripted" },
+        commands: [],
+        tools: [],
+        models: [{ provider: "p", modelId: "m", contextWindow: tokens, thinkingLevels: ["off" as const] }],
+        defaultModel: { provider: "p", modelId: "m" },
+      }),
+    });
+    const asked = async (tokens: number) => {
+      feishuFetch();
+      const seen: string[] = [];
+      injectedAgent = withWindow(
+        scriptedAgent(async function* (request) {
+          yield ev.message();
+          seen.push(promptOf(request).text);
+          yield ev.ended();
+        }),
+        tokens,
+      );
+      const { handler, idle } = buildChannel();
+      await flush();
+      for (let i = 1; i <= 12; i++)
+        await handler(
+          feishuRequest(messageEvent({ id: `om_room_${i}`, chatType: "group", text: `A${i}-${"x".repeat(250)}` })),
+        );
+      await handler(
+        feishuRequest(
+          messageEvent({
+            id: "om_ask",
+            chatType: "group",
+            content: JSON.stringify({ text: "@_bot summarize" }),
+            mentions: [{ key: "@_bot", name: "Bot", id: { open_id: "ou_bot" } }],
+          }),
+        ),
+      );
+      await idle();
+      return seen[0] ?? "";
+    };
+    const small = await asked(8_000); // 1,600 characters
+    expect(small).toMatch(/\(\d+ earlier messages here not shown\)/);
+    expect(small).toContain("A12-");
+    expect(small).not.toContain("A1-");
+    const large = await asked(200_000);
+    expect(large).toContain("A1-");
+    expect(large).not.toContain("not shown");
+  });
+
   it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
     vi.spyOn(log, "warn").mockImplementation(() => {});
     feishuFetch();

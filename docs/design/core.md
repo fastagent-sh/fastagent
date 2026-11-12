@@ -695,6 +695,11 @@ it: an inbound attachment is part of the conversation exactly as the entry namin
 an operator's capacity decision (size the volume, prune deliberately), not a retention policy this project may impose
 on someone's data.
 
+A third thing sits between them: Telegram's `buffers/` (a file per chat), a copy of group messages nobody asked the agent about. It was
+not told to the agent, so it is not conversation data, and it is not machinery's own record either, so it is bounded
+by time (14 days) and says what it dropped, where the first two grow with use. It is a file per chat because a time bound with no size bound lets one busy chat's history grow, and a single file rewritten before every acknowledgement would then cost every chat what the busiest one weighs (measured: 89 ms per message with ten busy groups in one file, 2 ms with the file of the group alone). What a turn folded from it is
+conversation data from then on, in the session.
+
 Credentials live separately under `<agent dir>/.secrets/` (`FASTAGENT_SECRETS_DIR` overrides) because the deploy
 lifecycle differs: values ride the host's secret store, a model login is made on the box itself, and state rides the
 volume. A deployed box points both knobs at its volume so its login, and every OAuth refresh of it, persists.

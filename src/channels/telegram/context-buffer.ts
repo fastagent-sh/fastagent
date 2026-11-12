@@ -12,6 +12,8 @@ export interface BufferEntry {
   body: string;
   /** The message's id: rendered into the fold so the model can correlate replies. */
   messageId: number;
+  /** When it was said, in milliseconds since the epoch: what the buffer's retention is counted from. */
+  date: number;
   /**
    * Where it stands in its chat, for the range a turn folds: the message id, except for the agent's answer, which stands
    * after the newest message taken when it was done (its own id is from when it began, as a preview).
@@ -85,6 +87,7 @@ export function ownPostEntry(body: string, messageId: number, conversation?: str
     sender: "you (sent by the agent)",
     body: truncateCodePointPrefix(body.replace(/\s+/g, " ").trim(), OWN_POST_MAX_CHARS, " … (truncated)"),
     messageId,
+    date: Date.now(),
   };
 }
 
@@ -98,6 +101,7 @@ function isBufferEntry(e: unknown): e is BufferEntry {
     typeof t?.sender === "string" &&
     typeof t.body === "string" &&
     typeof t.messageId === "number" &&
+    typeof t.date === "number" &&
     (t.at === undefined || typeof t.at === "number") &&
     (t.replyTo === undefined || typeof t.replyTo === "number") &&
     strings(t.fileIds) &&
@@ -106,9 +110,11 @@ function isBufferEntry(e: unknown): e is BufferEntry {
   );
 }
 
-export function createContextBuffer(path: string): ContextBuffer {
+export function createContextBuffer(dir: string, clock?: { retentionMs?: number; now?: () => number }): ContextBuffer {
   return createGenericContextBuffer({
-    path,
+    ...clock,
+    dir,
+    time: (entry) => entry.date,
     label: "[telegram]",
     isEntry: isBufferEntry,
     line: bufferLine,

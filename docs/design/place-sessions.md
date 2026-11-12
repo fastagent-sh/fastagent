@@ -15,7 +15,8 @@ by `kit/ask-log.ts`; the table there holds asks, and the agent's own posts are s
 sender (Telegram and Feishu groups' main timelines; the agent's own answers are excluded per conversation) and replies
 steered into the session they name (`kit/message-owners.ts`, Telegram and Feishu main timelines) are built, and so are
 Feishu thread forks from the session holding the message a topic was opened on, with a topic that names none starting
-empty. This document proposes replacing [participant-model.md](participant-model.md)
+empty. A turn's fold is bounded by its model's context window, and Telegram's local record is bounded by time and says
+what it dropped ("Limits to keep visible"). This document proposes replacing [participant-model.md](participant-model.md)
 Rule 3 and §6, and revising its thread-context and platform mappings. The participant axiom and the distinction between
 hearing and answering remain.
 
@@ -146,8 +147,10 @@ A fork inherits its parent's entries but not the table, so its first read is the
 reads its own messages, and the earlier room messages are read by the thread tools when needed. The reads happen after
 the ingress acknowledgement.
 
-The fold's budget (4000 characters) and truncation notice are unchanged. What the budget leaves out is said in the
-text; it does not reach the model, and nothing retries it. The scoped thread tools are the way to read more.
+The fold's budget is a share of the turn's model's context window, not a fixed count (`kit/fold-budget.ts`; a tenth of
+the window at two characters a token, a judgement and not a measurement). The truncation notice is unchanged. What the
+budget leaves out is said in the text; it does not reach the model, and nothing retries it. The scoped thread tools are
+the way to read more.
 
 ### Limits to keep visible
 
@@ -157,8 +160,18 @@ text; it does not reach the model, and nothing retries it. The scoped thread too
 - Group thread tools do not serve DMs, and Telegram has no equivalent. A DM's scoped lookup and a bounded lookup over
   Telegram's retained records are needed before either is claimed. Room-bound lookup stays room-bound; no tool takes an
   arbitrary chat id.
-- Telegram's local records are its only copy. Retention bounds, persistence on each host and an observable missing-history
-  result must be specified before long-term retrieval is promised.
+- Telegram's local record of a chat is its only copy, so it is bounded by what it is for. It is the un-summoned messages
+  a later ask has not read, so it is kept for 14 days and not by size (`BUFFER_RETENTION_MS`), and a turn that reads a
+  chat that lost messages to it is told so (the note outlives the messages by one more 14 days, then the chat's file goes) ("messages here older than 14 days are no longer kept"). What a turn folded
+  is in its session, which has no retention of its own, so the 14 days bound only what no ask has read. Where the state
+  does not persist (AgentCore, whose storage a deploy resets), it is gone at the next deploy, which is shorter still.
+  **Not built, and why:** a lookup tool over this record. It would read the same messages the fold already hands the
+  turn, and a larger record would make fastagent the store of a chat's content, where the rule is that the platform is
+  the memory and fastagent keeps a copy only where it cannot be read. Reconsider with a case where an agent failed for
+  want of an older message. A Slack or Feishu DM lookup is not built either: the platform keeps the history, and what
+  the DM's turns need is read from it. Slack opens a session per top-level DM ask (native streaming needs a thread), so
+  an earlier thread's content reaches a new one only through the newest messages it reads; whether that matters is a
+  product question about the streaming trade, not a missing tool.
 
 ## Answers, delivery and restart
 
@@ -305,7 +318,8 @@ Acceptance needs real platform payloads and the channel lifecycle for:
 - reads for a new session, a fork, a session whose newest message is a wake-up's or a schedule's, an ask still queued in
   the inbox when the next one arrives (including after a restart), the agent's own answers and stop feedback left out, a
   place longer than the budget, and an unreadable source;
-- scoped DM lookup and Telegram retained-history lookup with concrete retention and persistence limits;
+- Telegram retained-record retention, persistence and the missing-history notice (built); a scoped DM lookup and a Telegram
+  history lookup (not built: see "Limits to keep visible");
 - Telegram privacy setup, already-added bots, administrator exceptions and unavailable checks;
 - the declared limits on parallel tool side effects.
 

@@ -22,6 +22,7 @@ import { dispatchStop, isStopText } from "../kit/stop-command.ts";
 import { codePointPrefix } from "../kit/text.ts";
 import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
 import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { foldBudget } from "../kit/fold-budget.ts";
 import type { PlaceMessage } from "../kit/place-history.ts";
 import { createTurnRunner } from "../kit/turn-runner.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
@@ -398,6 +399,7 @@ function createSlackRuntime(
       const fold = await history.fold({
         key: turn.historyKey,
         conversation: turn.conversation,
+        budget: await foldBudget(agent, recordedSession(turn.conversation)),
         ...(start.after === undefined ? {} : { after: start.after }),
         until: ask.ts,
       });

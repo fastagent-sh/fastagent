@@ -138,7 +138,12 @@ derivation that must not drift. The seam is where the platforms actually differ.
    The drop is by id, not time: a message that arrives during a turn can be older than the answer that ends it.
 3. Drop system and deleted messages. Label each sender: a human by name (Slack: `users.info`, `users:read`), `you` for
    this app, another bot by its id (Feishu) or name (Slack).
-4. Bound newest-first by a character budget, so the discussion closest to the ask is what survives. The agent's own
+4. Bound newest-first by a character budget the turn's model sets, so the discussion closest to the ask is what survives.
+   The budget is a share of the model's context window (`kit/fold-budget.ts`: a tenth of it, at two characters a
+   token, so 40,000 characters for a 200,000-token window; the window of a model that declares none is taken as
+   128,000 tokens, and said once in the log). It is not a fixed count: a fixed count is too much for a small window and
+   too little for a large one. A platform read's own bounds (a page of 50, a line of 280 characters) stay the tighter ones
+   where they are. The agent's own
    posts get a larger per-message cap, because a digest is thousands of characters. What the budget cut is said
    ("N earlier messages not shown"), and so is what the read never reached ("earlier messages not shown", without a
    count: counting would mean reading every page), never dropped silently.

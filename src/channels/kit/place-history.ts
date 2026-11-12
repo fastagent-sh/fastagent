@@ -8,7 +8,8 @@
  * is the one record of it.
  */
 import { log } from "../../log.ts";
-import { BUFFER_LINE_MAX_CHARS, BUFFER_MAX_CHARS } from "./context-buffer.ts";
+import { BUFFER_LINE_MAX_CHARS } from "./context-buffer.ts";
+import { fitToBudget } from "./fold-budget.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
 import { truncateCodePointPrefix } from "./text.ts";
 
@@ -52,34 +53,13 @@ function line(message: PlaceMessage): string {
   return `${message.from.label} (${meta}): ${body}`;
 }
 
-/**
- * Render `messages` (oldest first) newest-first into the buffer's budget (the same bound, whichever the source). What the budget leaves out, and what the read never
- * reached (`earlier`), is said in a line, never dropped silently.
- */
-function foldPlace(messages: readonly PlaceMessage[], earlier: boolean): { text: string; folded: PlaceMessage[] } {
-  const lines: string[] = [];
-  const folded: PlaceMessage[] = [];
-  let used = 0;
-  let cut = 0;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as PlaceMessage;
-    const rendered = line(message);
-    if (cut > 0 || used + rendered.length + 1 > BUFFER_MAX_CHARS) {
-      cut++;
-      continue;
-    }
-    used += rendered.length + 1;
-    lines.unshift(rendered);
-    folded.unshift(message);
-  }
-  if (cut > 0 || earlier) {
-    lines.unshift(
-      cut > 0
-        ? `(${cut}${earlier ? "+" : ""} earlier message${cut === 1 && !earlier ? "" : "s"} here not shown)`
-        : "(earlier messages here not shown)",
-    );
-  }
-  return { text: folded.length > 0 || cut > 0 ? lines.join("\n") : "", folded };
+/** Render `messages` (oldest first) into `budget` characters, newest first ({@link fitToBudget}). */
+function foldPlace(
+  messages: readonly PlaceMessage[],
+  earlier: boolean,
+  budget: number,
+): { text: string; folded: PlaceMessage[] } {
+  return fitToBudget(messages, line, budget, earlier);
 }
 
 /**
@@ -104,6 +84,8 @@ export interface PlaceRead<C> {
   key: string;
   /** The conversation reading: what it posted is in its session, what other conversations posted is discussion. */
   conversation: string;
+  /** The characters the read may fold ({@link foldBudget}): what the model's window lets one turn carry. */
+  budget: number;
   after?: C;
   until?: C;
 }
@@ -154,7 +136,7 @@ export function createPlaceHistory<C>(deps: {
   const scope = (key: string, conversation: string): string => `${conversation}\n${key}`;
 
   return {
-    async fold({ key, conversation, after, until }) {
+    async fold({ key, conversation, budget, after, until }) {
       const outputs = new Set(places.get(scope(key, conversation)));
       try {
         const { messages, earlier } = await deps.read(
@@ -165,7 +147,7 @@ export function createPlaceHistory<C>(deps: {
           },
           until,
         );
-        return foldPlace(messages, earlier);
+        return foldPlace(messages, earlier, budget);
       } catch (error) {
         log.warn(`${label} could not read the history of place ${key}; the turn runs without it: ${String(error)}`);
         return { text: `(could not read the recent discussion here: ${String(error)})`, folded: [], unread: true };
@@ -190,7 +172,8 @@ export function createPlaceHistory<C>(deps: {
     },
     async snapshot(key) {
       const { messages, earlier } = await deps.read(key, { drop: () => false });
-      return foldPlace(messages, earlier);
+      // A tool's read is the platform's page, which is bounded already: the model asked for all of it.
+      return foldPlace(messages, earlier, Number.POSITIVE_INFINITY);
     },
   };
 }

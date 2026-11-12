@@ -831,6 +831,44 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls[1]?.prompt.text).toContain("bare follow-up");
   });
 
+  it("folds as much of a thread's discussion as the model's window lets one turn carry", async () => {
+    const withWindow = (agent: Agent, tokens: number): Agent => ({
+      ...agent,
+      info: async () => ({
+        name: "scripted",
+        agent: { name: "scripted" },
+        commands: [],
+        tools: [],
+        models: [{ provider: "p", modelId: "m", contextWindow: tokens, thinkingLevels: ["off" as const] }],
+        defaultModel: { provider: "p", modelId: "m" },
+      }),
+    });
+    const asked = async (tokens: number) => {
+      vi.stubGlobal("fetch", okFetch());
+      const { agent, calls } = replyingAgent();
+      const { handler, turnsIdle } = mount(withWindow(agent, tokens));
+      await handler(signedRequest(message("70.0", { text: "incident" })));
+      for (let i = 1; i <= 12; i++)
+        await handler(
+          signedRequest(
+            message(`70.${String(i).padStart(3, "0")}`, { text: `A${i}-${"x".repeat(250)}`, thread_ts: "70.0" }),
+          ),
+        );
+      await handler(
+        signedRequest(message("70.999", { type: "app_mention", text: "<@UBOT> summarize", thread_ts: "70.0" })),
+      );
+      await turnsIdle();
+      return calls[0]?.prompt.text ?? "";
+    };
+    const small = await asked(8_000); // 1,600 characters
+    expect(small).toMatch(/\(\d+ earlier messages here not shown\)/);
+    expect(small).toContain("A12-");
+    expect(small).not.toContain("A1-");
+    const large = await asked(200_000);
+    expect(large).toContain("A1-");
+    expect(large).not.toContain("not shown");
+  });
+
   it("says a place it could not read, and forgets that ask so the next turn reads what it missed", async () => {
     vi.spyOn(log, "warn").mockImplementation(() => {});
     const base = okFetch();

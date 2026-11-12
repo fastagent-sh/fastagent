@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPlaceHistory } from "../src/channels/kit/place-history.ts";
+import { type PlaceListing, createPlaceHistory } from "../src/channels/kit/place-history.ts";
 import { log } from "../src/log.ts";
 
 const roots: string[] = [];
@@ -15,16 +15,19 @@ afterEach(() => {
 function setup(path?: string) {
   const root = mkdtempSync(join(tmpdir(), "place-history-"));
   roots.push(root);
-  const read = vi.fn(async (_key: string, _from: { after?: number; drop(id: string): boolean }, _until?: number) => ({
-    messages: [],
-    earlier: false,
-  }));
+  const read = vi.fn(
+    async (
+      _key: string,
+      _from: { after?: number; drop(id: string): boolean },
+      _until?: number,
+    ): Promise<PlaceListing> => ({ messages: [], earlier: false }),
+  );
   const open = (file = path ?? join(root, "history.json")) =>
     createPlaceHistory<number>({ label: "[test]", path: file, read });
   const history = open();
   /** Whether a read of `key` would leave `id` out: a recorded output the place still holds. */
   const drops = async (key: string, id: string, reader = history, conversation = "c"): Promise<boolean> => {
-    await reader.fold({ key, conversation, until: Number.MAX_SAFE_INTEGER });
+    await reader.fold({ key, conversation, budget: 4000, until: Number.MAX_SAFE_INTEGER });
     return read.mock.lastCall?.[1].drop(id) ?? false;
   };
   return { history, read, drops, open, root };
@@ -33,12 +36,31 @@ function setup(path?: string) {
 describe("place history", () => {
   it("hands a read the range it was asked for, and records nothing of it", async () => {
     const { history, read } = setup();
-    await history.fold({ key: "p", conversation: "c", after: 5, until: 9 });
+    await history.fold({ key: "p", conversation: "c", budget: 4000, after: 5, until: 9 });
     expect(read.mock.lastCall?.[0]).toBe("p");
     expect(read.mock.lastCall?.[1].after).toBe(5);
     expect(read.mock.lastCall?.[2]).toBe(9);
-    await history.fold({ key: "p", conversation: "c", until: 12 });
+    await history.fold({ key: "p", conversation: "c", budget: 4000, until: 12 });
     expect(read.mock.lastCall?.[1].after).toBeUndefined(); // the place keeps no cursor: a read starts where it is told to
+  });
+
+  it("folds into the budget the read is given, newest first, and a tool's read of a page is not cut by one", async () => {
+    const { history, read } = setup();
+    const page = Array.from({ length: 10 }, (_, i) => ({
+      id: `m${i}`,
+      at: i,
+      from: { kind: "human" as const, label: "Alice" },
+      text: "z".repeat(100),
+      images: [],
+      files: [],
+    }));
+    read.mockResolvedValue({ messages: page, earlier: false });
+    const cut = await history.fold({ key: "p", conversation: "c", budget: 400, until: 99 });
+    expect(cut.text).toMatch(/^\(\d+ earlier messages here not shown\)\n/);
+    expect(cut.folded.at(-1)?.id).toBe("m9");
+    expect(cut.folded.length).toBeLessThan(10);
+    expect((await history.fold({ key: "p", conversation: "c", budget: 1e6, until: 99 })).folded).toHaveLength(10);
+    expect((await history.snapshot("p")).folded).toHaveLength(10);
   });
 
   it("leaves out what a turn posted into the place, until the place is forgotten", async () => {
@@ -83,7 +105,7 @@ describe("place history", () => {
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     const { history, read } = setup();
     read.mockRejectedValueOnce(new Error("platform down"));
-    const folded = await history.fold({ key: "p", conversation: "c", until: 1 });
+    const folded = await history.fold({ key: "p", conversation: "c", budget: 4000, until: 1 });
     expect(folded.text).toContain("could not read the recent discussion here: Error: platform down");
     expect(folded.folded).toEqual([]);
     expect(warn.mock.calls.flat().join(" ")).toContain("platform down");
