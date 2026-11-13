@@ -7,25 +7,30 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
 import { log } from "../../log.ts";
-import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
-import { createSeenRing } from "../kit/seen.ts";
-import { createTaskTracker } from "../kit/tasks.ts";
-import { attachmentsDir } from "../kit/attachment-path.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
-import { signatureIsFresh } from "../kit/signature.ts";
-import { dispatchStop, isStopText } from "../kit/stop-command.ts";
-import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
+import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
+import { attachmentsDir } from "../kit/text.ts";
+import { createMessageOwners, createSeenRing, createThreadParticipants, senderConversation } from "../kit/state.ts";
 import type { ForkSource } from "../../channel.ts";
-import { threadForkSource } from "../kit/thread-fork.ts";
-import { createAskLog, readStart } from "../kit/ask-log.ts";
+import {
+  type PlaceMessage,
+  createAskLog,
+  createRoomThreads,
+  registerRoomThreads,
+  threadForkSource,
+} from "../kit/history.ts";
 import { foldBudget } from "../kit/fold-budget.ts";
-import { createMessageOwners } from "../kit/message-owners.ts";
-import { senderConversation } from "../kit/sender-conversation.ts";
-import type { PlaceMessage } from "../kit/place-history.ts";
-import { createTurnRunner } from "../kit/turn-runner.ts";
-import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
+import {
+  DROPPED_TURN_NOTICE,
+  SHARED_ANSWER_NOTICE,
+  createTaskTracker,
+  createTurnRunner,
+  dispatchStop,
+  isStopText,
+  readPlaceDiscussion,
+} from "../kit/turn.ts";
 import { acknowledgeFeishuAsk } from "./reaction.ts";
 import { portJoin } from "../../effect-port.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
@@ -45,7 +50,6 @@ import { feishuTurnStream } from "./invoke-turn.ts";
 import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
 import type { FeishuEventHeader } from "./model.ts";
 import { normalizeFeishuMessage } from "./normalize.ts";
-import { createThreadParticipants } from "../kit/thread-participants.ts";
 import { FEISHU_AGENT_SCOPES, scopeSatisfied } from "./setup-mode.ts";
 import {
   type FeishuMessage,
@@ -336,8 +340,7 @@ function createFeishuRuntimeFactory(
     // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
     // operator log line.
     const notifyDropped = (r: PendingFeishuTurn): void => {
-      const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-      void settleFeishuPreview(placeApi(r), targetOf(r), undefined, body).catch((e) =>
+      void settleFeishuPreview(placeApi(r), targetOf(r), undefined, DROPPED_TURN_NOTICE).catch((e) =>
         log.warn(`${label} could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
       );
     };
@@ -346,20 +349,18 @@ function createFeishuRuntimeFactory(
       label,
       store,
       // The read ends at the ask and starts after the ask its session was last sent.
-      discussion: async (rec) => {
-        if (rec.historyKey === undefined) return { text: "", folded: [] };
-        const until = { at: rec.askAt, id: rec.id };
-        const start = await readStart(asks, label, rec.conversation, recordedSession(rec.conversation), until);
-        const fold = await history.fold({
-          key: rec.historyKey,
+      discussion: (rec) =>
+        readPlaceDiscussion({
+          agent,
+          label,
+          asks,
+          history,
+          sessionId: recordedSession(rec.conversation),
+          historyKey: rec.historyKey,
           conversation: rec.conversation,
-          budget: await foldBudget(agent, recordedSession(rec.conversation)),
-          ...(start.after === undefined ? {} : { after: start.after }),
-          until,
-        });
-        if (fold.unread) asks.forget(rec.conversation, rec.id);
-        return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
-      },
+          turnId: rec.id,
+          until: { at: rec.askAt, id: rec.id },
+        }),
       seen,
       delivered: createSeenRing(join(stateHome, "delivered.json"), label),
       toStored: (intent) => ({ ...intent, attempts: 0 }),
@@ -624,93 +625,87 @@ function createFeishuWebhookRoutes(
       `${label} no ${envPrefix}_ENCRYPT_KEY: events are accepted unsigned, with no replay window — set one in the console to enable it`,
     );
   }
-  const handler = async (req: Request): Promise<Response> => {
-    if (req.method !== "POST") return text("POST only\n", 405);
-    const body = await readBodyCapped(req, MAX_EVENT_BYTES);
-    if ("tooLarge" in body) return text("payload too large\n", 413);
-    let outer: Record<string, unknown>;
-    try {
-      outer = JSON.parse(body.text) as Record<string, unknown>;
-      if (typeof outer !== "object" || outer === null) throw new Error("not an object");
-    } catch {
-      return text("invalid json\n", 400);
-    }
+  const handler = createJsonWebhookRoute<Record<string, unknown>>({
+    maxBytes: MAX_EVENT_BYTES,
+    turnsIdle: runtime.turnsIdle,
+    handle: (req, rawBody, outer) => {
+      if (typeof outer !== "object" || outer === null) return text("invalid json\n", 400);
 
-    let envelope: Record<string, unknown>;
-    if (typeof outer.encrypt === "string") {
-      if (!encryptKey) {
-        log.error(
-          `${label} received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
-        );
-        return text("encrypt key not configured\n", 400);
-      }
-      const sig = {
-        timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
-        nonce: req.headers.get("x-lark-request-nonce") ?? "",
-        signature: req.headers.get("x-lark-signature") ?? "",
-      };
-      if (sig.signature) {
-        // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about it, so without
-        // a window a captured body + its three x-lark-* headers replays forever.
-        if (!signatureIsFresh(sig.timestamp, MAX_SIGNATURE_AGE_S)) {
-          log.warn(
-            `${label} rejected an event: X-Lark-Request-Timestamp outside the ±${MAX_SIGNATURE_AGE_S / 3600} h replay window`,
+      let envelope: Record<string, unknown>;
+      if (typeof outer.encrypt === "string") {
+        if (!encryptKey) {
+          log.error(
+            `${label} received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
           );
-          return text("stale signature\n", 401);
+          return text("encrypt key not configured\n", 400);
         }
-        if (!verifySignature(encryptKey, sig, body.text)) {
-          log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+        const sig = {
+          timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
+          nonce: req.headers.get("x-lark-request-nonce") ?? "",
+          signature: req.headers.get("x-lark-signature") ?? "",
+        };
+        if (sig.signature) {
+          // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about it, so without
+          // a window a captured body + its three x-lark-* headers replays forever.
+          if (!signatureIsFresh(sig.timestamp, MAX_SIGNATURE_AGE_S)) {
+            log.warn(
+              `${label} rejected an event: X-Lark-Request-Timestamp outside the ±${MAX_SIGNATURE_AGE_S / 3600} h replay window`,
+            );
+            return text("stale signature\n", 401);
+          }
+          if (!verifySignature(encryptKey, sig, rawBody)) {
+            log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+            return text("invalid signature\n", 401);
+          }
+        }
+        try {
+          envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
+        } catch {
+          if (!sig.signature) {
+            log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
+            return text("invalid encrypted payload\n", 401);
+          }
+          return text("invalid encrypted payload\n", 400);
+        }
+        if (!sig.signature && envelope.type !== "url_verification") {
+          log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
           return text("invalid signature\n", 401);
         }
-      }
-      try {
-        envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
-      } catch {
-        if (!sig.signature) {
-          log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
-          return text("invalid encrypted payload\n", 401);
+      } else {
+        if (encryptKey) {
+          log.warn(`${label} rejected a plaintext event while encryptKey is set (console mismatch, or a forgery)`);
+          return text("plaintext events not accepted\n", 401);
         }
-        return text("invalid encrypted payload\n", 400);
+        envelope = outer;
       }
-      if (!sig.signature && envelope.type !== "url_verification") {
-        log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
-        return text("invalid signature\n", 401);
+      const token =
+        (typeof envelope.token === "string" ? envelope.token : undefined) ??
+        (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
+          ? ((envelope.header as Record<string, unknown>).token as string)
+          : undefined);
+      if (!secretEquals(token, verificationToken)) {
+        log.warn(
+          `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
+        );
+        return text("invalid token\n", 401);
       }
-    } else {
-      if (encryptKey) {
-        log.warn(`${label} rejected a plaintext event while encryptKey is set (console mismatch, or a forgery)`);
-        return text("plaintext events not accepted\n", 401);
-      }
-      envelope = outer;
-    }
-    const token =
-      (typeof envelope.token === "string" ? envelope.token : undefined) ??
-      (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
-        ? ((envelope.header as Record<string, unknown>).token as string)
-        : undefined);
-    if (!secretEquals(token, verificationToken)) {
-      log.warn(
-        `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
-      );
-      return text("invalid token\n", 401);
-    }
-    // The platform's token: the Request URL reaches this instance, at the address it was sent to (Lark's, set by a
-    // person where its configuration API is missing).
-    recordReached(stateDir, req);
+      // The platform's token: the Request URL reaches this instance, at the address it was sent to (Lark's, set by a
+      // person where its configuration API is missing).
+      recordReached(stateDir, req);
 
-    if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
-      log.info(`${label} answered the console's url_verification challenge`);
-      return Response.json({ challenge: envelope.challenge });
-    }
-    const header = envelope.header as FeishuEventHeader | undefined;
-    if (header?.event_type !== "im.message.receive_v1") {
-      log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
+      if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+        log.info(`${label} answered the console's url_verification challenge`);
+        return Response.json({ challenge: envelope.challenge });
+      }
+      const header = envelope.header as FeishuEventHeader | undefined;
+      if (header?.event_type !== "im.message.receive_v1") {
+        log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
+        return new Response(null, { status: 200 });
+      }
+      runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
       return new Response(null, { status: 200 });
-    }
-    runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
-    return new Response(null, { status: 200 });
-  };
-  (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;
+    },
+  });
   return { [`POST /${kind}`]: handler };
 }
 

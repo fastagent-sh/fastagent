@@ -2,7 +2,7 @@
  * The mounted channel and proactive tools share credentials, token cache, gateway and retry policy: one transport per
  * app a process holds, found by the app id both hold.
  */
-import { roomThreads } from "../kit/room-threads.ts";
+import { roomThreads } from "../kit/history.ts";
 import { cloudFor, type FeishuCloudKind } from "./cloud.ts";
 import { createFeishuApi, type FeishuApi } from "./feishu-api.ts";
 
@@ -47,7 +47,7 @@ export function larkTransport(app: FeishuAppCredentials): FeishuTransport {
 
 /**
  * The threads of the group chat the message running in `sessionId` was asked in, and only those
- * (`kit/room-threads.ts`): `list()` its recent threads, `read(threadId)` one of them. Throws outside a Feishu group
+ * (`kit/history.ts`): `list()` its recent threads, `read(threadId)` one of them. Throws outside a Feishu group
  * turn served by this process.
  */
 export function feishuThreads(sessionId: string | undefined): ReturnType<typeof roomThreads> {

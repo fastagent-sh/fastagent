@@ -2,10 +2,9 @@
  * external-upload protocol. */
 import { mkdir, open, stat, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
-import { attachmentPath } from "../kit/attachment-path.ts";
-import type { CallOptions } from "../kit/transport.ts";
-import { codePointPrefix } from "../kit/text.ts";
+import type { ImageAttachment as ImageRef } from "../kit/invoke.ts";
+import { attachmentPath, codePointPrefix } from "../kit/text.ts";
+import type { CallOptions } from "../kit/ingress.ts";
 import type { SlackFile } from "./model.ts";
 
 const API_TIMEOUT_MS = 30_000;

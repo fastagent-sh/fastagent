@@ -7,24 +7,23 @@ import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
-import { readBodyCapped } from "../body.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
-import { createSeenRing } from "../kit/seen.ts";
-import { signatureIsFresh } from "../kit/signature.ts";
-import { createThreadParticipants } from "../kit/thread-participants.ts";
+import { createSeenRing, createThreadParticipants } from "../kit/state.ts";
+import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { portJoin } from "../../effect-port.ts";
-import { createTaskTracker } from "../kit/tasks.ts";
-import { attachmentsDir } from "../kit/attachment-path.ts";
-import { dispatchStop, isStopText } from "../kit/stop-command.ts";
-import { codePointPrefix } from "../kit/text.ts";
-import { createRoomThreads, registerRoomThreads } from "../kit/room-threads.ts";
-import { createAskLog, readStart } from "../kit/ask-log.ts";
-import { foldBudget } from "../kit/fold-budget.ts";
-import type { PlaceMessage } from "../kit/place-history.ts";
-import { createTurnRunner } from "../kit/turn-runner.ts";
+import { attachmentsDir, codePointPrefix } from "../kit/text.ts";
+import { type PlaceMessage, createAskLog, createRoomThreads, registerRoomThreads } from "../kit/history.ts";
+import {
+  DROPPED_TURN_NOTICE,
+  createTaskTracker,
+  createTurnRunner,
+  dispatchStop,
+  isStopText,
+  readPlaceDiscussion,
+} from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import {
@@ -379,12 +378,9 @@ function createSlackRuntime(
   });
 
   const notifyDropped = (turn: PendingSlackTurn): void => {
-    void settleSlackPreview(
-      placeApi(turn),
-      targetOf(turn),
-      undefined,
-      "⚠️ I couldn’t complete an earlier request — please ask again.",
-    ).catch((error) => log.warn(`${label} could not notify a dropped turn: ${String(error)}`));
+    void settleSlackPreview(placeApi(turn), targetOf(turn), undefined, DROPPED_TURN_NOTICE).catch((error) =>
+      log.warn(`${label} could not notify a dropped turn: ${String(error)}`),
+    );
   };
 
   const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, PlaceMessage>({
@@ -392,20 +388,18 @@ function createSlackRuntime(
     store,
     // The read ends at the ask (`messageRefOf`: the ts of the message that asked) and starts after the ask its session
     // was last sent.
-    discussion: async (turn) => {
-      const ask = messageRefOf(turn.id);
-      if (turn.historyKey === undefined || ask === undefined) return { text: "", folded: [] };
-      const start = await readStart(asks, label, turn.conversation, recordedSession(turn.conversation), ask.ts);
-      const fold = await history.fold({
-        key: turn.historyKey,
+    discussion: (turn) =>
+      readPlaceDiscussion({
+        agent,
+        label,
+        asks,
+        history,
+        sessionId: recordedSession(turn.conversation),
+        historyKey: turn.historyKey,
         conversation: turn.conversation,
-        budget: await foldBudget(agent, recordedSession(turn.conversation)),
-        ...(start.after === undefined ? {} : { after: start.after }),
-        until: ask.ts,
-      });
-      if (fold.unread) asks.forget(turn.conversation, turn.id);
-      return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
-    },
+        turnId: turn.id,
+        until: messageRefOf(turn.id)?.ts,
+      }),
     seen,
     delivered: createSeenRing(join(stateHome, "delivered.json"), label),
     toStored: (intent) => ({ ...intent, attempts: 0 }),
@@ -678,39 +672,35 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
     const runtime = createSlackRuntime(policy, ctx);
     const { stateDir: stateHome } = ctx;
-    const handler = async (request: Request): Promise<Response> => {
-      if (request.method !== "POST") return text("POST only\n", 405);
-      const body = await readBodyCapped(request, MAX_EVENT_BYTES);
-      if ("tooLarge" in body) return text("payload too large\n", 413);
-      const timestamp = request.headers.get("x-slack-request-timestamp") ?? "";
-      const signature = request.headers.get("x-slack-signature") ?? "";
-      if (!verifySlackSignature(signingSecret, timestamp, signature, body.text)) {
-        log.warn("[slack] rejected an event with an invalid/stale X-Slack-Signature");
-        return text("invalid signature\n", 401);
-      }
-      // Slack signed it: the Request URL a person set reaches this instance, at the address it was sent to.
-      recordReached(stateHome, request);
-
-      let envelope: SlackEventEnvelope;
-      try {
-        envelope = JSON.parse(body.text) as SlackEventEnvelope;
-        if (typeof envelope !== "object" || envelope === null) throw new Error("not an object");
-      } catch {
-        return text("invalid json\n", 400);
-      }
-      if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
-        return Response.json({ challenge: envelope.challenge });
-      }
-      if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
-      try {
-        await runtime.ingest(envelope);
-      } catch (error) {
-        log.error(`[slack] refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
-        return text("slack authentication unavailable\n", 503);
-      }
-      return new Response(null, { status: 200 });
-    };
-    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;
+    const handler = createJsonWebhookRoute<SlackEventEnvelope>({
+      maxBytes: MAX_EVENT_BYTES,
+      turnsIdle: runtime.turnsIdle,
+      verifyRaw: (request, rawBody) => {
+        const timestamp = request.headers.get("x-slack-request-timestamp") ?? "";
+        const signature = request.headers.get("x-slack-signature") ?? "";
+        if (!verifySlackSignature(signingSecret, timestamp, signature, rawBody)) {
+          log.warn("[slack] rejected an event with an invalid/stale X-Slack-Signature");
+          return text("invalid signature\n", 401);
+        }
+        // Slack signed it: the Request URL a person set reaches this instance, at the address it was sent to.
+        recordReached(stateHome, request);
+        return undefined;
+      },
+      handle: async (_request, _raw, envelope) => {
+        if (typeof envelope !== "object" || envelope === null) return text("invalid json\n", 400);
+        if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+          return Response.json({ challenge: envelope.challenge });
+        }
+        if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
+        try {
+          await runtime.ingest(envelope);
+        } catch (error) {
+          log.error(`[slack] refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
+          return text("slack authentication unavailable\n", 503);
+        }
+        return new Response(null, { status: 200 });
+      },
+    });
     return { "POST /slack": handler };
   };
 }

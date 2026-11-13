@@ -1,9 +1,9 @@
 /** Resolve Slack file IDs at dequeue, then stream one harness-neutral Agent turn. */
 import type { Agent } from "../../agent-api.ts";
-import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import {
+  type ImageAttachment as ImageRef,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
@@ -13,7 +13,7 @@ import {
   turnStream,
   type TurnEvent,
   promptContent,
-} from "../kit/invoke-turn-kit.ts";
+} from "../kit/invoke.ts";
 import type { SlackBufferedFileRef } from "./history.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
 

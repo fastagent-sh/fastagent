@@ -1,118 +1,187 @@
-/** The durable-turn LIFECYCLE the stateful chat channels share, over the kit's parts. */
+/**
+ * Durable channel turn runner, steered-turn gate, side-task tracker, `/stop` dispatch, and shared discussion reader.
+ */
+import type * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import type * as Stream from "effect/Stream";
-import type { Message } from "../../agent-api.ts";
+import * as Stream from "effect/Stream";
+import { type Agent, AgentError, type Message } from "../../agent-api.ts";
+import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
-import { type PortFailure, portJoin } from "../../effect-port.ts";
-import type { TurnEvent } from "./invoke-turn-kit.ts";
-import type { Discussion } from "./place-history.ts";
-import type { SeenRing } from "./seen.ts";
-import { gatedReply } from "./turn-gate.ts";
+import { beginWork } from "../busy.ts";
 import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
+import { foldBudget } from "./fold-budget.ts";
+import { type AskLog, type Discussion, type PlaceHistory, type PlaceMessage, readStart } from "./history.ts";
+import type { TurnEvent } from "./invoke.ts";
+import type { SeenRing } from "./state.ts";
 import type { TurnRecordBase, TurnStore } from "./turn-store.ts";
 
-/**
- * A pending turn is the persisted intent minus its attempt count, plus live-only fields the channel adds (a notice's
- * message id).
- */
+export const SHARED_ANSWER_NOTICE = "↑ Answered together with an earlier message above.";
+export const DROPPED_TURN_NOTICE = "⚠️ I couldn’t complete an earlier request — please ask again.";
+
+export function isStopText(text: string): boolean {
+  return /^(stop|cancel)[.!]?$/i.test(text.trim());
+}
+
+const STOPPED_NOTICE = "⏹ Stopped.";
+const NOTHING_RUNNING_NOTICE = "Nothing is running.";
+const UNKNOWN_NOTICE = "⚠️ Could not tell whether it stopped — check again in a moment.";
+
+export async function dispatchStop(
+  agent: Pick<Agent, "sessions">,
+  sessionId: string | undefined,
+  label: string,
+): Promise<string> {
+  if (sessionId === undefined) return NOTHING_RUNNING_NOTICE;
+  try {
+    const { stopped } = await agent.sessions.cancel(sessionId);
+    return stopped.length > 0 ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
+  } catch (error) {
+    if (error instanceof AgentError && error.code === "not_found") return NOTHING_RUNNING_NOTICE;
+    const code = error instanceof AgentError ? error.code : undefined;
+    log.warn(
+      `${label} stop failed for ${sessionId}: ${code ?? "error"} — ${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (code === undefined || code === "unavailable") return UNKNOWN_NOTICE;
+    return `⚠️ Could not stop (${code}).`;
+  }
+}
+
+export interface TaskTracker {
+  track(task: Promise<unknown>): void;
+  drain(): Promise<void>;
+}
+
+export function createTaskTracker(label: string): TaskTracker {
+  const tasks = new Set<Fiber.Fiber<void>>();
+  return {
+    track(task) {
+      const workDone = beginWork();
+      const fiber = Effect.runFork(
+        portJoin(() => task).pipe(
+          Effect.asVoid,
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.warn(`${label} side task rejected: ${String(portError(cause))}`)),
+          ),
+          Effect.ensuring(Effect.sync(workDone)),
+        ),
+      );
+      tasks.add(fiber);
+      fiber.addObserver(() => tasks.delete(fiber));
+    },
+    drain: () => Effect.runPromise(Effect.asVoid(Fiber.awaitAll([...tasks]))),
+  };
+}
+
+/** Shared discussion fold over `AskLog` + `PlaceHistory` for channels whose platform supports history reads. */
+export async function readPlaceDiscussion<C>(opts: {
+  agent: Agent;
+  label: string;
+  asks: AskLog<C>;
+  history: PlaceHistory<C>;
+  sessionId: string | undefined;
+  historyKey: string | undefined;
+  conversation: string;
+  turnId: string;
+  until: C | undefined;
+}): Promise<Discussion<PlaceMessage>> {
+  if (opts.historyKey === undefined || opts.until === undefined) return { text: "", folded: [] };
+  const start = await readStart(opts.asks, opts.label, opts.conversation, opts.sessionId, opts.until);
+  const fold = await opts.history.fold({
+    key: opts.historyKey,
+    conversation: opts.conversation,
+    budget: await foldBudget(opts.agent, opts.sessionId),
+    ...(start.after === undefined ? {} : { after: start.after }),
+    until: opts.until,
+  });
+  if (fold.unread) opts.asks.forget(opts.conversation, opts.turnId);
+  return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
+}
+
+function gatedReply(opts: {
+  events: Stream.Stream<TurnEvent, PortFailure>;
+  held: boolean;
+  awaitEarlier: Effect.Effect<void>;
+  answerKey: () => string | undefined;
+  delivered: (answerKey: string) => boolean;
+  render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>;
+  skipped: (answerKey: string) => Effect.Effect<void>;
+}): Effect.Effect<void, PortFailure, Scope.Scope> {
+  if (!opts.held) return opts.render(opts.events);
+  return Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<TurnEvent, PortFailure | Cause.Done>();
+    const over = Deferred.makeUnsafe<void>();
+    yield* Effect.forkScoped(
+      Stream.runForEach(opts.events, (event) => Effect.sync(() => void Queue.offerUnsafe(queue, event))).pipe(
+        Effect.matchCauseEffect({
+          onSuccess: () => Queue.end(queue),
+          onFailure: (cause) => Queue.failCause(queue, cause as Cause.Cause<PortFailure>),
+        }),
+        Effect.ensuring(Effect.sync(() => void Deferred.doneUnsafe(over, Effect.void))),
+      ),
+    );
+    yield* Deferred.await(over);
+    yield* opts.awaitEarlier;
+    const key = opts.answerKey();
+    if (key !== undefined && opts.delivered(key)) {
+      yield* opts.skipped(key);
+      return;
+    }
+    yield* opts.render(Stream.fromQueue(queue));
+  });
+}
+
 export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
 
-/** A light acknowledgement on the asker's message (a reaction) while its turn waits, settled when the turn ends. */
 export interface TurnAck {
-  /** The turn ended with an answer (its own, or the earlier input's it shared). */
   complete(): Promise<void>;
-  /** The turn ended without one. */
   remove(): Promise<void>;
 }
 
-/** An acknowledgement that does nothing: where none could be made. */
 export const NO_ACK: TurnAck = { complete: async () => undefined, remove: async () => undefined };
 
-/** `<session>:<entry>`: the Agent's answer a message ended with, the unit a delivery is recorded by. */
 function answerKeyOf(message: Message | undefined): string | undefined {
   return message?.answer === undefined ? undefined : `${message.sessionId}:${message.answer.entryId}`;
 }
 
-/** What the runner gives a turn beyond its inputs: how its message is sent, and how its reply and answer are delivered. */
 interface TurnHooks {
-  /** The turn's message is recorded with the Agent (or was refused): the next input may be prepared and sent. */
   admitted(): void;
-  /** The turn's own message ended, as the Agent reports it. */
   observe(message: Message): void;
-  /**
-   * Render the turn's reply from its message's events. An input steered into a run that was still going shares that
-   * run's answer, which the earlier turn delivers: such a turn renders nothing when that is done.
-   */
   reply(
     events: Stream.Stream<TurnEvent, PortFailure>,
     render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>,
   ): Effect.Effect<void, PortFailure, Scope.Scope>;
-  /** Run `deliver` for a recovered answer, unless an earlier turn delivered it already. */
   deliverOnce(deliver: Effect.Effect<void, PortFailure, Scope.Scope>): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
 
 export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, F> {
   label: string;
   store: TurnStore<S>;
-  /**
-   * What a turn folds beyond its own ask: the place's discussion from where its session last read to, up to the turn's
-   * own ask. It reads nothing for a turn with no place (a routed one). Never rejects: a source that cannot read says
-   * so in its text, and the turn goes on without it.
-   */
   discussion(rec: R): Promise<Discussion<F>>;
-  /** Delivery dedup by platform id, recorded post-persist (Slack, Feishu). */
   seen?: { add(id: string): void };
-  /**
-   * The answers already delivered (`<session>:<entry>`): inputs steered into one run share its answer, and an input is
-   * skipped when its answer is in here.
-   */
   delivered: SeenRing;
-  /** The persisted intent for a pending turn — drops the live-only fields. */
   toStored(rec: R): S;
-  /** A recovered intent as a pending turn — live-only fields start absent. */
   fromStored(stored: S): R;
-  /** The place, for the lifecycle log line (`chat=… thread=…`). */
   where(rec: R): string;
-  /** Runs before the attempt is counted. */
   beforeRun?(rec: R): Promise<boolean>;
-  /** The turn started the ceiling's worth of times without finishing: tell the asker. */
   notifyDropped(rec: R): void;
-  /**
-   * The turn's input was answered together with an earlier one, so it sends nothing of its own: tell the asker where the
-   * answer is, when it is not under their message (a group's answer quotes the first asker). Absent: say nothing.
-   */
   notifyShared?(rec: R): Promise<void>;
-  /**
-   * The turn's input was steered into a run that is still going (or the turn restarted), so nothing of its own shows
-   * until that run ends: mark the asker's message. Best effort: an acknowledgement is decoration and must not fail the
-   * turn, so a rejection is logged and the turn goes on without one.
-   */
   acknowledgeHeld?(rec: R): Promise<TurnAck>;
   execute(
     rec: R,
     discussion: Discussion<F>,
-    /** Called with the finished reply just before it is delivered — the point the answer becomes recoverable. */
     onAnswered: (answer: string) => void,
     turn: TurnHooks,
   ): Effect.Effect<void, PortFailure, Scope.Scope>;
-  /**
-   * Deliver an answer a previous run generated but never confirmed delivering: no model, no tools, and no live
-   * preview — the one the answer was written for died with its process.
-   */
   deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
 }
 
 export interface TurnRunner<R, S> {
-  /**
-   * Accept a turn: persist its intent (pre-ACK — a failed write throws so the platform redelivers), record the
-   * delivery id, enqueue.
-   */
   submit(rec: R, persist: boolean): void;
-  /** Re-enqueue the turns a prior crash left mid-flight; returns them so a channel can continue its arrival counter. */
   recover(): S[];
-  /** Resolve once no turn is in flight — the test/observability seam. */
   idle(): Promise<void>;
 }
 
@@ -120,7 +189,6 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
   options: TurnRunnerOptions<R, S, F>,
   rec: R,
   slot: TurnSlot = unqueuedSlot,
-  /** The turn was left by an earlier process, so its message may have been sent and answered already. */
   afterRestart = false,
 ): Effect.Effect<void, PortFailure> {
   return Effect.gen(function* () {
@@ -141,10 +209,6 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
           ),
         );
       });
-    /**
-     * Mark the asker's message while `reply` runs, then settle the mark by how it ended. Started beside the reply so the
-     * mark's round trip does not hold back sending the message; settled in a finalizer, which logs and never fails.
-     */
     const acknowledged = (
       ack: () => Promise<TurnAck>,
       reply: Effect.Effect<void, PortFailure, Scope.Scope>,
@@ -210,13 +274,8 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
         options.notifyDropped(rec);
         return;
       }
-      // The ceiling is about EXECUTION — a turn that may be crashing the process must stop being run. Delivering a
-      // recorded answer costs one message and no model call, so the record the store just dropped gets one last
-      // send instead of "please ask again" over an answer that exists.
       return yield* Effect.scoped(hooks.deliverOnce(options.deliverAnswer(rec, stranded))).pipe(
         Effect.matchEffect({
-          // The store has already said, at error level, that this turn will not be run again. Silence after that
-          // reads as "nothing happened"; this line is what distinguishes it from a delivered answer.
           onSuccess: () =>
             Effect.sync(() =>
               log.info(
@@ -230,23 +289,16 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
                 `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
                   `either (conversation=${rec.conversation}) — the answer is gone: ${String(error.cause)}`,
               );
-              // The record is off disk, so nothing will retry this. The asker is owed an ending — without one, a
-              // queue notice this turn put up stays in the chat forever reading "Queued".
               options.notifyDropped(rec);
             }),
         }),
       );
     }
-    // The store has logged that the attempt could not be recorded; a restart replays the turn.
     if (decision === "defer") return;
     const startedAt = Date.now();
-    // A recovered answer reads no discussion: the answer exists, and only its delivery is owed.
     const recovered = rec.answer;
     let answered = recovered !== undefined;
-    // A recovered answer is not sent to the Agent: there is nothing to prepare, and nothing for the next input to wait for.
     if (recovered !== undefined) slot.release();
-    // One stable prefix, so every `turn done:`/`turn failed:` has a `turn start:` to grep back to; what kind of work
-    // it is rides along as a field.
     log.info(
       `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
         `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
@@ -260,7 +312,6 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
                 rec,
                 discussion,
                 (answer) => {
-                  // Only a recorded answer is recoverable — an untracked run has no record to keep it in.
                   answered = store.answered(rec.id, answer, answerKey());
                 },
                 hooks,
@@ -285,11 +336,7 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
           }),
       }),
     );
-    // An answer that exists but did not reach the chat is the one failure worth another start: re-delivering it costs
-    // one message and no model call, and `startAttempt` bounds how often that is tried. Everything else — delivered,
-    // or failed before there was an answer — is done here. Interruption never reaches this removal.
     if (delivered || !answered) {
-      // Before the record goes: a crash between the two leaves a record whose answer is skipped, not delivered twice.
       const key = answerKey();
       if (delivered && key !== undefined) options.delivered.add(key);
       store.remove(rec.id);
@@ -315,8 +362,8 @@ export function createTurnRunner<
   const recoveredIds = new Set<string>();
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {
-      store.add(options.toStored(rec)); // pre-ACK: a failed write throws → 500 → redelivery
-      seen?.add(rec.id); // post-persist — recording first could turn a failed write into silent loss
+      store.add(options.toStored(rec));
+      seen?.add(rec.id);
     }
     queue.accept(rec);
   };

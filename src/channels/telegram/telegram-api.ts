@@ -8,7 +8,7 @@
  *  2. Only a 429 is retried (bounded attempts, honouring `retry_after` up to FLOOD_WAIT_MAX_S per
  *     wait); a longer flood ban or exhausted retries fail visibly. No other failure class is retried:
  *     the request may have been processed, and a retried sendMessage would double-deliver. A caller whose
- *     write is DROPPABLE spends no budget on it — see kit/transport.ts.
+ *     write is DROPPABLE spends no budget on it — see kit/ingress.ts.
  *  3. Success requires the body's own `ok:true` — an intermediary's HTTP 200 is not a sent message.
  *  4. Every failure is a {@link TelegramApiError} naming the method: self-description is a property of
  *     the error type, not per-call-site string assembly.
@@ -18,9 +18,9 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
-import { attachmentPath } from "../kit/attachment-path.ts";
-import type { CallOptions } from "../kit/transport.ts";
+import type { ImageAttachment as ImageRef } from "../kit/invoke.ts";
+import { attachmentPath } from "../kit/text.ts";
+import type { CallOptions } from "../kit/ingress.ts";
 import type { TelegramUpdate } from "./parse.ts";
 
 /** Telegram's hard text limit per message. */

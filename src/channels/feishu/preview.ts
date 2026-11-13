@@ -10,11 +10,10 @@
  * with NO live updates; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import type { TurnEvent } from "../kit/invoke-turn-kit.ts";
+import type { TurnEvent } from "../kit/invoke.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { previewPump, renderReply } from "../kit/delivery.ts";
 import { type PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
@@ -26,7 +25,7 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
-import { DROPPABLE_FRAME } from "../kit/transport.ts";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -35,10 +34,12 @@ import {
   composeTurnBody,
   createTurnView,
   defaultErrorMessage,
+  previewPump,
+  renderReply,
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "../kit/preview-kit.ts";
+} from "../kit/preview.ts";
 import { truncateCodePointPrefix, truncateUtf8 } from "../kit/text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */

@@ -2,7 +2,7 @@
  * The ONE Slack transport per bot a process holds: the mounted channel's, shared with the scaffolded send tool, found
  * by the bot token both hold.
  */
-import { roomThreads } from "../kit/room-threads.ts";
+import { roomThreads } from "../kit/history.ts";
 import { type SlackApi, createSlackApi } from "./slack-api.ts";
 
 /** What a proactive sender needs: Markdown delivery and file upload. */
@@ -26,7 +26,7 @@ export function slackTransport(botToken: string): SlackTransport {
 }
 
 /**
- * The threads of the channel the message running in `sessionId` was asked in, and only those (`kit/room-threads.ts`):
+ * The threads of the channel the message running in `sessionId` was asked in, and only those (`kit/history.ts`):
  * `list()` its recent threads, `read(threadTs)` one of them. Throws outside a Slack channel turn served by this
  * process.
  */

@@ -13,11 +13,11 @@
  * or hide its still-readable siblings.
  */
 import type { Agent } from "../../agent-api.ts";
-import type { ImageAttachment as ImageRef } from "../kit/invoke-turn-kit.ts";
 import type * as Stream from "effect/Stream";
 import type { PortFailure } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
+  type ImageAttachment as ImageRef,
   attachedFilesManifest,
   attributedFileName,
   backgroundImagesManifest,
@@ -27,7 +27,7 @@ import {
   turnStream,
   type TurnEvent,
   promptContent,
-} from "../kit/invoke-turn-kit.ts";
+} from "../kit/invoke.ts";
 import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
 import type { FeishuBufferedRef } from "./history.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";

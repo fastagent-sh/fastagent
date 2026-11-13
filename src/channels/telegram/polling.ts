@@ -10,7 +10,7 @@
  */
 import type { LongConnection } from "../../channel.ts";
 import { log } from "../../log.ts";
-import { pause } from "../kit/abortable.ts";
+import { pause } from "../kit/ingress.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 import type { TelegramUpdate } from "./parse.ts";
 

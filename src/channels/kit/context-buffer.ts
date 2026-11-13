@@ -21,7 +21,7 @@
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { log } from "../../log.ts";
-import type { Discussion } from "./place-history.ts";
+import type { Discussion } from "./history.ts";
 import { fitToBudget } from "./fold-budget.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "../../state-file.ts";
 

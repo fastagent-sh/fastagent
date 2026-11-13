@@ -11,7 +11,7 @@ import {
   agentError,
   errorData,
 } from "../../src/agent-api.ts";
-import type { TurnEvent } from "../../src/channels/kit/invoke-turn-kit.ts";
+import type { TurnEvent } from "../../src/channels/kit/invoke.ts";
 
 /** How a scripted message ends. */
 export type Ending = { status: "completed" | "incomplete" | "canceled" } | { status: "failed"; error: AgentErrorData };
