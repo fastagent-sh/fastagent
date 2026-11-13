@@ -70,7 +70,14 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
         thinkingLevels: Schema.Array(ThinkingLevel),
       }),
     ),
+    /** The model a session answers with when it names none; absent when none is set, or the one set is `unusableDefault`. */
     defaultModel: Schema.optionalKey(ModelRef),
+    /**
+     * The default model the configuration names and this agent does not have, as the configuration wrote it, and why
+     * (a provider retired it, a catalog update renamed it). The agent opens without a default, and a message that names
+     * no model is refused `missing_model`.
+     */
+    unusableDefault: Schema.optionalKey(Schema.Struct({ spec: Schema.String, reason: Schema.String })),
   }),
 ) {}
 

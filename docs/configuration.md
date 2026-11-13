@@ -96,7 +96,9 @@ where each value came from.
 ```
 
 With none set, a command in a terminal lets you pick one (and sign in), then prints the line to keep in the config.
-Without a terminal it fails with `missing model`. `fastagent models [search]` lists the specs.
+Without a terminal it fails with `missing model`. `fastagent models [search]` lists the specs. A command that runs the
+agent stops at startup when the model it resolves is not in the lists; `openAgent` opens an agent whose configured
+default is not, as [embedding](embedding.md) says.
 
 `deploy` takes the model from the configuration only, never from your shell. The model lists are refreshed from
 [pi.dev](https://pi.dev/models) at most every 4 hours and kept in `<state root>/models/`; `FASTAGENT_OFFLINE=1` skips

@@ -138,7 +138,7 @@ Every operation answers or rejects with an `AgentError`: `code`, `message`, `ret
 | `unauthorized` | No key, or a wrong one (HTTP only) | no | 401 |
 | `not_found` | An unknown session, message, fork source or cursor | no | 404 |
 | `busy` | `running`: refused by a busy session; `queue_full`: the session's queue is full; `capacity`: the process holds all it can | yes | 409; 429 and 503 with `Retry-After` |
-| `missing_model` | The session names no model the agent has | no | 409 |
+| `missing_model` | The session names no model the agent has, or none and the agent has no default (`info().unusableDefault` says when one is configured and unusable) | no | 409 |
 | `missing_tool` | The session names a tool the agent no longer has | no | 409 |
 | `unconfirmed` | A send may have been recorded and could not be confirmed | no | 500 |
 | `unavailable` | The agent cannot answer now, and the same request is safe to send again | yes | 503 with `Retry-After` |
