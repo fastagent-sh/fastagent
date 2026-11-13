@@ -52,15 +52,13 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    */
   secrets: Readonly<Record<string, string | undefined>>;
   /**
-   * The base environment of the processes the agent starts (`baseEnv(process.env)` is the CLI's): the commands of
-   * its declared packages come ahead on its `PATH`, and the declared secrets are added to it. Nothing else of this
-   * process's reaches them.
+   * The base environment of the processes the agent starts (`baseEnv(process.env)` is the CLI's), plus the declared
+   * secrets. Nothing else of this process's reaches them.
    */
   env: Readonly<Record<string, string>>;
   /**
-   * The environment FastAgent's own work for the instance runs in: installing the declared packages, cloning content,
-   * finding `git` and `mise`, and where a CLI instance's files are. The CLI gives this process's; an app, its `env`.
-   * The instance's secrets are added to it.
+   * The environment FastAgent's own work for the instance runs in: cloning content, finding `git`, and where a CLI
+   * instance's files are. The CLI gives this process's; an app, its `env`. The instance's secrets are added to it.
    */
   ownEnv: Readonly<Record<string, string | undefined>>;
   /** Who runs the instance: what decides how a channel that names no way receives, and whether its prompt describes a deployment. */
@@ -196,11 +194,11 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const text = openText(dir, options.config);
   const mcpServers = declareMcp(dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
-  // may run several agents, each with its own values and packages.
+  // may run several agents, each with its own values.
   const secrets = definedValues(options.secrets);
   const code = buildDefinition(definition, secrets, { ...config, dev: options.runsAs.dev });
-  // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
-  // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
+  // FastAgent's own work for the instance (cloning content, finding its files) runs in this process's environment and
+  // the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };
   const processEnv = processEnvironment(
     {
