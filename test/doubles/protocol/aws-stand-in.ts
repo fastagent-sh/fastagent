@@ -4,7 +4,7 @@ import { createHash, createHmac } from "node:crypto";
  * The microVM's metadata service and Secrets Manager as the container reaches them, with a SigV4 check that does not
  * use the signer under test: it recomputes the signature from the request's own headers and the role's secret key, so a
  * signature the real service would refuse is refused here. One double for `runtime-secrets.ts`, driven on Bun by
- * test/bun/runtime-secrets.ts.
+ * test/smoke/bun/runtime-secrets.ts.
  */
 const ACCESS_KEY_ID = "AKIATESTACCESSKEY";
 const SECRET_ACCESS_KEY = "TESTSECRETKEY/abc123";

@@ -93,7 +93,8 @@ it("every top-level CLI command in src/cli/program.ts has at least one CLI test"
     .map((file) => readFileSync(file, "utf8"))
     .join("\n");
   const uncovered = commands.filter(
-    (cmd) => !new RegExp(`(?:runInProcess|run|spawnCli|cliInit|cli)\\(\\[\\s*"${cmd}"|\\["${cmd}"`).test(testCorpus),
+    (cmd) =>
+      !new RegExp(`(?:runInProcess|run|spawnCli|whileRunning|cliInit|cli)\\(\\s*\\[\\s*"${cmd}"`).test(testCorpus),
   );
   expect(uncovered).toEqual([]);
 });

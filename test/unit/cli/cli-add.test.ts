@@ -54,4 +54,23 @@ describe("a channel at the command line: the program by `add`, the app by `chann
       }
     },
   );
+
+  it("`channels setup` hands unattended setup to startTicket and rejects unknown channels with exit 2", async () => {
+    const dir = await agentWorkspace("fa-channels-setup-", {
+      "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
+    });
+    expect((await runInProcess(["add", "lark", dir, "--json"])).code).toBe(0);
+
+    const bad = await runInProcess(["channels", "setup", "nope", dir]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("`channels setup` sets up telegram, slack, feishu and lark");
+
+    const setup = await runInProcess(["channels", "setup", "lark", dir, "--json"]);
+    expect(setup.code, setup.stderr).toBe(0);
+    expect(started).toHaveLength(1);
+    expect(JSON.parse(setup.stdout)).toMatchObject({
+      status: "need_user_action",
+      url: "http://127.0.0.1:4242/setup/0123456789abcdef0123456789abcdef0123456789abcdef",
+    });
+  });
 });

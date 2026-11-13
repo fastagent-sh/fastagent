@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { stat, writeFile } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
+import { agentWorkspace, besideAgent, runInProcess } from "../../doubles/cli-run.ts";
+import { gitAnswersIn } from "../../doubles/git-double.ts";
+
+vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
 /** What `info` runs with: no model from this machine's shell. */
 const withoutModel = (): NodeJS.ProcessEnv => {
@@ -77,5 +80,29 @@ describe("cli: mcp list", () => {
     expect(refused.stderr).toMatch(
       /MCP server "docs" is declared by the program \(context\.json\) and by the instance/,
     );
+  });
+});
+
+describe("cli: content", () => {
+  it("adds, lists as JSON, removes content, and exits 2 on an unknown name", async () => {
+    const dir = await agentWorkspace("fa-cli-content-");
+    const rawDocsDir = besideAgent(dir, "docs");
+    await mkdir(rawDocsDir, { recursive: true });
+    const docsDir = await realpath(rawDocsDir);
+    gitAnswersIn(docsDir, { "rev-parse --show-toplevel": undefined });
+
+    const added = await runInProcess(["content", "add", docsDir, dir]);
+    expect(added.code, added.stderr).toBe(0);
+
+    const listed = await runInProcess(["content", "list", dir, "--json"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(JSON.parse(listed.stdout).content).toEqual([expect.objectContaining({ name: "docs", location: docsDir })]);
+
+    const removed = await runInProcess(["content", "remove", "docs", dir]);
+    expect(removed.code, removed.stderr).toBe(0);
+
+    const missing = await runInProcess(["content", "remove", "docs", dir]);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toMatch(/no content named "docs"/);
   });
 });
