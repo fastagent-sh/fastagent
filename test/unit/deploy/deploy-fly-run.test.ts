@@ -73,8 +73,7 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       ok: false,
       gate:
         "not logged in to Fly — run `fly auth login` in a terminal (it opens a browser), or set FLY_API_TOKEN in this " +
-        "shell's environment (it is not a value of the deployment); then re-run. " +
-        "From a coding agent, `fastagent deploy fly ../bot --run --json` hands the sign-in to its user",
+        "shell's environment (it is not a value of the deployment); then re-run",
     });
     expect(fly.cmds()).toEqual(["auth whoami"]);
   });

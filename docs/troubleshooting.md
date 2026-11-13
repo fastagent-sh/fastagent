@@ -127,8 +127,7 @@ The state root is not on persistent storage. Generated deployments handle this; 
 
 ### A deploy stopped and the message does not say why
 
-The host CLI's output is printed above the last line; a `--json` ticket has it as `log_tail` (the full log at `log`).
-The same inputs fail the same way, so read it first.
+The host CLI's output is printed above the error line. The same inputs fail the same way, so read it first.
 
 - **Fly: `authentication handshake failed` or `connecting to Depot builder: timed out`:** a VPN or a proxy's TUN mode
   blocks Fly's builder. Turn it off for the deploy, or run the printed runbook with `fly deploy --depot=false`.

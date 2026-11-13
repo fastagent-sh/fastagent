@@ -29,7 +29,7 @@ import { loadEnvValues } from "../../value-file.ts";
 import { deploymentName } from "../../deploy/deployment-name.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterDeploymentEnv } from "../instance.ts";
-import { printReport } from "../ticket.ts";
+import { printReport } from "../shared.ts";
 import { join } from "node:path";
 
 /** The targets that keep a deployment's values in a store of their own. */

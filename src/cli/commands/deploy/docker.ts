@@ -16,7 +16,7 @@ import { type BoxShell, processShell } from "../../../deploy/box-shell.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
 import { type ModelKey, declaredNames, secretNeeds } from "../../../deploy/secrets.ts";
 import { failStartup } from "../../fail.ts";
-import { type Answerer, type HostDeploy, boxLoginStep, leftToPerson } from "./shared.ts";
+import { type Answerer, type HostDeploy, boxLoginStep } from "./shared.ts";
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { DeclaredSecret } from "../../../declared-secrets.ts";
 
@@ -100,7 +100,6 @@ async function runDeployDocker(params: {
   envFile: string | undefined;
 }): Promise<string | undefined> {
   const { agentDir, composeFile, port, channels } = params;
-  const leave = leftToPerson(params.answerer);
   const needs = secretNeeds(params.modelAuth, params.declaredSecrets, params.modelKey);
   const outcome = await deployDockerRun(
     {
@@ -123,7 +122,6 @@ async function runDeployDocker(params: {
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   for (const note of ingressNotes(channels, params.publicUrl, outcome.url && `${outcome.url}/health`)) {
     console.error(`[fastagent] note: ${note}`);
-    leave?.(note);
   }
   return outcome.url;
 }

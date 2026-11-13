@@ -271,3 +271,12 @@ export function terminalLoginIO(): LoginIO {
     openUrl: openExternalUrl,
   };
 }
+
+/** Print one JSON object or human-readable lines to stdout. */
+export function printReport(asJson: boolean | undefined, json: Record<string, unknown>, text: readonly string[]): void {
+  if (asJson) {
+    console.log(JSON.stringify(json));
+    return;
+  }
+  for (const line of text) console.log(line);
+}

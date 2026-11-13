@@ -87,10 +87,7 @@ export function deploySecrets(input: {
       ...(source === undefined ? {} : { source }),
       ...(answerer.kind === "terminal" ? { asker: terminalAsker } : {}),
       commands: secretsCommands(host, agentDir, opts.config),
-      say: (line) => {
-        console.error(`[fastagent] note: ${line}`);
-        if (answerer.kind === "ticket") answerer.step.person.afterwards(line);
-      },
+      say: (line) => console.error(`[fastagent] note: ${line}`),
       inform: (line) => console.error(`[fastagent] note: ${line}`),
       ...(api.served ? { mint: [mintApiKey(answerer.kind === "terminal")] } : {}),
       onMinted: async (minted) => {

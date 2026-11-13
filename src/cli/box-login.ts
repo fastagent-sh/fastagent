@@ -12,7 +12,6 @@ import type { LoginIO } from "../harnesses/models/login.ts";
 import type { SignInMethod } from "../sign-in-api.ts";
 import { relayLogin } from "./login-relay.ts";
 import { terminalLoginIO } from "./shared.ts";
-import type { TicketStep } from "./ticket.ts";
 
 export interface BoxLoginRequest {
   host: DeployHost;
@@ -29,8 +28,6 @@ export interface BoxLoginRequest {
   ifMissing?: boolean;
   /** false: never ask; a box without the credential is a failure naming the command to run in a terminal. */
   input: boolean;
-  /** Who answers what the box asks: this terminal by default, or a ticket's process ({@link ticketLoginIO}). */
-  io?: LoginIO;
 }
 
 /**
@@ -60,7 +57,7 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
   if (woken instanceof Error) return woken.message;
   const channel = await shell.open(command).catch((error: Error) => error);
   if (channel instanceof Error) return channel.message;
-  const io = catchingRedirect(request.io ?? terminalLoginIO());
+  const io = catchingRedirect(terminalLoginIO());
   const result = await relayLogin(channel.output, channel.input, io, (line) => console.error(line)).finally(io.close);
   const closed = await channel.closed;
   if (!closed.opened) return closed.error;
@@ -79,13 +76,7 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
     return undefined;
   }
   if (result.reason === "missing") {
-    const forAgent = provider
-      ? `fastagent login ${provider} --method account --deployment ${host} --json`
-      : `${retry} --json`;
-    return (
-      `not logged in: ${result.message} — run \`${retry}\` in a terminal, or \`${forAgent}\` from a coding agent, ` +
-      `which hands the sign-in to its user`
-    );
+    return `not logged in: ${result.message} — run \`${retry}\` in a terminal`;
   }
   if (result.reason === "cancelled") return `login on the deployment cancelled — run \`${retry}\` to log it in`;
   return `login on the deployment failed: ${result.message}`;
@@ -94,35 +85,6 @@ export async function loginOnBox(request: BoxLoginRequest): Promise<string | und
 const CAUGHT_PAGE =
   "<!doctype html><meta charset=utf-8><title>fastagent</title>" +
   "<p>fastagent received the sign-in and sent it to your deployment. Return to your terminal.</p>";
-
-/**
- * A box's sign-in answered by a ticket's process, with no one at a terminal: what the person does is the ticket's
- * (`need_user_action`), and what the box asks is answered as {@link signInInteraction} answers a local sign-in. A choice
- * takes its first option, pi's default; a text question is left blank; the address the browser ended on comes from
- * `login --check --code` (or the redirect {@link catchingRedirect} catches first); a secret it cannot take, and
- * `refusal` says so, since the box only hears that the question was backed out of.
- */
-export function ticketLoginIO(step: TicketStep, retry: string): LoginIO & { refusal(): string | undefined } {
-  let refusal: string | undefined;
-  return {
-    refusal: () => refusal,
-    select: async (_message, options) => options[0]?.value,
-    async prompt(message, opts) {
-      if (opts?.hidden) {
-        refusal = `the sign-in asks "${message}", which only a terminal can answer: run \`${retry}\` in one`;
-        return undefined;
-      }
-      if (!opts?.redirect) return "";
-      const address = await step
-        .address(opts.signal ? AbortSignal.any([opts.signal, step.signal]) : step.signal)
-        .catch(() => undefined);
-      if (address !== undefined) step.person.carriesOn();
-      return address;
-    },
-    note: (message) => console.error(`[fastagent] ${message}`),
-    openUrl: (url, userCode) => step.waits(userCode ? { url, code: userCode } : { url, takesAddress: true }),
-  };
-}
 
 /**
  * A browser OAuth flow sends the owner's browser back to its `redirect_uri`: a localhost address, which on the owner's

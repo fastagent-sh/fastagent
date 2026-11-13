@@ -32,9 +32,10 @@ Without `--run`, `deploy` only writes the files (a `Dockerfile` and the host's m
    `fastagent secrets push|set <host>`.
 4. **Make something reach it**: a channel, a schedule, or the [Agent API](#the-agent-api).
 
-A coding agent deploys with `--run --json`: it gets a ticket and checks it with `fastagent deploy <host> --check
-<ticket>`, relaying each `need_user_action` (a host sign-in, a Feishu app to confirm, the box's model login) to its
-user.
+A coding agent deploys with `--run --json`: when prerequisites (host auth, channel credentials, target secrets) are in
+place it deploys synchronously and prints the JSON outcome; if an interactive step is missing, it stops immediately naming
+what the user must run in a terminal (`fly auth login`, `fastagent channels setup`, `fastagent secrets set`, or
+`fastagent login --deployment`).
 
 ## Several instances
 
