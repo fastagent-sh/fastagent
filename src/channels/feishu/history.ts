@@ -6,9 +6,15 @@
  */
 import { log } from "../../log.ts";
 import { capBufferedRefs } from "../kit/context-buffer.ts";
-import { type PlaceHistory, type PlaceListing, type PlaceMessage, createPlaceHistory } from "../kit/place-history.ts";
-import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
-import { CONTEXT_READ } from "../kit/transport.ts";
+import {
+  type PlaceHistory,
+  type PlaceListing,
+  type PlaceMessage,
+  type ThreadSummary,
+  createPlaceHistory,
+  threadList,
+} from "../kit/history.ts";
+import { CONTEXT_READ } from "../kit/ingress.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
 
@@ -33,7 +39,7 @@ export const isFeishuPosition = (value: unknown): value is FeishuPosition =>
 export const compareFeishuPositions = (a: FeishuPosition, b: FeishuPosition): number => a.at - b.at;
 
 export interface FeishuPlaceHistory extends PlaceHistory<FeishuPosition> {
-  /** The chat's threads among its newest messages, for a tool (`kit/room-threads.ts`). */
+  /** The chat's threads among its newest messages, for a tool (`kit/history.ts`). */
   threads(chatId: string): Promise<string>;
 }
 

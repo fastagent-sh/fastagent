@@ -1,12 +1,11 @@
 /** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
 import type { Json } from "../../agent-api.ts";
-import type { TurnEvent } from "../kit/invoke-turn-kit.ts";
+import type { TurnEvent } from "../kit/invoke.ts";
 import { answerText } from "../../answer-text.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { previewPump, renderReply, serialWriter, turnEnd, unfinishedTurn } from "../kit/delivery.ts";
 import { PortFailure, portJoin } from "../../effect-port.ts";
 import { log } from "../../log.ts";
 import {
@@ -18,10 +17,15 @@ import {
   createTurnView,
   defaultErrorMessage,
   humanizeToolName,
+  previewPump,
+  renderReply,
   revealedAnswer,
+  serialWriter,
   summarizeToolArgs,
   toolLines,
-} from "../kit/preview-kit.ts";
+  turnEnd,
+  unfinishedTurn,
+} from "../kit/preview.ts";
 import {
   type SlackApi,
   type SlackTarget,
@@ -29,7 +33,7 @@ import {
   chunkSlackText,
   isSlackNativeUnavailable,
 } from "./slack-api.ts";
-import { type CallOptions, DROPPABLE_FRAME } from "../kit/transport.ts";
+import { type CallOptions, DROPPABLE_FRAME } from "../kit/ingress.ts";
 
 export type SlackFailure = ChannelFailure;
 export type SlackRendering = "native" | "classic";

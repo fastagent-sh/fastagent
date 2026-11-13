@@ -6,9 +6,15 @@
  * session last read to, as Feishu's does: Slack has no reliable "after this point" (`SlackRange`).
  */
 import { capBufferedRefs } from "../kit/context-buffer.ts";
-import { type PlaceHistory, type PlaceListing, type PlaceMessage, createPlaceHistory } from "../kit/place-history.ts";
-import { type ThreadSummary, threadList } from "../kit/room-threads.ts";
-import { CONTEXT_READ } from "../kit/transport.ts";
+import {
+  type PlaceHistory,
+  type PlaceListing,
+  type PlaceMessage,
+  type ThreadSummary,
+  createPlaceHistory,
+  threadList,
+} from "../kit/history.ts";
+import { CONTEXT_READ } from "../kit/ingress.ts";
 import { slackMessageText } from "./parse.ts";
 import { log } from "../../log.ts";
 import { type SlackApi, SlackApiError, type SlackListedMessage } from "./slack-api.ts";
@@ -23,7 +29,7 @@ const FIRST_READ = 20;
 const SPOKEN_SUBTYPES = new Set(["file_share", "thread_broadcast", "bot_message", "me_message"]);
 
 export interface SlackPlaceHistory extends PlaceHistory<string> {
-  /** The channel's threads among its newest messages, for a tool (`kit/room-threads.ts`); `room` is its place key. */
+  /** The channel's threads among its newest messages, for a tool (`kit/history.ts`); `room` is its place key. */
   threads(room: string): Promise<string>;
 }
 

@@ -5,12 +5,11 @@
  * carry unbalanced HTML); on completion the same message is edited into the final answer as HTML. One
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
-import type { TurnEvent } from "../kit/invoke-turn-kit.ts";
+import type { TurnEvent } from "../kit/invoke.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { previewPump, renderReply } from "../kit/delivery.ts";
-import { DROPPABLE_FRAME } from "../kit/transport.ts";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
 import { type PortFailure, portJoin } from "../../effect-port.ts";
 import {
   RETRY_NOTICE,
@@ -20,10 +19,12 @@ import {
   composeTurnBody,
   createTurnView,
   defaultErrorMessage,
+  previewPump,
+  renderReply,
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "../kit/preview-kit.ts";
+} from "../kit/preview.ts";
 import { log } from "../../log.ts";
 import {
   TELEGRAM_MAX_TEXT,

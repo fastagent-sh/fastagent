@@ -1,4 +1,7 @@
-/** Scoped outbound writers. Frames coalesce; native append/status operations retain every queued write. */
+/**
+ * Channel live-preview state/formatting (`createTurnView`, `applyTurnEvent`) and scoped outbound delivery (`renderReply`,
+ * `previewPump`, `serialWriter`).
+ */
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -6,18 +9,160 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { TurnEvent } from "./invoke-turn-kit.ts";
-import { log } from "../../log.ts";
-import type { ChannelFailure } from "./preview-kit.ts";
+import type { Json, SessionEvent } from "../../agent-api.ts";
+import { answerText } from "../../answer-text.ts";
 import { PortFailure, portError, portJoin } from "../../effect-port.ts";
+import { log } from "../../log.ts";
+import type { TurnEvent } from "./invoke.ts";
+import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 
-/** How a turn ended: answered, or the failure to tell the asker about. */
+export interface ChannelFailure {
+  details: string;
+  retryable: boolean;
+  code?: string;
+}
+
+export function defaultErrorMessage(failed: ChannelFailure): string {
+  return failed.retryable
+    ? "⚠️ Temporary problem — please try again in a moment."
+    : "⚠️ Sorry, something went wrong. Try rephrasing, or check I have access to what you need.";
+}
+
+export const RETRY_NOTICE = "⏳ Temporary problem — retrying…";
+export const THINKING_PLACEHOLDER = "💭 Thinking…";
+
+interface ToolLine {
+  label: string;
+  status: "running" | "ok" | "error";
+  progress?: string;
+}
+
+export interface TurnView {
+  thinking: string;
+  tools: ToolLine[];
+  toolById: Map<string, ToolLine>;
+  answer: string;
+  textOf: (event: SessionEvent) => string;
+  answerSince?: number;
+  retrying: boolean;
+}
+
+export function createTurnView(): TurnView {
+  return {
+    thinking: "",
+    tools: [],
+    toolById: new Map(),
+    answer: "",
+    textOf: answerText(),
+    retrying: false,
+  };
+}
+
+export function applyTurnEvent(view: TurnView, e: TurnEvent, now = Date.now()): boolean {
+  const closedRetry = view.retrying && e.type !== "retrying";
+  if (closedRetry) view.retrying = false;
+  const appended = (text: string): boolean => {
+    if (text === "") return closedRetry;
+    view.answer += text;
+    if (view.answerSince === undefined && view.answer.trim() !== "") view.answerSince = now;
+    return true;
+  };
+  switch (e.type) {
+    case "delta":
+      if (e.channel === "text") return appended(view.textOf(e));
+      view.thinking += e.text;
+      return true;
+    case "tool_started": {
+      const arg = summarizeToolArgs(e.args);
+      const name = humanizeToolName(e.name);
+      const line: ToolLine = { label: arg ? `${name} ${arg}` : name, status: "running" };
+      view.tools.push(line);
+      view.toolById.set(e.toolCallId, line);
+      return true;
+    }
+    case "tool_progress": {
+      const line = view.toolById.get(e.toolCallId);
+      if (line?.status !== "running") return closedRetry;
+      line.progress = e.text;
+      return true;
+    }
+    case "entry": {
+      if (e.entry.kind === "assistant") return appended(view.textOf(e));
+      if (e.entry.kind !== "tool_result") return closedRetry;
+      const data = e.entry.data as { toolCallId?: string; isError?: boolean };
+      const line = data.toolCallId === undefined ? undefined : view.toolById.get(data.toolCallId);
+      if (!line) return closedRetry;
+      line.status = data.isError === true ? "error" : "ok";
+      return true;
+    }
+    case "retrying":
+      view.retrying = true;
+      return true;
+    default:
+      return closedRetry;
+  }
+}
+
+const TOOL_MARK = { running: "…", ok: "✓", error: "✗" } as const;
+
+export function toolLines(view: TurnView): string {
+  return view.tools
+    .map((t) => {
+      const progress = t.status === "running" && t.progress ? ` › ${clip(t.progress, TOOL_PROGRESS_MAX)}` : "";
+      return `🔧 ${t.label} ${TOOL_MARK[t.status]}${progress}`;
+    })
+    .join("\n");
+}
+
+export function thinkingLine(view: TurnView, maxTail: number): string {
+  const t = view.thinking.replace(/\s+/g, " ").trim();
+  return t === "" ? "" : `💭 ${truncateCodePointSuffix(t, maxTail)}`;
+}
+
+export function revealedAnswer(view: TurnView, ageMs: number, now = Date.now()): string {
+  if (view.answer.trim() === "" || view.answerSince === undefined) return "";
+  return now - view.answerSince >= ageMs ? view.answer : "";
+}
+
+export function composeTurnBody(parts: readonly string[]): string {
+  return parts
+    .filter((s) => s.trim() !== "")
+    .join("\n\n")
+    .trim();
+}
+
+const TOOL_ARG_MAX = 48;
+const TOOL_PROGRESS_MAX = 64;
+const TOOL_NAME_MAX = 80;
+
+function clip(s: string, max = TOOL_ARG_MAX): string {
+  const one = s.replace(/\s+/g, " ").trim();
+  return truncateCodePointPrefix(one, max);
+}
+
+export function summarizeToolArgs(args: Json): string {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return clip(String(args));
+  const values = Object.values(args);
+  const primary = values.find((v) => typeof v === "string" || typeof v === "number");
+  if (primary !== undefined) return clip(String(primary));
+  return values.length > 0 ? clip(JSON.stringify(args)) : "";
+}
+
+export function humanizeToolName(name: string): string {
+  const normalize = (s: string): string =>
+    s
+      .replace(/[_\-.]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  const base = mcp ? `${normalize(mcp[1] ?? "")}: ${normalize(mcp[2] ?? "")}` : normalize(name);
+  const label = base.trim() || name.trim() || "Tool";
+  const capitalized = label.charAt(0).toUpperCase() + label.slice(1);
+  return truncateCodePointPrefix(capitalized, TOOL_NAME_MAX);
+}
+
 export type TurnEnd = { answered: true } | { failure: ChannelFailure };
 
-/**
- * Whether this event ends the turn, and how: the message was refused, or the turn's message ended. A message the
- * agent stopped answering at its output limit still answers with what was written.
- */
 export function turnEnd(event: TurnEvent, messageId: string | undefined): TurnEnd | undefined {
   if (event.type === "rejected") {
     const { code, message, retryable } = event.error;
@@ -44,15 +189,10 @@ export function turnEnd(event: TurnEvent, messageId: string | undefined): TurnEn
   }
 }
 
-/**
- * A turn whose stream ended before its message did, after the agent said why (`stream_error`: the message's end could
- * not be recorded, or missed events could not be read back): a failure worth trying again. Undefined when nothing was said.
- */
 export function unfinishedTurn(streamError: string | undefined): ChannelFailure | undefined {
   return streamError === undefined ? undefined : { details: streamError, retryable: true, code: "stream_error" };
 }
 
-/** Snapshot/edit renderers share terminal ownership; platform-specific settle policies stay injected. */
 export function renderReply(
   events: Stream.Stream<TurnEvent, PortFailure>,
   opts: {
@@ -62,7 +202,6 @@ export function renderReply(
     answer: () => string;
     settle: (text: string) => Effect.Effect<void, PortFailure>;
     formatError: (failure: ChannelFailure) => string | undefined;
-    /** The finished reply, handed over before it is delivered — where a channel records it for recovery. */
     onAnswered?: (answer: string) => void;
   },
 ): Effect.Effect<void, PortFailure, Scope.Scope> {
@@ -133,14 +272,12 @@ export function renderReply(
 
 export interface PreviewPump {
   touch(): void;
-  /** Cancel pacing, join an issued write, and prevent any subsequent frame. */
   finish: Effect.Effect<void>;
 }
 
 export function previewPump(opts: {
   flush: () => Promise<void>;
   throttleMs: number;
-  /** Slack's mutation slot precedes a write; stopping the pump can discard this pending frame. */
   beforeFlush?: Effect.Effect<void>;
   onError: (error: unknown) => void;
 }): Effect.Effect<PreviewPump, never, Scope.Scope> {
@@ -155,8 +292,6 @@ export function previewPump(opts: {
       while (dirty && !stopped) {
         dirty = false;
         if (opts.beforeFlush) yield* opts.beforeFlush;
-        // An issued mutation may have reached the platform. Join it, including publishing its id
-        // and diagnosing its outcome, before the final writer takes over.
         yield* portJoin(opts.flush).pipe(
           Effect.catchTag("PortFailure", (error) =>
             Effect.sync(() => {
@@ -185,7 +320,6 @@ export function previewPump(opts: {
         dirty = true;
         const exit = fiber?.pollUnsafe();
         if (fiber && (!exit || Exit.isFailure(exit))) return;
-        // The first placeholder starts before a fast source can reach its terminal event.
         fiber = run(Effect.forkIn(work, scope, { startImmediately: true }));
       },
       finish,
@@ -195,7 +329,6 @@ export function previewPump(opts: {
 
 export interface SerialWriter {
   enqueue(work: () => Promise<void>): void;
-  /** End admission and join every accepted operation, including its caller-owned failure policy. */
   finish: Effect.Effect<void, PortFailure>;
 }
 
@@ -221,9 +354,6 @@ export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> 
         }),
       ),
     );
-    // This finalizer precedes forkScoped's interruption: accepted append/status writes must drain. It must not fail:
-    // a defect makes the scope's typed failure one too, and a `catchTag` downstream misses it. So a write failure no
-    // `finish` reported is said in the log.
     yield* Effect.addFinalizer(() =>
       end.pipe(
         Effect.andThen(Fiber.await(fiber)),

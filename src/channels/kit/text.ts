@@ -1,7 +1,23 @@
-/** Pure Unicode-safe text slicing helpers shared by channel rendering paths (Feishu/Lark cards, the preview kit). */
+/** Pure Unicode-safe text slicing and inbound attachment path helpers shared by messaging channels. */
+import { join, resolve, sep } from "node:path";
 
 /** How much of a replied-to message is quoted back into a prompt. */
 export const REFERENT_MAX_CODE_POINTS = 4096;
+
+/** Inbound attachment root inside a channel's state directory. */
+export const attachmentsDir = (stateHome: string): string => join(stateHome, "files");
+
+export function attachmentPath(
+  filesDir: string,
+  conversationId: string | number,
+  fileName: string,
+): { dir: string; name: string; path: string } {
+  const id = String(conversationId).replace(/\p{Surrogate}/gu, "\uFFFD");
+  const dir = resolve(filesDir, `c-${encodeURIComponent(id)}`);
+  const cleaned = fileName.replace(/[/\\]/g, "_");
+  const name = resolve(dir, cleaned).startsWith(dir + sep) ? cleaned : "file";
+  return { dir, name, path: resolve(dir, name) };
+}
 
 /** Take at most `maxPoints` Unicode code points from the start, without adding a marker. */
 export function codePointPrefix(text: string, maxPoints: number): string {

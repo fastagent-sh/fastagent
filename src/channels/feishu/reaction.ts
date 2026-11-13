@@ -3,7 +3,7 @@
  * when it is answered. Removing a reaction needs the id the platform gave it, so the mark keeps it.
  */
 import { log } from "../../log.ts";
-import { NO_ACK, type TurnAck } from "../kit/turn-runner.ts";
+import { NO_ACK, type TurnAck } from "../kit/turn.ts";
 import type { FeishuApi } from "./feishu-api.ts";
 
 const WAITING = "OnIt";

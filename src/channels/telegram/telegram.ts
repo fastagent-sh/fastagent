@@ -5,8 +5,6 @@
 import { join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { log } from "../../log.ts";
-import { readBodyCapped } from "../body.ts";
-import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
 import { type BufferEntry, collectAttachments, createContextBuffer, ownPostEntry } from "./context-buffer.ts";
@@ -29,23 +27,57 @@ import {
 } from "./parse.ts";
 import { registerTelegramTransport } from "./shared-api.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
-import { attachmentsDir } from "../kit/attachment-path.ts";
-import { dispatchStop } from "../kit/stop-command.ts";
-import { createTaskTracker } from "../kit/tasks.ts";
+import { attachmentsDir } from "../kit/text.ts";
+import { createJsonWebhookRoute } from "../kit/ingress.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
-import { createAskLog, readStart } from "../kit/ask-log.ts";
+import { createAskLog, readStart } from "../kit/history.ts";
 import { foldBudget } from "../kit/fold-budget.ts";
-import { createMessageOwners } from "../kit/message-owners.ts";
+import { createMessageOwners, createSeenRing, isSenderConversation, senderConversation } from "../kit/state.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
-import { isSenderConversation, senderConversation } from "../kit/sender-conversation.ts";
-import { createSeenRing } from "../kit/seen.ts";
-import { NO_ACK, createTurnRunner } from "../kit/turn-runner.ts";
-import { SHARED_ANSWER_NOTICE } from "../kit/turn-gate.ts";
+import {
+  DROPPED_TURN_NOTICE,
+  NO_ACK,
+  SHARED_ANSWER_NOTICE,
+  createTaskTracker,
+  createTurnRunner,
+  dispatchStop,
+} from "../kit/turn.ts";
+import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { acknowledgeTelegramAsk } from "./reaction.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { portJoin } from "../../effect-port.ts";
 import { pollTelegramUpdates } from "./polling.ts";
-import { type StoredTurn, createTurnStore } from "./turn-store.ts";
+
+interface StoredTurn extends TurnRecordBase {
+  placeKey: string;
+  baseText: string;
+  chatId: number | string;
+  threadId?: number;
+  replyTo?: number;
+  askedIn?: { chatId: number | string; messageId: number };
+  imageFileIds: string[];
+  fileIds: string[];
+}
+
+function isStoredTurn(t: unknown): t is StoredTurn {
+  const r = t as StoredTurn;
+  const strings = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === "string");
+  return (
+    typeof r?.id === "string" &&
+    typeof r.conversation === "string" &&
+    typeof r.placeKey === "string" &&
+    typeof r.baseText === "string" &&
+    (typeof r.chatId === "string" || typeof r.chatId === "number") &&
+    (r.threadId === undefined || typeof r.threadId === "number") &&
+    (r.replyTo === undefined || typeof r.replyTo === "number") &&
+    (r.askedIn === undefined ||
+      (typeof r.askedIn?.messageId === "number" &&
+        (typeof r.askedIn.chatId === "string" || typeof r.askedIn.chatId === "number"))) &&
+    strings(r.imageFileIds) &&
+    strings(r.fileIds) &&
+    typeof r.attempts === "number"
+  );
+}
 
 // Re-export the public surface authored elsewhere, so `@fastagent-sh/fastagent/telegram` keeps one entry point.
 export { defaultTelegramRoute, telegramEnvelope, telegramStop };
@@ -148,15 +180,18 @@ function createTelegramRuntime(
   });
   // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
   // replay on the next start.
-  const store = createTurnStore(join(stateHome, "turns.json"));
+  const store = createTurnStore<StoredTurn>(join(stateHome, "turns.json"), {
+    label: "[telegram]",
+    isRecord: isStoredTurn,
+    order: (a, b) => Number(a.id) - Number(b.id),
+  });
   const sideTasks = createTaskTracker("[telegram]");
   const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
 
   // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
   // operator log line.
   const notifyDropped = (r: PendingTurn): void => {
-    const body = "⚠️ I couldn’t complete an earlier request — please ask again.";
-    void sendMessage(apiBaseUrl, botToken, targetOf(r), body, { html: false }).catch((e) =>
+    void sendMessage(apiBaseUrl, botToken, targetOf(r), DROPPED_TURN_NOTICE, { html: false }).catch((e) =>
       log.warn(`[telegram] could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
     );
   };
@@ -358,25 +393,18 @@ export function telegramChannel(options: TelegramChannelOptions): ChannelModule 
       );
     }
     const runtime = createTelegramRuntime({ ...options, apiBaseUrl }, ctx);
-    const handler = async (req: Request): Promise<Response> => {
-      if (req.method !== "POST") return text("POST only\n", 405);
-      // Fail closed: a missing/wrong secret token is 401, never routed.
-      if (!secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secretToken)) {
-        return text("invalid secret token\n", 401);
-      }
-      const body = await readBodyCapped(req, MAX_UPDATE_BYTES);
-      if ("tooLarge" in body) return text("payload too large\n", 413);
-      let update: TelegramUpdate;
-      try {
-        update = JSON.parse(body.text) as TelegramUpdate;
-      } catch {
-        return text("invalid json\n", 400);
-      }
-      runtime.accept(update);
-      return new Response(null, { status: 200 });
-    };
-    // Test/observability seam: await the fire-and-forget turns this handler enqueues.
-    (handler as typeof handler & { turnsIdle?: () => Promise<void> }).turnsIdle = runtime.turnsIdle;
+    const handler = createJsonWebhookRoute<TelegramUpdate>({
+      maxBytes: MAX_UPDATE_BYTES,
+      turnsIdle: runtime.turnsIdle,
+      beforeBody: (req) =>
+        secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secretToken)
+          ? undefined
+          : new Response("invalid secret token\n", { status: 401 }),
+      handle: (_req, _raw, update) => {
+        runtime.accept(update);
+        return new Response(null, { status: 200 });
+      },
+    });
     return { "POST /telegram": handler };
   };
 }

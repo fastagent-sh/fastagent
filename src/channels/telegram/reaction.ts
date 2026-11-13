@@ -4,8 +4,8 @@
  * Telegram lets a bot react with.
  */
 import { log } from "../../log.ts";
-import { DROPPABLE_FRAME } from "../kit/transport.ts";
-import { NO_ACK, type TurnAck } from "../kit/turn-runner.ts";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
+import { NO_ACK, type TurnAck } from "../kit/turn.ts";
 import { callApi } from "./telegram-api.ts";
 
 const WAITING = "👀";
@@ -26,7 +26,7 @@ const react = (api: string, botToken: string, ask: AskedMessage, emoji: string |
       chat_id: ask.chatId,
       message_id: ask.messageId,
       reaction: emoji === undefined ? [] : [{ type: "emoji", emoji }],
-      // Decoration: never worth waiting out a rate limit, which would hold the turn's end (kit/transport.ts).
+      // Decoration: never worth waiting out a rate limit, which would hold the turn's end (kit/ingress.ts).
     },
     DROPPABLE_FRAME,
   );

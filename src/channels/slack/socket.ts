@@ -14,7 +14,7 @@
 import type { LongConnection } from "../../channel.ts";
 import { RuntimeWebSocket, pinger, watchPongs } from "../../runtime-websocket.ts";
 import { log } from "../../log.ts";
-import { pause, whenAborted } from "../kit/abortable.ts";
+import { pause, whenAborted } from "../kit/ingress.ts";
 import type { SlackEventEnvelope } from "./parse.ts";
 
 const RETRY_FIRST_MS = 1_000;
