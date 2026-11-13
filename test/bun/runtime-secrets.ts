@@ -1,8 +1,7 @@
 /**
  * The AgentCore container's read of its secret on Bun, where vitest does not run: CI's Bun job runs this file
- * (`bun test/bun/runtime-secrets.ts`), and test/agentcore-secrets.test.ts holds the same contract on Node, against the
- * same stand-in. The container signs GetSecretValue with `@smithy/signature-v4` over its own hash; the stand-in checks
- * the signature with a computation of its own.
+ * (`bun test/bun/runtime-secrets.ts`), against aws-stand-in.ts. The container signs GetSecretValue with
+ * `@smithy/signature-v4` over its own hash; the stand-in checks the signature with a computation of its own.
  */
 import { applyRuntimeSecrets } from "../../src/deploy/agentcore/runtime-secrets.ts";
 import { awsStandIn } from "../aws-stand-in.ts";

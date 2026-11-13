@@ -104,28 +104,29 @@ describe("cli: destroy agentcore", () => {
 
   it("dry-run reports resources without deleting; --run deletes deployment resources while keeping foreign bucket data", async () => {
     const dir = await agentWorkspace("fa-destroy-run-", {
-      "fastagent.config.ts": `export default { name: "my-agent", defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "package.json": '{"type":"module","name":"my-agent"}\n',
     });
     const env = { ...process.env, AWS_REGION: "us-west-2" };
 
     const dryAws = withForeignBucket();
     const dryRun = await runInProcess(["destroy", "agentcore", dir], undefined, env);
     expect(dryRun.code, dryRun.stderr).toBe(0);
-    expect(dryRun.stdout).toContain("what a deploy of");
-    expect(dryRun.stdout).toContain("NOT MINE TO DELETE: bucket");
+    expect(dryRun.stdout).toContain('what a deploy of "my-agent" put in this account:');
+    expect(dryRun.stdout).toContain("NOT MINE TO DELETE: bucket fa-my-agent-123456789012");
     expect(dryRun.stdout).toContain("nothing was deleted. Re-run with --run to delete all of it.");
+    expect(dryAws.cmds()).toContain("cloudformation describe-stacks --stack-name fastagent-my-agent --output json");
     expect(dryAws.cmds().some((cmd) => cmd.includes("delete-"))).toBe(false);
 
     const runAws = withForeignBucket();
     const deleted = await runInProcess(["destroy", "agentcore", dir, "--run"], undefined, env);
     expect(deleted.code, deleted.stderr).toBe(0);
     expect(deleted.stdout).toContain("deleted:");
-    expect(deleted.stdout).toContain("KEPT: bucket");
+    expect(deleted.stdout).toContain("KEPT: bucket fa-my-agent-123456789012");
     expect(runAws.cmds()).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("cloudformation delete-stack"),
-        expect.stringContaining("ecr delete-repository"),
-        expect.stringContaining("secretsmanager delete-secret"),
+        "cloudformation delete-stack --stack-name fastagent-my-agent",
+        "ecr delete-repository --repository-name fastagent/my-agent --force",
+        "secretsmanager delete-secret --secret-id fastagent/my-agent --force-delete-without-recovery",
       ]),
     );
     expect(runAws.cmds().some((cmd) => cmd.startsWith("s3api delete-"))).toBe(false);
@@ -134,7 +135,9 @@ describe("cli: destroy agentcore", () => {
 
 describe("cli: logs agentcore", () => {
   it("refuses an unsupported host or invalid --source with exit 2, and refuses when the stack is absent", async () => {
-    const dir = await agentWorkspace("fa-logs-refuse-");
+    const dir = await agentWorkspace("fa-logs-refuse-", {
+      "package.json": '{"type":"module","name":"my-agent"}\n',
+    });
     expect((await runInProcess(["logs", "fly", dir])).code).toBe(2);
 
     const badSource = await runInProcess(["logs", "agentcore", dir, "--source", "other"]);
@@ -142,18 +145,19 @@ describe("cli: logs agentcore", () => {
     expect(badSource.stderr).toContain('logs: --source must be "runtime" or "forwarder"');
 
     recordHostCli("aws", ({ args }) =>
-      args[0] === "cloudformation" ? { code: 254, stderr: "Stack with id fastagent-bot does not exist" } : {},
+      args[0] === "cloudformation" ? { code: 254, stderr: "Stack with id fastagent-my-agent does not exist" } : {},
     );
     const absent = await runInProcess(["logs", "agentcore", dir, "--source", "forwarder"]);
     expect(absent.code).toBe(1);
-    expect(absent.stderr).toMatch(/no AgentCore stack .* deploy it first/);
+    expect(absent.stderr).toContain("no AgentCore stack fastagent-my-agent in this account/region — deploy it first");
   });
 
-  it("discovers the runtime log group from stack outputs and tails it with --since", async () => {
+  it("discovers the runtime and forwarder log groups from the derived stack and tails them", async () => {
     const dir = await agentWorkspace("fa-logs-ok-", {
-      "fastagent.config.ts": `export default { name: "my-agent", defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "package.json": '{"type":"module","name":"my-agent"}\n',
+      "staging.json": '{"name":"staging"}\n',
     });
-    const aws = recordHostCli("aws", ({ args }) => {
+    const runtimeAws = recordHostCli("aws", ({ args }) => {
       if (args[0] === "cloudformation") {
         return {
           stdout: JSON.stringify([
@@ -173,6 +177,35 @@ describe("cli: logs agentcore", () => {
     const tailed = await runInProcess(["logs", "agentcore", dir, "--since", "10m"]);
     expect(tailed.code, tailed.stderr).toBe(0);
     expect(tailed.stderr).toContain("runtime → /aws/bedrock-agentcore/runtimes/rt_123-DEFAULT");
-    expect(aws.cmds()).toContain("logs tail /aws/bedrock-agentcore/runtimes/rt_123-DEFAULT --format short --since 10m");
+    expect(runtimeAws.cmds()).toContain(
+      "cloudformation describe-stacks --stack-name fastagent-my-agent --query Stacks[0].Outputs --output json",
+    );
+    expect(runtimeAws.cmds()).toContain(
+      "logs tail /aws/bedrock-agentcore/runtimes/rt_123-DEFAULT --format short --since 10m",
+    );
+
+    const forwarderAws = recordHostCli("aws", ({ args }) => {
+      if (args[0] === "cloudformation") return { stdout: "[]" };
+      if (args[0] === "logs" && args[1] === "describe-log-groups") {
+        return { stdout: JSON.stringify(["/aws/lambda/fastagent-staging-forwarder"]) };
+      }
+      return {};
+    });
+
+    const tailedForwarder = await runInProcess([
+      "logs",
+      "agentcore",
+      dir,
+      "--source",
+      "forwarder",
+      "--config",
+      join(dir, "staging.json"),
+    ]);
+    expect(tailedForwarder.code, tailedForwarder.stderr).toBe(0);
+    expect(tailedForwarder.stderr).toContain("forwarder → /aws/lambda/fastagent-staging-forwarder");
+    expect(forwarderAws.cmds()).toContain(
+      "cloudformation describe-stacks --stack-name fastagent-staging --query Stacks[0].Outputs --output json",
+    );
+    expect(forwarderAws.cmds()).toContain("logs tail /aws/lambda/fastagent-staging-forwarder --format short");
   });
 });
