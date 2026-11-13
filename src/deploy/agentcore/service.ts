@@ -156,7 +156,7 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
 
 /**
  * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's ONLY reachable
- * surface (channels/agentcore.ts).
+ * surface (`adapter.ts`).
  */
 function mountAgentcore(options: {
   agent: Agent;
@@ -211,7 +211,7 @@ function mountAgentcore(options: {
 
 /**
  * The alarm mirror: each schedule as a recurring EventBridge schedule and each pending wake-up as a one-shot one, set
- * by the forwarder (schedule/wake-alarm.ts), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
+ * by the forwarder (`wake-alarm.ts`), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
  * clock starts: the first wake poll may advance a recurring entry, and that save must already re-arm its alarm.
  * Without the wake secret there is no way to set one, which is said.
  */

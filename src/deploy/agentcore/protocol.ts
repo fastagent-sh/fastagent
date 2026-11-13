@@ -28,7 +28,7 @@ export const ENVELOPE_KINDS = ["webhook", "schedule-fire", "wake-poke", "probe"]
  * reports. IAM is what decides who gets to ask at all.
  *
  * ONE reading, because the deferred wrapper answers a probe before the adapter exists and would otherwise spell the
- * same rule twice (channels/agentcore-service.ts).
+ * same rule twice (`service.ts`).
  */
 export function fromForwarder(envelope: { auth?: unknown } | undefined, expected: string | undefined): boolean {
   return secretEquals(envelope?.auth, expected);
@@ -102,7 +102,7 @@ export interface WakeAlarm {
  */
 export interface RecurringSchedule {
   name: string;
-  /** EventBridge's `cron(...)` (schedule/eventbridge-cron.ts). */
+  /** EventBridge's `cron(...)` (`eventbridge-cron.ts`). */
   expression: string;
   /** IANA zone the expression is evaluated in. */
   tz: string;

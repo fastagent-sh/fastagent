@@ -109,7 +109,7 @@ export const agentcoreHost: HostDeploy = {
       );
     }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
-    // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A schedule that does not build is the
+    // mirrors them into EventBridge schedules itself (`deploy/agentcore/wake-alarm.ts`). A schedule that does not build is the
     // pre-flight's to report.
     const acName = agentcoreName(instance);
     const plan = planAgentcoreDeploy({

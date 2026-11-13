@@ -1,8 +1,7 @@
 /**
  * A schedule's cron in EventBridge Scheduler's dialect: `cron(m h dom mon dow year)`, Quartz-flavoured, with exactly
  * one of the two day fields `?` and 1 = Sunday. AgentCore fires each schedule from a recurring EventBridge schedule
- * the container sets (schedule/wake-alarm.ts), so a schedule must translate to be one at all: discovery refuses one
- * that does not, on every host, so that what runs locally also runs there.
+ * the container sets (`wake-alarm.ts`), so `deploy agentcore` (`agentcoreHost.validate`) checks that each schedule translates.
  */
 
 /**

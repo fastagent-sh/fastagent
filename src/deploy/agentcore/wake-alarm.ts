@@ -73,8 +73,8 @@ function toAlarms(pending: Wakeup[], now: Date): WakeAlarm[] {
 }
 
 /**
- * Each armed schedule → the recurring EventBridge schedule that fires it. Discovery admits only a cron that
- * translates (schedule/discover.ts), so one that does not here is a defect, and throws.
+ * Each armed schedule → the recurring EventBridge schedule that fires it (`agentcoreHost.validate` gates
+ * non-translatable crons on deploy).
  */
 function toRecurring(schedules: readonly Schedule[]): RecurringSchedule[] {
   return schedules.map((s) => {
