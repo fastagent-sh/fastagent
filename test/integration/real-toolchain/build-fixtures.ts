@@ -44,7 +44,7 @@ export const FILES: Record<string, string> = {
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",
   LICENSE: "MIT\n",
-  "context.json": JSON.stringify({ environment: { variables: { LOOKUP_KEY: { description: "the lookup service" } } } }),
+  "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
   "skills/lookup/SKILL.md": "---\nname: lookup\ndescription: Look up\n---\nUse lookup.\n",
   "skills/lookup/.env": "SKILL_TOKEN=leaked\n",
   "prompts/review.md": "Review $1.\n",

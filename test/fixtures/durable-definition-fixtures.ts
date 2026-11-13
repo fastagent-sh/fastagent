@@ -44,7 +44,11 @@ Ask for the order number, then read references/codes.md.
 import { defineTool } from "@earendil-works/pi-durable";
 import { needs } from "${DEFINE}";
 export default needs(
-  [{ name: "WEATHER_KEY", description: "The weather service's API key" }, { name: "WEATHER_REGION", optional: true }],
+  [
+    { name: "WEATHER_KEY", description: "The weather service's API key" },
+    { name: "WEATHER_REGION", optional: true },
+    { name: "GH_TOKEN", description: "For gh" },
+  ],
   ({ WEATHER_KEY, WEATHER_REGION }) =>
     defineTool({
       name: "weather",
@@ -63,7 +67,6 @@ export default defineExtension({ name: "audit", sections: [section("audit", () =
   "src/schedules/daily.ts": `import { defineSchedule } from "${DEFINE}";
 export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: ({ at }) => \`Report for \${at.toISOString()}\` });
 `,
-  "context.json": JSON.stringify({ environment: { variables: { GH_TOKEN: { description: "For gh" } } } }),
 };
 
 export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };

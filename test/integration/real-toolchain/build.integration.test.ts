@@ -23,10 +23,8 @@ describe("fastagent build", () => {
       description: "Answers support questions.",
       dir: dist,
     });
-    expect(built.inputs.secrets).toEqual([
-      { name: "LOOKUP_KEY", description: "the lookup service", optional: false, declaredIn: ["context.json"] },
-    ]);
-    const [tool] = buildDefinition(built, { LOOKUP_KEY: "k" }).tools;
+    expect(built.inputs.secrets).toEqual([]);
+    const [tool] = buildDefinition(built, {}).tools;
     const result = await tool?.execute({ text: "hi" }, {} as never, {} as never);
     expect(result?.output).toEqual([{ type: "text", text: "HI kg from the note" }]);
   });

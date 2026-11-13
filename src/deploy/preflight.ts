@@ -24,7 +24,7 @@ import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from
 import { DEPLOYED_ENV, INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
 import type { DeclaredContent } from "../content/declare.ts";
-import { loadContent, loadEnvironment } from "../content/file.ts";
+import { loadContent } from "../content/file.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
@@ -41,8 +41,6 @@ import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { loadEnvValues, namedValueFile, trackedValueFile, trackedValueFileNote } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
-import { declaredVariables, declaresTool, runtimeAdvice } from "../environment/declare.ts";
-import { checkPackages, MISE_PACKAGE_NAMES, miseBinary, packageSpecs } from "../environment/mise.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -176,41 +174,6 @@ function checkContent(
         `agent directory, which every release carries`,
     );
   }
-}
-
-/**
- * What the image needs to install the packages the agent declares: the agent's own mise for linux in its package.json,
- * so the image's install brings it, packages FastAgent installs from, and a PyPI package's runtime. A machine without
- * the agent's mise cannot check them, which is an issue (a warning without `--run`), as a code input that cannot load
- * is.
- */
-async function checkEnvironment(
-  agentDir: string,
-  packages: Record<string, string>,
-  pkg: { optionalDependencies?: Record<string, unknown> },
-  report: DeployReport,
-): Promise<void> {
-  if (Object.keys(packages).length === 0) return;
-  const linux = MISE_PACKAGE_NAMES.filter((name) => name.includes("-linux-"));
-  const missing = linux.filter((name) => !(name in (pkg.optionalDependencies ?? {})));
-  if (missing.length > 0) {
-    report.issue(
-      `context.json declares packages, and the image would have no mise to install them with: the agent's ` +
-        `package.json does not list ${missing.join(", ")}. Run \`fastagent env install\` in the agent directory.`,
-    );
-    return;
-  }
-  const bin = miseBinary(agentDir);
-  if (!bin) {
-    report.issue(
-      `the agent's mise is not installed here, so the packages context.json declares cannot be checked. Run ` +
-        `\`fastagent env install\` in ${agentDir}, then deploy again.`,
-    );
-    return;
-  }
-  const { refusals, runtime } = await checkPackages(agentDir, bin, packages);
-  for (const refusal of refusals) report.issue(refusal);
-  if (runtime) report.issue(runtimeAdvice(runtime));
 }
 
 /** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
@@ -370,9 +333,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const modelSpec = model.spec;
 
   const declaredSecrets = [
-    ...(definition
-      ? definitionSecrets(definition, config, mcpOpens ? delivered?.source : undefined)
-      : declaredVariables(loadEnvironment(agentDir))),
+    ...(definition ? definitionSecrets(definition, config, mcpOpens ? delivered?.source : undefined) : []),
     // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
     ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),
   ];
@@ -499,23 +460,9 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   const paths = await buildContextPaths(agentDir, authPath, namedValueFile());
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
-  const environment = loadEnvironment(agentDir);
-  const packages = environment?.packages ?? {};
-  await checkEnvironment(agentDir, packages, pkg, report);
-  const installsPackages = Object.keys(packages).length > 0;
-
-  // Write-back mechanics are fastagent's (the policy is the agent's prompt's). A repository content entry is cloned on the
-  // host, which takes git too. mise downloads over TLS, and the slim base image has no CA certificates; rustup, which
-  // mise installs rust with, downloads with curl. The agent's own apt packages join them, in one layer.
+  // A repository content entry or a shipped .git needs git in the image.
   const needsGit = shipsGit || content.length > 0;
-  const apt = [
-    ...new Set([
-      ...(needsGit ? ["git"] : []),
-      ...(installsPackages ? ["ca-certificates"] : []),
-      ...(declaresTool(packages, "rust") ? ["curl"] : []),
-      ...(environment?.aptPackages ?? []),
-    ]),
-  ];
+  const apt = needsGit ? ["git"] : [];
   const container: ContainerInput = {
     agent: input.name,
     ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
@@ -525,12 +472,11 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     bunVersion,
     hasLockfile,
     apt,
-    ...(installsPackages ? { packages: packageSpecs(packages) } : {}),
     config: deliveredConfig(delivered?.source.values),
     shipsGit,
   };
   const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  if (kept !== undefined) checkKeptDockerfile(kept, agentDir, report);
+  if (kept !== undefined) checkKeptDockerfile(kept, report);
 
   return {
     channels,
@@ -653,20 +599,10 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops: the environment (context.json's) that the generated one installs, the
- * build `start` opens, and the marker that makes the box a deployed one. (The instance's configuration and name are
- * variables on the host, not part of any image.)
+ * What a KEPT hand-written Dockerfile drops: the build `start` opens, and the marker that makes the box a deployed
+ * one. (The instance's configuration and name are variables on the host, not part of any image.)
  */
-function checkKeptDockerfile(dockerfileText: string, agentDir: string, report: DeployReport): void {
-  // What the image installs: the packages and apt packages. Variables are the target's, whatever the image.
-  const environment = loadEnvironment(agentDir);
-  if (Object.keys(environment?.packages ?? {}).length > 0 || (environment?.aptPackages.length ?? 0) > 0) {
-    report.warn(
-      `kept your hand-written Dockerfile — it installs the environment context.json declares only if it says so: ` +
-        `a generated Dockerfile shows the layers (the apt packages, then \`mise install --system\` of the packages ` +
-        `context.json declares).`,
-    );
-  }
+function checkKeptDockerfile(dockerfileText: string, report: DeployReport): void {
   // The INSTRUCTION is the question, not the file's authorship: without the marker `start` takes no storage (no mount
   // check, no lease, no owner), so a box that lost it runs as a local instance on a disk that is gone at the next
   // restart. Anywhere in an `ENV` instruction, not just first.

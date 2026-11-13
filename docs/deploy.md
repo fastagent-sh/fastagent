@@ -195,8 +195,8 @@ treat its holder as able to escalate within the account.
 ## What ships
 
 The image holds the agent directory (at `/app`) minus `.secrets/`, `.state/`, `content/`, `node_modules`, `.env*` and
-the file `--env-file` names. It installs the declared [environment](configuration.md#environment), and `git` when the
-agent is a repository. The persistent root holds what changes:
+the file `--env-file` names. It installs `git` when the agent is a repository or clones GitHub content. The persistent
+root holds what changes:
 
 ```text
 /data/                # or /mnt/data on AgentCore

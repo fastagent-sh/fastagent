@@ -161,8 +161,8 @@ export function planFlyDeploy(input: FlyPlanInput): FlyPlan {
     ``,
     `# The volume is the agent's working directory: it keeps its work, .state and .secrets across restarts and deploys.`,
     imageHasGit(input)
-      ? `# Git is installed (the definition ships its .git, github content is cloned here, or context.json declares it in aptPackages).`
-      : `# To give the agent git, declare it: fastagent env add apt:git`,
+      ? `# Git is installed (the definition ships its .git or clones github content).`
+      : `# Git is not installed in the base image (add \`RUN apt-get update && apt-get install -y git\` to a custom Dockerfile if needed).`,
   );
 
   // The credential is created on the box, never carried: the box is then the only holder of its grant.

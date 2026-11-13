@@ -2,12 +2,11 @@
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { channelIngress } from "../../channels/discover.ts";
-import { loadContent, loadEnvironment } from "../../content/file.ts";
+import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
-import type { DeclaredEnvironment } from "../../environment/declare.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import {
   type EffectiveConfig,
@@ -63,7 +62,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           .then(() => buildDefinition(definition, process.env, config))
           .catch(failStartup)
       : undefined;
-  // Reported, not fatal: `info` is how an author finds out a content entry is missing, or the environment refused.
+  // Reported, not fatal: `info` is how an author finds out a content entry is missing.
   let content: ResolvedContent[] = [];
   let contentError: string | undefined;
   try {
@@ -71,8 +70,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   } catch (error) {
     contentError = (error as Error).message;
   }
-  // Read already, by the definition's secrets: a refused environment is a definition that does not open.
-  const environment = loadEnvironment(agentDir);
   const models = await modelEnvironment(agentDir, {}, code?.providers ?? [], {
     environment: definedValues(process.env),
   });
@@ -112,7 +109,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           starters: presentation.starters ?? [],
           content,
           contentError: contentError ?? null,
-          environment: environment ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
@@ -148,7 +144,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     line("starters", presentation.starters.map((starter) => JSON.stringify(starter)).join(", "));
   for (const [label, value] of contentLines(content)) line(label, value);
   if (contentError) cont(`⚠ ${contentError}`);
-  line("environment", environment ? describeEnvironment(environment) : "(none: the machine's commands)");
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or defaults.model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
@@ -189,11 +184,4 @@ function configReport(
   const model = modelSpecFor(config, modelFlag);
   if (override !== undefined && model !== undefined) report.model = { value: model, source: override };
   return report;
-}
-
-/** The packages and apt packages an environment declares, as one line. */
-function describeEnvironment(environment: DeclaredEnvironment): string {
-  const packages = Object.entries(environment.packages).map(([name, version]) => `${name} ${version}`);
-  const apt = environment.aptPackages.map((name) => `apt:${name}`);
-  return [...packages, ...apt].join(", ") || "(none: the machine's commands)";
 }

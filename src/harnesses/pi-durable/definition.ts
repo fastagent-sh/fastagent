@@ -2,9 +2,7 @@
  * A definition as a value: what `dev` loads from a source project and what a built package
  * will export, one frozen shape every opener assembles from. Its declared inputs are read once, when it is made.
  */
-import { loadEnvironment } from "../../content/file.ts";
 import type { DeclaredSecret } from "../../declared-secrets.ts";
-import { declaredVariables } from "../../environment/declare.ts";
 import { type McpInstance, declareMcp, mcpSecrets } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { servedByDev } from "../../serving-command.ts";
@@ -199,18 +197,14 @@ function declarers(
 type Declaring = Pick<DefinitionSpec, "registry" | "config" | "dir">;
 
 /**
- * The secrets the definition's code reads (`needs()`) and its commands do (`context.json`'s variables): an instance's,
- * under its `config`, or every way's with none.
+ * The secrets the definition's code reads (`needs()`): an instance's, under its `config`, or every way's with none.
  */
 export function codeSecrets(definition: Declaring, config?: IngressConfig): DeclaredSecret[] {
-  return [
-    ...declarers(definition, config).flatMap(({ declaredIn, value, when }) =>
-      isNeeds(value)
-        ? value.secrets.map((secret) => ({ ...secret, declaredIn, ...(when === undefined ? {} : { when }) }))
-        : [],
-    ),
-    ...declaredVariables(loadEnvironment(definition.dir)),
-  ];
+  return declarers(definition, config).flatMap(({ declaredIn, value, when }) =>
+    isNeeds(value)
+      ? value.secrets.map((secret) => ({ ...secret, declaredIn, ...(when === undefined ? {} : { when }) }))
+      : [],
+  );
 }
 
 /**

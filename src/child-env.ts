@@ -30,10 +30,8 @@ export interface ProcessEnvironmentInputs {
   base: Readonly<Record<string, string>>;
   /** The instance's secrets: only the declared names among them are passed on. */
   secrets: Readonly<Record<string, string | undefined>>;
-  /** The names the definition declares (`needs()`, `context.json`'s environment variables). */
+  /** The names the definition declares (`needs()`). */
   declared: readonly string[];
-  /** What the declared packages add (`mise env`): their commands ahead on the `PATH` the base gave. */
-  packages: Readonly<Record<string, string>>;
   /** The agent's working directory. */
   workdir: string;
 }
@@ -47,5 +45,5 @@ export function processEnvironment(inputs: ProcessEnvironmentInputs, workspacePa
   const declared = Object.fromEntries(
     inputs.declared.flatMap((name) => (Object.hasOwn(held, name) ? [[name, held[name]]] : [])),
   );
-  return { ...inputs.base, ...declared, ...inputs.packages, [GIT_CEILING]: workspaceParent };
+  return { ...inputs.base, ...declared, [GIT_CEILING]: workspaceParent };
 }

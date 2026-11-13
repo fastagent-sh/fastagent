@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, env, models, login, logout, auth, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
+description: "The fastagent CLI reference: init, info, content, models, login, logout, auth, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
 status: current
 ---
 
@@ -27,7 +27,6 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `models [search]` | list model specs |
 | `login [provider]`, `logout`, `auth check` | manage model credentials (`login --deployment <host>` signs a deployment in) |
 | `content list\|add\|remove` | what the agent works on |
-| `env add\|remove\|list\|install\|exec` | the commands the agent needs |
 | `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
 | `add skill <source>` | copy an Agent Skills skill into `skills/` |
 | `channels setup <name>` | create or connect the platform app and keep its credentials |
@@ -50,7 +49,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `env list`, `login`, `auth check`, `add` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `login`, `auth check`, `add` | Machine-readable output. |
 
 ## Exit codes
 

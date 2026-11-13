@@ -471,71 +471,6 @@ const deploy: CommandSpec = {
     }),
 };
 
-const env: CommandSpec = {
-  name: "env",
-  summary: "add, remove or list the commands the agent runs: its environment",
-  description:
-    "The agent's environment is the `environment` of its context.json: `packages`, each a name from mise's registry " +
-    "or written with aqua:, github:, gitlab:, conda:, npm: or pypi:, with a version; `aptPackages`, Debian " +
-    "packages the image installs; and `variables`, the environment variables its commands read, each declared by " +
-    "name with a description (its value goes in .secrets/.env, never in context.json; every one is required). " +
-    "Variables are edited in context.json by hand. Nothing is locked: each place installs the newest release a " +
-    "version allows when it first needs a package, and the image installs every package when it is built. Run in " +
-    "the agent directory (the current one). The first change adds mise to the agent's package.json (one optional " +
-    "package per platform; npm installs this machine's), so nothing has to be installed first.",
-  subcommands: [
-    {
-      name: "add",
-      summary: "add packages: installed here first, then declared",
-      args: [{ name: "<packages...>", description: "name[@version] (default latest), or apt:<name> for the image" }],
-      examples: [
-        { cmd: "fastagent env add gh@2", note: "a CLI from mise's registry" },
-        { cmd: "fastagent env add npm:prettier@3", note: "an npm package" },
-        { cmd: "fastagent env add python uv pypi:markitdown", note: "PyPI, with its runtime" },
-        { cmd: "fastagent env add apt:chromium", note: "installed by the image" },
-      ],
-      run: async (args) => (await import("./commands/env.ts")).runEnvAdd(args[0] as string[]),
-    },
-    {
-      name: "remove",
-      summary: "remove packages, by the name they are declared with",
-      args: [{ name: "<packages...>", description: "a declared package, or apt:<name>" }],
-      examples: [{ cmd: "fastagent env remove gh apt:chromium" }],
-      run: async (args) => (await import("./commands/env.ts")).runEnvRemove(args[0] as string[]),
-    },
-    {
-      name: "list",
-      summary: "the declared packages and their versions, the variables and whether each has a value",
-      flags: [{ flags: "--json", description: "the packages, apt packages and variables as JSON" }],
-      examples: [{ cmd: "fastagent env list" }, { cmd: "fastagent env list --json" }],
-      run: async (_args, f) => (await import("./commands/env.ts")).runEnvList({ json: f.json === true }),
-    },
-    {
-      name: "install",
-      summary: "install what context.json declares here, at the newest release each version allows",
-      description:
-        "Install the agent's mise (adding it to package.json when it is not there), then every package context.json " +
-        "declares, at the newest release its version allows: a newer one where one is out. Not needed day to day " +
-        "(`add` installs what it adds, and every start installs what is missing): it is for a newer release, and " +
-        "for a clone that has not installed its mise yet.",
-      examples: [{ cmd: "fastagent env install", note: "after a clone, or for newer releases" }],
-      run: async () => (await import("./commands/env.ts")).runEnvInstall(),
-    },
-    {
-      name: "exec",
-      summary: "run a command in the environment, with the agent's .secrets/.env",
-      args: [{ name: "<command...>", description: "the command and its arguments, after --", verbatim: true }],
-      examples: [{ cmd: "fastagent env exec -- gh --version" }],
-      run: async (args) => (await import("./commands/env.ts")).runEnvExec(args[0] as string[]),
-    },
-  ],
-  notes:
-    "`dev`, `start` and `invoke` install the declared packages that have no install here yet, and " +
-    "put them first on the PATH of what the agent runs; one already installed is kept, so a start needs no network. " +
-    "`dev` restarts when context.json changes. Apt packages are installed in the image; on Debian or Ubuntu a start " +
-    "here names the missing ones.",
-};
-
 const content: CommandSpec = {
   name: "content",
   summary: "list, add or remove what the agent works on",
@@ -1151,7 +1086,6 @@ const specs: readonly CommandSpec[] = [
   info,
   build,
   content,
-  env,
   invoke,
   schedules,
   dev,

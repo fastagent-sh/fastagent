@@ -90,9 +90,6 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
-  // mise's data directory, on the storage rather than the container's disk. The image's packages are in mise's system
-  // directory, which mise reads as well, so a start installs nothing there.
-  process.env.MISE_DATA_DIR ||= join(process.env.FASTAGENT_STATE_DIR, "mise");
   return dirArg;
 }
 

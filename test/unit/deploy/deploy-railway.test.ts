@@ -17,12 +17,7 @@ const base = {
 describe("deploy/railway: planRailwayDeploy", () => {
   it("ships the shared portable container (Dockerfile + .dockerignore), same as Fly", () => {
     const artifacts = planRailwayDeploy({ ...base, channels: [] }).artifacts;
-    expect(artifacts.map((a) => a.path)).toEqual([
-      ".fastagent/deploy/fastagent.packages",
-      "Dockerfile",
-      ".dockerignore",
-      ".railwayignore",
-    ]);
+    expect(artifacts.map((a) => a.path)).toEqual(["Dockerfile", ".dockerignore", ".railwayignore"]);
     // .git is deliberately SHIPPED (the agent's pull/push loop needs it) — the exclusion must not
     // creep back in silently; machinery/secret excludes are the hard contract instead.
     const dockerignore = artifacts.find((a) => a.path === ".dockerignore")!.content;
