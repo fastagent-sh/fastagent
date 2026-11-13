@@ -4,10 +4,20 @@
  * sets what the app's own credentials can set, on every call and without reading it first.
  */
 import type { DeclaredChannel } from "./discover.ts";
-import { registerFeishuWebhook } from "./feishu/register-webhook.ts";
 import { DEPLOY_REGISTRATION_ATTEMPTS, type RegistrationOutcome } from "./registration.ts";
-import { registerTelegramWebhook } from "./telegram/register-webhook.ts";
 import { log } from "../log.ts";
+
+export type WebhookRegistrar = (
+  baseUrl: string,
+  opts: { env: NodeJS.ProcessEnv; attempts?: number; retryMs?: number },
+) => Promise<RegistrationOutcome>;
+
+const webhookDrivers = new Map<WebhookKind, WebhookRegistrar>();
+
+/** Register a platform webhook driver (called when a webhook channel module is mounted). */
+export function registerWebhookDriver(kind: WebhookKind, registrar: WebhookRegistrar): void {
+  webhookDrivers.set(kind, registrar);
+}
 
 /** One webhook channel's registration. */
 export interface WebhookRegistration {
@@ -84,17 +94,15 @@ export async function registerOwnWebhooks(
     }
     const url = `${baseUrl}${KINDS[kind].path}`;
     const step = KINDS[kind].manual(url);
-    if (kind === "slack") {
+    const register = webhookDrivers.get(kind);
+    if (kind === "slack" || register === undefined) {
       registrations.push({ channel: kind, outcome: "manual", url, step });
       continue;
     }
     const attempts = options.attempts ?? DEPLOY_REGISTRATION_ATTEMPTS;
     const retry = { attempts, ...(options.retryMs === undefined ? {} : { retryMs: options.retryMs }) };
     // A registrar that throws ends its channel `failed`, said with why, never left `pending` for a reader to wait on.
-    const outcome: RegistrationOutcome = await (kind === "telegram"
-      ? registerTelegramWebhook(baseUrl, { env, ...retry })
-      : registerFeishuWebhook(baseUrl, kind, { env, ...retry })
-    ).catch((error: unknown) => {
+    const outcome: RegistrationOutcome = await register(baseUrl, { env, ...retry }).catch((error: unknown) => {
       log.error(`[fastagent] ${kind}: could not register its webhook: ${String(error)}`);
       return "failed" as const;
     });

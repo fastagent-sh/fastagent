@@ -19,7 +19,7 @@ import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, type ServableAgent, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
+import { assertTunnelBindable, bindLine, cliMountOptions, serve, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -42,10 +42,19 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   unmarkDevServe();
   if (process.env.FASTAGENT_AGENTCORE === "1") {
     const { runAgentcoreStart } = await import("../../deploy/agentcore/start.ts");
-    runAgentcoreStart(dirArg, opts, {
-      ...(portFlag === undefined ? {} : { portFlag }),
-      ...(bindFlag === undefined ? {} : { bindFlag }),
-    });
+    runAgentcoreStart(
+      {
+        prepareWorkspace: () => prepareStartWorkspace(dirArg),
+        openPrepared: (dir, runtime) => openPreparedStartService(dir, opts, runtime),
+        serve,
+        bindLine,
+        parsePort,
+      },
+      {
+        ...(portFlag === undefined ? {} : { portFlag }),
+        ...(bindFlag === undefined ? {} : { bindFlag }),
+      },
+    );
     return;
   }
   // Deployed storage refusals (no mount, a held lease, a missing `flock`, another agent's storage) are the operator's only

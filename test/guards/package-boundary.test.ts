@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -141,5 +141,67 @@ describe("host boundary: channels, schedules, and start stay decoupled from Agen
       check(entry);
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("core never imports channel implementations, deploy/, or cli/; deploy/ never imports cli/", () => {
+    const walkFiles = (dir: string): string[] => {
+      const out: string[] = [];
+      for (const entry of readdirSync(dir)) {
+        const full = resolve(dir, entry);
+        if (statSync(full).isDirectory()) out.push(...walkFiles(full));
+        else if (entry.endsWith(".ts")) out.push(full);
+      }
+      return out;
+    };
+    const pkgOf = (fileAbs: string): string => {
+      const rel = resolve(fileAbs).slice(srcDir.length + 1);
+      if (rel.startsWith("channels/kit/")) return "channel-kit";
+      if (rel.startsWith("channels/telegram/")) return "telegram";
+      if (rel.startsWith("channels/slack/")) return "slack";
+      if (rel.startsWith("channels/feishu/") || rel.startsWith("channels/lark/")) return "feishu";
+      if (rel.startsWith("deploy/agentcore/")) return "agentcore";
+      if (rel.startsWith("deploy/fly/")) return "fly";
+      if (rel.startsWith("deploy/railway/")) return "railway";
+      if (rel.startsWith("deploy/")) return "deploy-core";
+      if (
+        rel.startsWith("cli/") ||
+        rel === "cli.ts" ||
+        ["dev-supervisor.ts", "open-url.ts", "tunnel.ts", "box-login.ts"].includes(rel)
+      ) {
+        return "fastagent";
+      }
+      if (["telegram.ts", "slack.ts", "feishu.ts", "lark.ts"].includes(rel)) return "subpath";
+      return "core";
+    };
+    const importRe = /^\s*(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s*["'](\.[^"']+)["']/gm;
+    const dynRe = /import\(\s*["'](\.[^"']+)["']\s*\)/g;
+    const bad: string[] = [];
+    const allowed: Record<string, Set<string>> = {
+      core: new Set(["core"]),
+      "channel-kit": new Set(["channel-kit", "core"]),
+      telegram: new Set(["telegram", "channel-kit", "core"]),
+      slack: new Set(["slack", "channel-kit", "core"]),
+      feishu: new Set(["feishu", "channel-kit", "core"]),
+      "deploy-core": new Set(["deploy-core", "core"]),
+      fly: new Set(["fly", "deploy-core", "core"]),
+      railway: new Set(["railway", "deploy-core", "core"]),
+      agentcore: new Set(["agentcore", "deploy-core", "core"]),
+    };
+    for (const fileAbs of walkFiles(srcDir)) {
+      const fromPkg = pkgOf(fileAbs);
+      const permit = allowed[fromPkg];
+      if (!permit) continue;
+      const src = readFileSync(fileAbs, "utf8");
+      for (const re of [importRe, dynRe]) {
+        for (const m of src.matchAll(re)) {
+          const target = resolve(dirname(fileAbs), m[1] as string);
+          const toPkg = pkgOf(target);
+          if (!permit.has(toPkg)) {
+            bad.push(`${fromPkg} (${fileAbs.slice(srcDir.length + 1)}) → ${toPkg} (${m[1]})`);
+          }
+        }
+      }
+    }
+    expect(bad).toEqual([]);
   });
 });

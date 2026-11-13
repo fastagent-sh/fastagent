@@ -26,6 +26,8 @@ import {
   telegramStop,
 } from "./parse.ts";
 import { registerTelegramTransport } from "./shared-api.ts";
+import { registerTelegramWebhook } from "./register-webhook.ts";
+import { registerWebhookDriver } from "../webhooks.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/text.ts";
 import { createJsonWebhookRoute } from "../kit/ingress.ts";
@@ -386,6 +388,7 @@ function createTelegramRuntime(
 /** Build a Telegram bot channel that receives by webhook: policy options in, a {@link ChannelModule} out. */
 export function telegramChannel(options: TelegramChannelOptions): ChannelModule {
   const { secretToken, apiBaseUrl = TELEGRAM_API } = options;
+  registerWebhookDriver("telegram", registerTelegramWebhook);
   return (ctx) => {
     if (!secretToken) {
       throw new Error(

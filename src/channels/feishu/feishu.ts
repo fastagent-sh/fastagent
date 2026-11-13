@@ -64,6 +64,8 @@ import {
 import { type FeishuFailure, defaultErrorMessage, settleFeishuPreview, feishuReply } from "./preview.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
 import { registerFeishuApi } from "./shared-api.ts";
+import { registerFeishuWebhook } from "./register-webhook.ts";
+import { registerWebhookDriver } from "../webhooks.ts";
 
 // Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
@@ -714,6 +716,7 @@ export function buildFeishuChannel(
   opts: FeishuChannelOptions,
   factoryName: string,
 ): ChannelModule {
+  registerWebhookDriver(profile.kind, (baseUrl, regOpts) => registerFeishuWebhook(baseUrl, profile.kind, regOpts));
   const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
   return (ctx) => {
     if (!opts.verificationToken) {

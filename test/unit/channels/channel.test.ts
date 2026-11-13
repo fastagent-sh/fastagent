@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../../../src/agent-api.ts";
 import type { ChannelModule } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
+import { registerOwnWebhooks, registerWebhookDriver } from "../../../src/channels/webhooks.ts";
 import {
   type AnyChannelModule,
   channelIngress,
@@ -74,5 +75,21 @@ describe("channelContext: what a channel is handed", () => {
     expect(agent.forks).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(ctx.stateDir, "sessions.json"), "utf8"))).toEqual({ "chat-1": first });
     expect(await ctx.sessionFor("chat-2")).not.toBe(first);
+  });
+});
+
+describe("registerWebhookDriver + registerOwnWebhooks", () => {
+  it("dispatches registered drivers and falls back to manual for slack or unregistered channels", async () => {
+    registerWebhookDriver("telegram", async () => "registered");
+    const out = await registerOwnWebhooks("https://agent.example.com", ["telegram", "slack"], {});
+    expect(out).toEqual([
+      { channel: "telegram", outcome: "registered", url: "https://agent.example.com/telegram" },
+      {
+        channel: "slack",
+        outcome: "manual",
+        url: "https://agent.example.com/slack",
+        step: "slack: set Event Subscriptions → Request URL → https://agent.example.com/slack",
+      },
+    ]);
   });
 });
