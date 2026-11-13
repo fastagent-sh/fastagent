@@ -298,7 +298,7 @@ export interface AssembleAgentOptions {
   storage: Storage;
   /** Who runs the instance, as far as the prompt says where the agent runs (deployed, on AgentCore). */
   runsAs: RunsAs;
-  /** What the agent works on (`context.json`'s content), resolved for this instance. */
+  /** What the agent works on (`fastagent.config.ts` / `fastagent.json`), resolved for this instance. */
   content?: readonly ResolvedContent[];
   /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
   name?: string;

@@ -272,10 +272,10 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  const rawProgram = await loadRawProgramConfig(agentDir).catch(() => ({
-    value: undefined,
-    file: "fastagent.config.ts",
-  }));
+  const rawProgram = await loadRawProgramConfig(agentDir).catch((error: unknown) => {
+    report.issue(`cannot read fastagent.config.ts: ${messageOf(error)}`);
+    return { value: undefined, file: "fastagent.config.ts" };
+  });
   const content = loadContent(rawProgram.value?.content, delivered?.source, rawProgram.file);
   checkContent(content, delivered?.source.label, storageResets, report);
   const textProblem = delivered === undefined ? undefined : undeliverableText(delivered.source);

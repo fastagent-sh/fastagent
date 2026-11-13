@@ -166,11 +166,11 @@ export async function initAgent(
         .split("\n")
         .map((line, i) => (i === 0 ? line : `  ${line}`))
         .join("\n");
-      writeFileAtomic(
-        cfgPath,
-        existing.replace("} satisfies AgentConfig;", `  content: ${rendered},\n} satisfies AgentConfig;`),
-        INSTANCE_FILE_MODE,
-      );
+      const updated = existing.replace("} satisfies AgentConfig;", `  content: ${rendered},\n} satisfies AgentConfig;`);
+      if (updated === existing) {
+        throw new Error(`could not insert content into ${AGENT_CONFIG_FILE}`);
+      }
+      writeFileAtomic(cfgPath, updated, INSTANCE_FILE_MODE);
     }
     if (Object.keys(instanceEntries).length > 0) {
       writeFileAtomic(configPath, instanceFileText({}, instanceEntries), INSTANCE_FILE_MODE);
