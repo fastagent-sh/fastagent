@@ -99,6 +99,8 @@ export interface DurableAgentOptions {
   commands?: () => readonly AgentCommand[];
   /** What a conversation answers with when its own settings name none (defaults.ts). */
   model?: ModelRef;
+  /** The configured default model this agent lacks (`info().unusableDefault`): no `model` then. */
+  unusableDefault?: NonNullable<AgentInfo["unusableDefault"]>;
   thinkingLevel?: ModelThinkingLevel;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
@@ -317,6 +319,7 @@ function durableAgent(
           ...(options.model === undefined
             ? {}
             : { defaultModel: { provider: options.model.provider, modelId: options.model.modelId } }),
+          ...(options.unusableDefault === undefined ? {} : { unusableDefault: options.unusableDefault }),
         };
       }),
     );
@@ -346,7 +349,9 @@ function durableAgent(
     return agentError(
       "missing_model",
       model === undefined
-        ? "Neither this session nor the agent names a model"
+        ? options.unusableDefault === undefined
+          ? "Neither this session nor the agent names a model"
+          : `This session names no model, and the agent's default ${options.unusableDefault.spec} is unusable: ${options.unusableDefault.reason}`
         : `This session answers with ${model.provider}/${model.modelId}, which is not among this agent's models`,
       model === undefined ? undefined : { model: `${model.provider}/${model.modelId}` },
     );

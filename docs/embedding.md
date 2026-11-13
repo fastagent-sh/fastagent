@@ -218,5 +218,9 @@ An app that runs agents for a person on their machine:
 - Without `config`, an instance reads `<root>/fastagent.json`, which the agent itself can write (MCP servers
   included). Pass `config` (even `{}`) to prevent that.
 - `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
+- A configured default model that the model lists no longer have (a provider retired it, a catalog update renamed it)
+  does not stop the open: `info().defaultModel` is absent, `info().unusableDefault` gives the configured `spec` and the
+  `reason`, and a message that names no model is refused `missing_model`. A `model` given to `openAgent` is stricter: one
+  the lists do not have fails the open.
 - A new agent version is a new build: `close()` and open it again.
 - Agents in one process keep their secrets and packages apart, but share the process: one that crashes it crashes all.

@@ -26,6 +26,8 @@ import { fastagentVersion } from "../../version.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
 import { instanceName } from "../../instance-name.ts";
 import type { RunsAs } from "../../serving-command.ts";
+import type { AgentInfo, ModelRef } from "../../agent-api.ts";
+import { log } from "../../log.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
@@ -341,17 +343,39 @@ export interface AssembleAgentOptions {
   processEnv: Readonly<Record<string, string>>;
 }
 
+/**
+ * The default model `spec` names, or why this instance cannot answer with it. A model chosen now (`chosen`: a flag,
+ * `FASTAGENT_MODEL`) is strict, so a typo fails at the open. A configured default may have left the catalog since it was
+ * written (a provider retires it, a catalog update renames it); the instance still opens, with no default.
+ */
+function resolveDefaultModel(
+  spec: string | undefined,
+  chosen: boolean,
+  models: Models,
+  catalogProblem: string | undefined,
+): { model?: ModelRef; unusableDefault?: NonNullable<AgentInfo["unusableDefault"]> } {
+  if (spec === undefined) return {};
+  const model = modelRefOf(spec, "the default model");
+  if (models.getModel(model.provider, model.modelId) !== undefined) return { model };
+  const stale = catalogProblem === undefined ? "" : `, and ${catalogProblem}`;
+  const reason = `no provider "${model.provider}" offers "${model.modelId}"${stale}`;
+  if (chosen) throw new Error(`unknown model "${spec}": ${reason}`);
+  log.warn(`[fastagent] the default model "${spec}" is unusable: ${reason}`);
+  return { unusableDefault: { spec, reason } };
+}
+
 /** Open the definition as an Agent over `models`: the coding tools, then its own. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir } = definition;
   const { code, models, config } = options;
   const text = options.text ?? programText(dir);
   const spec = options.model ?? config.model;
-  const model = spec === undefined ? undefined : modelRefOf(spec, "the default model");
-  if (model !== undefined && models.getModel(model.provider, model.modelId) === undefined) {
-    const stale = options.catalogProblem === undefined ? "" : `, and ${options.catalogProblem}`;
-    throw new Error(`unknown model "${spec}": no provider "${model.provider}" offers "${model.modelId}"${stale}`);
-  }
+  const { model, unusableDefault } = resolveDefaultModel(
+    spec,
+    options.model !== undefined,
+    models,
+    options.catalogProblem,
+  );
   const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
     WAKE_TOOLS.includes(name),
   );
@@ -391,6 +415,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     name: options.name ?? instanceName(definition.name),
     ...agentPresentation(definition, config),
     ...(model === undefined ? {} : { model }),
+    ...(unusableDefault === undefined ? {} : { unusableDefault }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
