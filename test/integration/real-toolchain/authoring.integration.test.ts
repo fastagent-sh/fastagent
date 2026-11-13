@@ -34,7 +34,6 @@ describe("authoring API", () => {
     expect(created.content.map((c) => [c.name, c.location])).toEqual([["app", app]]);
     const bindings = () => readFile(join(agentDir, "fastagent.json"), "utf8");
     expect(await bindings()).toBe(`{\n  "content": {\n    "app": {\n      "path": "${app}"\n    }\n  }\n}\n`);
-    await expect(access(join(agentDir, "context.json"))).rejects.toThrow(/ENOENT/);
 
     const added = await addContent(agentDir, directory(docs));
     expect(added.name).toBe("docs");

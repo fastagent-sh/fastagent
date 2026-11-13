@@ -2,7 +2,7 @@
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { channelIngress } from "../../channels/discover.ts";
-import { loadContent } from "../../content/file.ts";
+import { loadContent } from "../../content/declare.ts";
 import { type ResolvedContent, resolveContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
@@ -66,7 +66,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   let content: ResolvedContent[] = [];
   let contentError: string | undefined;
   try {
-    content = resolveContent(loadContent(agentDir, instance), { workdir });
+    content = resolveContent(loadContent(definition.config.content, instance), { workdir });
   } catch (error) {
     contentError = (error as Error).message;
   }

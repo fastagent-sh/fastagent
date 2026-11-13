@@ -1,6 +1,6 @@
 /**
- * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared: `needs(...)`, next to the code that reads
- * the value, and the `variables` of `context.json`, for the commands the agent runs.
+ * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared (`needs(...)`, next to the code that reads
+ * the value).
  *
  * One list, two consequences:
  *  - opening the agent ASSERTS the values first, so a missing one is a startup failure naming the file, not a 401
@@ -8,20 +8,18 @@
  *  - `deploy --run` refuses a value file that does not supply one.
  *
  * Agent code does not read `process.env`: `needs` hands back exactly the values it declared, so the declaration cannot
- * drift from the read, and a typo is a type error. A command the agent runs (`gh`) reads its own variable from the
- * process env, so a `context.json` declaration hands nothing back. The values travel through the process env, and
- * `deploy` carries the whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED, it does not decide
- * what travels.
+ * drift from the read, and a typo is a type error. The values travel through the process env, and `deploy` carries the
+ * whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED, it does not decide what travels.
  */
 
 /** One env var some part of the definition declared, and where that declaration is. */
 export interface DeclaredSecret {
   /** The env-var name. */
   name: string;
-  /** Where it was declared: "src/tools/x-post.ts", "fastagent.config.ts providers[0]", "context.json" — printed in
+  /** Where it was declared: "src/tools/x-post.ts", "fastagent.config.ts providers[0]" — printed in
    *  runbooks and failures, so it must name a place the author can open. */
   declaredIn: string;
-  /** What it is for, when the declaration says (`context.json`'s variables do): printed beside it in runbooks. */
+  /** What it is for, when the declaration says: printed beside it in runbooks. */
   description?: string;
   /** The code runs without it: no start is refused for its absence. */
   optional: boolean;

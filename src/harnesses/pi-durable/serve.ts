@@ -18,7 +18,7 @@ import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
 import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
-import { loadContent } from "../../content/file.ts";
+import { loadContent } from "../../content/declare.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
@@ -143,12 +143,12 @@ export interface OpenedServing {
  * on disk.
  */
 async function contentForThisRun(
-  dir: string,
+  programContent: unknown,
   instance: InstanceConfigSource | undefined,
   workdir: string,
   env: NodeJS.ProcessEnv,
 ): Promise<ResolvedContent[]> {
-  const declared = loadContent(dir, instance);
+  const declared = loadContent(programContent, instance);
   const places = { workdir };
   for (const entry of resolveContent(declared, places)) {
     if (entry.kind !== "github") continue;
@@ -192,7 +192,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const config = resolveConfig(definition, options.config, options.overrides);
   const name = instanceName(definition.name, options.name ?? config.name);
   const text = openText(dir, options.config);
-  const mcpServers = declareMcp(dir, options.config);
+  const mcpServers = declareMcp(definition.config.mcpServers, dir, options.config);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values.
   const secrets = definedValues(options.secrets);
@@ -209,7 +209,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     },
     dirname(workdir),
   );
-  const content = await contentForThisRun(dir, options.config, workdir, env);
+  const content = await contentForThisRun(definition.config.content, options.config, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const authPath =
     options.authPath ??

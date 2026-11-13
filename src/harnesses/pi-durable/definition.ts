@@ -46,7 +46,7 @@ export interface AgentDefinition<Settings = unknown> {
   readonly description?: string;
   /** True for a source project the author works in (`dev`), absent for a built package, which an instance only reads. */
   readonly source?: true;
-  /** Absolute: the program's files, its text and `context.json`. */
+  /** Absolute: the program's files, its text and `fastagent.config.ts`. */
   readonly dir: string;
   readonly config: AgentConfig;
   readonly registry: Registry;
@@ -216,5 +216,8 @@ export function definitionSecrets(
   config?: IngressConfig,
   instance?: McpInstance,
 ): DeclaredSecret[] {
-  return [...codeSecrets(definition, config), ...mcpSecrets(declareMcp(definition.dir, instance))];
+  return [
+    ...codeSecrets(definition, config),
+    ...mcpSecrets(declareMcp(definition.config.mcpServers, definition.dir, instance)),
+  ];
 }

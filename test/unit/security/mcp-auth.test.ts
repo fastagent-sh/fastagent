@@ -19,8 +19,8 @@ beforeEach(async () => {
   store = mcpGrantFile(file);
   remote = mcpFixture();
   await writeFile(
-    join(dir, "context.json"),
-    JSON.stringify({ mcpServers: { linear: { type: "http", url: remote.url } } }),
+    join(dir, "fastagent.config.ts"),
+    `export default ${JSON.stringify({ mcpServers: { linear: { type: "http", url: remote.url } } })};\n`,
   );
 });
 afterEach(async () => {

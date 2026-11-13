@@ -40,11 +40,11 @@ export default defineTool({
 `;
 
 export const FILES: Record<string, string> = {
-  "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-6.1-sol" } };\n',
+  "fastagent.config.ts":
+    'export default { defaults: { model: "openai/gpt-6.1-sol" }, content: { handbook: { github: "acme/handbook" } } };\n',
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",
   LICENSE: "MIT\n",
-  "context.json": JSON.stringify({ content: { handbook: { github: "acme/handbook" } } }),
   "skills/lookup/SKILL.md": "---\nname: lookup\ndescription: Look up\n---\nUse lookup.\n",
   "skills/lookup/.env": "SKILL_TOKEN=leaked\n",
   "prompts/review.md": "Review $1.\n",

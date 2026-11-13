@@ -3,9 +3,7 @@
  * checked as one list, its code built with them, and an Agent opened over pi-ai's built-in models with the
  * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
  */
-import { existsSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { basename, resolve } from "node:path";
 import type { ModelThinkingLevel, Models, Provider } from "@earendil-works/pi-ai";
 import {
   type Extension,
@@ -21,6 +19,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelIngress, channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
+import { loadRawProgramConfig } from "../../program-config.ts";
 import { readPackageJson } from "../../runtime.ts";
 import { fastagentVersion } from "../../version.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
@@ -54,21 +53,10 @@ import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
 
-async function importDefault(path: string, what: string): Promise<unknown> {
-  try {
-    return ((await import(pathToFileURL(path).href)) as { default?: unknown }).default;
-  } catch (error) {
-    throw new Error(`${what}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-  }
-}
-
 /** The agent package's `fastagent.config.ts`, checked; `{}` without one. */
 async function loadConfig(dir: string): Promise<AgentConfig> {
-  const configPath = join(dir, CONFIG_FILE);
-  return checkProgramConfig(
-    existsSync(configPath) ? await importDefault(configPath, CONFIG_FILE) : undefined,
-    CONFIG_FILE,
-  );
+  const { value, file } = await loadRawProgramConfig(dir);
+  return checkProgramConfig(value, file);
 }
 
 /** The default model a process here runs with: `--model` > `FASTAGENT_MODEL` > the configuration's `model`. */
@@ -310,7 +298,7 @@ export interface AssembleAgentOptions {
   storage: Storage;
   /** Who runs the instance, as far as the prompt says where the agent runs (deployed, on AgentCore). */
   runsAs: RunsAs;
-  /** What the agent works on (`context.json`'s content), resolved for this instance. */
+  /** What the agent works on (`fastagent.config.ts` / `fastagent.json`), resolved for this instance. */
   content?: readonly ResolvedContent[];
   /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
   name?: string;

@@ -1,5 +1,5 @@
 /**
- * `fastagent content list|add|remove`: what the agent works on, as the program's `context.json` declares it and the
+ * `fastagent content list|add|remove`: what the agent works on, as `fastagent.config.ts` declares it and the
  * instance's configuration adds to it.
  */
 import { resolve } from "node:path";
@@ -30,10 +30,10 @@ export async function runContentList(dirArg: string, json: boolean, flags?: Inst
 export async function runContentAdd(
   source: string,
   dirArg: string,
-  opts: SourceOptions & { program?: boolean; instance?: InstanceFlags },
+  opts: SourceOptions & { instance?: InstanceFlags },
 ): Promise<void> {
   const dir = resolve(dirArg);
-  const { program, instance, ...options } = opts;
+  const { instance, ...options } = opts;
   const { addition, notes } = await Promise.resolve()
     .then(() => readContentSource(source, process.cwd(), options))
     .catch(failStartup);
@@ -42,9 +42,7 @@ export async function runContentAdd(
     name,
     content,
     notes: left,
-  } = await addContent(dir, { ...addition, ...(program ? { program } : {}) }, contentInstanceOf(dir, instance)).catch(
-    failEdit(" — pass --name"),
-  );
+  } = await addContent(dir, addition, contentInstanceOf(dir, instance)).catch(failEdit(" — pass --name"));
   const added = content.filter((entry) => entry.name === name);
   for (const [label, value] of contentLines(added)) console.error(`[fastagent] ${label} ${value}`);
   for (const note of left) console.error(`[fastagent] ${note}`);

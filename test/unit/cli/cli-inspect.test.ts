@@ -61,7 +61,7 @@ describe("cli: info", () => {
 describe("cli: mcp list", () => {
   it("shows the program's servers and the ones the project's fastagent.json adds, and `info` the same", async () => {
     const dir = await agentWorkspace("fa-cli-mcp-list-", {
-      "context.json": JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } }),
+      "fastagent.config.ts": `export default ${JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } })};\n`,
       "fastagent.json": JSON.stringify({
         mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } },
       }),
@@ -78,7 +78,7 @@ describe("cli: mcp list", () => {
     const refused = await runInProcess(["mcp", "list", dir, "--json"]);
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(
-      /MCP server "docs" is declared by the program \(context\.json\) and by the instance/,
+      /MCP server "docs" is declared by the program \(fastagent\.config\.ts\) and by the instance/,
     );
   });
 });

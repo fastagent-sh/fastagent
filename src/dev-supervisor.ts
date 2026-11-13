@@ -5,7 +5,7 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_FILE, CONTEXT_FILE, INSTANCE_CONFIG_FILE, isUnderDir } from "./paths.ts";
+import { AGENT_CONFIG_FILE, INSTANCE_CONFIG_FILE, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./value-file.ts";
 import { log } from "./log.ts";
 import { openExternalUrl } from "./open-url.ts";
@@ -16,7 +16,7 @@ import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.t
 /** The agent's code (its tools, extensions, channels and schedules), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
 
-const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, context.json, fastagent.json, .secrets/.env`;
+const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, fastagent.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -27,7 +27,7 @@ function devWatchIgnored(root: string, envFile: string): (path: string) => boole
     const rel = relative(root, path);
     // Code inputs at the agent dir root: config, package.json, and the code loaded once per worker (a restart is
     // their only re-read).
-    if (rel === AGENT_CONFIG_FILE || rel === CONTEXT_FILE) return false;
+    if (rel === AGENT_CONFIG_FILE) return false;
     if (rel === "package.json" || rel === INSTANCE_CONFIG_FILE) return false;
     const segments = rel.split(sep);
     if (segments[0] === CODE_DIR) return false;

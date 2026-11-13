@@ -20,7 +20,6 @@ reviewer/
 ├── src/tools/            # optional: tools
 ├── src/channels/         # optional: Telegram, Slack, Feishu or your own
 ├── src/schedules/        # optional: prompts run on a cron
-├── context.json          # what it works on (GitHub repositories) and the commands it needs
 └── fastagent.json        # optional: this instance's settings (a deployment gets its own)
 ```
 

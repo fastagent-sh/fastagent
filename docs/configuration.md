@@ -9,8 +9,7 @@ status: current
 | What | Where |
 |---|---|
 | Behavior | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, code in `src/` |
-| What it works on, and the commands it needs | `context.json` |
-| Model, providers, defaults | `fastagent.config.ts` (the program) |
+| Model, providers, shared content/MCP, defaults | `fastagent.config.ts` (the program) |
 | One instance's values | `fastagent.json`, flags, environment variables |
 | Secrets | `.secrets/.env`, `.secrets/auth.json` (`fastagent login`), provider variables |
 
@@ -144,7 +143,7 @@ Read the key through `needs`, never write it into the config: the config ships i
 
 What the agent works on is declared by name:
 
-- `context.json` (committed): GitHub repositories every instance gets.
+- `fastagent.config.ts` (committed): GitHub repositories every instance gets (`content`).
 - `fastagent.json`: repositories and local directories of this instance only.
 
 ```json

@@ -51,7 +51,7 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await mkdir(staging, { recursive: true });
     const code = await compile(dir, staging, definition, options.check !== false);
     await copyFiles(dir, staging, await copyPlan(dir, code));
-    requireShippedCommands(dir, staging);
+    requireShippedCommands(dir, staging, definition.config.mcpServers);
     await writeEntry(staging, definition);
     await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
     await writeFile(
@@ -65,7 +65,7 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
-  return { dist, definition, warnings: literalMcpCredentials(dir) };
+  return { dist, definition, warnings: literalMcpCredentials(dir, definition.config.mcpServers) };
 }
 
 /** The compiler reads a `.ts` file as CommonJS without a package that says otherwise, and refuses its `import`s. */
@@ -216,8 +216,8 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
  * `dist/`, holding only what the build copied. One the build did not copy works in `dev` and is not there on a box, so
  * it is refused here, against what was actually written to `staging`, rather than found when the box starts.
  */
-function requireShippedCommands(dir: string, staging: string): void {
-  for (const { name, file, command } of relativeCommands(declareMcp(dir))) {
+function requireShippedCommands(dir: string, staging: string, programServers: unknown): void {
+  for (const { name, file, command } of relativeCommands(declareMcp(programServers, dir))) {
     const inProject = resolve(dir, command);
     const shipped = join(staging, relative(dir, inProject));
     if (isUnderDir(inProject, dir) && existsSync(shipped)) continue;
@@ -236,8 +236,8 @@ function requireShippedCommands(dir: string, staging: string): void {
 }
 
 /** What a build says of a literal credential in the program's `mcpServers`, which the package publishes. */
-function literalMcpCredentials(dir: string): string[] {
-  return literalCredentials(declareMcp(dir)).map(
+function literalMcpCredentials(dir: string, programServers: unknown): string[] {
+  return literalCredentials(declareMcp(programServers, dir)).map(
     (literal) =>
       `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and ` +
       `${DIST_DIR}/ is published: ${literalCredentialAdvice(literal)} and give the value as a secret`,

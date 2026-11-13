@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { CONTEXT_FILE, exists } from "../../paths.ts";
+import { exists } from "../../paths.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { registryFiles } from "./registry.ts";
 
@@ -20,7 +20,7 @@ const TEST = /\.(test|spec)\.[a-z]+$/;
 /** What never leaves the project, wherever it is: secrets, dependencies, history, the build's own output. */
 const NEVER_COPIED = /^(\.env(\..*)?|\.secrets|node_modules|\.git|\.DS_Store)$/;
 /** The program's text and data at the project root. */
-const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", CONTEXT_FILE, "README.md"];
+const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", "README.md"];
 const ROOT_DIRS = ["skills", "prompts", "assets"];
 const LICENSE = /^LICEN[CS]E(\..*)?$/i;
 

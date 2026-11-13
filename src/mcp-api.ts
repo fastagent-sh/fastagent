@@ -78,7 +78,7 @@ export interface McpOptions {
 
 /**
  * The instance configuration as far as MCP reads it: an object, or the absolute path of a `fastagent.json`. Its
- * `mcpServers` add to the program's (`context.json`), and a name in both refuses.
+ * `mcpServers` add to the program's (`fastagent.config.ts`), and a name in both refuses.
  */
 export type McpConfigInput = { mcpServers?: Readonly<Record<string, unknown>>; [key: string]: unknown } | string;
 
