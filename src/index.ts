@@ -45,12 +45,16 @@ export type { Service } from "./service.ts";
 export {
   ContentNameError,
   addContent,
+  addMcpServer,
   createAgent,
   listContent,
   removeContent,
+  removeMcpServer,
   type ContentEdit,
   type ContentInstance,
   type CreatedAgent,
+  type McpEdit,
+  type McpServerInput,
 } from "./authoring.ts";
 export type { ContentAddition, SourceOptions } from "./content/source.ts";
 export { readContentSource } from "./content/source.ts";

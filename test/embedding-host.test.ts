@@ -17,10 +17,13 @@ import {
   type CredentialStore,
   type SignInInteraction,
   addContent,
+  addMcpServer,
   createAgent,
   credentialFile,
+  inspectMcp,
   listContent,
   removeContent,
+  removeMcpServer,
   signIn,
   signInOptions,
 } from "../src/index.ts";
@@ -152,6 +155,62 @@ describe("an agent's own content, from the package entry", () => {
     const removed = await removeContent(dir, "NOTES");
     expect(removed.name).toBe("notes");
     expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
+  });
+});
+
+describe("an instance's MCP servers, from the package entry", () => {
+  const stdio = { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/project"] };
+  const http = { type: "http", url: "https://mcp.example.com/mcp" } as const;
+
+  async function agentDir(program?: object) {
+    const dir = join(await tmp("fa-host-mcp-"), "agent");
+    await createAgent(dir);
+    if (program !== undefined) await writeFile(join(dir, "context.json"), JSON.stringify(program));
+    return { dir, config: join(dir, "fastagent.json") };
+  }
+  const servers = async (dir: string, config: string) =>
+    (await inspectMcp(dir, { config })).map(({ name, transport }) => `${name}:${transport}`).sort();
+
+  it("adds and removes a server in the instance configuration, keeping its other keys", async () => {
+    const { dir, config } = await agentDir();
+    await writeFile(config, JSON.stringify({ model: "openai/gpt-5.5", mcpServers: { files: stdio } }));
+
+    expect(await addMcpServer(dir, "docs", http)).toEqual({ name: "docs", notes: [] });
+    expect(await servers(dir, config)).toEqual(["docs:http", "files:stdio"]);
+    expect(JSON.parse(await readFile(config, "utf8"))).toMatchObject({ model: "openai/gpt-5.5" });
+
+    await removeMcpServer(dir, "files");
+    await removeMcpServer(dir, "docs");
+    expect(await readFile(config, "utf8")).toBe(`${JSON.stringify({ model: "openai/gpt-5.5" }, null, 2)}\n`);
+  });
+
+  it("refuses with the open's own message, and writes nothing", async () => {
+    const { dir, config } = await agentDir({ content: {}, mcpServers: { program: stdio } });
+    await writeFile(config, JSON.stringify({ mcpServers: { files: stdio } }));
+    const before = await readFile(config, "utf8");
+
+    const refused: [string, unknown, string][] = [
+      ["extra", { ...stdio, cwd: "/" }, "unknown fields are refused"],
+      ["plain", { type: "http", url: "http://mcp.example.com/mcp" }, "MCP endpoints require HTTPS"],
+      ["bad__name", stdio, "server names must be"],
+      ["files", stdio, "already declared"],
+      ["program", stdio, "declared by the program"],
+    ];
+    for (const [name, server, why] of refused) {
+      await expect(addMcpServer(dir, name, server as never)).rejects.toThrow(why);
+    }
+    await expect(removeMcpServer(dir, "program")).rejects.toThrow("declared by the program");
+    await expect(removeMcpServer(dir, "nope")).rejects.toThrow('no MCP server named "nope"');
+    expect(await readFile(config, "utf8")).toBe(before);
+  });
+
+  it("says each literal credential the added entry carries", async () => {
+    const { dir } = await agentDir();
+    const edit = await addMcpServer(dir, "docs", {
+      ...http,
+      headers: { Authorization: "Bearer abc", "X-Team": `\${TEAM}` },
+    });
+    expect(edit.notes).toEqual([expect.stringContaining("mcpServers.docs.headers.Authorization is a literal value")]);
   });
 });
 

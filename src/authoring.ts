@@ -3,7 +3,8 @@
  * `fastagent env` writes its declaration through {@link writeEnvironment}), so the rules live here, not in a command.
  * Nothing here prints or exits; every refusal is thrown with the message the CLI shows. The package exports
  * {@link createAgent} and the content edits ({@link addContent}, {@link removeContent}, {@link listContent}), which
- * give an agent its own entries, without an alias prefix; the environment's edit is not exported.
+ * give an agent its own entries, without an alias prefix, and the instance's MCP server edits ({@link addMcpServer},
+ * {@link removeMcpServer}), which take the same lock; the environment's edit is not exported.
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -25,6 +26,14 @@ import { type ResolvedContent, checkDirectory, resolveContent } from "./content/
 import type { ContentAddition } from "./content/source.ts";
 import type { AgentDefinition } from "./harnesses/pi-durable/definition.ts";
 import { type LockResult, withLockedFile } from "./locked-file.ts";
+import { McpError } from "./mcp-api.ts";
+import {
+  type McpInstance,
+  type McpServerDeclaration,
+  declareMcp,
+  literalCredentialAdvice,
+  literalCredentials,
+} from "./mcp/config.ts";
 
 /** `context.json` and `fastagent.json` are part of an agent's text: read by whoever reads the agent. */
 const CONTEXT_FILE_MODE = 0o644;
@@ -238,6 +247,110 @@ export async function removeContent(
   return { name: removed, content: resolveContent(declaration, places), notes };
 }
 
+/** One server as an instance's `mcpServers` holds it: a stdio server by `command`, or an HTTP one by `type` and `url`. */
+export type McpServerInput = McpServerDeclaration;
+
+export interface McpEdit {
+  name: string;
+  /** What the host should say or refuse: each literal credential the added entry carries. Empty for a removal. */
+  notes: string[];
+}
+
+/**
+ * Add the MCP server `name` to the instance configuration of `agent`, a source directory or a built definition (which
+ * needs `instance.config`), keeping every other key of the file. The result is checked as an open checks it, the
+ * program's servers included, so a refusal is the open's own message and nothing is written: unknown fields, an address
+ * that is not allowed, a name the program declares, a name this instance already has. Under the lock
+ * {@link addContent} takes. Grants and bindings are the host's and are not touched.
+ */
+export async function addMcpServer(
+  agent: string | AgentDefinition,
+  name: string,
+  server: McpServerInput,
+  instance?: ContentInstance,
+): Promise<McpEdit> {
+  const places = placesFor(agent, instance);
+  const literals = await editInstanceFile(places, (file) => {
+    const servers = mcpServersOf(file, places);
+    if (Object.hasOwn(servers, name)) {
+      throw new McpError("configuration", `already declared in ${places.config}`, name);
+    }
+    const next = { ...file, mcpServers: { ...servers, [name]: server } };
+    const declared = declareMcp(places.dir, instanceValues(places, next));
+    return { result: literalCredentials(declared).filter((literal) => literal.server === name), next };
+  });
+  return {
+    name,
+    notes: literals.map(
+      (literal) =>
+        `${literal.file} mcpServers.${name}.${literal.field}.${literal.key} is a literal value: ${literalCredentialAdvice(literal)}`,
+    ),
+  };
+}
+
+/**
+ * Remove the MCP server `name` from the instance configuration of `agent`, keeping every other key of the file. A name
+ * the instance does not have is refused, and so is one the program declares: the program is read, never edited. What
+ * is left is checked before it is written, so removing a broken entry is how it is mended. Grants and bindings are the
+ * host's and are not touched.
+ */
+export async function removeMcpServer(
+  agent: string | AgentDefinition,
+  name: string,
+  instance?: ContentInstance,
+): Promise<McpEdit> {
+  const places = placesFor(agent, instance);
+  await editInstanceFile(places, (file) => {
+    const servers = mcpServersOf(file, places);
+    if (!Object.hasOwn(servers, name)) {
+      const programs = declareMcp(places.dir).map((declared) => declared.name);
+      throw new McpError(
+        "configuration",
+        programs.includes(name)
+          ? `declared by the program (${CONTEXT_FILE}), which is read and never edited`
+          : `no MCP server named "${name}" in ${places.config}`,
+        name,
+      );
+    }
+    const { [name]: _removed, ...rest } = servers;
+    const { mcpServers: _replaced, ...others } = file;
+    const next = Object.keys(rest).length > 0 ? { ...others, mcpServers: rest } : others;
+    declareMcp(places.dir, instanceValues(places, next));
+    return { result: undefined, next };
+  });
+  return { name, notes: [] };
+}
+
+function mcpServersOf(file: Record<string, unknown>, places: Places): Record<string, unknown> {
+  const servers = file.mcpServers;
+  if (servers === undefined) return {};
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
+    throw new McpError("configuration", `${places.config}: "mcpServers" must be an object`);
+  }
+  return servers as Record<string, unknown>;
+}
+
+/**
+ * Rewrite the instance configuration with what `edit` makes of the file as it is now, every other key kept, under the
+ * lock content edits take, since they write the same file. Nothing is written when `edit` throws.
+ */
+async function editInstanceFile<T>(
+  places: Places,
+  edit: (file: Record<string, unknown>) => { result: T; next: Record<string, unknown> },
+): Promise<T> {
+  const lockPath = lockPathOf(places);
+  return withLockedFile(
+    lockPath,
+    async (): Promise<LockResult<T>> => {
+      const text = textIfExists(places.config);
+      const out = edit(text === undefined ? {} : parseInstanceFile(text, places.config));
+      writeFileAtomic(places.config, `${JSON.stringify(out.next, null, 2)}\n`, fileMode(places.config));
+      return { result: out.result };
+    },
+    { mode: fileMode(lockPath), create: false },
+  );
+}
+
 /**
  * `maps` with `addition` among them, checked as a whole before anything is written: its name can name an entry and is
  * not taken (ignoring case), the entry is valid, a repository to clone has nothing at `content/<name>` yet, a
@@ -301,9 +414,15 @@ function entryNamed(maps: ContentMaps, name: string): string {
 /** The instance configuration's content, as `loadContent` reads it: from the file, or none when there is none. */
 function instanceSourceOf(places: Places) {
   const text = textIfExists(places.config);
-  if (text === undefined) return undefined;
-  return { values: parseInstanceFile(text, places.config), label: places.config, directory: dirname(places.config) };
+  return text === undefined ? undefined : instanceValues(places, parseInstanceFile(text, places.config));
 }
+
+/** The instance configuration `values` as the readers of its declarations take it. */
+const instanceValues = (places: Places, values: Record<string, unknown>): McpInstance => ({
+  values,
+  label: places.config,
+  directory: dirname(places.config),
+});
 
 /** `text`, the contents of the instance configuration at `path`, as the object it is. */
 function parseInstanceFile(text: string, path: string): Record<string, unknown> {
@@ -336,7 +455,7 @@ async function editContent<T>(
   edit: (maps: ContentMaps) => { result: T; next: ContentMaps },
 ): Promise<T> {
   const programPath = join(places.dir, CONTEXT_FILE);
-  const lockPath = places.built ? places.config : programPath;
+  const lockPath = lockPathOf(places);
   return withLockedFile(
     lockPath,
     async (lockedText): Promise<LockResult<T>> => {
@@ -367,6 +486,9 @@ async function editContent<T>(
     { mode: fileMode(lockPath), create: false },
   );
 }
+
+/** The file every edit of an agent's declarations locks: `context.json`, or for a built definition, which only reads it, the instance configuration. */
+const lockPathOf = (places: Places): string => (places.built ? places.config : join(places.dir, CONTEXT_FILE));
 
 const sameEntries = (a: Record<string, ContentEntry>, b: Record<string, ContentEntry>) =>
   JSON.stringify(a) === JSON.stringify(b);

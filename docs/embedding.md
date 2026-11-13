@@ -213,6 +213,7 @@ An app that runs agents for a person on their machine:
 
 - `createAgent(dir, { content })` makes an agent as `fastagent init` does. `addContent`, `removeContent` and
   `listContent` edit what it works on; changes apply at the next open (`agent.content` is what the open agent has).
+  `addMcpServer` and `removeMcpServer` edit the instance's [MCP servers](mcp.md#in-an-app) the same way.
 - Open with a `stateDir` of your own to run beside `fastagent dev` on the same project. Each instance has its own
   sessions. Only one of them should `serve()`, or schedules fire twice; an instance nobody serves refuses `wake`.
 - Without `config`, an instance reads `<root>/fastagent.json`, which the agent itself can write (MCP servers
