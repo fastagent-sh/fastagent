@@ -95,9 +95,9 @@ function respond(text: string) {
     case "long":
       return fauxAssistantMessage("cut short", { stopReason: "length" });
     case "slow":
-      return fauxAssistantMessage(`answer: ${"slow ".repeat(40).trim()}`);
+      return fauxAssistantMessage(`answer: ${"slow ".repeat(32).trim()}`);
     case "ponder":
-      return fauxAssistantMessage([fauxThinking("pondering ".repeat(30).trim()), fauxText("answer: ponder")]);
+      return fauxAssistantMessage([fauxThinking("pondering ".repeat(15).trim()), fauxText("answer: ponder")]);
     default:
       return fauxAssistantMessage(`answer: ${text}`);
   }
@@ -110,7 +110,7 @@ function subjectModels(signedOut: boolean) {
   const slow = createFauxCore({
     provider: PROVIDER,
     api: PROVIDER,
-    tokensPerSecond: 60,
+    tokensPerSecond: 110,
     tokenSize: { min: 2, max: 2 },
   });
   const stream = (...args: Parameters<typeof fast.streamSimple>) => {
@@ -215,7 +215,7 @@ export function durableSubject(): AgentApiSubject {
       execute: async (_args, api) => {
         for (const line of ["one\n", "two\n", "three of the lines\n"]) {
           api.output(line);
-          await new Promise((resolve) => setTimeout(resolve, 150));
+          await new Promise((resolve) => setTimeout(resolve, 25));
         }
         return {};
       },
@@ -234,7 +234,7 @@ export function durableSubject(): AgentApiSubject {
       description: "Looks a city up, slowly",
       parameters: obj({ city: str() }),
       execute: async (args) => {
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        await new Promise((resolve) => setTimeout(resolve, 25));
         return { output: [{ type: "text", text: `found ${args.city}` }] };
       },
     }),
@@ -263,7 +263,11 @@ export function durableSubject(): AgentApiSubject {
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
-      settings: { retry: { maxRetries: 1, baseDelayMs: 1 }, compaction: { keepRecentTokens: 1 } },
+      settings: {
+        retry: { maxRetries: 1, baseDelayMs: 1 },
+        compaction: { keepRecentTokens: 1 },
+        progress: { partialIntervalMs: 25, outputIntervalMs: 15 },
+      },
     });
     return current;
   };
