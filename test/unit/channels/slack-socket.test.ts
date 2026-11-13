@@ -5,6 +5,7 @@ import {
   connectSlackSocket,
 } from "../../../src/channels/slack/socket.ts";
 import type { SlackEventEnvelope } from "../../../src/channels/slack/parse.ts";
+import { slackStandIn } from "../../doubles/protocol/slack-stand-in.ts";
 
 const API = "https://slack.test/api";
 const APP_TOKEN = "xapp-1-A1-1-abc";
@@ -129,5 +130,49 @@ describe("slack socket mode: events", () => {
     expect(socket.sent).toEqual([]);
     taken.resolve();
     await vi.waitFor(() => expect(socket.sent).toEqual([{ envelope_id: "E1" }]));
+  });
+});
+
+describe("slack socket mode on Node: real RuntimeWebSocket and undici ping/pong", () => {
+  const stands: Array<() => void> = [];
+  afterEach(() => {
+    for (const stop of stands.splice(0)) stop();
+  });
+
+  it("keeps a connection alive while pongs answer undici.ping, and reconnects when pongs stop", async () => {
+    const healthy = await slackStandIn({ answerPings: true });
+    stands.push(() => healthy.close());
+    const abortHealthy = new AbortController();
+    aborts.push(abortHealthy);
+    const keepConn = connectSlackSocket(
+      {
+        apiBaseUrl: healthy.apiBaseUrl,
+        appToken: APP_TOKEN,
+        ingest: async () => {},
+        timing: { pingEveryMs: 15, pongWithinMs: 120 },
+      },
+      abortHealthy.signal,
+    );
+    await keepConn.ready;
+    await vi.waitFor(() => expect(healthy.peers[0]?.pings ?? 0).toBeGreaterThanOrEqual(4));
+    expect(healthy.peers).toHaveLength(1);
+    abortHealthy.abort();
+
+    const silent = await slackStandIn({ answerPings: false });
+    stands.push(() => silent.close());
+    const abortSilent = new AbortController();
+    aborts.push(abortSilent);
+    const reconnectConn = connectSlackSocket(
+      {
+        apiBaseUrl: silent.apiBaseUrl,
+        appToken: APP_TOKEN,
+        ingest: async () => {},
+        timing: { pingEveryMs: 15, pongWithinMs: 50, retryFirstMs: 5 },
+      },
+      abortSilent.signal,
+    );
+    await reconnectConn.ready;
+    await vi.waitFor(() => expect(silent.peers.length).toBeGreaterThanOrEqual(2));
+    expect(silent.peers[0]?.closed).toBe(true);
   });
 });
