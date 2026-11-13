@@ -120,7 +120,7 @@ jobs:
 
       # An agent made by `init` from the packed package answers through `invoke`, builds, and its build answers in an app.
       - name: End to end on the packed package
-        run: node test/e2e/packed.ts "$TARBALL"
+        run: node test/smoke/e2e/packed.ts "$TARBALL"
 
   bun-smoke:
     name: Bun 1.4 smoke
@@ -153,19 +153,19 @@ jobs:
 
       # Vitest runs on Node; this is the serving host's contract on Bun's own server.
       - name: Serve on Bun
-        run: bun test/bun/serve.ts
+        run: bun test/smoke/bun/serve.ts
 
       - name: Open a built package on Bun
-        run: bun test/bun/built.ts
+        run: bun test/smoke/bun/built.ts
 
       - name: Slack Socket Mode on Bun
-        run: bun test/bun/slack-socket.ts
+        run: bun test/smoke/bun/slack-socket.ts
 
       - name: The AgentCore container's secret read on Bun
-        run: bun test/bun/runtime-secrets.ts
+        run: bun test/smoke/bun/runtime-secrets.ts
 
       - name: The AgentCore command shell on Bun
-        run: bun test/bun/agentcore-shell.ts
+        run: bun test/smoke/bun/agentcore-shell.ts
 
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node

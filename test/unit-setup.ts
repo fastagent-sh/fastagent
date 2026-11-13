@@ -1,3 +1,3 @@
-import { forbidProcesses } from "./forbidden.ts";
+import { forbidProcesses } from "./guards/forbidden.ts";
 
 forbidProcesses();
