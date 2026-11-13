@@ -2,48 +2,14 @@
  * The environment a deployed agent runs with — host-neutral.
  *
  * Docker, Fly and Railway keep a deployment's values in a store of their own and are never handed a file (secret-store.ts):
- * what the definition declares (`defineTool`/`defineChannel`, the `variables` of `context.json`, plus the model's env key)
- * says which names must have a value there. AgentCore's store is a Secrets Manager secret (agentcore/store.ts).
+ * what the definition declares (`needs()`, plus the model's env key) says which names must have a value there.
+ * AgentCore's store is a Secrets Manager secret (agentcore/store.ts).
  */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
-import { DEV_SERVE_ENV } from "../serving-command.ts";
-import { AGENT_ENVIRONMENT_ENV } from "../paths.ts";
 
 /** Is this local auth source an env-var API key (→ becomes a deploy secret) vs OAuth / stored / none? */
 export function isEnvKey(source: string | undefined): source is string {
   return source !== undefined && /^[A-Z][A-Z0-9_]*$/.test(source);
-}
-
-/** Names a deployment sets on the box itself: a value for one describes THIS machine (a local state path, a port). */
-const DEPLOY_OWNED = new Set([
-  "PORT",
-  "FASTAGENT_MODEL",
-  "FASTAGENT_THINKING_LEVEL",
-  "FASTAGENT_HTTP_API",
-  "FASTAGENT_HTTP_PUBLIC_URL",
-  "FASTAGENT_INGRESS",
-  "FASTAGENT_CONFIG",
-  "FASTAGENT_CONFIG_JSON",
-  "FASTAGENT_NAME",
-  "FASTAGENT_ROOT",
-  "FASTAGENT_WORKDIR",
-  "FASTAGENT_STATE_DIR",
-  "FASTAGENT_SECRETS_DIR",
-  "FASTAGENT_AUTH_PATH",
-  "FASTAGENT_RELEASE_ID",
-  "FASTAGENT_DEPLOYED",
-  "FASTAGENT_AGENTCORE",
-  "FASTAGENT_SECRET_ARN",
-  "FASTAGENT_INGRESS_SECRET",
-  "FASTAGENT_WAKE_SECRET",
-  "FASTAGENT_DEV_WORKER",
-  DEV_SERVE_ENV,
-  AGENT_ENVIRONMENT_ENV,
-]);
-
-/** Is `name` one the deployment sets itself (see {@link DEPLOY_OWNED})? */
-export function isDeployOwned(name: string): boolean {
-  return DEPLOY_OWNED.has(name);
 }
 
 /** One variable a runbook tells the operator to set, and where to look for its value. */

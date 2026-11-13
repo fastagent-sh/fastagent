@@ -21,7 +21,6 @@ describe("deploy/docker: planDockerDeploy", () => {
     const plan = planDockerDeploy({ ...base, channels: declaredChannels(["telegram"]) });
     expect(plan.artifacts.map((artifact) => artifact.path)).toEqual([
       "fastagent.bot.compose.yml",
-      ".fastagent/deploy/fastagent.packages",
       "Dockerfile",
       ".dockerignore",
     ]);

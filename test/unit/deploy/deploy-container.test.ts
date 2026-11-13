@@ -53,8 +53,7 @@ describe("deploy/container: shared Docker context", () => {
     const other = files({ ...input, agent: "support", config: '{"thinkingLevel":"high"}', configFile: "support.json" });
     // Every artifact is the same whichever instance it is for: a name, a configuration or a release changes none.
     expect(other).toEqual(one);
-    // The only build output is the package list, which is the program's; no configuration, text or manifest.
-    expect(Object.keys(one).sort()).toEqual([".dockerignore", ".fastagent/deploy/fastagent.packages", "Dockerfile"]);
+    expect(Object.keys(one).sort()).toEqual([".dockerignore", "Dockerfile"]);
     for (const text of Object.values(one)) {
       expect(text).not.toContain("/etc/fastagent");
       expect(text).not.toContain("FASTAGENT_CONFIG");

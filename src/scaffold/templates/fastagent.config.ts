@@ -26,5 +26,4 @@ export default {
     },
     // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
   },
-  // The commands the agent needs (CLIs, runtimes, apt packages) live in context.json: `fastagent env add gh`.
 } satisfies AgentConfig;

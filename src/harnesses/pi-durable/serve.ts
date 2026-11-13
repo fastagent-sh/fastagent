@@ -22,7 +22,6 @@ import { loadContent } from "../../content/file.ts";
 import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
-import { prepareEnvironment } from "../../environment/mise.ts";
 import { log } from "../../log.ts";
 import type { Agent } from "../../agent-api.ts";
 import { STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
@@ -203,13 +202,11 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // FastAgent's own work for the instance (installing packages, cloning content, finding its files) runs in this
   // process's environment and the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };
-  const packages = await prepareEnvironment(dir, env, { ...env, PATH: options.env.PATH });
   const processEnv = processEnvironment(
     {
       base: options.env,
       secrets,
       declared: definition.inputs.secrets.map(({ name }) => name),
-      packages,
       workdir,
     },
     dirname(workdir),

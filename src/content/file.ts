@@ -1,28 +1,24 @@
 /**
  * The program's `context.json` and the content an instance's configuration adds, read in ONE place, so the opener,
- * `info`, `content list`, `env`, `tool` and deploy read one declaration; and the one shape `context.json` is written
- * in. A reader declares the part it uses (its content, or its environment), so a part that is refused stops what uses
- * it and is reported where it is, not as the other's; an edit declares the whole, since it writes the whole. JSON,
+ * `info`, `content list`, `tool` and deploy read one declaration; and the one shape `context.json` is written in. JSON,
  * like `mcp.json` and `package.json`, so a command, a client or the agent itself can edit it without touching
  * TypeScript.
  */
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CONTEXT_FILE } from "../paths.ts";
-import { type DeclaredEnvironment, declareEnvironment } from "../environment/declare.ts";
 import { type ContentEntry, type DeclaredContent, declareContent, joinContent } from "./declare.ts";
 
-/** `context.json` as read: the content entries as written and as declared, and the environment. */
+/** `context.json` as read: the content entries as written and as declared. */
 export interface ContextFile {
   $schema?: string;
   content: Record<string, ContentEntry>;
   declared: DeclaredContent[];
-  environment?: DeclaredEnvironment;
   /** The program's MCP servers as written. Their shape is the MCP reader's to check; an edit keeps them as they are. */
   mcpServers?: Record<string, unknown>;
 }
 
-const FILE_KEYS = ["$schema", "content", "environment", "mcpServers"] as const;
+const FILE_KEYS = ["$schema", "content", "mcpServers"] as const;
 
 /** `text`, the contents of `path`, as the object a context file is: refused when the file itself is wrong. */
 function parseFile(text: string, path: string): Record<string, unknown> {
@@ -64,12 +60,10 @@ function declarePart<T>(path: string, declare: () => T): T {
 export function parseContextFile(text: string, path: string): ContextFile {
   const file = parseFile(text, path);
   const declared = declarePart(path, () => declareContent(file.content, { origin: "program", file: CONTEXT_FILE }));
-  const environment = declarePart(path, () => declareEnvironment(file.environment));
   return {
     ...(file.$schema !== undefined ? { $schema: file.$schema as string } : {}),
     content: (file.content ?? {}) as Record<string, ContentEntry>,
     declared,
-    ...(environment !== undefined ? { environment } : {}),
     ...(file.mcpServers !== undefined ? { mcpServers: file.mcpServers as Record<string, unknown> } : {}),
   };
 }
@@ -126,39 +120,21 @@ export function instanceContent({ values, label, directory }: InstanceContent): 
   );
 }
 
-/** The environment the agent in `agentDir` declares, or undefined when it declares none. */
-export function loadEnvironment(agentDir: string): DeclaredEnvironment | undefined {
-  const { path, text } = contextFileAt(agentDir);
-  if (text === undefined) return undefined;
-  const file = parseFile(text, path);
-  return declarePart(path, () => declareEnvironment(file.environment));
-}
-
 /** The program's `mcpServers` map as written in `context.json`, and the file's path, which names it in a refusal. */
 export function readProgramMcpServers(agentDir: string): { values: unknown; path: string } {
   const { path, text } = contextFileAt(agentDir);
   return { values: text === undefined ? undefined : parseFile(text, path).mcpServers, path };
 }
 
-/** The text `context.json` is written as. An environment that declares nothing is left out. */
+/** The text `context.json` is written as. */
 export function contextFileText(file: {
   $schema?: string;
   content: Record<string, ContentEntry>;
-  environment?: DeclaredEnvironment;
   mcpServers?: Record<string, unknown>;
 }): string {
-  const packages = file.environment?.packages ?? {};
-  const aptPackages = file.environment?.aptPackages ?? [];
-  const variables = file.environment?.variables ?? {};
-  const environment = {
-    ...(Object.keys(packages).length > 0 ? { packages } : {}),
-    ...(aptPackages.length > 0 ? { aptPackages } : {}),
-    ...(Object.keys(variables).length > 0 ? { variables } : {}),
-  };
   const out = {
     ...(file.$schema !== undefined ? { $schema: file.$schema } : {}),
     content: file.content,
-    ...(Object.keys(environment).length > 0 ? { environment } : {}),
     ...(file.mcpServers !== undefined && Object.keys(file.mcpServers).length > 0
       ? { mcpServers: file.mcpServers }
       : {}),

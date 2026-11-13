@@ -33,7 +33,7 @@ legacy HTTP+SSE, live tool-list updates. Reopen the agent to pick up new tools.
 ```
 
 - The server runs in the instance's working directory, without a shell. FastAgent does not install it: `npx -y`
-  fetches it, or declare it in the agent's [environment](configuration.md#environment).
+  fetches it, or install the CLI in your image `Dockerfile`.
 - It gets only a minimal environment (`PATH`, `HOME`, temp and locale) and its own `env`.
 - A program's command that is a path must be under `assets/`, which `build` ships.
 

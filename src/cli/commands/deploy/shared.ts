@@ -10,12 +10,7 @@ import { DEPLOY_REGISTRATION_ATTEMPTS } from "../../../channels/registration.ts"
 import { registerTelegramWebhook } from "../../../channels/telegram/register-webhook.ts";
 import type { Registrars, UrlRecorder } from "../../../deploy/channel-ingress.ts";
 import { recordChannelUrl } from "../../channel-app.ts";
-import {
-  BUILD_OUTPUTS,
-  IMAGE_APP_DIR,
-  isGeneratedDockerfile,
-  isGeneratedDockerignore,
-} from "../../../deploy/container.ts";
+import { IMAGE_APP_DIR, isGeneratedDockerfile, isGeneratedDockerignore } from "../../../deploy/container.ts";
 import type { DeployPreflight } from "../../../deploy/preflight.ts";
 import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
@@ -212,7 +207,7 @@ export async function planArtifacts(
   for (const a of artifacts) {
     const abs = join(target, a.path);
     // Pure build output, not operator-owned configuration. It must track the generated template/runbook.
-    if (BUILD_OUTPUTS.includes(a.path) || options.alwaysWrite?.includes(a.path)) {
+    if (options.alwaysWrite?.includes(a.path)) {
       write(a.path, abs, a.content);
       continue;
     }

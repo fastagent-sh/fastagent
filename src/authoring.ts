@@ -1,10 +1,9 @@
 /**
- * Creating an agent and editing its content: `fastagent init` and `fastagent content` are thin wrappers over these (and
- * `fastagent env` writes its declaration through {@link writeEnvironment}), so the rules live here, not in a command.
- * Nothing here prints or exits; every refusal is thrown with the message the CLI shows. The package exports
- * {@link createAgent} and the content edits ({@link addContent}, {@link removeContent}, {@link listContent}), which
- * give an agent its own entries, without an alias prefix, and the instance's MCP server edits ({@link addMcpServer},
- * {@link removeMcpServer}), which take the same lock; the environment's edit is not exported.
+ * Creating an agent and editing its content: `fastagent init` and `fastagent content` are thin wrappers over these, so
+ * the rules live here, not in a command. Nothing here prints or exits; every refusal is thrown with the message the CLI
+ * shows. The package exports {@link createAgent} and the content edits ({@link addContent}, {@link removeContent},
+ * {@link listContent}), which give an agent its own entries, without an alias prefix, and the instance's MCP server
+ * edits ({@link addMcpServer}, {@link removeMcpServer}), which take the same lock.
  */
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -21,7 +20,6 @@ import {
   joinContent,
 } from "./content/declare.ts";
 import { contextFileText, loadContent, parseContextFile, readContextFile } from "./content/file.ts";
-import type { DeclaredEnvironment } from "./environment/declare.ts";
 import { type ResolvedContent, checkDirectory, resolveContent } from "./content/resolve.ts";
 import type { ContentAddition } from "./content/source.ts";
 import type { AgentDefinition } from "./harnesses/pi-durable/definition.ts";
@@ -521,26 +519,6 @@ export async function setChannelConfig(
       return { result: undefined };
     },
     { mode: fileMode(programPath), create: false },
-  );
-}
-
-/**
- * Replace the environment `context.json` declares with what `change` makes of it as it is now, under the lock content
- * edits take, keeping the rest of the file as it is; and return what was written.
- */
-export async function writeEnvironment(
-  agentDir: string,
-  change: (current: DeclaredEnvironment | undefined) => DeclaredEnvironment,
-): Promise<DeclaredEnvironment> {
-  const path = join(resolveAgentDir(agentDir), CONTEXT_FILE);
-  return withLockedFile(
-    path,
-    async (src) => {
-      const file = parseContextFile(src ?? "{}", path);
-      const environment = change(file.environment);
-      return { result: environment, next: contextFileText({ ...file, environment }) };
-    },
-    { mode: fileMode(path) },
   );
 }
 

@@ -9,23 +9,7 @@ import {
   STATE_DIRNAME,
 } from "../paths.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
-import { MISE_ENVIRONMENT } from "../environment/mise.ts";
 import { BOX_CLI_PREDATES } from "./box-shell.ts";
-
-/**
- * What a deploy writes for the image beyond the program: the package list. FastAgent's own directory, so it is ignored
- * by git and absent from the author's root. It holds the program's, so every instance's image is the same one.
- */
-export const DEPLOY_DIR = `${INSTANCES_DIRNAME}/deploy`;
-
-/**
- * The packages the image installs, one per line as mise is given them: build output every deploy writes, so the layer
- * that installs them is built again when they change and not when anything else does.
- */
-export const PACKAGES_PATH = `${DEPLOY_DIR}/fastagent.packages`;
-
-/** What every deploy writes whoever wrote it before: build output, by its path, never kept or reported stale. */
-export const BUILD_OUTPUTS: readonly string[] = [PACKAGES_PATH];
 
 export interface Artifact {
   path: string;
@@ -109,13 +93,8 @@ export interface ContainerInput {
   hasLockfile: boolean;
   /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from packageManager `bun@x`), else `"1"`. */
   bunVersion?: string;
-  /**
-   * The Debian packages the image installs: what FastAgent needs (git for content and a shipped `.git`, CA certificates
-   * and curl for mise), then the agent's `aptPackages`.
-   */
+  /** Debian packages the image installs (`git` for content and a shipped `.git`). */
   apt?: string[];
-  /** The packages the agent declares, as mise is given them (`gh@2`): the image installs them with the agent's own mise. */
-  packages?: string[];
   /**
    * The configuration the deployment delivers as one line of JSON (`deliveredConfig`), set on the box as
    * `FASTAGENT_CONFIG_JSON`: the host renders it with the instance's other variables, and the image holds none of it.
@@ -133,7 +112,7 @@ export interface ContainerInput {
   shipsGit?: boolean;
 }
 
-/** Whether the image has git: FastAgent installs it for its own needs, or the agent declares it in `aptPackages`. */
+/** Whether the image has git: FastAgent installs it for content or a shipped `.git`. */
 export function imageHasGit(input: Pick<ContainerInput, "apt">): boolean {
   return input.apt?.includes("git") === true;
 }
@@ -146,36 +125,6 @@ function aptLayer(packages?: string[]): string {
  && rm -rf /var/lib/apt/lists/*
 `
     : "";
-}
-
-/** mise's own directories for the build, thrown away with the layer: nothing of them is read at run time. */
-const BUILD_MISE_DIR = "/tmp/mise";
-
-/** Where the build holds the package list while it installs them: not the program's directory. */
-const BUILD_PACKAGES = "/tmp/fastagent.packages";
-
-/**
- * The layer that installs the agent's packages, after its dependencies (the agent's own mise among them) and before the
- * definition, so it stays cached while the definition changes. It reads them from {@link PACKAGES_PATH}, which deploy
- * writes, rather than listing them: the Dockerfile is kept once written, and a list here would make every package
- * change one that `--run` stops on. The packages go to mise's system directory (`--system`,
- * /usr/local/share/mise/installs), which every mise reads beside its own data directory, so a start installs nothing.
- */
-function environmentLayer(dir: string): string {
-  const isolation = Object.entries(MISE_ENVIRONMENT)
-    .map(([key, value]) => `${key}=${value}`)
-    .join(" ");
-  // The agent's own mise, by its package: the bin link is not reliable (mise.ts `miseBinary`).
-  const mise = `${dir}/node_modules/@jdxcode/mise-linux-$(case "$(uname -m)" in aarch64|arm64) echo arm64;; *) echo x64;; esac)/bin/mise`;
-  const steps = [
-    `export ${isolation} MISE_DATA_DIR=${BUILD_MISE_DIR} MISE_CACHE_DIR=${BUILD_MISE_DIR}/cache MISE_STATE_DIR=${BUILD_MISE_DIR}/state MISE="${mise}"`,
-    // One argument per line, read as it is: no quote or backslash in a package means anything to xargs.
-    `xargs -d '\\n' -a ${BUILD_PACKAGES} "$MISE" install --system`,
-    `rm -rf ${BUILD_MISE_DIR}`,
-  ];
-  return `COPY ${PACKAGES_PATH} ${BUILD_PACKAGES}
-RUN ${steps.join(" \\\n && ")}
-`;
 }
 
 /**
@@ -197,7 +146,6 @@ function dockerfile(input: ContainerInput): string {
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const deployment = `ENV ${DEPLOYED_ENV}=1\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
-  const environment = input.packages && input.packages.length > 0 ? environmentLayer(dir) : "";
   const isBun = input.runtime === "bun";
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
   const note = isBun
@@ -218,7 +166,7 @@ ${deployment}`;
     const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
     return `${head}COPY package.json bun.lock* *.tgz ./
 RUN ${install}
-${environment}COPY . .
+COPY . .
 ${BUILD_STEP_NOTE}
 RUN bun run fastagent build
 CMD ["bun", "run", "fastagent", "start", "${dir}"]
@@ -229,7 +177,7 @@ CMD ["bun", "run", "fastagent", "start", "${dir}"]
   const install = input.hasLockfile ? "npm ci" : "npm install";
   return `${head}COPY package.json package-lock.json* *.tgz ./
 RUN ${install}
-${environment}COPY . .
+COPY . .
 ${BUILD_STEP_NOTE}
 RUN ./node_modules/.bin/fastagent build
 CMD ["./node_modules/.bin/fastagent", "start", "${dir}"]
@@ -252,8 +200,6 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
 /${INSTANCES_DIRNAME}
-# what a deploy writes for the image: the package list
-!/${DEPLOY_DIR}
 /${CONTENT_DIRNAME}
 # the project's own instance configuration: the development instance's, which a deploy does not carry
 /${INSTANCE_CONFIG_FILE}
@@ -263,9 +209,8 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 !**/.env.example
 !**/${SECRETS_DIRNAME}/.gitignore
 **/*.log
-# .git is deliberately shipped with the definition (the generated image installs the git binary
-# when this directory ships a .git; otherwise run "fastagent env add apt:git"). For a smaller image with no
-# git needs, add a ".git" line here.
+# .git is deliberately shipped with the definition (the generated image installs git when the directory ships
+# a .git or clones github content). For a smaller image with no git needs, add a ".git" line here.
 `;
 
 /**
@@ -281,8 +226,6 @@ export function redeployCommand(host: string, input: Pick<ContainerInput, "confi
 /** The Dockerfile + ignore artifacts — spread into any host's artifact list. */
 export function containerArtifacts(input: ContainerInput): Artifact[] {
   return [
-    // Written without packages too, empty: a list an earlier deploy left would otherwise outlive the last package.
-    { path: PACKAGES_PATH, content: (input.packages ?? []).map((spec) => `${spec}\n`).join("") },
     { path: "Dockerfile", content: dockerfile(input) },
     { path: ".dockerignore", content: dockerignore(input) },
   ];

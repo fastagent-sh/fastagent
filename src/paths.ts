@@ -21,7 +21,7 @@ export function globalHome(): string {
  * ignore templates spell it out as literal text, so renaming this constant means editing them too.
  */
 export const SECRETS_DIRNAME = ".secrets";
-export const AGENT_ENVIRONMENT_ENV = "FASTAGENT_ENVIRONMENT";
+const AGENT_ENVIRONMENT_ENV = "FASTAGENT_ENVIRONMENT";
 type AgentEnvironment = "dev" | "production";
 
 export function selectAgentEnvironment(environment: AgentEnvironment, env: NodeJS.ProcessEnv = process.env): void {

@@ -180,34 +180,6 @@ content, and (when deployed) what a self-edit changes. Nothing comes from the ma
 Prompt templates (`prompts/<name>.md`) run on a bare `/<name>`, and on a channel anyone can type one. A template named
 like a platform command (`prompts/start.md` for Telegram's `/start`) takes that command over.
 
-## Environment
-
-Commands the agent needs, declared in `context.json`, are installed (with [mise](https://mise.jdx.dev)) wherever it
-runs and in its image:
-
-```json
-{
-  "environment": {
-    "packages": { "gh": "2", "jq": "latest", "npm:@mermaid-js/mermaid-cli": "11" },
-    "aptPackages": ["chromium", "fonts-noto-cjk"],
-    "variables": { "GITHUB_TOKEN": { "description": "gh's token, with repo scope" } }
-  }
-}
-```
-
-| Key | Meaning |
-|---|---|
-| `packages` | CLIs and runtimes with a version: a mise registry name, or `aqua:`, `github:`, `gitlab:`, `conda:`, `npm:`, `pypi:` |
-| `aptPackages` | Debian packages the image installs (browsers, fonts). Locally the start only names the missing ones |
-| `variables` | Variables the agent's commands read. Required; values come from `.secrets/.env` or the deploy's values |
-
-- Use `fastagent env add gh@2` (installs, then declares), `env list`, `env install`, `env exec`.
-- Nothing is locked: each machine installs the newest release the version allows, once.
-- Packages that build from source or run plugin code are refused; use a `github:` release or your own `Dockerfile`.
-- A `pypi:` package needs `python` and `uv` declared too.
-- The agent's commands get a small base environment (`PATH`, `HOME`, locale, proxy, …), the declared packages and
-  secrets, and nothing else from your shell.
-
 ## Auth and secrets
 
 | Source | Use |
