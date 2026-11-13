@@ -67,16 +67,12 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
 - **Nothing waits on a terminal.** A choice a terminal would ask for has a flag or an argument. Without a terminal,
   or with `--no-input` or `--json`, a choice not given ends the command, exit 2, naming what to pass (`login --json`
   answers `need_choice` with a command for each).
-- **A step only a person can take returns at once**, with what the person does and how to follow it:
-  `"status": "need_user_action"`, the address to open, and a `check_command` to run once they have, in a sentence for
-  the agent (`agent_next_steps`). An account sign-in (`login`, and `login --deployment` on the box) and an app's setup
-  (`channels setup`) work this way: a process of the CLI's own finishes the step and keeps a ticket that
-  `--check <ticket>` reads. So does a whole deploy, opted into with `deploy <host> --run --json`: a deploy's exit 0
-  says it is deployed, so one paused for a person (exit 0, `need_user_action`) is never what a CI job gets without
-  asking for it.
-- **A secret never passes through the agent's conversation.** The person pastes it on a page the command's own process
-  serves, types it at a terminal of their own, or, for the values still left to a file (a model's API key, a bot
-  token), writes it where the command names (the agent's `.secrets/.env`) in a terminal the agent does not read.
+- **A step only a person can take returns at once**: `channels setup <name> --json` checks the target env file
+  statelessly and exits 2 (`need_user_action`) naming the missing env vars, guide URL, and terminal command until the
+  owner writes them, then exits 0 once verified. An account sign-in (`login`, and `login --deployment` on the box) and
+  `deploy <host> --run --json` return `need_user_action` with a `check_command` / `--check <ticket>`.
+- **A secret never passes through the agent's conversation.** The person types it at a terminal of their own, or writes
+  it where the command names (the agent's `.secrets/.env`) without sending it through the agent.
 - **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is
   data has `--json`.
 - **The exit code says how it ended**: 0, 1 or 2, as above.

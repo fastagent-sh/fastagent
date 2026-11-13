@@ -206,6 +206,38 @@ async function deploy(
     `${opts.fromEnv ? " --from-env" : ""}` +
     `${opts.intoLinked ? " --into-linked" : ""}${opts.idleTimeout === undefined ? "" : ` --idle-timeout ${opts.idleTimeout}`} --run`;
   const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
+  if (unprepared.length > 0) {
+    const supplied = unprepared.flatMap(channelAppNames);
+    const kinds = unprepared.map(({ kind }) => kind);
+    const absent = supplied.filter((name) => !pre.values.get(name)?.trim());
+    if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
+      failStartup(
+        new Error(
+          `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
+            `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valuesFrom}, or ` +
+            `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
+            `--config delivers`,
+        ),
+      );
+    }
+    // The credentials of the app it makes are kept in a file, and a deployment has no default one.
+    if (opts.envFile === undefined) {
+      const configFlag = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
+      failUsage(
+        `deploy stopped: ${absent.join(", ")} are not in ${pre.valuesFrom}, so a production ${kinds.join(" and ")} app ` +
+          `has to be made, and its credentials need a file to be kept in. Make it with ` +
+          `\`fastagent channels setup ${kinds[0]} --env-file <file>${configFlag}\` (it creates the file), then deploy ` +
+          `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
+      );
+    }
+    if (opts.json || opts.input === false || !isInteractive()) {
+      const configFlag = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
+      failUsage(
+        `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: run ` +
+          `\`fastagent channels setup ${kinds[0]} --env-file ${shellArg(opts.envFile)}${configFlag} --json\` first, or run this deploy in a terminal`,
+      );
+    }
+  }
 
   if (opts.json && step === undefined) {
     // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
@@ -247,46 +279,8 @@ async function deploy(
 
   /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
   const deployWith = async (answerer: Answerer): Promise<{ url?: string; notes: string[] }> => {
-    if (unprepared.length > 0) {
-      const supplied = unprepared.flatMap(channelAppNames);
-      const kinds = unprepared.map(({ kind }) => kind);
-      const { values } = pre;
-      const absent = supplied.filter((name) => !values.get(name)?.trim());
-      if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
-        failStartup(
-          new Error(
-            `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-              `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valuesFrom}, or ` +
-              `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
-              `--config delivers`,
-          ),
-        );
-      }
-      // The credentials of the app it makes are kept in a file, and a deployment has no default one.
-      if (opts.envFile === undefined) {
-        const config = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
-        failUsage(
-          `deploy stopped: ${absent.join(", ")} are not in ${pre.valuesFrom}, so a production ${kinds.join(" and ")} app ` +
-            `has to be made, and its credentials need a file to be kept in. Make it with ` +
-            `\`fastagent channels setup ${kinds[0]} --env-file <file>${config}\` (it creates the file), then deploy ` +
-            `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
-        );
-      }
-      if (answerer.kind === "nobody") {
-        failUsage(
-          `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: setting up the separate production app ` +
-            `needs a person — run this deploy in a terminal; from a coding agent, run \`${rerun} --json\`, which ` +
-            `hands their part to its user`,
-        );
-      }
-      const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
-      await prepareChannelApps(
-        agentDir,
-        resolve(opts.envFile),
-        unprepared,
-        again,
-        answerer.kind === "ticket" ? answerer.step.person : undefined,
-      ).catch(failStartup);
+    if (unprepared.length > 0 && opts.envFile !== undefined && answerer.kind === "terminal") {
+      await prepareChannelApps(agentDir, resolve(opts.envFile), unprepared, rerun).catch(failStartup);
       // What the setup kept is this deploy's values from here on.
       loadDotEnv(agentDir);
       pre = await preflight();

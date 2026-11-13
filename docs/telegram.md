@@ -16,8 +16,9 @@ fastagent channels setup telegram   # opens @BotFather; paste the token (hidden,
 fastagent dev                       # polls Telegram: no public URL needed
 ```
 
-Message the bot. A coding agent runs `channels setup telegram --json`, and the person pastes the token on a local
-page, never in the conversation. `fastagent dev` runs the setup itself the first time.
+Message the bot. A coding agent runs `channels setup telegram --json` (exit 2 with the missing env var and `@BotFather`
+link until the owner adds `TELEGRAM_BOT_TOKEN` to `.secrets/.env` or runs `channels setup telegram` in a terminal, then
+exit 0 once valid). `fastagent dev` runs the setup itself the first time.
 
 **For groups, turn privacy mode off**, or the bot sees only mentions and replies: in @BotFather send `/setprivacy`,
 choose the bot, choose Disable, then **remove the bot from each group and add it back**. Setup and startup warn when

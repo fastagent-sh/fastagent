@@ -1,30 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
-
-/**
- * What a setup with no one at a terminal asks `startTicket` to start. The step it starts serves the person a page of its
- * own (feishu-setup.test.ts and channels-setup.test.ts run that step in process).
- */
-const started: unknown[] = [];
-vi.mock("../../../src/cli/ticket.ts", async (original) => {
-  const real = await original<typeof import("../../../src/cli/ticket.ts")>();
-  return {
-    ...real,
-    startTicket: async (input: Parameters<typeof real.startTicket>[0]) => {
-      started.push(input);
-      return {
-        ...real.createTicket(input),
-        status: "need_user_action" as const,
-        url: "http://127.0.0.1:4242/setup/0123456789abcdef0123456789abcdef0123456789abcdef",
-        instructions: "Paste the App ID and App Secret of the Lark app on this page.",
-      };
-    },
-  };
-});
-
-afterEach(() => started.splice(0));
 
 describe("a channel at the command line: the program by `add`, the app by `channels setup`", () => {
   it.each(["telegram", "slack", "feishu", "lark"] as const)(
@@ -55,7 +32,7 @@ describe("a channel at the command line: the program by `add`, the app by `chann
     },
   );
 
-  it("`channels setup` hands unattended setup to startTicket and rejects unknown channels with exit 2", async () => {
+  it("`channels setup` rejects unknown channels with exit 2 and returns structured missing steps under --json", async () => {
     const dir = await agentWorkspace("fa-channels-setup-", {
       "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
     });
@@ -66,11 +43,18 @@ describe("a channel at the command line: the program by `add`, the app by `chann
     expect(bad.stderr).toContain("`channels setup` sets up telegram, slack, feishu and lark");
 
     const setup = await runInProcess(["channels", "setup", "lark", dir, "--json"]);
-    expect(setup.code, setup.stderr).toBe(0);
-    expect(started).toHaveLength(1);
+    expect(setup.code, setup.stderr).toBe(2);
     expect(JSON.parse(setup.stdout)).toMatchObject({
       status: "need_user_action",
-      url: "http://127.0.0.1:4242/setup/0123456789abcdef0123456789abcdef0123456789abcdef",
+      channel: "lark",
+      steps: [
+        {
+          fields: [
+            { name: "LARK_APP_ID", secret: false },
+            { name: "LARK_APP_SECRET", secret: true },
+          ],
+        },
+      ],
     });
   });
 });

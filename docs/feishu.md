@@ -27,8 +27,8 @@ fastagent dev                     # WebSocket: no public URL needed
 
 - **Feishu** creates the app for you (scan-to-create): confirm it in the browser or the Feishu app, then **create a
   version and publish it** in the console.
-- **Lark** opens a link that creates the app with the right scopes; paste its App ID and App Secret (on a local page
-  for a coding agent's `--json` run), then publish.
+- **Lark** opens a link that creates the app with the right scopes; paste its App ID and App Secret in a terminal (or
+  add `LARK_APP_ID` / `LARK_APP_SECRET` to `.secrets/.env` and verify with `--json`), then publish.
 
 Setup checks the app's scopes and names any your tenant withheld, with a link to request it:
 

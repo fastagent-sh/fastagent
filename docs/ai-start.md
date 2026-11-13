@@ -197,14 +197,15 @@ restart it. Restart it yourself after editing `lib/`, which is not watched. Only
 
 | Channel | Run | The owner |
 |---|---|---|
-| Telegram | `fastagent add telegram && fastagent channels setup telegram --json` | creates the bot with @BotFather and pastes the token on the page returned |
-| Slack | `fastagent add slack && fastagent channels setup slack --json` | creates the app from the link, installs it, pastes two tokens on the page |
-| Feishu | `fastagent add feishu && fastagent channels setup feishu --json` | confirms the new app, then publishes it in the console |
-| Lark | `fastagent add lark && fastagent channels setup lark --json` | creates the app from the link and pastes its App ID and Secret on the page |
+| Telegram | `fastagent add telegram && fastagent channels setup telegram --json` | creates the bot with @BotFather and saves `TELEGRAM_BOT_TOKEN` to `.secrets/.env` (or runs `fastagent channels setup telegram` in a terminal) |
+| Slack | `fastagent add slack && fastagent channels setup slack --json` | creates the app from the link, installs it, and saves its tokens to `.secrets/.env` (or runs `fastagent channels setup slack` in a terminal) |
+| Feishu | `fastagent add feishu && fastagent channels setup feishu --json` | runs `fastagent channels setup feishu` in a terminal (or adds `FEISHU_APP_ID` / `FEISHU_APP_SECRET`), then publishes in the console |
+| Lark | `fastagent add lark && fastagent channels setup lark --json` | creates the app from the link and saves its App ID and Secret to `.secrets/.env` (or runs `fastagent channels setup lark` in a terminal) |
 
-With `--json`, each step only the owner can do comes back as `need_user_action`: relay its address and instructions,
-wait for the owner, then run its `check_command`. Then run `fastagent dev --no-input` (no tunnel needed) and have the
-owner send a real message. A passed URL check is not a conversation.
+With `--json`, `channels setup` validates `.secrets/.env` (or `--env-file`) statelessly: when credentials are missing or
+refused it exits 2 with `need_user_action` (env var names, guide URL, and `rerun` command); once written, re-running
+`--json` verifies them and exits 0. Then run `fastagent dev --no-input` (no tunnel needed) and have the owner send a
+real message. A passed URL check is not a conversation.
 
 Chat replies are sent for you. Use a send tool (`telegram_send`, `slack_send`, …) only to reach someone outside the
 current turn, with an approved recipient.

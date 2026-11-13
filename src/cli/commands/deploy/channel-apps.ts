@@ -5,7 +5,6 @@
 import type { DeclaredChannel } from "../../../channels/discover.ts";
 import type { SetupWay } from "../../../channels/setup.ts";
 import { type SetupKind, setUpChannel, setupNames } from "../../channel-setup.ts";
-import type { Person } from "../../person.ts";
 
 export interface ChannelAppSetup {
   kind: "feishu" | "lark";
@@ -28,22 +27,26 @@ export function unpreparedChannelApps(
   });
 }
 
-/** Set each of `apps` up for production, its person's steps taken by `person` (absent: at this terminal). */
+/** Set each of `apps` up for production in an interactive terminal. */
 export async function prepareChannelApps(
   agentDir: string,
   file: string,
   apps: readonly ChannelAppSetup[],
   rerun: string,
-  person?: Person,
 ): Promise<void> {
   for (const { kind, way } of apps) {
     console.error(`[fastagent] ${kind}: preparing the production app for ${way} in ${file}`);
-    const input = { kind: kind satisfies SetupKind, agentDir, file, way, dev: false, rerun };
-    const { after } = await setUpChannel(person === undefined ? input : { ...input, person });
-    // What is left (the publish, a scope to approve) is not the deploy's to finish: the person is told.
-    for (const line of after) {
-      if (person === undefined) console.error(`[fastagent] next: ${line}`);
-      else person.afterwards(line);
+    const outcome = await setUpChannel({
+      kind: kind satisfies SetupKind,
+      agentDir,
+      file,
+      way,
+      dev: false,
+      rerun,
+      interactive: true,
+    });
+    if (outcome.status === "done") {
+      for (const line of outcome.after) console.error(`[fastagent] next: ${line}`);
     }
   }
 }

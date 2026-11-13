@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,6 @@ import { bootstrapFeishuVerificationToken } from "../../../src/channels/feishu/b
 import { FEISHU_AGENT_SCOPES, FEISHU_APP_CONFIG_SCOPE } from "../../../src/channels/feishu/setup-mode.ts";
 import { registerFeishuApp } from "../../../src/channels/feishu/register-app.ts";
 import { type SetUpChannelInput, setUpChannel } from "../../../src/cli/channel-setup.ts";
-import type { Person } from "../../../src/cli/person.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
@@ -26,7 +25,8 @@ vi.mock("@clack/prompts", () => {
     log: { info: () => {}, error: () => {} },
   };
 });
-vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: () => {} }));
+const opened: string[] = [];
+vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
 vi.mock("../../../src/channels/feishu/bootstrap-token.ts", () => ({ bootstrapFeishuVerificationToken: vi.fn() }));
 vi.mock("../../../src/channels/feishu/register-app.ts", async (original) => {
   const actual = await original<typeof import("../../../src/channels/feishu/register-app.ts")>();
@@ -51,30 +51,13 @@ let platform: Platform;
 let dir: string;
 let file: string;
 let said: string[];
-let waits: { url: string; instructions: string; until?: number }[];
-let afterwards: { instructions: string; url?: string }[];
-let carried: number;
-
-const person: Person = {
-  waitsOn: (url, instructions, until) => {
-    waits.push({ url, instructions, ...(until === undefined ? {} : { until }) });
-  },
-  carriesOn: () => {
-    carried++;
-  },
-  afterwards: (instructions, url) => {
-    afterwards.push({ instructions, ...(url === undefined ? {} : { url }) });
-  },
-};
 
 beforeEach(async () => {
   platform = { granted: WEBHOOK_SCOPES, config: "missing" };
   dir = await mkdtemp(join(tmpdir(), "fa-feishu-setup-"));
   file = join(dir, ".secrets", ".env");
   said = [];
-  waits = [];
-  afterwards = [];
-  carried = 0;
+  opened.length = 0;
   prompts.answers.length = 0;
   prompts.asked.length = 0;
   vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
@@ -138,28 +121,57 @@ const setup = (kind: "feishu" | "lark", way: "webhook" | "connection", extra: Pa
     way,
     dev: way === "connection",
     rerun: "fastagent deploy fly --run",
+    interactive: true,
     ...extra,
   });
 
 const written = async () => (await readFile(file, "utf8").catch(() => "")) as string;
 
 describe("a Feishu app is created by scan-to-create", () => {
-  it("waits on the person to confirm it, carries on once they have, keeps the credentials, and leaves them publishing it", async () => {
+  it("opens the confirmation URL, keeps the credentials, and reports remaining publish steps", async () => {
     platform.granted = AGENT_SCOPES;
-    const outcome = await setup("feishu", "connection", { person });
-    expect(waits).toEqual([
-      expect.objectContaining({
-        instructions: expect.stringContaining("confirm the new Feishu app"),
-        url: expect.stringContaining("https://open.feishu.cn/page/launcher?user_code=AB-CD"),
-      }),
-    ]);
-    expect(carried).toBe(1);
-    expect(outcome.written).toEqual(["FEISHU_APP_ID", "FEISHU_APP_SECRET"]);
-    expect(outcome.after).toEqual(["CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_new/version"]);
+    const outcome = await setup("feishu", "connection");
+    expect(opened).toEqual([expect.stringContaining("https://open.feishu.cn/page/launcher?user_code=AB-CD")]);
+    expect(outcome).toEqual({
+      status: "done",
+      written: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+      kept: [],
+      after: ["CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_new/version"],
+    });
     expect(await written()).toMatch(/^FEISHU_APP_ID=cli_new$/m);
-    // The link's own lapse (Feishu's expires_in), which can come before the ticket's.
-    const until = (waits[0] as { until: number }).until;
-    expect(until - Date.now()).toBeGreaterThan(590_000);
-    expect(until - Date.now()).toBeLessThanOrEqual(600_000);
+  });
+
+  it("in non-interactive mode, returns missing app credentials without spawning a device flow and accepts pre-set credentials", async () => {
+    const missing = await setup("feishu", "connection", { interactive: false });
+    expect(registerFeishuApp).not.toHaveBeenCalled();
+    expect(missing).toMatchObject({
+      status: "need_user_action",
+      steps: [
+        expect.objectContaining({
+          fields: [
+            { name: "FEISHU_APP_ID", label: "FEISHU_APP_ID", secret: false },
+            { name: "FEISHU_APP_SECRET", label: "FEISHU_APP_SECRET", secret: true },
+          ],
+        }),
+      ],
+    });
+
+    // Webhook mode stops before evaluating Verification Token's app-id-dependent guide URL when App ID is absent.
+    const webhookMissing = await setup("lark", "webhook", { interactive: false });
+    expect(webhookMissing).toMatchObject({
+      status: "need_user_action",
+      steps: [{ label: "App ID and App Secret" }],
+    });
+    expect(JSON.stringify(webhookMissing)).not.toContain("undefined");
+
+    platform.granted = AGENT_SCOPES;
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(file, "FEISHU_APP_ID=cli_preset\nFEISHU_APP_SECRET=sec\n");
+    expect(await setup("feishu", "connection", { interactive: false })).toEqual({
+      status: "done",
+      written: [],
+      kept: ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+      after: ["CREATE + PUBLISH a version: https://open.feishu.cn/app/cli_preset/version"],
+    });
   });
 });
