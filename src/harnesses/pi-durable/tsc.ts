@@ -1,7 +1,7 @@
 /**
  * The project's TypeScript as `fastagent build` runs it: its own `tsc`, a process per call, with the options FastAgent
  * sets. Apart from the build so a test whose subject is what the build decides can stand in for the compiler
- * (test/tsc-double.ts), which is the slowest thing the build does.
+ * (test/doubles/tsc-double.ts), which is the slowest thing the build does.
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";

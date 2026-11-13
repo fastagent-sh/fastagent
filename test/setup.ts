@@ -7,8 +7,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { vi } from "vitest";
-import { forbidNetwork } from "./forbidden.ts";
-import { CHILD_REFUSALS } from "./network-guard.ts";
+import { forbidNetwork } from "./guards/forbidden.ts";
+import { CHILD_REFUSALS } from "./guards/network-guard.ts";
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
 
@@ -20,7 +20,7 @@ forbidNetwork();
 process.env[CHILD_REFUSALS] = join(process.env.HOME, "refused-connections");
 process.env.NODE_OPTIONS = [
   process.env.NODE_OPTIONS,
-  `--import=${new URL("./child-network-guard.ts", import.meta.url).pathname}`,
+  `--import=${new URL("./guards/child-network-guard.ts", import.meta.url).pathname}`,
 ]
   .filter(Boolean)
   .join(" ");

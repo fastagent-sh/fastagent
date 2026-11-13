@@ -77,6 +77,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",
     "test": "vitest --run --project unit",
+    "test:guards": "vitest --run --project unit test/guards",
     "test:integration": "vitest --run --project integration",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src test && node scripts/check-doc-links.mjs && knip",

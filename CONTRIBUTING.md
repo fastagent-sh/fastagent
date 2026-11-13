@@ -14,7 +14,7 @@ All repository-facing text — code, comments, docs, commit messages, PR descrip
 
 Anything that can be verified locally **must** be verified locally before opening a PR. Pushing speculatively "to see if CI catches it" wastes Actions minutes and pollutes history.
 
-While iterating, run the test files for the code you changed (`npx vitest run test/<file>.test.ts`). Run the full local loop once, before pushing:
+While iterating, run the guards and the test domain for the code you changed (`npm run test:guards && npx vitest run test/unit/<domain>/`). Run the full local loop once, before pushing:
 
 ```bash
 npm install

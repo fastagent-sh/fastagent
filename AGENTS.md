@@ -19,7 +19,7 @@ Agent API.
   stays true goes into the code: a name, a header, a test.
 - There is no specification document: one implementation and the client it ships need none. The Agent API is
   `src/agent-api.ts` and `src/http/contract.ts`; what it promises is `docs/agent-api.md`, and
-  `test/agent-api-conformance.ts` and `test/http-api.test.ts` test those promises. Changing them is an explicit
+  `test/harnesses/agent-api-conformance.ts` and `test/unit/agent-api/http-api.test.ts` test those promises. Changing them is an explicit
   decision. A second implementation is when a specification would earn its place.
 
 ## Decisions the code cannot show
@@ -29,7 +29,7 @@ Agent API.
   by choice.
 - **The contracts import no harness.** `src/agent-api.ts` imports only `effect/Schema`. `src/channel.ts`,
   `src/sign-in-api.ts` and `src/mcp-api.ts` import nothing. `src/index.ts` names every export and exports no assembly
-  part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/package-boundary.test.ts` checks this.
+  part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
 - **One process owns an instance's state.** That state is the instance's SQLite storage and each Caller's files under
   the state root. A deployment routes every session of one storage to one process. What a Caller reads back is
   durable before it is reported.
@@ -74,30 +74,31 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 
 | Layer / Tier | Files, command | Scope & allowed resources | Timeout |
 | --- | --- | --- | --- |
-| Guards (L0) | `test/package-boundary.test.ts`, `test/test-tiers.test.ts`, `test/forbidden.test.ts` | Static export/dependency boundaries and test-suite rules | 20 s |
-| Unit (L1) | `test/*.test.ts`, `npm test` | Pure invariants (no I/O) and contract specs via standard doubles, temp dirs, SQLite, loopback sockets, fake timers. No child processes. | 20 s |
-| Integration (L2) | `test/*.integration.test.ts`, `npm run test:integration` | Double parity checks, cross-process locks/signals/pipes, real `build`/`tsc`/`git`/MCP subprocesses, `npm pack` | 30 s |
-| Artifact smoke (L3) | CI only: `test/e2e/packed.ts`, `test/bun/` | Installed tarball without `src/` aliases and Bun 1.4 runtime differences | the job |
+| Guards (L0) | `test/guards/*.test.ts`, `npm run test:guards` | Static export/dependency boundaries, double parity, command coverage, and hygiene rules | 20 s |
+| Unit (L1) | `test/unit/<domain>/*.test.ts`, `npm test` | Pure invariants (no I/O) and contract specs via standard doubles, temp dirs, SQLite, loopback sockets, fake timers. No child processes. | 20 s |
+| Integration (L2) | `test/integration/**/*.integration.test.ts`, `npm run test:integration` | Double parity checks, cross-process locks/signals/pipes, real `build`/`tsc`/`git`/MCP subprocesses, `npm pack` | 30 s |
+| Artifact smoke (L3) | CI only: `test/smoke/e2e/packed.ts`, `test/smoke/bun/` | Installed tarball without `src/` aliases and Bun 1.4 runtime differences | the job |
 
 **Change-to-Test Matrix:**
 
 | Change area | Required tests | Mandatory seam (do not invent a local mock) |
 | --- | --- | --- |
-| Agent API / HTTP (`src/agent-api.ts`, `src/http/`) | `test/agent-api-conformance.ts`, `test/http-api.test.ts` | `durableSubject` / `httpSubject` |
-| CLI command or flag (`src/cli/`) | Main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
-| Channel (`src/channels/`) | Verified ingress, DM/group summon, `/stop`, send tool | `scriptedAgent` (`test/scripted-agent.ts`) + stubbed `fetch` |
-| Deploy / Host CLI (`src/deploy/`) | Preflight gates, generated artifacts, `run`/`destroy`/`logs` paths | `hostCli` / `recordHostCli` (`test/host-cli-double.ts`); no secrets in artifacts or argv |
-| Security boundary | Valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
-| Test double (`test/*-double.ts`, `test/cli-run.ts`) | Update its `*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
+| Agent API / HTTP (`src/agent-api.ts`, `src/http/`) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
+| CLI command or flag (`src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
+| Channel (`src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, send tool | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
+| Deploy / Host CLI (`src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts, `run`/`destroy`/`logs` paths | `hostCli` / `recordHostCli` (`test/doubles/host-cli-double.ts`); no secrets in artifacts or argv |
+| Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
+| Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
 | Bugfix | Minimal regression test reproducing the bug | L1 preferred; use L2 only when process/lock/tool behavior is essential |
 
 **How the suite stays fast and consistent:**
+- **Scoped local loop:** Iterate on the domain you touched (`npx vitest run test/unit/<domain>/` and `npm run test:guards`), then run the full local loop before pushing.
 - **Append before creating:** When adding fewer than ~8 tests in an existing domain, append to that domain's test file instead of opening a new `.test.ts` file (each file in `pool: "forks"` pays a cold-import cost).
-- **Canonical seams only:** Use `runInProcess` for CLI tests (never stub `process.cwd`/`console.log`/`process.exitCode` manually), `host-cli-double.ts` for host CLIs (never write a local `fakeCli`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, `faux.ts`, and `scripted-agent.ts`.
+- **Canonical seams only:** Use `runInProcess` for CLI tests (never spy on `process.cwd`/`console.log`), `host-cli-double.ts` for host CLIs (never write a local `fakeCli`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, `faux.ts`, and `scripted-agent.ts`.
 - **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, `FASTAGENT_OFFLINE=1`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
-- **Hygiene guards (`test/test-tiers.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds (`Date.now() - t < ...`), and shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`) are rejected.
-- **Process CLI tests (`run`):** Spawn the binary in an integration test only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).
-- **Paired fixtures:** A subject tested in both Unit and Integration shares `<name>-fixtures.ts`.
+- **Hygiene guards (`test/guards/suite-hygiene.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds, shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`), ghost file references, missing double parity, missing CLI command tests, and CLI seam bypasses are rejected.
+- **Process CLI tests (`run`):** Spawn the binary in `test/integration/` only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).
+- **Paired fixtures:** A subject tested in both Unit and Integration shares `test/fixtures/<name>-fixtures.ts`.
 
 ## Priorities
 
@@ -113,7 +114,7 @@ without being rewritten. When the following conflict, the earlier one wins; name
 ## Workflow
 
 `CONTRIBUTING.md` has the full workflow: branches, the PR loop, releases, merge and review policy.
-- Iterate with the tests for what you changed (`npx vitest run test/<file>.test.ts`). Before pushing, run
+- Iterate with the guards and domain tests for what you changed (`npm run test:guards && npx vitest run test/unit/<domain>/`). Before pushing, run
   `npm run lint && npm run typecheck && npm test`, plus `npm run test:integration` when the change touches that tier.
 - Never commit to `main`. Use a branch prefix (`feature/`, `fix/`, `refactor/`, `docs/`, `chore/`, `ci/`, `test/`),
   then `gh pr create --base main --assignee @me`. PRs are squash-merged: the PR title and body become the commit, so
