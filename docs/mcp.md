@@ -108,6 +108,26 @@ browser and shows progress. Nothing opens a browser on its own. A custom `McpGra
 must serialize everyone sharing a grant and write durably. Pass `store` and `bindings` together. Two agents may share
 a grant; closing one does not sign the other out.
 
+A host that lets the person connect a service adds the server to the instance's configuration, rather than writing
+`fastagent.json` itself:
+
+```ts
+import { addMcpServer, removeMcpServer } from "@fastagent-sh/fastagent";
+
+const { notes } = await addMcpServer(agentDir, "linear", { type: "http", url: "https://mcp.linear.app/mcp" });
+// for a built definition: addMcpServer(definition, name, server, { config: "/private/app-data/instance/fastagent.json" })
+await removeMcpServer(agentDir, "linear");
+```
+
+- The entry is checked as an open checks it, with the program's servers: a refusal is the open's own message and
+  nothing is written. It refuses a name the program declares or the instance already has, and `removeMcpServer`
+  refuses a name the instance does not have, or one the program declares: the program is read, never edited.
+- The file's other keys stay as they are. The edit takes the lock `addContent` takes.
+- `notes` says each header or `env` value that is a literal and not a `${NAME}`: show it, or refuse where the entry
+  would be written into a copy of the agent.
+- Grants and bindings are the host's: removing a server does not sign it out or revoke its grant. Reopen the agent for
+  the change to take effect.
+
 ## Failures
 
 - Cancelling a tool forwards the cancel; the server may ignore it.
