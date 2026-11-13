@@ -26,7 +26,7 @@ async function read(stream: NodeJS.ReadableStream): Promise<string> {
   return text;
 }
 
-// The keepalive waits 30 s before its first ping, so it runs beside the rest.
+// Wait up to 4 s for the 50 ms keepalive to fire both a WebSocket ping and a heartbeat frame.
 const keepalive = (async () => {
   const opcodes: number[] = [];
   const channels: number[] = [];
@@ -37,9 +37,12 @@ const keepalive = (async () => {
     },
     (opcode) => opcodes.push(opcode),
   );
-  const channel = openShellChannel(await listen(service), "sleep 100");
+  const channel = openShellChannel(await listen(service), "sleep 100", { keepaliveMs: 50 });
   channel.output.resume();
-  await new Promise((resolve) => setTimeout(resolve, 31_500));
+  const started = Date.now();
+  while (Date.now() - started < 4000 && !(opcodes.includes(9) && channels.includes(5))) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   check(
     "a quiet connection is kept alive with a WebSocket ping and a heartbeat frame",
     opcodes.includes(9) && channels.includes(5),

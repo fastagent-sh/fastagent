@@ -120,7 +120,8 @@ function shellExit(status: string): string | undefined {
 }
 
 /** Open `command` in a new shell on `url`: stdin/stdout as streams, the other channels folded in. */
-export function openShellChannel(url: string, command: string): BoxChannel {
+export function openShellChannel(url: string, command: string, options: { keepaliveMs?: number } = {}): BoxChannel {
+  const keepaliveMs = options.keepaliveMs ?? KEEPALIVE_MS;
   const output = new PassThrough();
   const ws = new RuntimeWebSocket(url);
   const ping = pinger(ws);
@@ -148,7 +149,7 @@ export function openShellChannel(url: string, command: string): BoxChannel {
     keepalive = setInterval(() => {
       ping();
       frame(HEARTBEAT);
-    }, KEEPALIVE_MS);
+    }, keepaliveMs);
   });
   ws.addEventListener("message", (event) => {
     const data = Buffer.from(event.data as ArrayBuffer);
