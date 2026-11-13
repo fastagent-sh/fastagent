@@ -20,6 +20,7 @@ export interface HostCliCall {
   args: string[];
   input?: string;
   env: NodeJS.ProcessEnv;
+  passedEnv?: NodeJS.ProcessEnv;
   cwd: string;
 }
 
@@ -60,7 +61,13 @@ export function spawnRunner(bin: string, cwd: string, options: { stdoutToStderr?
     const answer = clis.get(bin);
     if (answer === undefined) return { code: 127, stdout: "", stderr: opts?.captureStderr ? "" : undefined };
     const env = opts?.env ? { ...process.env, ...opts.env } : process.env;
-    const said = await answer({ args, env, cwd, ...(opts?.input ? { input: opts.input } : {}) });
+    const said = await answer({
+      args,
+      env,
+      cwd,
+      ...(opts?.env !== undefined ? { passedEnv: opts.env } : {}),
+      ...(opts?.input ? { input: opts.input } : {}),
+    });
     const stdout = said.stdout ?? "";
     const stderr = said.stderr ?? "";
     if (!opts?.capture && stdout !== "") (options.stdoutToStderr ? process.stderr : process.stdout).write(stdout);
