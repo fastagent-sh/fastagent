@@ -5,7 +5,9 @@
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { Schema } from "@earendil-works/pi-schema";
+import type { ContentEntry } from "../../content/declare.ts";
 import { isEnvName } from "../../declared-secrets.ts";
+import type { McpServerDeclaration } from "../../mcp/config.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 /** What an instance may set over the program's `defaults`, and what a program's `defaults` are. */
@@ -44,6 +46,10 @@ export interface AgentDefaults<Settings = unknown> {
 export interface AgentConfig<Settings = unknown> {
   /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
+  /** GitHub repositories every instance of this agent works on. */
+  content?: Record<string, ContentEntry>;
+  /** MCP servers shared by every instance of this agent. */
+  mcpServers?: Record<string, McpServerDeclaration>;
   /** What each instance may choose, as an object schema (`obj({ ... })` from `@earendil-works/pi-schema`); no secrets. */
   settings?: Schema<Settings>;
   /** What an instance gets unless its configuration says otherwise. */

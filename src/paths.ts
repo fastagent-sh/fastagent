@@ -42,9 +42,6 @@ export const STATE_DIRNAME = ".state";
  */
 export const CONTENT_DIRNAME = "content";
 
-/** The agent's context declaration (`context.json`), beside its config: shared, so only what every instance reaches. */
-export const CONTEXT_FILE = "context.json";
-
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an

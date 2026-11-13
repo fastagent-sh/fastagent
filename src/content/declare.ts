@@ -1,10 +1,10 @@
 /**
- * WHAT AN AGENT WORKS ON, declared and refused in ONE place (file.ts reads the files through it): the `content` map of
- * the program's `context.json`, which holds only repositories every instance reaches, and the `content` map of an
- * instance's `fastagent.json`, which adds repositories and directories of its own. An instance only adds: a name the
- * program declares is not one it may take. Pure: what is on the disk is resolve.ts's question.
+ * WHAT AN AGENT WORKS ON, declared and refused in ONE place: the `content` map of the program's `fastagent.config.ts`,
+ * which holds only repositories every instance reaches, and the `content` map of an instance's `fastagent.json`, which
+ * adds repositories and directories of its own. An instance only adds: a name the program declares is not one it may
+ * take. Pure: what is on the disk is resolve.ts's question.
  */
-import { CONTEXT_FILE, configurationPath } from "../paths.ts";
+import { AGENT_CONFIG_FILE, configurationPath } from "../paths.ts";
 
 /** One content entry as a file holds it, under its name: a repository, or a directory of this machine. */
 export type ContentEntry =
@@ -107,12 +107,40 @@ export function joinContent(
     const taken = program.find((entry) => entry.name.toLowerCase() === added.name.toLowerCase());
     if (taken !== undefined) {
       throw new Error(
-        `content "${added.name}" is declared by the program (${CONTEXT_FILE} names "${taken.name}") and by the ` +
+        `content "${added.name}" is declared by the program (${AGENT_CONFIG_FILE} names "${taken.name}") and by the ` +
           `instance: an instance adds to the program's content and does not replace it — name it otherwise`,
       );
     }
   }
   return [...program, ...instance];
+}
+
+/** The instance configuration's content, as `loadContent` reads it: its `content` map and where it is from. */
+export interface InstanceContent {
+  values: unknown;
+  label: string;
+  /** The configuration file's directory, which a relative `path` is relative to. */
+  directory?: string;
+}
+
+/** What an instance configuration's `content` declares. */
+export function instanceContent({ values, label, directory }: InstanceContent): DeclaredContent[] {
+  const content = typeof values === "object" && values !== null ? (values as { content?: unknown }).content : undefined;
+  return declareContent(content, {
+    origin: "instance",
+    file: label,
+    ...(directory === undefined ? {} : { base: directory }),
+  });
+}
+
+/** Program content (from `fastagent.config.ts`) joined with instance content. */
+export function loadContent(
+  programContent: unknown,
+  instance?: InstanceContent,
+  programFile = AGENT_CONFIG_FILE,
+): DeclaredContent[] {
+  const program = declareContent(programContent, { origin: "program", file: programFile });
+  return joinContent(program, instance === undefined ? [] : instanceContent(instance));
 }
 
 /** The entries of a `content` map, each name checked, unique ignoring case. */

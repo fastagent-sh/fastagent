@@ -55,7 +55,10 @@ it.each(["issuer", "resource_metadata"])(
     const dir = await mkdtemp(join(tmpdir(), "mcp-network-"));
     cleanup.push(() => rm(dir, { recursive: true, force: true }));
     const url = "https://public.test/mcp";
-    await writeFile(join(dir, "context.json"), JSON.stringify({ mcpServers: { remote: { type: "http", url } } }));
+    await writeFile(
+      join(dir, "fastagent.config.ts"),
+      `export default ${JSON.stringify({ mcpServers: { remote: { type: "http", url } } })};\n`,
+    );
     const calls: string[] = [];
     const fetch: typeof globalThis.fetch = async (input, init) => {
       calls.push(String(input));

@@ -156,6 +156,14 @@ describe("an agent's own content, from the package entry", () => {
     const removed = await removeContent(dir, "NOTES");
     expect(removed.name).toBe("notes");
     expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
+
+    // GitHub content added during createAgent lands in fastagent.config.ts (program), not context.json.
+    const ghAgent = join(base, "gh-agent");
+    const createdGh = await createAgent(ghAgent, { content: [{ name: "docs", entry: { github: "acme/docs" } }] });
+    expect(createdGh.content).toEqual([expect.objectContaining({ name: "docs", kind: "github", repo: "acme/docs" })]);
+    expect(await readFile(join(ghAgent, "fastagent.config.ts"), "utf8")).toContain('"acme/docs"');
+    expect(existsSync(join(ghAgent, "context.json"))).toBe(false);
+    await expect(removeContent(ghAgent, "docs")).rejects.toThrow(/declared by the program \(fastagent\.config\.ts\)/);
   });
 });
 
@@ -166,7 +174,9 @@ describe("an instance's MCP servers, from the package entry", () => {
   async function agentDir(program?: object) {
     const dir = join(await tmp("fa-host-mcp-"), "agent");
     await createAgent(dir);
-    if (program !== undefined) await writeFile(join(dir, "context.json"), JSON.stringify(program));
+    if (program !== undefined) {
+      await writeFile(join(dir, "fastagent.config.ts"), `export default ${JSON.stringify(program)};\n`);
+    }
     return { dir, config: join(dir, "fastagent.json") };
   }
   const servers = async (dir: string, config: string) =>
@@ -208,7 +218,6 @@ describe("an instance's MCP servers, from the package entry", () => {
   it("edits the instance of a definition a host opens, and never the program's servers", async () => {
     const program = { content: {}, mcpServers: { program: stdio } };
     const { dir } = await agentDir(program);
-    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
     const definition = await loadSourceDefinition(dir);
     const config = join(await tmp("fa-host-mcp-instance-"), "fastagent.json");
 
@@ -220,7 +229,6 @@ describe("an instance's MCP servers, from the package entry", () => {
 
     await removeMcpServer(definition, "docs", { config });
     expect(await servers(dir, config)).toEqual(["program:stdio"]);
-    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual(program);
   });
 
   it("says each literal credential the added entry carries", async () => {

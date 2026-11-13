@@ -18,8 +18,8 @@ export async function directory(config: unknown) {
   roots.push(dir);
   await symlink(NODE_MODULES, join(dir, "node_modules"), "dir");
   await writeFile(join(dir, "package.json"), '{"type":"module","dependencies":{"@fastagent-sh/fastagent":"*"}}');
-  await writeFile(join(dir, "context.json"), JSON.stringify(config));
   await writeFile(join(dir, "SYSTEM.md"), "Use the requested tool.");
+  const extra = typeof config === "object" && config !== null ? config : {};
   await writeFile(
     join(dir, "fastagent.config.ts"),
     `import { createFauxCore, createModels, createProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -30,7 +30,7 @@ const stream=(...args)=>{core.appendResponses([context=>{
  const user=context.messages.findLast(m=>m.role==="user");const raw=typeof user.content==="string"?user.content:user.content.map(p=>p.text??"").join("");
  const cmd=JSON.parse(raw);return fauxAssistantMessage([fauxToolCall(cmd.name,cmd.args)],{stopReason:"toolUse"});
 }]);return core.streamSimple(...args);};
-export default {defaults:{model:"fixture/"+core.getModel().id},providers:[createProvider({id:"fixture",auth:{apiKey:{name:"fixture",resolve:async()=>({auth:{}})}},models:core.models,api:{stream,streamSimple:stream}})]};`,
+export default {defaults:{model:"fixture/"+core.getModel().id},providers:[createProvider({id:"fixture",auth:{apiKey:{name:"fixture",resolve:async()=>({auth:{}})}},models:core.models,api:{stream,streamSimple:stream}})],...${JSON.stringify(extra)}};`,
   );
   return dir;
 }

@@ -22,9 +22,8 @@ import {
   union,
   unknown,
 } from "@earendil-works/pi-schema";
-import type { ContentEntry } from "../../content/declare.ts";
-import { instanceContent } from "../../content/file.ts";
-import { type McpServerDeclaration, checkInstanceServers } from "../../mcp/config.ts";
+import { type ContentEntry, declareContent, instanceContent } from "../../content/declare.ts";
+import { type McpServerDeclaration, checkInstanceServers, declareServers } from "../../mcp/config.ts";
 import { checkInstanceName } from "../../instance-name.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import {
@@ -73,7 +72,7 @@ const PROGRAM_DEFAULT = "program default";
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const CONSTANTS = ["providers"];
+const CONSTANTS = ["providers", "content", "mcpServers"];
 /** Keys that were the program's own before they became defaults. */
 const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
 
@@ -220,7 +219,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  const { settings, defaults, providers } = config as AgentConfig;
+  const { settings, defaults, providers, content, mcpServers } = config as AgentConfig;
   const keys = [...CONSTANTS, "settings", "defaults"];
   for (const key of Object.keys(config)) {
     if (keys.includes(key)) continue;
@@ -232,6 +231,8 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
     throw new Error(`${file}: unknown key "${key}"${moved} (keys: ${keys.join(", ")})`);
   }
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
+  if (content !== undefined) declareContent(content, { origin: "program", file });
+  if (mcpServers !== undefined) declareServers(mcpServers, file);
   if (settings !== undefined) {
     if ((settings as { type?: unknown } | null)?.type !== "object") {
       throw new Error(`${file}: "settings" must be an object schema (obj({ ... }) from @earendil-works/pi-schema)`);

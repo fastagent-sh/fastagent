@@ -23,8 +23,7 @@ import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable
 import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { DEPLOYED_ENV, INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
 import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
-import type { DeclaredContent } from "../content/declare.ts";
-import { loadContent } from "../content/file.ts";
+import { type DeclaredContent, loadContent } from "../content/declare.ts";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
@@ -37,6 +36,7 @@ import {
   literalCredentials,
   relativeCommands,
 } from "../mcp/config.ts";
+import { loadRawProgramConfig } from "../program-config.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { loadEnvValues, namedValueFile, trackedValueFile, trackedValueFileNote } from "../value-file.ts";
 import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
@@ -104,7 +104,7 @@ export interface DeployReport {
 /** What a host's clone of a `github` entry reads; optional, since a public repository needs none. */
 const GITHUB_TOKEN_SECRET: DeclaredSecret = {
   name: "GITHUB_TOKEN",
-  declaredIn: "context.json (a github content entry)",
+  declaredIn: "fastagent.config.ts (a github content entry)",
   description: "git's credential for a private repository, and for the agent to push",
   optional: true,
 };
@@ -119,10 +119,16 @@ const GITHUB_TOKEN_SECRET: DeclaredSecret = {
  * package, and `build` refuses one that it does not copy.)
  * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
  */
-function checkMcp(agentDir: string, delivered: InstanceConfigSource | undefined, report: DeployReport): boolean {
+function checkMcp(
+  agentDir: string,
+  programServers: unknown,
+  programFile: string,
+  delivered: InstanceConfigSource | undefined,
+  report: DeployReport,
+): boolean {
   let declarations: McpDeclaration[];
   try {
-    declarations = declareMcp(agentDir, delivered);
+    declarations = declareMcp(programServers, agentDir, delivered, programFile);
   } catch (error) {
     report.issue(messageOf(error));
     return false;
@@ -266,11 +272,15 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     );
   }
 
-  const content = loadContent(agentDir, delivered?.source);
+  const rawProgram = await loadRawProgramConfig(agentDir).catch(() => ({
+    value: undefined,
+    file: "fastagent.config.ts",
+  }));
+  const content = loadContent(rawProgram.value?.content, delivered?.source, rawProgram.file);
   checkContent(content, delivered?.source.label, storageResets, report);
   const textProblem = delivered === undefined ? undefined : undeliverableText(delivered.source);
   if (textProblem !== undefined) report.issue(textProblem);
-  const mcpOpens = checkMcp(agentDir, delivered?.source, report);
+  const mcpOpens = checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, delivered?.source, report);
   // The project's own, the development instance's: a deploy carries only the configuration it is given.
   const own = await instanceConfigIn(agentDir);
   if (own !== undefined && own.label !== delivered?.source.label) {

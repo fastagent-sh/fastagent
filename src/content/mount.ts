@@ -1,7 +1,7 @@
 /**
- * The agent's `content/`, where fastagent clones the repositories `context.json` declares. The directory carries its
- * own `.gitignore` (`*`), as `.secrets/` does: each clone is its repository's, never the definition's, so it stays out
- * of git even in an agent whose own `.gitignore` predates it.
+ * The agent's `content/`, where fastagent clones the repositories `fastagent.config.ts` / `fastagent.json` declares.
+ * The directory carries its own `.gitignore` (`*`), as `.secrets/` does: each clone is its repository's, never the
+ * definition's, so it stays out of git even in an agent whose own `.gitignore` predates it.
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

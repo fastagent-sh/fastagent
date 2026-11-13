@@ -1,5 +1,5 @@
 /**
- * Content (src/content/): what the program declares an agent works on in `context.json`, what an instance's
+ * Content (src/content/): what the program declares an agent works on in `fastagent.config.ts`, what an instance's
  * configuration adds, what a command's `<source>` adds, and where each entry is for this instance. Each refusal is
  * tested once, here, where its rule lives; callers test only their wiring.
  */
@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { declareContent } from "../../../src/content/declare.ts";
 import { resolveContent } from "../../../src/content/resolve.ts";
 
-const PROGRAM = { origin: "program", file: "context.json" } as const;
+const PROGRAM = { origin: "program", file: "fastagent.config.ts" } as const;
 const INSTANCE = { origin: "instance", file: "fastagent.json", base: "/agents/me" } as const;
 
 describe("content: the program's declaration", () => {

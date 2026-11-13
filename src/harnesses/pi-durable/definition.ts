@@ -216,5 +216,8 @@ export function definitionSecrets(
   config?: IngressConfig,
   instance?: McpInstance,
 ): DeclaredSecret[] {
-  return [...codeSecrets(definition, config), ...mcpSecrets(declareMcp(definition.dir, instance))];
+  return [
+    ...codeSecrets(definition, config),
+    ...mcpSecrets(declareMcp(definition.config.mcpServers, definition.dir, instance)),
+  ];
 }

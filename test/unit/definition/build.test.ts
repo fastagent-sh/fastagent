@@ -20,7 +20,6 @@ describe("fastagent build", () => {
       "LICENSE",
       "SYSTEM.md",
       "build.json",
-      "context.json",
       "fastagent.config.d.ts",
       "fastagent.config.js",
       "fastagent.schema.json",

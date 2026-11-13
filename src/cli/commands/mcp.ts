@@ -3,7 +3,7 @@ import { confirm, isCancel } from "@clack/prompts";
 import { inspectMcp, mcpContext, writeMcpBinding, httpServer } from "../../mcp/host.ts";
 import { signInMcp } from "../../mcp/sign-in.ts";
 import { holdingInstance } from "../../harnesses/pi-durable/serve.ts";
-import { declareMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
+import { loadMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
 import { devInstanceConfig, mcpConfigOf, namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
@@ -47,9 +47,7 @@ export async function runMcp(
     return;
   }
   if (!server)
-    return failUsage(
-      `mcp ${action} needs a server name from the program's context.json or the instance's fastagent.json`,
-    );
+    return failUsage(`mcp ${action} needs a server name from fastagent.config.ts or the instance's fastagent.json`);
   const context = mcpContext(target);
   if (action === "disconnect") {
     await holdingInstance(context.stateRoot, () => writeMcpBinding(context.stateRoot, server, undefined)).catch(
@@ -71,7 +69,7 @@ export async function runMcp(
     return;
   }
   httpServer(
-    resolveMcpServers(declareMcp(target, mcpInstance(config)), context.environment, server, target, {}),
+    resolveMcpServers(await loadMcp(target, mcpInstance(config)), context.environment, server, target, {}),
     server,
   );
   const seconds = options.timeout === undefined ? 900 : Number(options.timeout);

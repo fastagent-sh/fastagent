@@ -23,9 +23,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     .catch(failStartup);
   let installFailed = false;
   const { created, content, repository } = await initAgent(dir, {
-    // A new agent's repositories are its program's: every instance of it reaches them, and a deploy carries them. A
-    // directory is this machine's, and goes to the instance configuration.
-    content: read.map(({ addition }) => ("github" in addition.entry ? { ...addition, program: true } : addition)),
+    content: read.map(({ addition }) => addition),
     ...(opts.install
       ? {
           install: async (agentDir: string) => {

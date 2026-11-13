@@ -49,8 +49,8 @@ const init: CommandSpec = {
     {
       flags: "--content <source>",
       description:
-        "a directory or github:owner/repo the agent works on (repeatable): a repository in context.json, a " +
-        "directory of this machine in fastagent.json",
+        "a directory or github:owner/repo the agent works on (repeatable): github repos go in fastagent.config.ts, " +
+        "directories in fastagent.json",
       repeatable: true,
     },
     { flags: "--no-install", description: "scaffold everything but skip npm install" },
@@ -460,9 +460,8 @@ const content: CommandSpec = {
   summary: "list, add or remove what the agent works on",
   description:
     "Content is a directory the agent works on: a GitHub repository, cloned at content/<name> in the instance's " +
-    "working directory, or a directory of this machine. The program's context.json declares repositories every " +
-    "instance reaches; an instance's fastagent.json adds its own, repositories and directories, and only adds: a " +
-    "name the program declares is not one it may take.",
+    "working directory, or a directory of this machine. Program-wide repositories live in fastagent.config.ts; " +
+    "an instance's fastagent.json adds its own repositories and directories, and cannot shadow a program entry.",
   subcommands: [
     {
       name: "list",
@@ -481,29 +480,22 @@ const content: CommandSpec = {
         { flags: "--ref <ref>", description: "a repository: the branch, tag or commit to clone" },
         { flags: "--name <name>", description: "its name (default: the directory's or repository's)" },
         { flags: "--description <text>", description: "one sentence for the agent: what it is, how to treat it" },
-        {
-          flags: "--program",
-          description: "declare a repository in context.json, for every instance of the program, not in fastagent.json",
-        },
         ...CONTENT_FLAGS,
       ],
       examples: [
         { cmd: "fastagent content add ~/code/app", note: "a directory" },
         { cmd: "fastagent content add github:acme/docs", note: "a clone" },
-        { cmd: "fastagent content add --program github:acme/docs", note: "for every instance" },
       ],
       notes:
-        "Without --program the entry is written to the instance's fastagent.json (the project's, or the file " +
-        "--config or FASTAGENT_CONFIG names); a deploy does not carry it yet. github:owner/repo is cloned into " +
-        "content/<name> when the agent starts, and brought up to date in place at each start where git can do so " +
-        "without touching the agent's work. A directory is used as it is: it must exist, and it may " +
-        "hold the agent directory or sit inside it.",
+        "Entries are written to the instance's fastagent.json (or the file --config or FASTAGENT_CONFIG names). " +
+        "github:owner/repo is cloned into content/<name> when the agent starts, and brought up to date in place at " +
+        "each start where git can do so without touching the agent's work. A directory is used as it is: it must " +
+        "exist, and it may hold the agent directory or sit inside it.",
       run: async (args, f) =>
         (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
           ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
           ...(typeof f.name === "string" ? { name: f.name } : {}),
           ...(typeof f.description === "string" ? { description: f.description } : {}),
-          ...(f.program === true ? { program: true } : {}),
           instance: instanceFlags(f),
         }),
     },
@@ -677,9 +669,8 @@ const secrets: CommandSpec = {
       name: "list",
       summary: "the names the definition declares, and which the target holds",
       description:
-        "Print every name the deployment declares (the model's key, `needs()`, `context.json`'s variables, MCP " +
-        "references, for the channels its configuration chooses) with whether the target holds a value for it. A value " +
-        "is never read back.",
+        "Print every name the deployment declares (the model's key, `needs()`, MCP references, for the channels its " +
+        "configuration chooses) with whether the target holds a value for it. A value is never read back.",
       args: [SECRETS_HOST, AGENT_ARG],
       flags: [
         { flags: "--config <file>", description: "the configuration that names the instance (`deploy --config`)" },

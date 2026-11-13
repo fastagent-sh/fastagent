@@ -1,16 +1,16 @@
 /**
- * The MCP servers an instance opens: the program's, the `mcpServers` map of its
- * `context.json`, and what the instance adds, the `mcpServers` map of its `fastagent.json`. One list, read once, that
- * every reader (the open, `inspectMcp`, sign-in, the secrets list, the build's warning) is given.
+ * The MCP servers an instance opens: the program's (`mcpServers` in `fastagent.config.ts`), and what the instance adds
+ * (`mcpServers` in `fastagent.json`). One list, read once, that every reader (the open, `inspectMcp`, sign-in, the
+ * secrets list, the build's warning) is given.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import { readProgramMcpServers } from "../content/file.ts";
 import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
 import { type McpConfigInput, McpError } from "../mcp-api.ts";
-import { CONTEXT_FILE, INSTANCE_CONFIG_FILE } from "../paths.ts";
+import { AGENT_CONFIG_FILE, INSTANCE_CONFIG_FILE } from "../paths.ts";
+import { loadRawProgramConfig } from "../program-config.ts";
 
 const Strings = Schema.Record(Schema.String, Schema.String);
 const Stdio = Schema.Struct({
@@ -51,7 +51,7 @@ export interface McpInstance {
 }
 
 /** The `mcpServers` map `raw` holds (undefined is none), checked; every refusal names `file` and, where it can, the server. */
-function declareServers(raw: unknown, file: string): Record<string, McpServerDeclaration> {
+export function declareServers(raw: unknown, file: string): Record<string, McpServerDeclaration> {
   if (raw === undefined) return {};
   let servers: Record<string, McpServerDeclaration>;
   try {
@@ -93,13 +93,17 @@ const mapOf = (values: unknown): unknown =>
   typeof values === "object" && values !== null ? (values as { mcpServers?: unknown }).mcpServers : undefined;
 
 /**
- * The servers of the program in `dir` and of `instance`. An instance only adds: a name both declare is refused, naming
- * both, so nothing is shadowed.
+ * The servers of the program (`fastagent.config.ts`) and of `instance`. An instance only adds: a name both declare is
+ * refused, naming both, so nothing is shadowed.
  */
-export function declareMcp(dir: string, instance?: McpInstance): McpDeclaration[] {
-  const own = readProgramMcpServers(dir);
-  const program = Object.entries(declareServers(own.values, own.path)).map(
-    ([name, server]): McpDeclaration => ({ name, server, file: CONTEXT_FILE, base: resolve(dir), origin: "program" }),
+export function declareMcp(
+  programServers: unknown,
+  dir: string,
+  instance?: McpInstance,
+  programFile = AGENT_CONFIG_FILE,
+): McpDeclaration[] {
+  const program = Object.entries(declareServers(programServers, programFile)).map(
+    ([name, server]): McpDeclaration => ({ name, server, file: programFile, base: resolve(dir), origin: "program" }),
   );
   if (instance === undefined) return program;
   const added = Object.entries(declareServers(mapOf(instance.values), instance.label)).map(
@@ -115,12 +119,18 @@ export function declareMcp(dir: string, instance?: McpInstance): McpDeclaration[
     if (program.some((declared) => declared.name === name)) {
       throw new McpError(
         "configuration",
-        `MCP server "${name}" is declared by the program (${CONTEXT_FILE}) and by the instance (${instance.label}): an ` +
+        `MCP server "${name}" is declared by the program (${programFile}) and by the instance (${instance.label}): an ` +
           `instance adds to the program's servers and does not replace them — name it otherwise`,
       );
     }
   }
   return [...program, ...added];
+}
+
+/** Load `mcpServers` from the agent directory's `fastagent.config.ts` (or compiled `fastagent.config.js`) and join `instance`. */
+export async function loadMcp(dir: string, instance?: McpInstance): Promise<McpDeclaration[]> {
+  const { value, file } = await loadRawProgramConfig(dir);
+  return declareMcp(value?.mcpServers, dir, instance, file);
 }
 
 /** An instance configuration given to `inspectMcp` or `signInMcp`: an object, or the absolute path of a `fastagent.json`. */

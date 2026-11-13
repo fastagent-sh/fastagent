@@ -8,7 +8,7 @@ status: current
 
 Give the agent tools from MCP servers by declaring them under `mcpServers`:
 
-- in `context.json`: the agent's own, shipped to every instance;
+- in `fastagent.config.ts`: the agent's own, shipped to every instance;
 - in an instance's `fastagent.json`: that instance's extra ones (a name in both refuses the open).
 
 `.mcp.json`, editor settings and your home directory are not read. Paste a server's documented entry into one of the

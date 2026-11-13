@@ -13,14 +13,10 @@ export interface SourceOptions {
   description?: string;
 }
 
-/**
- * A content entry to add, by name. It is written to the instance's `fastagent.json`, or, with `program`, to the
- * program's `context.json`, which every instance of it reaches and so holds repositories only.
- */
+/** A content entry to add, by name, into the instance's `fastagent.json` (or `--config <file>`). */
 export interface ContentAddition {
   name: string;
   entry: ContentEntry;
-  program?: boolean;
 }
 
 /**

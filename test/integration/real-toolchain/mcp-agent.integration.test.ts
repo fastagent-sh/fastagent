@@ -40,7 +40,7 @@ it("an instance adds servers through its configuration, beside the program's, an
   // Refused before anything of the instance is opened, naming both.
   const taken = { mcpServers: { constructor: added } };
   await expect(openSource(dir, { config: taken, stateDir: join(dir, "refused") })).rejects.toThrow(
-    /MCP server "constructor" is declared by the program \(context\.json\) and by the instance/,
+    /MCP server "constructor" is declared by the program \(fastagent\.config\.ts\) and by the instance/,
   );
   await expect(readFile(join(dir, "refused", "agent.sqlite"))).rejects.toThrow(/ENOENT/);
   // The reference an instance's server makes is a secret it needs, like the program's.
