@@ -27,6 +27,7 @@ import {
   signIn,
   signInOptions,
 } from "../src/index.ts";
+import { loadSourceDefinition } from "../src/harnesses/pi-durable/open.ts";
 import { openSource } from "./open-source.ts";
 import { keepCatalog } from "./kept-catalog.ts";
 
@@ -202,6 +203,24 @@ describe("an instance's MCP servers, from the package entry", () => {
     await expect(removeMcpServer(dir, "program")).rejects.toThrow("declared by the program");
     await expect(removeMcpServer(dir, "nope")).rejects.toThrow('no MCP server named "nope"');
     expect(await readFile(config, "utf8")).toBe(before);
+  });
+
+  it("edits the instance of a definition a host opens, and never the program's servers", async () => {
+    const program = { content: {}, mcpServers: { program: stdio } };
+    const { dir } = await agentDir(program);
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
+    const definition = await loadSourceDefinition(dir);
+    const config = join(await tmp("fa-host-mcp-instance-"), "fastagent.json");
+
+    await expect(addMcpServer(definition, "docs", http)).rejects.toThrow("pass instance.config");
+    await addMcpServer(definition, "docs", http, { config });
+    await expect(addMcpServer(definition, "program", stdio, { config })).rejects.toThrow("declared by the program");
+    await expect(removeMcpServer(definition, "program", { config })).rejects.toThrow("declared by the program");
+    expect(await servers(dir, config)).toEqual(["docs:http", "program:stdio"]);
+
+    await removeMcpServer(definition, "docs", { config });
+    expect(await servers(dir, config)).toEqual(["program:stdio"]);
+    expect(JSON.parse(await readFile(join(dir, "context.json"), "utf8"))).toEqual(program);
   });
 
   it("says each literal credential the added entry carries", async () => {
