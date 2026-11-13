@@ -1,22 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
-import { type FlyRunPlan, deployFlyRun } from "../../../src/deploy/fly/run.ts";
-import type { RegistrationOutcome } from "../../../src/channels/registration.ts";
-import type { CliRunner } from "../../../src/deploy/runner.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { declaredChannels } from "../../../src/channels/discover.ts";
+import type { RegistrationOutcome } from "../../../src/channels/registration.ts";
+import { type FlyRunPlan, deployFlyRun } from "../../../src/deploy/fly/run.ts";
+import type { CliRunner } from "../../../src/deploy/runner.ts";
+import {
+  type HostCliAnswer,
+  type HostCliCall,
+  recordHostCli,
+  resetHostClis,
+  spawnRunner,
+} from "../../doubles/host-cli-double.ts";
 import { boxReporting } from "../../harnesses/box-webhooks.ts";
 
-/** A fake flyctl: records every call, returns per-command scripted results (default code 0, empty out). */
-function fakeFly(script: (args: string[]) => { code?: number; stdout?: string } = () => ({})) {
-  const calls: { args: string[]; input?: string }[] = [];
-  const fly: CliRunner = async (args, opts) => {
-    calls.push({ args, input: opts?.input });
-    const r = script(args);
-    // An unscripted `--json` command answers an EMPTY LIST, not an empty string: flyctl cannot print
-    // the latter, and the driver's parse gates correctly refuse it. Scripting stays per-test.
-    return { code: r.code ?? 0, stdout: r.stdout ?? (args.includes("--json") ? "[]" : "") };
-  };
-  return { fly, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
-}
+afterEach(resetHostClis);
+
+const recordFly = (script: (call: HostCliCall) => HostCliAnswer = () => ({})) =>
+  recordHostCli("fly", (call) => {
+    const answer = script(call);
+    return {
+      ...answer,
+      stdout: answer.stdout ?? (call.args.includes("--json") ? "[]" : ""),
+    };
+  });
 
 const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   appName: "bot",
@@ -38,19 +43,18 @@ const run = (
 
 describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
   it("happy path: auth → create app+address → set secrets → deploy → telegram webhook", async () => {
-    // Fresh account: apps/ips lists are empty, everything succeeds.
-    const { fly, cmds } = fakeFly((a) => (a[0] === "apps" || a[0] === "ips" ? { stdout: "[]" } : {}));
+    const fly = recordFly(({ args }) => (args[0] === "apps" || args[0] === "ips" ? { stdout: "[]" } : {}));
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
       plan({
         channels: declaredChannels(["telegram"]),
       }),
-      fly,
+      spawnRunner("fly", "."),
       tg,
     );
 
     expect(out).toEqual({ ok: true });
-    expect(cmds()).toEqual([
+    expect(fly.cmds()).toEqual([
       "auth whoami",
       "apps list --json",
       "apps create bot",
@@ -59,21 +63,12 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
       "ips allocate-v6 -a bot",
       "deploy . -a bot -c fastagent/fly.toml --dockerfile fastagent/Dockerfile --remote-only --yes --ha=false",
     ]);
-    expect(tg).toHaveBeenCalledWith("https://bot.fly.dev"); // telegram end-to-end
+    expect(tg).toHaveBeenCalledWith("https://bot.fly.dev");
   });
 
-  // The check is per family because the ACTION is: "has an ingress address" would read either of
-  // these as done. The v6-only app is #425 itself — it resolves, to an AAAA record alone, which an
-  // IPv4-only webhook sender (Telegram, GitHub) cannot reach. The v4-only app is how it gets there:
-  // allocate-v4 succeeds, allocate-v6 gates, and the re-run the gate asks for sees v4 and skips.
-
-  // Exit 0 with unreadable output is a THIRD answer, and every list gates on it rather than reading it
-  // as "absent". flyctl has dropped `--json` before (superfly/flyctl#1967), and each collapse has its
-  // own damage: a create misreported as a name clash, an unreachable deploy (#425).
-
   it("gate: not logged in with nobody to sign in → stops before any side effect, naming every way in", async () => {
-    const { fly, cmds } = fakeFly((a) => (a[0] === "auth" ? { code: 1 } : {}));
-    const out = await run(plan(), fly);
+    const fly = recordFly(({ args }) => (args[0] === "auth" ? { code: 1 } : {}));
+    const out = await run(plan(), spawnRunner("fly", "."));
     expect(out).toEqual({
       ok: false,
       gate:
@@ -81,6 +76,6 @@ describe("deploy/fly/run: the coding-agent deploy journey (benchmark)", () => {
         "shell's environment (it is not a value of the deployment); then re-run. " +
         "From a coding agent, `fastagent deploy fly ../bot --run --json` hands the sign-in to its user",
     });
-    expect(cmds()).toEqual(["auth whoami"]); // nothing after the gate
+    expect(fly.cmds()).toEqual(["auth whoami"]);
   });
 });

@@ -109,3 +109,10 @@ it("CLI unit tests use runInProcess instead of manually spying on process.cwd or
     .map(({ at }) => at);
   expect(offenders).toEqual([]);
 });
+
+it("unit tests use host-cli-double.ts instead of defining local CliRunner stubs", () => {
+  const offenders = lines
+    .filter(({ file, line }) => file.startsWith("unit/") && /:\s*CliRunner\s*=/.test(line))
+    .map(({ at }) => at);
+  expect(offenders).toEqual([]);
+});
