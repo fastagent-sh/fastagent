@@ -5,8 +5,7 @@ import { agentWorkspace, runInProcess } from "./cli-run.ts";
 
 /**
  * What a setup with no one at a terminal asks `startTicket` to start. The step it starts serves the person a page of its
- * own (feishu-setup.test.ts and channels-setup.test.ts run that step in process); that it outlives this command is
- * `startTicket`'s, tested with real processes in ticket.integration.test.ts.
+ * own (feishu-setup.test.ts and channels-setup.test.ts run that step in process).
  */
 const started: unknown[] = [];
 vi.mock("../src/cli/ticket.ts", async (original) => {
