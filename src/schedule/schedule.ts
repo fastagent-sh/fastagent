@@ -1,14 +1,12 @@
 /**
- * A schedule: a prompt the definition runs on a cron, written in TypeScript as `defineSchedule` in `src/schedules/`
- *, its name its file's. It is code, so it changes with a build and a deployment; the clock that
- * fires it is scheduler.ts, or on AgentCore the recurring EventBridge schedule the container sets (wake-alarm.ts).
+ * A schedule: a prompt the definition runs on a cron, written in TypeScript as `defineSchedule` in `src/schedules/`,
+ * its name its file's.
  *
  * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts). A
  * schedule is written in the DEFINITION and a wake-up into the STATE by a running agent (minted id, cancellable, aimed
  * back at the conversation it came from).
  */
 import { recurringCronError } from "./cron.ts";
-import { toEventBridgeCron } from "./eventbridge-cron.ts";
 import { MAX_PENDING_WAKEUPS } from "./wakeups.ts";
 
 /** As many schedules as one conversation may have pending wake-ups: the same bound on what the agent can set going. */
@@ -29,20 +27,11 @@ export interface Schedule extends ScheduleConfig {
   name: string;
 }
 
-/**
- * Why `config` is not a schedule this agent can run, or undefined: the one rule the build applies. Its cron passes the
- * guard a recurring wake-up passes, and is one AgentCore's clock (EventBridge) can express, so a schedule that runs
- * locally also runs there.
- */
+/** Why `config` is not a schedule this agent can run, or undefined. */
 export function scheduleConfigProblem(config: ScheduleConfig): string | undefined {
   if (typeof config.prompt !== "string" && typeof config.prompt !== "function")
     return "its prompt is a text or a function";
   if (config.prompt === "") return "its prompt is empty";
   if (typeof config.cron !== "string") return "its cron is a text";
-  const invalid = recurringCronError(config.cron, config.tz);
-  if (invalid !== undefined) return invalid;
-  const translated = toEventBridgeCron(config.cron);
-  return "error" in translated
-    ? `AgentCore's clock (EventBridge) cannot express this cron: ${translated.error}`
-    : undefined;
+  return recurringCronError(config.cron, config.tz);
 }

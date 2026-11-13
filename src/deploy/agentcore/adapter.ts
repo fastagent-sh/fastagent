@@ -1,24 +1,24 @@
 /** AWS AgentCore Runtime adapter: serve the channels, the schedules' fires and the wake pokes through the Runtime's service contract. */
 import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
-import { PortFailure, portJoin } from "../effect-port.ts";
+import { PortFailure, portJoin } from "../../effect-port.ts";
 import {
   type AgentcoreEnvelope,
   type CarriedRequest,
   ENVELOPE_KINDS,
   fromForwarder,
   type WebhookReply,
-} from "./agentcore-protocol.ts";
-import { beginWork } from "./busy.ts";
-import type { ChannelHandler, Routes } from "../channel.ts";
-import { router } from "../channels/router.ts";
-import { log } from "../log.ts";
-import { once } from "../once.ts";
-import type { WebhookRegistration } from "./webhooks.ts";
-import { rememberWakeAlarmUrl } from "../schedule/wake-alarm.ts";
-import { readBodyCapped } from "./body.ts";
-import { text } from "./respond.ts";
-import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./agentcore-limits.ts";
+} from "./protocol.ts";
+import { beginWork } from "../../channels/busy.ts";
+import type { ChannelHandler, Routes } from "../../channel.ts";
+import { router } from "../../channels/router.ts";
+import { log } from "../../log.ts";
+import { once } from "../../once.ts";
+import type { WebhookRegistration } from "../../channels/webhooks.ts";
+import { rememberWakeAlarmUrl } from "./wake-alarm.ts";
+import { readBodyCapped } from "../../channels/body.ts";
+import { text } from "../../channels/respond.ts";
+import { MAX_ENVELOPE_BYTES, MAX_WEBHOOK_BODY_BYTES } from "./limits.ts";
 
 /**
  * What the lazy factory hands back: the CHANNELS' routes, and nothing else.

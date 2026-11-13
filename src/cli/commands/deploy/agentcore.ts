@@ -22,6 +22,7 @@ import {
   planAgentcoreDeploy,
 } from "../../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun, pickStackOutputs } from "../../../deploy/agentcore/run.ts";
+import { toEventBridgeCron } from "../../../deploy/agentcore/eventbridge-cron.ts";
 import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
@@ -87,6 +88,14 @@ export const agentcoreHost: HostDeploy = {
         ),
       );
     }
+    for (const schedule of pre.schedules) {
+      const translated = toEventBridgeCron(schedule.cron);
+      if ("error" in translated) {
+        const msg = `schedule "${schedule.name}" cannot run on AgentCore (EventBridge): ${translated.error}`;
+        if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+        console.error(`[fastagent] warn: ${msg}`);
+      }
+    }
   },
   async deploy(ctx) {
     const { opts, agentDir, name: instance, config, channels, pre, write } = ctx;
@@ -100,7 +109,7 @@ export const agentcoreHost: HostDeploy = {
       );
     }
     // Schedules and wake-ups need nothing from the template beyond the forwarder every stack has: the container
-    // mirrors them into EventBridge schedules itself (schedule/wake-alarm.ts). A schedule that does not build is the
+    // mirrors them into EventBridge schedules itself (`deploy/agentcore/wake-alarm.ts`). A schedule that does not build is the
     // pre-flight's to report.
     const acName = agentcoreName(instance);
     const plan = planAgentcoreDeploy({

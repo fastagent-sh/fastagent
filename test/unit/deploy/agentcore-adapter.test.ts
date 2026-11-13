@@ -3,8 +3,12 @@ import { Buffer } from "node:buffer";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentcoreRoutes, type AgentcoreAdapterOptions, type RouteSurface } from "../../../src/channels/agentcore.ts";
-import type { AgentcoreEnvelope, WebhookReply } from "../../../src/channels/agentcore-protocol.ts";
+import {
+  agentcoreRoutes,
+  type AgentcoreAdapterOptions,
+  type RouteSurface,
+} from "../../../src/deploy/agentcore/adapter.ts";
+import type { AgentcoreEnvelope, WebhookReply } from "../../../src/deploy/agentcore/protocol.ts";
 import type { Routes } from "../../../src/channel.ts";
 
 /** The forwarder→runtime shared secret (FASTAGENT_INGRESS_SECRET) in these tests. */

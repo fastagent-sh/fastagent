@@ -103,3 +103,43 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
   });
 });
+
+describe("host boundary: channels, schedules, and start stay decoupled from AgentCore", () => {
+  it("none of channels/, schedule/, or cli/commands/start.ts statically imports deploy/agentcore", () => {
+    const visited = new Set<string>();
+    const offenders: string[] = [];
+    const fromRe = /^\s*(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s*["']([^"']+)["']/gm;
+    const check = (entryRel: string): void => {
+      const entryAbs = resolve(srcDir, entryRel);
+      const walk = (fileAbs: string): void => {
+        if (visited.has(fileAbs)) return;
+        visited.add(fileAbs);
+        const src = readFileSync(fileAbs, "utf8");
+        for (const m of src.matchAll(fromRe)) {
+          const spec = m[1];
+          if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
+          const target = resolve(dirname(fileAbs), spec);
+          if (target.startsWith(resolve(srcDir, "deploy/agentcore"))) {
+            offenders.push(`${entryRel} → ${spec}`);
+          } else {
+            walk(target);
+          }
+        }
+      };
+      walk(entryAbs);
+    };
+    for (const entry of [
+      "channels/serve.ts",
+      "channels/telegram/telegram.ts",
+      "channels/slack/slack.ts",
+      "channels/feishu/feishu.ts",
+      "schedule/schedule.ts",
+      "schedule/scheduler.ts",
+      "schedule/wakeups.ts",
+      "cli/commands/start.ts",
+    ]) {
+      check(entry);
+    }
+    expect(offenders).toEqual([]);
+  });
+});

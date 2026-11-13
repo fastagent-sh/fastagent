@@ -1,6 +1,6 @@
 /** `fastagent deploy agentcore --run` — drive the AWS CLI + Docker to completion. */
 import type { BoxLoginStep } from "../box-shell.ts";
-import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
+import { RESERVED_PATHS } from "./protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { type BoxWebhooksProbe, type UrlRecorder, confirmWebhooks, loginGate } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";

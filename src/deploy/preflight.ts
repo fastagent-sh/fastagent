@@ -55,6 +55,8 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /** `src/schedules/` declares at least one schedule. */
   hasCron: boolean;
+  /** Built schedules (name + cron) for host-specific cron checks such as AgentCore EventBridge compatibility. */
+  schedules: readonly { name: string; cron: string }[];
   /**
    * The values this deploy has to give the target: the environment it runs in (what a CI job or `op run` injects, and
    * the file `--env-file` names laid under it), read ONCE here so the plan side and the run side cannot disagree about
@@ -491,6 +493,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   return {
     channels,
     hasCron,
+    schedules: (code?.schedules ?? []).map(({ name, cron }) => ({ name, cron })),
     values,
     valuesFrom,
     modelAuth,

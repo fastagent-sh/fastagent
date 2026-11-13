@@ -25,3 +25,11 @@
 export const DEPLOY_HOSTS = ["docker", "fly", "railway", "agentcore"] as const;
 
 export type DeployHost = (typeof DEPLOY_HOSTS)[number];
+
+/** Which deploy host this process runs on, inferred from platform environment markers when present. */
+export function deployedHost(env: NodeJS.ProcessEnv = process.env): DeployHost | undefined {
+  if (env.FASTAGENT_AGENTCORE === "1") return "agentcore";
+  if (env.FLY_APP_NAME) return "fly";
+  if (env.RAILWAY_SERVICE_ID) return "railway";
+  return undefined;
+}

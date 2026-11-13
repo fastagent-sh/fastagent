@@ -25,7 +25,8 @@ export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
 export interface RunsAs {
   dev: boolean;
   deployed: boolean;
-  agentcore: boolean;
+  /** Every deploy wipes the storage root, so persistent work belongs in external systems. */
+  ephemeralRoot?: boolean;
 }
 
-export const NOT_HOSTED: RunsAs = { dev: false, deployed: false, agentcore: false };
+export const NOT_HOSTED: RunsAs = { dev: false, deployed: false, ephemeralRoot: false };

@@ -7,7 +7,7 @@
 import { Buffer } from "node:buffer";
 import * as nodeCrypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_WEBHOOK_BODY_BYTES } from "../../../src/channels/agentcore-limits.ts";
+import { MAX_WEBHOOK_BODY_BYTES } from "../../../src/deploy/agentcore/limits.ts";
 import { forwarderSource } from "../../../src/deploy/agentcore/plan.ts";
 
 type Envelope = Record<string, unknown> & { kind?: string; wake?: { url: string } };

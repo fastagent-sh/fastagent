@@ -1,12 +1,10 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
-import { applyRuntimeSecrets } from "../../deploy/agentcore/runtime-secrets.ts";
 import { prepareDeployment, releaseFromEnv } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
   resolveSecretsDir,
-  isAgentcoreRuntime,
   isDeployedWorkspace,
   isUnderDir,
   INSTANCE_ROOT_ENV,
@@ -15,14 +13,13 @@ import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { Project } from "../../harnesses/pi-durable/open.ts";
 import type { EffectiveConfig } from "../../harnesses/pi-durable/config.ts";
-import { namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
+import { namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
-import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
-import { mountAgentcoreService, deferAgentcoreService } from "../../channels/agentcore-service.ts";
+import { DEFAULT_HTTP_PORT, type ServableAgent, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { assertTunnelBindable, bindLine, cliMountOptions, serveService, serve } from "../serve.ts";
+import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
@@ -35,7 +32,7 @@ export interface StartOptions {
 }
 
 /** What `start` opened and serves: the agent too, for a deployment's own check of what it runs. */
-type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
+export type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -43,21 +40,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   setLogLevel("info");
   selectAgentEnvironment("production");
   unmarkDevServe();
-  if (isAgentcoreRuntime()) {
-    // The generated Runtime resource sets PORT; 8080 is the platform's contract when nothing does.
-    const port = portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? 8080;
-    const deferred = deferAgentcoreService({
-      prepare: () => prepareAgentcoreWorkspace(dirArg),
-      assemble: async (dir) => {
-        const service = await openPreparedStartService(dir, opts);
-        await service.ready;
-        return service;
-      },
-    });
-    // The assembly report waits for the first envelope, so this line is the only sign of life a booted container gives.
-    serve(deferred, { port, host: bindFlag }, (port) => {
-      log.info(bindLine(bindFlag, port));
-      log.info("[fastagent] agentcore: the definition opens on the first invocation");
+  if (process.env.FASTAGENT_AGENTCORE === "1") {
+    const { runAgentcoreStart } = await import("../../deploy/agentcore/start.ts");
+    runAgentcoreStart(dirArg, opts, {
+      ...(portFlag === undefined ? {} : { portFlag }),
+      ...(bindFlag === undefined ? {} : { bindFlag }),
     });
     return;
   }
@@ -93,21 +80,19 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   return dirArg;
 }
 
-/**
- * AgentCore's stage one: the deployment's values first, on the first invocation, so a failed read is that invocation's
- * failure and the next asks again; then the storage.
- */
-export async function prepareAgentcoreWorkspace(dirArg: string): Promise<string> {
-  await applyRuntimeSecrets();
-  return prepareStartWorkspace(dirArg);
-}
-
 export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   return openPreparedStartService(await prepareStartWorkspace(dirArg), opts);
 }
 
 /** Stage two: open the built definition in `dirArg` and serve it. */
-export async function openPreparedStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
+export async function openPreparedStartService(
+  dirArg: string,
+  opts: StartOptions,
+  runtime: {
+    storage?: "posix" | "leased-dotfile";
+    mount?: (opened: ServableAgent) => Promise<ServedAgent>;
+  } = {},
+): Promise<StartedService> {
   // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<Project> | undefined;
   // A start never reads the development `fastagent.json`: its instance configuration is the one `--config` names.
@@ -119,8 +104,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     model: modelSpec,
     ...instanceInputs(agentDir),
     ...(config === undefined ? {} : { config }),
-    // AgentCore's session storage refuses SQLite's own locks; the deployment's lease makes the dotfile lock safe.
-    storage: { instance: isAgentcoreRuntime() ? "leased-dotfile" : "posix" },
+    storage: { instance: runtime.storage ?? "posix" },
   });
   const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);
@@ -135,9 +119,7 @@ export async function openPreparedStartService(dirArg: string, opts: StartOption
     );
   }
   const { config: effective } = opened;
-  const service = await (isAgentcoreRuntime()
-    ? mountAgentcoreService(opened)
-    : serveAgent(opened, cliMountOptions(effective)));
+  const service = await (runtime.mount ? runtime.mount(opened) : serveAgent(opened, cliMountOptions(effective)));
   return {
     ...service,
     agent: opened.agent,

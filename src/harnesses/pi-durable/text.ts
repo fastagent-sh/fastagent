@@ -322,20 +322,13 @@ export function definitionSections(
       contentSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true, content }),
     ),
     section("self_change", () =>
-      options.runsAs.deployed ? selfChangeSection(options.wake, options.runsAs.agentcore) : undefined,
+      options.runsAs.deployed ? selfChangeSection(options.wake, options.runsAs.ephemeralRoot === true) : undefined,
     ),
   ];
 }
 
-/**
- * What takes effect when, and the agent's own path to a new capability, are the same on every host; how long the
- * storage lives is the host's answer: AgentCore's managed mount is reset by every deploy, so telling that agent to keep
- * work in its directory would name a location its next deploy erases; elsewhere the directory is the host's storage,
- * which every deployment keeps. Its definition is the image's either way, so the sentence says where a capability that
- * should outlast a deployment has to go.
- */
-function selfChangeSection(wake: boolean, agentcore: boolean): string {
-  const storage = agentcore
+function selfChangeSection(wake: boolean, ephemeralRoot: boolean): string {
+  const storage = ephemeralRoot
     ? "Every deployment of a new version resets this host's storage entirely, your directory with it, so anything " +
       "that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database)."
     : "Your directory is this host's storage and survives deployments of a new version.";

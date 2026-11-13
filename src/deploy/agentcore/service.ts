@@ -1,9 +1,9 @@
 /** The AgentCore serving assembly — the same product as `serveAgent`, built differently because the host is. */
-import type { Agent } from "../agent-api.ts";
-import { fromForwarder } from "./agentcore-protocol.ts";
-import { log } from "../log.ts";
-import type { Routes } from "../channel.ts";
-import type { Schedule } from "../schedule/schedule.ts";
+import type { Agent } from "../../agent-api.ts";
+import { fromForwarder } from "./protocol.ts";
+import { log } from "../../log.ts";
+import type { ChannelHandler, Routes } from "../../channel.ts";
+import type { Schedule } from "../../schedule/schedule.ts";
 import {
   type ServableAgent,
   type ServedAgent,
@@ -12,19 +12,18 @@ import {
   serviceOver,
   startSchedules,
   webhooksOf,
-} from "../service.ts";
-import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./agentcore.ts";
+} from "../../service.ts";
+import { type AgentcoreAdapterOptions, type RouteSurface, agentcoreRoutes, agentcorePing } from "./adapter.ts";
 import * as Effect from "effect/Effect";
-import { fireScheduleOnce } from "../schedule/scheduler.ts";
-import { nextRun } from "../schedule/cron.ts";
-import { createWakeAlarmSink } from "../schedule/wake-alarm.ts";
-import { setWakeupsSink } from "../schedule/wakeups.ts";
-import { text } from "./respond.ts";
-import { activeWork, beginWork } from "./busy.ts";
-import type { ChannelHandler } from "../channel.ts";
-import { router } from "./router.ts";
-import { readBodyCapped } from "./body.ts";
-import { MAX_ENVELOPE_BYTES } from "./agentcore-limits.ts";
+import { fireScheduleOnce } from "../../schedule/scheduler.ts";
+import { nextRun } from "../../schedule/cron.ts";
+import { createWakeAlarmSink } from "./wake-alarm.ts";
+import { setWakeupsSink } from "../../schedule/wakeups.ts";
+import { text } from "../../channels/respond.ts";
+import { activeWork, beginWork } from "../../channels/busy.ts";
+import { router } from "../../channels/router.ts";
+import { readBodyCapped } from "../../channels/body.ts";
+import { MAX_ENVELOPE_BYTES } from "./limits.ts";
 
 /**
  * Runtime filesystems appear on invocation, so even opening the definition must be deferred — in the TWO stages that
@@ -157,7 +156,7 @@ export async function mountAgentcoreService(opened: ServableAgent): Promise<Serv
 
 /**
  * Mount the AgentCore Runtime adapter (`POST /invocations` + `GET /ping`) — the deployed container's ONLY reachable
- * surface (channels/agentcore.ts).
+ * surface (`adapter.ts`).
  */
 function mountAgentcore(options: {
   agent: Agent;
@@ -212,7 +211,7 @@ function mountAgentcore(options: {
 
 /**
  * The alarm mirror: each schedule as a recurring EventBridge schedule and each pending wake-up as a one-shot one, set
- * by the forwarder (schedule/wake-alarm.ts), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
+ * by the forwarder (`wake-alarm.ts`), so a container AgentCore reclaimed is woken for them. Installed BEFORE the
  * clock starts: the first wake poll may advance a recurring entry, and that save must already re-arm its alarm.
  * Without the wake secret there is no way to set one, which is said.
  */
