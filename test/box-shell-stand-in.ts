@@ -5,8 +5,8 @@ import type { Duplex } from "node:stream";
 /**
  * The service side of `InvokeAgentRuntimeCommandShell`, as far as a test needs it: an RFC 6455 handshake, masked
  * client frames in, unmasked binary frames out. `onFrame` sees each binary client frame as [channel, payload]; `onOpcode`
- * sees every frame's WebSocket opcode, a ping included. One double for the shell's WebSocket, which vitest drives on Node
- * (agentcore-shell.test.ts) and test/bun/agentcore-shell.ts drives on Bun.
+ * sees every frame's WebSocket opcode, a ping included. One double for the shell's WebSocket, driven on Bun by
+ * test/bun/agentcore-shell.ts.
  */
 export function shellService(
   onFrame: (channel: number, payload: Buffer, send: (frame: Buffer) => void, close: () => void) => void,

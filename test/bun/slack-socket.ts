@@ -1,6 +1,6 @@
 /**
  * Slack Socket Mode on Bun, where vitest does not run: CI's Bun job runs this file (`bun test/bun/slack-socket.ts`),
- * and test/slack-socket-wire.test.ts holds the same contract on Node, against the same stand-in. What Bun can differ in
+ * against slack-stand-in.ts. What Bun can differ in
  * is its `undici` shim: the WebSocket, and the ping that tells a connection nobody answers on from a quiet one.
  */
 import { connectSlackSocket } from "../../src/channels/slack/socket.ts";

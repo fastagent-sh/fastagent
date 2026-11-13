@@ -62,49 +62,42 @@ Agent API.
 
 ## Tests
 
-**What the suite tests: the spec's cases, not the code's.** A test shows a contract a user relies on, as the docs
-describe it. It goes through the entry that user has: the Agent API, a CLI command, a package export, a channel's
-ingress, or the files a command writes. Each contract gets:
-- one test for its main case;
-- one for each refusal the docs promise;
-- one for each security boundary: a signature or key checked, a URL refused, a secret kept out of argv, an image and a
-  page.
+**What the suite tests: user-visible contracts and high-risk invariants, never wiring.** A test proves either a contract
+a user or host relies on (through the entry they call: Agent API, CLI command, package export, channel ingress, generated
+files) or a pure/concurrency invariant whose failure silently corrupts state or security. Each contract gets one test for
+its main case, one for each promised refusal, and one for each security boundary. Never test internal call order,
+private helpers, or non-actionable wording.
 
-Not tested: a module on its own, a state file's format, a state written by hand to stand for a crash, the order calls
-reach a module or a host CLI, retries, races, and wording beyond what a user acts on. A bug found there is fixed with a
-test that shows it at an entry, if one can. Kept beside the spec cases: the structure guards
-(`package-boundary.test.ts`, `test-tiers.test.ts`) and one integration test per double.
+See [`test/README.md`](test/README.md) for the double inventory and suite index.
 
-**Tiers are set by the resources a test uses.** Use the smallest tier that can show the behavior.
+**Tiers are set by the resources a test uses.** Pick the smallest tier that can prove the behavior:
 
-| Tier | Files, command | May use | Timeout |
+| Layer / Tier | Files, command | Scope & allowed resources | Timeout |
 | --- | --- | --- | --- |
-| Unit | `test/*.test.ts`, `npm test` | One process: temp directories, SQLite on a temp file, loopback sockets, the faux model, the shared doubles, fake timers. No child process. | 20 s |
-| Integration | `test/*.integration.test.ts`, `npm run test:integration` | This machine: processes, signals, locks between processes, the real build, `git`, `npm pack` | 30 s |
-| Artifact smoke | CI only: `test/e2e/packed.ts` on the packed tarball, `test/bun/` on Bun | The package as a user installs it | the job |
+| Guards (L0) | `test/package-boundary.test.ts`, `test/test-tiers.test.ts`, `test/forbidden.test.ts` | Static export/dependency boundaries and test-suite rules | 20 s |
+| Unit (L1) | `test/*.test.ts`, `npm test` | Pure invariants (no I/O) and contract specs via standard doubles, temp dirs, SQLite, loopback sockets, fake timers. No child processes. | 20 s |
+| Integration (L2) | `test/*.integration.test.ts`, `npm run test:integration` | Double parity checks, cross-process locks/signals/pipes, real `build`/`tsc`/`git`/MCP subprocesses, `npm pack` | 30 s |
+| Artifact smoke (L3) | CI only: `test/e2e/packed.ts`, `test/bun/` | Installed tarball without `src/` aliases and Bun 1.4 runtime differences | the job |
 
-How the tiers are kept:
-- `test/setup.ts` refuses any connection off the machine, in every tier and in the Node processes a test starts
-  (through `NODE_OPTIONS`). `test/unit-setup.ts` refuses child processes in the unit tier. Both fail the test even when
-  product code catches the error.
-- Every file gets an empty `HOME`, `FASTAGENT_OFFLINE=1` and no proxy variables. Unit tests run shuffled;
-  `--sequence.seed=<n>` repeats an order. `vi.waitFor` waits 10 s.
-- `test/test-tiers.test.ts` refuses:
-  - a bare `.toThrow()`: name the failure instead;
-  - an upper bound on elapsed time: show "does not wait" with fake timers, or with a wait longer than the test's
-    timeout;
-  - `join(dir, "..", name)`: write beside a temp directory with `besideAgent(dir, name)`.
-- A unit test reaches a process or a tool through its seam: `runInProcess` for the CLI, a stubbed `fetch`,
-  `test/git-double.ts`, `test/tsc-double.ts`, `test/host-cli-double.ts`, `test/storage-no-wait.ts`. Keep one shared
-  double per contract (`scripted-agent.ts` for the Agent), each with one integration test against the real thing.
-- A CLI test calls the command with `runInProcess`. Spawn it with `run`, in an integration file, only when the test is
-  about the process: pipes, signals, a command that outlives its caller. `cli-run-parity.integration.test.ts` pins
-  that the two agree. A ticket's command and its step are tested in process, apart: `startTicket` is mocked to record,
-  and the step runs as `--ticket <id>`.
-- A test that asserts "X must not happen" is unproven until X has happened. Run the mutation that makes it happen and
-  watch the test fail.
-- A subject tested in both tiers has two files, `<name>.test.ts` and `<name>.integration.test.ts`, with what both need
-  in `<name>-fixtures.ts`.
+**Change-to-Test Matrix:**
+
+| Change area | Required tests | Mandatory seam (do not invent a local mock) |
+| --- | --- | --- |
+| Agent API / HTTP (`src/agent-api.ts`, `src/http/`) | `test/agent-api-conformance.ts`, `test/http-api.test.ts` | `durableSubject` / `httpSubject` |
+| CLI command or flag (`src/cli/`) | Main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
+| Channel (`src/channels/`) | Verified ingress, DM/group summon, `/stop`, send tool | `scriptedAgent` (`test/scripted-agent.ts`) + stubbed `fetch` |
+| Deploy / Host CLI (`src/deploy/`) | Preflight gates, generated artifacts, `run`/`destroy`/`logs` paths | `hostCli` / `recordHostCli` (`test/host-cli-double.ts`); no secrets in artifacts or argv |
+| Security boundary | Valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
+| Test double (`test/*-double.ts`, `test/cli-run.ts`) | Update its `*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
+| Bugfix | Minimal regression test reproducing the bug | L1 preferred; use L2 only when process/lock/tool behavior is essential |
+
+**How the suite stays fast and consistent:**
+- **Append before creating:** When adding fewer than ~8 tests in an existing domain, append to that domain's test file instead of opening a new `.test.ts` file (each file in `pool: "forks"` pays a cold-import cost).
+- **Canonical seams only:** Use `runInProcess` for CLI tests (never stub `process.cwd`/`console.log`/`process.exitCode` manually), `host-cli-double.ts` for host CLIs (never write a local `fakeCli`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, `faux.ts`, and `scripted-agent.ts`.
+- **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, `FASTAGENT_OFFLINE=1`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
+- **Hygiene guards (`test/test-tiers.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds (`Date.now() - t < ...`), and shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`) are rejected.
+- **Process CLI tests (`run`):** Spawn the binary in an integration test only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).
+- **Paired fixtures:** A subject tested in both Unit and Integration shares `<name>-fixtures.ts`.
 
 ## Priorities
 

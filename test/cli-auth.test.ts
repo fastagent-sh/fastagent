@@ -1,81 +1,84 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runAuthCheck } from "../src/cli/commands/auth.ts";
-import { runLogout } from "../src/cli/commands/logout.ts";
+import { runInProcess } from "./cli-run.ts";
 import { CODEX_MODEL } from "./codex-model.ts";
 
 // enterAgentEnv installs the proxy fetch, which swaps this process's fetch with no way back.
 vi.mock("../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
 afterEach(() => {
-  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  process.exitCode = undefined;
 });
 
 const OAUTH = { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
 
-/** An agent whose own credentials file holds `stored`, run from: the command reads it as `cwd`. */
+/** An agent whose own credentials file holds `stored`. */
 async function agentHolding(stored: Record<string, unknown>): Promise<string> {
-  const agent = join(await mkdtemp(join(tmpdir(), "fa-auth-")), "fastagent");
+  const agent = join(await realpath(await mkdtemp(join(tmpdir(), "fa-auth-"))), "fastagent");
   await mkdir(join(agent, ".secrets"), { recursive: true });
   await writeFile(join(agent, "fastagent.config.ts"), "export default {};\n");
   await writeFile(join(agent, ".secrets", "auth.json"), JSON.stringify(stored));
-  vi.spyOn(process, "cwd").mockReturnValue(agent);
   return agent;
-}
-
-/** One run's stdout, and its exit code. */
-async function checked(opts: Parameters<typeof runAuthCheck>[0]): Promise<{ out: string; code: unknown }> {
-  const out: string[] = [];
-  vi.spyOn(console, "log").mockImplementation((line: unknown) => void out.push(String(line)));
-  vi.spyOn(console, "error").mockImplementation(() => {});
-  process.exitCode = undefined;
-  await runAuthCheck(opts);
-  return { out: out.join("\n"), code: process.exitCode };
 }
 
 describe("auth check: a provider's readiness, as pi's `auth check` answers a script", () => {
   it("ready, not_ready and invalid, exiting 0, 1 and 2", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-env");
-    vi.stubEnv("OPENAI_API_KEY", "");
     const agent = await agentHolding({
       "openai-codex": { ...OAUTH, refresh: "revoked", expires: 1 },
       "github-copilot": OAUTH,
     });
+    const env = { ...process.env, ANTHROPIC_API_KEY: "sk-env", OPENAI_API_KEY: "" };
     const path = join(agent, ".secrets", "auth.json");
-    expect(await checked({ provider: "anthropic" })).toEqual({ out: "ready", code: 0 });
-    expect(JSON.parse((await checked({ provider: "anthropic", json: true })).out)).toEqual({
+
+    const missingTarget = await runInProcess(["auth", "check"], agent, env);
+    expect(missingTarget.code).toBe(2);
+    expect(missingTarget.stderr).toContain("auth check needs --provider <id> or --model <provider/modelId>");
+
+    const ready = await runInProcess(["auth", "check", "--provider", "anthropic"], agent, env);
+    expect([ready.code, ready.stdout.trim()]).toEqual([0, "ready"]);
+
+    const readyJson = await runInProcess(["auth", "check", "--provider", "anthropic", "--json"], agent, env);
+    expect(readyJson.code).toBe(0);
+    expect(JSON.parse(readyJson.stdout)).toEqual({
       status: "ready",
       provider: "anthropic",
       authType: "api_key",
       source: "ANTHROPIC_API_KEY",
       path,
     });
-    expect(JSON.parse((await checked({ provider: "github-copilot", json: true })).out)).toMatchObject({
-      status: "ready",
-      authType: "oauth",
-      source: "OAuth",
+
+    const oauth = await runInProcess(["auth", "check", "--provider", "github-copilot", "--json"], agent, env);
+    expect(oauth.code).toBe(0);
+    expect(JSON.parse(oauth.stdout)).toMatchObject({ status: "ready", authType: "oauth", source: "OAuth" });
+
+    const missing = await runInProcess(["auth", "check", "--provider", "openai", "--json"], agent, env);
+    expect(missing.code).toBe(1);
+    expect(JSON.parse(missing.stdout)).toEqual({
+      status: "not_ready",
+      provider: "openai",
+      reason: "credentials_not_configured",
+      path,
     });
-    expect(await checked({ provider: "openai", json: true })).toEqual({
-      out: JSON.stringify({ status: "not_ready", provider: "openai", reason: "credentials_not_configured", path }),
-      code: 1,
+
+    const unknown = await runInProcess(["auth", "check", "--provider", "nope", "--json"], agent, env);
+    expect(unknown.code).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toEqual({
+      status: "not_ready",
+      provider: "nope",
+      reason: "provider_not_found",
     });
-    expect(await checked({ provider: "nope", json: true })).toEqual({
-      out: JSON.stringify({ status: "not_ready", provider: "nope", reason: "provider_not_found" }),
-      code: 1,
-    });
+
     // A login due a refresh is refreshed, as a message would; one the provider refuses is invalid, not missing.
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 })),
     );
-    const refused = await checked({ model: CODEX_MODEL, json: true });
+    const refused = await runInProcess(["auth", "check", "--model", CODEX_MODEL, "--json"], agent, env);
     expect(refused.code).toBe(2);
-    expect(JSON.parse(refused.out)).toMatchObject({
+    expect(JSON.parse(refused.stdout)).toMatchObject({
       status: "invalid",
       provider: "openai-codex",
       reason: "invalid_state",
@@ -85,17 +88,21 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
 });
 
 describe("logout: removing what login stored, as pi's /logout does", () => {
-  it("removes the provider named by its id or name, and only what is stored", async () => {
+  it("removes the provider named by its id or name, and refuses an omitted provider without a terminal", async () => {
     const agent = await agentHolding({ "openai-codex": OAUTH, anthropic: { type: "api_key", key: "sk" } });
-    const said: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((line: unknown) => void said.push(String(line)));
-    await runLogout("OpenAI Codex", {});
-    await runLogout("anthropic", {});
+    const unnamed = await runInProcess(["logout"], agent);
+    expect(unnamed.code).toBe(2);
+    expect(unnamed.stderr).toContain("name the provider to log out of:");
+
+    const first = await runInProcess(["logout", "OpenAI Codex"], agent);
+    const second = await runInProcess(["logout", "anthropic"], agent);
+    expect(first.code, first.stderr).toBe(0);
+    expect(second.code, second.stderr).toBe(0);
     expect(JSON.parse(await readFile(join(agent, ".secrets", "auth.json"), "utf8"))).toEqual({});
-    expect(said).toEqual([
-      `[fastagent] logged out of OpenAI Codex — removed from ${join(agent, ".secrets", "auth.json")}`,
-      `[fastagent] removed the stored API key for Anthropic from ${join(agent, ".secrets", "auth.json")}; ` +
-        "environment variables are unchanged",
-    ]);
+    expect(`${first.stderr}${second.stderr}`).toBe(
+      `[fastagent] logged out of OpenAI Codex — removed from ${join(agent, ".secrets", "auth.json")}\n` +
+        `[fastagent] removed the stored API key for Anthropic from ${join(agent, ".secrets", "auth.json")}; ` +
+        "environment variables are unchanged\n",
+    );
   });
 });

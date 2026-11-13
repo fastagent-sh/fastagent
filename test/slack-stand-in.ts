@@ -4,8 +4,7 @@ import type { Socket } from "node:net";
 
 /**
  * A Slack stand-in speaking the real Socket Mode protocol: `apps.connections.open`, the WebSocket handshake, text frames,
- * pings. One double for the runtime's own WebSocket, which vitest drives on Node (slack-socket-wire.test.ts) and
- * test/bun/slack-socket.ts drives on Bun.
+ * pings. One double for the runtime's own WebSocket, driven on Bun by test/bun/slack-socket.ts.
  */
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

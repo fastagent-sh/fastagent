@@ -4,17 +4,14 @@ import type { RegistrationOutcome } from "../src/channels/registration.ts";
 import { ingressSessionId } from "../src/deploy/agentcore/plan.ts";
 import { type AgentcoreRunPlan, deployAgentcoreRun } from "../src/deploy/agentcore/run.ts";
 import type { CliRunner } from "../src/deploy/runner.ts";
-
-/** A fake CLI: records every call, returns per-command scripted results (default code 0, empty out). */
-function fakeCli(script: (args: string[]) => { code?: number; stdout?: string; stderr?: string } = () => ({})) {
-  const calls: { args: string[]; input?: string }[] = [];
-  const cli: CliRunner = async (args, opts) => {
-    calls.push({ args, input: opts?.input });
-    const r = script(args);
-    return { code: r.code ?? 0, stdout: r.stdout ?? "", stderr: opts?.captureStderr ? (r.stderr ?? "") : undefined };
-  };
-  return { cli, calls, cmds: () => calls.map((c) => c.args.join(" ")) };
-}
+import {
+  type HostCliAnswer,
+  type HostCliCall,
+  awsRunner,
+  recordHostCli,
+  resetHostClis,
+  spawnRunner,
+} from "./host-cli-double.ts";
 
 const IDENTITY = JSON.stringify({ Account: "123456789012" });
 const OUTPUTS = JSON.stringify([
@@ -36,7 +33,7 @@ const NO_SUCH_STACK = {
  * different answers here — one reply for both would make every case a redeploy and leave the double unable to express
  * a first deploy at all.
  */
-const happyAws = (args: string[]): { code?: number; stdout?: string; stderr?: string } => {
+const happyAws = ({ args }: HostCliCall): HostCliAnswer => {
   if (args[0] === "sts") return { stdout: IDENTITY };
   if (args[0] === "ecr" && args[1] === "get-login-password") return { stdout: "hunter2" };
   if (args[0] === "secretsmanager" && args[1] === "describe-secret") {
@@ -78,6 +75,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  resetHostClis();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -99,8 +97,8 @@ const run = (
 
 describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   it("happy path: identity → docker checks → ecr → login → buildx push → cfn deploy → outputs → webhook", async () => {
-    const { cli: aws, cmds: awsCmds } = fakeCli(happyAws);
-    const { cli: docker, cmds: dockerCmds, calls: dockerCalls } = fakeCli();
+    const aws = recordHostCli("aws", happyAws);
+    const docker = recordHostCli("docker");
     runtimeReporting([{ channel: "telegram", outcome: "registered" }]);
     const tg = vi.fn(async (): Promise<RegistrationOutcome> => "registered");
     const out = await run(
@@ -108,8 +106,8 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         channels: declaredChannels(["telegram"]),
         topology: FORWARDER,
       }),
-      aws,
-      docker,
+      awsRunner("."),
+      spawnRunner("docker", "."),
       tg,
     );
 
@@ -118,7 +116,7 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
       runtimeArn: "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc",
       url: "https://xyz.lambda-url.us-west-2.on.aws", // trailing slash stripped for the registrars
     });
-    expect(awsCmds()).toEqual([
+    expect(aws.cmds()).toEqual([
       "sts get-caller-identity --output json",
       // The pre-flight region probe: cheap, and BEFORE the multi-minute build it would otherwise waste.
       "bedrock-agentcore-control list-agent-runtimes --max-items 1 --region us-west-2",
@@ -149,18 +147,19 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
         "--agent-runtime-arn arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/my_agent-abc " +
         `--runtime-session-id ${ingressSessionId("my-agent")}`,
     ]);
-    expect(dockerCmds()).toEqual([
+    expect(docker.cmds()).toEqual([
       "version",
       "buildx version",
       "login --username AWS --password-stdin 123456789012.dkr.ecr.us-west-2.amazonaws.com",
       "buildx build --pull --platform linux/arm64 -t 123456789012.dkr.ecr.us-west-2.amazonaws.com/fastagent/my-agent:20260728 --push -f Dockerfile .",
     ]);
     // The ECR password flows stdout→stdin between the runners, never argv.
-    expect(dockerCalls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
+    expect(docker.calls.find((c) => c.args[0] === "login")?.input).toBe("hunter2");
     // The runtime pointed Telegram itself; the deploy read what it made of it.
     expect(tg).not.toHaveBeenCalled();
     // Secrets ride the params FILE (0600 temp), never argv.
-    const forwarderKey = awsCmds()
+    const forwarderKey = aws
+      .cmds()
       .find((c) => c.startsWith("s3 cp"))!
       .split(`s3://fa-my-agent-123456789012/`)[1]!;
     expect(writeParams).toHaveBeenCalledWith(
@@ -176,35 +175,36 @@ describe("deploy/agentcore/run: the coding-agent deploy journey", () => {
   });
 
   it("gates on: no aws CLI / no credentials / no region / no docker / daemon down / no buildx", async () => {
-    const { cli: docker } = fakeCli();
-    const noCli = await run(plan(), fakeCli(() => ({ code: 127 })).cli, docker);
+    const aws = awsRunner(".");
+    const docker = spawnRunner("docker", ".");
+
+    const noCli = await run(plan(), aws, docker);
     expect(noCli).toMatchObject({ ok: false, gate: expect.stringContaining("aws CLI not found") });
 
-    const noCreds = await run(plan(), fakeCli(() => ({ code: 1 })).cli, docker);
+    recordHostCli("aws", () => ({ code: 1 }));
+    const noCreds = await run(plan(), aws, docker);
     expect(noCreds).toMatchObject({ ok: false, gate: expect.stringContaining("no working AWS credentials") });
 
-    const noRegion = await run(
-      plan({ region: undefined }),
-      fakeCli((a) => (a[0] === "sts" ? { stdout: IDENTITY } : a[0] === "configure" ? { stdout: "" } : {})).cli,
-      docker,
+    recordHostCli("aws", ({ args }) =>
+      args[0] === "sts" ? { stdout: IDENTITY } : args[0] === "configure" ? { stdout: "" } : {},
     );
+    const noRegion = await run(plan({ region: undefined }), aws, docker);
     expect(noRegion).toMatchObject({ ok: false, gate: expect.stringContaining("no AWS region") });
 
-    const noDocker = await run(plan(), fakeCli(happyAws).cli, fakeCli(() => ({ code: 127 })).cli);
+    recordHostCli("aws", happyAws);
+    const noDocker = await run(plan(), aws, docker);
     expect(noDocker).toMatchObject({ ok: false, gate: expect.stringContaining("docker not found") });
 
     // Docker CLI present but the daemon is down: `docker version` exits non-zero non-127. Must gate
     // BEFORE any AWS side effect — not stumble into a generic build failure after creating ECR.
-    const daemonDown = fakeCli(happyAws);
-    const noDaemon = await run(plan(), daemonDown.cli, fakeCli((a) => (a[0] === "version" ? { code: 1 } : {})).cli);
+    const daemonAws = recordHostCli("aws", happyAws);
+    recordHostCli("docker", ({ args }) => (args[0] === "version" ? { code: 1 } : {}));
+    const noDaemon = await run(plan(), aws, docker);
     expect(noDaemon).toMatchObject({ ok: false, gate: expect.stringContaining("daemon not reachable") });
-    expect(daemonDown.cmds().some((c) => c.startsWith("ecr"))).toBe(false);
+    expect(daemonAws.cmds().some((c) => c.startsWith("ecr"))).toBe(false);
 
-    const noBuildx = await run(
-      plan(),
-      fakeCli(happyAws).cli,
-      fakeCli((a) => (a[0] === "buildx" ? { code: 1 } : {})).cli,
-    );
+    recordHostCli("docker", ({ args }) => (args[0] === "buildx" ? { code: 1 } : {}));
+    const noBuildx = await run(plan(), aws, docker);
     expect(noBuildx).toMatchObject({ ok: false, gate: expect.stringContaining("buildx") });
   });
 });

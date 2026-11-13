@@ -42,6 +42,19 @@ export function resetHostClis(): void {
   clis.clear();
 }
 
+/** Install `bin` and record every call in order. */
+export function recordHostCli(
+  bin: string,
+  answer: (call: HostCliCall) => HostCliAnswer | Promise<HostCliAnswer> = () => ({}),
+): { calls: HostCliCall[]; cmds: () => string[] } {
+  const calls: HostCliCall[] = [];
+  hostCli(bin, (call) => {
+    calls.push(call);
+    return answer(call);
+  });
+  return { calls, cmds: () => calls.map((call) => call.args.join(" ")) };
+}
+
 export function spawnRunner(bin: string, cwd: string, options: { stdoutToStderr?: boolean } = {}): CliRunner {
   return async (args, opts) => {
     const answer = clis.get(bin);

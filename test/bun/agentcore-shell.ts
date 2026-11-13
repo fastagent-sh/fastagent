@@ -1,8 +1,8 @@
 /**
  * The AgentCore command shell on Bun, where vitest does not run: CI's Bun job runs this file
- * (`bun test/bun/agentcore-shell.ts`), and test/agentcore-shell.test.ts holds the same contract on Node, against the
- * same stand-in. `login --deployment agentcore` is this channel; what Bun can differ in is `undici`'s WebSocket and the
- * ping that keeps the service from dropping a connection that has been quiet for a minute.
+ * (`bun test/bun/agentcore-shell.ts`), against box-shell-stand-in.ts. `login --deployment agentcore` is this channel;
+ * what Bun can differ in is `undici`'s WebSocket and the ping that keeps the service from dropping a connection that has
+ * been quiet for a minute.
  */
 import type { AddressInfo } from "node:net";
 import { openShellChannel } from "../../src/deploy/agentcore/shell.ts";
