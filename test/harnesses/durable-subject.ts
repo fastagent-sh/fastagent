@@ -263,7 +263,11 @@ export function durableSubject(): AgentApiSubject {
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
-      settings: { retry: { maxRetries: 1, baseDelayMs: 1 }, compaction: { keepRecentTokens: 1 } },
+      settings: {
+        retry: { maxRetries: 1, baseDelayMs: 1 },
+        compaction: { keepRecentTokens: 1 },
+        progress: { partialIntervalMs: 25, outputIntervalMs: 15 },
+      },
     });
     return current;
   };

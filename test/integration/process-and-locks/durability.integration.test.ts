@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeFileAtomic } from "../../../src/atomic-write.ts";
 import { openLockedStorage } from "../../../src/harnesses/pi-durable/storage.ts";
@@ -120,25 +122,28 @@ describe("openLockedStorage: exclusive SQLite locking across processes", () => {
     ).href;
 
     const holder = await openLockedStorage(db, "posix", "dev", 0);
-    const contender = await runNode(
-      `
-        import { openLockedStorage } from ${JSON.stringify(storageUrl)};
-        try {
-          await openLockedStorage(process.argv[1], "posix", "dev", 0);
-          process.exit(0);
-        } catch (error) {
-          console.error(error.message);
-          process.exit(2);
-        }
-      `,
-      [db],
-    );
-    expect(contender.code).toBe(2);
-    expect(contender.stderr).toContain("is held by another process: dev is running");
+    try {
+      const contender = await runNode(
+        `
+          import { openLockedStorage } from ${JSON.stringify(storageUrl)};
+          try {
+            await openLockedStorage(process.argv[1], "posix", "dev", 0);
+            process.exit(0);
+          } catch (error) {
+            console.error(error.message);
+            process.exit(2);
+          }
+        `,
+        [db],
+      );
+      expect(contender.code).toBe(2);
+      expect(contender.stderr).toContain("is held by another process: dev is running");
+    } finally {
+      await holder.close(BACKGROUND_CONTEXT);
+    }
 
-    await holder.close({} as never);
     const afterRelease = await openLockedStorage(db, "posix", "dev", 0);
-    await afterRelease.close({} as never);
+    await afterRelease.close(BACKGROUND_CONTEXT);
   });
 
   it("clears a stale <db>.lock directory in leased-dotfile mode", async () => {
@@ -146,6 +151,11 @@ describe("openLockedStorage: exclusive SQLite locking across processes", () => {
     const db = join(dir, "agent.sqlite");
     mkdirSync(`${db}.lock`);
     const storage = await openLockedStorage(db, "leased-dotfile", "serve", 0);
-    await storage.close({} as never);
+    try {
+      expect(existsSync(`${db}.lock`)).toBe(true);
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+    expect(existsSync(`${db}.lock`)).toBe(false);
   });
 });
