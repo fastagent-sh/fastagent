@@ -23,7 +23,8 @@ import {
 } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
-import { deployedHost, isDeployedWorkspace } from "../paths.ts";
+import { deployedHost } from "../deploy/hosts.ts";
+import { isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { type InstanceFlags, enterInstance } from "./instance.ts";
 import { dotEnvPath } from "../value-file.ts";

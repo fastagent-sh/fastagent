@@ -11,6 +11,7 @@ import {
   ingressSessionId,
   planAgentcoreDeploy,
 } from "../../../src/deploy/agentcore/plan.ts";
+import { toEventBridgeCron } from "../../../src/deploy/agentcore/eventbridge-cron.ts";
 import { applyRuntimeSecrets } from "../../../src/deploy/agentcore/runtime-secrets.ts";
 import { openShellChannel } from "../../../src/deploy/agentcore/shell.ts";
 import { awsStandIn } from "../../doubles/protocol/aws-stand-in.ts";
@@ -176,5 +177,10 @@ describe("deploy agentcore on Node: runtime secrets (SigV4) and command shell (u
       pingServer.closeAllConnections();
       pingServer.close();
     }
+  });
+
+  it("translates valid schedules and rejects crons EventBridge Scheduler cannot express", () => {
+    expect(toEventBridgeCron("0 9 * * 1-5")).toEqual({ expression: "cron(0 9 ? * 2-6 *)" });
+    expect(toEventBridgeCron("0 9 1 * 1")).toMatchObject({ error: expect.stringContaining("day-of-month") });
   });
 });

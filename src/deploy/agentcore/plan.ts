@@ -1,8 +1,8 @@
 /** `fastagent deploy agentcore` — the AWS Bedrock AgentCore deploy PLAN, computed from the resolved definition. */
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { MAX_WEBHOOK_BODY_BYTES } from "../../channels/agentcore-limits.ts";
-import type { AgentcoreEnvelope } from "../../channels/agentcore-protocol.ts";
+import { MAX_WEBHOOK_BODY_BYTES } from "./limits.ts";
+import type { AgentcoreEnvelope } from "./protocol.ts";
 import { SECRETS_DIRNAME } from "../../paths.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
 import { webhookKinds } from "../../channels/webhooks.ts";

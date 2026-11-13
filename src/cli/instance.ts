@@ -17,7 +17,6 @@ import {
   INSTANCE_ROOT_ENV,
   INSTANCE_STATE_ENV,
   INSTANCE_WORKDIR_ENV,
-  isAgentcoreRuntime,
   isDeployedWorkspace,
   resolveOverridePath,
   resolveStateRoot,
@@ -218,7 +217,11 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
 
 /** Who runs this process's instance, as its own variables say: the one place the CLI reads them for an open. */
 function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
-  return { dev: servedByDev(env), deployed: isDeployedWorkspace(env), agentcore: isAgentcoreRuntime(env) };
+  return {
+    dev: servedByDev(env),
+    deployed: isDeployedWorkspace(env),
+    ...(env.FASTAGENT_AGENTCORE === "1" ? { ephemeralRoot: true } : {}),
+  };
 }
 
 /**

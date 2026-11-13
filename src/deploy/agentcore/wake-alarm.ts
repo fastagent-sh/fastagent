@@ -10,19 +10,14 @@
 import { readFileSync } from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { PortFailure, portError, portJoin, portRequest } from "../effect-port.ts";
-import {
-  type RecurringSchedule,
-  RESERVED_PATHS,
-  type WakeAlarm,
-  type WakeAlarmRequest,
-} from "../channels/agentcore-protocol.ts";
-import { beginWork } from "../channels/busy.ts";
-import { log } from "../log.ts";
-import { scheduleFile, writeScheduleFile } from "./state.ts";
-import { type Wakeup, listWakeups } from "./wakeups.ts";
+import { PortFailure, portError, portJoin, portRequest } from "../../effect-port.ts";
+import { type RecurringSchedule, RESERVED_PATHS, type WakeAlarm, type WakeAlarmRequest } from "./protocol.ts";
+import { beginWork } from "../../channels/busy.ts";
+import { log } from "../../log.ts";
+import { scheduleFile, writeScheduleFile } from "../../schedule/state.ts";
+import { type Wakeup, listWakeups } from "../../schedule/wakeups.ts";
 import { toEventBridgeCron } from "./eventbridge-cron.ts";
-import type { Schedule } from "./schedule.ts";
+import type { Schedule } from "../../schedule/schedule.ts";
 
 const URL_FILE = "wake-alarm-url";
 

@@ -22,6 +22,7 @@ import {
   planAgentcoreDeploy,
 } from "../../../deploy/agentcore/plan.ts";
 import { deployAgentcoreRun, pickStackOutputs } from "../../../deploy/agentcore/run.ts";
+import { toEventBridgeCron } from "../../../deploy/agentcore/eventbridge-cron.ts";
 import { awsCli, awsJson } from "../../../deploy/agentcore/aws-cli.ts";
 import { agentcoreShell } from "../../../deploy/agentcore/shell.ts";
 import { awsRunner, spawnRunner } from "../../../deploy/runner.ts";
@@ -86,6 +87,14 @@ export const agentcoreHost: HostDeploy = {
             `names derived from it exceed their limits past 40 chars. Give the instance a shorter \`name\`.`,
         ),
       );
+    }
+    for (const schedule of pre.schedules) {
+      const translated = toEventBridgeCron(schedule.cron);
+      if ("error" in translated) {
+        const msg = `schedule "${schedule.name}" cannot run on AgentCore (EventBridge): ${translated.error}`;
+        if (opts.run) failStartup(new Error(`deploy stopped: ${msg}`));
+        console.error(`[fastagent] warn: ${msg}`);
+      }
     }
   },
   async deploy(ctx) {

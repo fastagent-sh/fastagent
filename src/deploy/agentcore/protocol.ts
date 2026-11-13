@@ -1,5 +1,5 @@
 /** The wire between the forwarder Lambda and the container, in ONE place. */
-import { secretEquals } from "./secret.ts";
+import { secretEquals } from "../../channels/secret.ts";
 
 /** Paths the forwarder answers ITSELF — never forwarded to a channel route. */
 export const RESERVED_PATHS = {
