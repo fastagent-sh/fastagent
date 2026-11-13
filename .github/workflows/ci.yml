@@ -151,21 +151,33 @@ jobs:
           bun dist/cli.js models gpt-5.5
           bun dist/cli.js --version
 
-      # Vitest runs on Node; this is the serving host's contract on Bun's own server.
-      - name: Serve on Bun
-        run: bun test/smoke/bun/serve.ts
-
-      - name: Open a built package on Bun
-        run: bun test/smoke/bun/built.ts
-
-      - name: Slack Socket Mode on Bun
-        run: bun test/smoke/bun/slack-socket.ts
-
-      - name: The AgentCore container's secret read on Bun
-        run: bun test/smoke/bun/runtime-secrets.ts
-
-      - name: The AgentCore command shell on Bun
-        run: bun test/smoke/bun/agentcore-shell.ts
+      # Vitest runs on Node; these five independent scripts verify the runtime's Bun 1.4 contracts in parallel.
+      - name: Run Bun smoke checks
+        run: |
+          scripts=(
+            test/smoke/bun/serve.ts
+            test/smoke/bun/built.ts
+            test/smoke/bun/slack-socket.ts
+            test/smoke/bun/runtime-secrets.ts
+            test/smoke/bun/agentcore-shell.ts
+          )
+          pids=()
+          logs=()
+          for script in "${scripts[@]}"; do
+            log="$RUNNER_TEMP/$(basename "$script" .ts).log"
+            logs+=("$log")
+            bun "$script" >"$log" 2>&1 &
+            pids+=($!)
+          done
+          failed=0
+          for i in "${!scripts[@]}"; do
+            echo "=== ${scripts[$i]} ==="
+            if ! wait "${pids[$i]}"; then
+              failed=1
+            fi
+            cat "${logs[$i]}"
+          done
+          exit "$failed"
 
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
