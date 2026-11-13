@@ -162,7 +162,6 @@ async function runDeployFly(params: {
       dockerfile: "Dockerfile",
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
-      forAgent: `${params.rerun} --json`,
       publicUrl: params.publicUrl,
       ...urlRecorder(agentDir, params.config, params.values, params.answerer),
     },

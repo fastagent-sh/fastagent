@@ -14,11 +14,6 @@ import { waitForHealth } from "../channels/wait-health.ts";
 export interface Registrars {
   telegram: (baseUrl: string) => Promise<RegistrationOutcome>;
   feishu?: (baseUrl: string, kind: "feishu" | "lark") => Promise<RegistrationOutcome>;
-  /**
-   * Where a channel's manual step goes beside the log, for a person who reads no log: a coding agent's user, through
-   * the deploy's ticket (its `afterwards`).
-   */
-  leave?: (step: string) => void;
 }
 
 interface ChannelIngress {
@@ -101,10 +96,6 @@ export async function pointChannelsAt(input: {
     }
     input.log(`registering ${kind} webhook…`);
     outcomes.push({ kind, outcome: await running });
-  }
-  // What the registrar said is in the log; the person who reads none gets the one route to set.
-  for (const { kind } of outcomes.filter(({ outcome }) => outcome === "manual")) {
-    input.registrars.leave?.(manualWebhookStep(kind, input.baseUrl));
   }
   return outcomes;
 }
@@ -262,7 +253,6 @@ export async function confirmWebhooks(input: {
   /** Where the platforms reach it, the delivered `http.publicUrl` (a custom domain, say): every step names this one. */
   publicUrl: string;
   channels: readonly DeclaredChannel[];
-  registrars: Pick<Registrars, "leave">;
   log: (msg: string) => void;
   retryHint: string;
   probe?: BoxWebhooksProbe;
@@ -308,7 +298,6 @@ export async function confirmWebhooks(input: {
     if (outcomes.get(kind) === "registered" || kind === "slack") continue;
     // What the box said and why is in its log; the line a person acts on is said here.
     input.log(manualWebhookStep(kind, input.publicUrl));
-    input.registrars.leave?.(manualWebhookStep(kind, input.publicUrl));
   }
   if (input.record !== undefined) await recordConfirmed(input, kinds, outcomes, input.record);
   for (const kind of kinds) {

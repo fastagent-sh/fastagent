@@ -29,7 +29,6 @@ const plan = (over: Partial<FlyRunPlan> = {}): FlyRunPlan => ({
   channels: [],
   flyConfig: "fastagent/fly.toml",
   dockerfile: "fastagent/Dockerfile",
-  forAgent: "fastagent deploy fly ../bot --run --json",
   ...over,
 });
 

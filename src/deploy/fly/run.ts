@@ -4,7 +4,6 @@ import {
   type BoxWebhooksProbe,
   type UrlRecorder,
   type PublicHealthProbe,
-  type Registrars,
   confirmWebhooks,
   loginGate,
   publicHealthGate,
@@ -43,8 +42,6 @@ export interface FlyRunPlan {
    * undefined once signed in. Absent: nobody can, and the run stops naming how.
    */
   hostLogin?: () => Promise<string | undefined>;
-  /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
-  forAgent: string;
 }
 
 /** Done, or a gate the operator must clear before re-running (printed + non-zero exit by the CLI). */
@@ -74,8 +71,7 @@ export async function deployFlyRun(
   plan: FlyRunPlan,
   fly: CliRunner,
   log: (msg: string) => void,
-  /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
-  registrars: Pick<Registrars, "leave">,
+  _registrars: object,
   healthProbe?: PublicHealthProbe,
   boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
 ): Promise<FlyRunOutcome> {
@@ -85,7 +81,7 @@ export async function deployFlyRun(
   if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
     const failed = plan.hostLogin
       ? await plan.hostLogin()
-      : hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", plan.forAgent);
+      : hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN");
     if (failed) return gate(failed);
   }
 
@@ -171,7 +167,6 @@ export async function deployFlyRun(
     baseUrl,
     publicUrl: plan.publicUrl ?? baseUrl,
     channels: plan.channels,
-    registrars,
     log,
     ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run to retry registration (steps already done are skipped)",

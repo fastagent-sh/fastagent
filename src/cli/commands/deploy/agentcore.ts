@@ -231,8 +231,7 @@ async function runDeployAgentcore(params: {
           keyOnTarget = params.modelKey.variables.some((variable) => held.has(variable));
           // Decided before the build and the stack: the deploy resets the runtime's storage and the login with it, so
           // with nobody to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving,
-          // with the webhooks a previous deploy registered still pointing at it. A coding agent's ticket has someone:
-          // its user.
+          // with the webhooks a previous deploy registered still pointing at it.
           if (params.boxLogin && !keyOnTarget && params.answerer.kind === "nobody") {
             return (
               `every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +

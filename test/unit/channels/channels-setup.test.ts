@@ -8,7 +8,7 @@ import { agentWorkspace } from "../../doubles/cli-run.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
-// At a terminal, so `--json` alone says a coding agent runs this (the ticket's own run asks nothing either way).
+// At a terminal, so `--json` alone says a coding agent runs this.
 vi.mock("../../../src/cli/shared.ts", async (original) => ({
   ...(await original<typeof import("../../../src/cli/shared.ts")>()),
   isInteractive: () => true,

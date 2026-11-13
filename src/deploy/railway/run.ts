@@ -4,7 +4,6 @@ import {
   type BoxWebhooksProbe,
   type UrlRecorder,
   type PublicHealthProbe,
-  type Registrars,
   confirmWebhooks,
   loginGate,
   publicHealthGate,
@@ -45,8 +44,6 @@ export interface RailwayRunPlan {
    * undefined once signed in. Absent: nobody can, and the run stops naming how.
    */
   hostLogin?: () => Promise<string | undefined>;
-  /** The command a coding agent runs to deploy this, its person's steps handed to its user (`--run --json`). */
-  forAgent: string;
   /**
    * The variables that vary per instance, with the service's domain in the configuration (`http.publicUrl`) so the box
    * points its own channels there, and the URL the configuration then names: the operator's own when it had one.
@@ -115,8 +112,7 @@ export async function deployRailwayRun(
   plan: RailwayRunPlan,
   railway: CliRunner,
   log: (msg: string) => void,
-  /** Slack's, which this machine still sets (its Request URL no credential on the box can change). */
-  registrars: Pick<Registrars, "leave">,
+  _registrars: object,
   healthProbe?: PublicHealthProbe,
   sleep: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   boxWebhooks?: { probe: BoxWebhooksProbe; intervalMs?: number },
@@ -130,7 +126,7 @@ export async function deployRailwayRun(
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
     const failed = plan.hostLogin
       ? await plan.hostLogin()
-      : hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", plan.forAgent);
+      : hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)");
     if (failed) return gate(failed);
   }
 
@@ -244,7 +240,6 @@ export async function deployRailwayRun(
     baseUrl: url,
     publicUrl,
     channels: plan.channels,
-    registrars,
     log,
     ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run with --into-linked to retry registration",
