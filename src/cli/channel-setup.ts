@@ -201,6 +201,9 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
       }
     }
     if (!interactive) {
+      if (missing.length > 0 && (typeof value.guide === "function" || value.capture !== undefined)) {
+        break;
+      }
       const guide = guideOf(value, held);
       missing.push({
         label: value.label,

@@ -156,6 +156,14 @@ describe("a Feishu app is created by scan-to-create", () => {
       ],
     });
 
+    // Webhook mode stops before evaluating Verification Token's app-id-dependent guide URL when App ID is absent.
+    const webhookMissing = await setup("lark", "webhook", { interactive: false });
+    expect(webhookMissing).toMatchObject({
+      status: "need_user_action",
+      steps: [{ label: "App ID and App Secret" }],
+    });
+    expect(JSON.stringify(webhookMissing)).not.toContain("undefined");
+
     platform.granted = AGENT_SCOPES;
     await mkdir(join(dir, ".secrets"), { recursive: true });
     await writeFile(file, "FEISHU_APP_ID=cli_preset\nFEISHU_APP_SECRET=sec\n");
