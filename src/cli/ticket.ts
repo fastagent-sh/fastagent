@@ -327,8 +327,8 @@ export interface TicketRequest {
   fields?: Record<string, string>;
 }
 
-/** A new ticket, its step not started yet. Not public: what `startTicket` starts, and a test seam. */
-export function createTicket(request: TicketRequest): Ticket {
+/** A new ticket, its step not started yet. Not public: what `startTicket` starts. */
+function createTicket(request: TicketRequest): Ticket {
   const now = Date.now();
   prune(now);
   mkdirSync(ticketsDir(), { recursive: true });

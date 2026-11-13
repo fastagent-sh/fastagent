@@ -272,21 +272,14 @@ async function deploy(
             `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
         );
       }
-      if (answerer.kind === "nobody") {
+      if (answerer.kind !== "terminal") {
+        const config = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
         failUsage(
-          `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: setting up the separate production app ` +
-            `needs a person — run this deploy in a terminal; from a coding agent, run \`${rerun} --json\`, which ` +
-            `hands their part to its user`,
+          `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: run ` +
+            `\`fastagent channels setup ${kinds[0]} --env-file ${shellArg(opts.envFile)}${config} --json\` first, or run this deploy in a terminal`,
         );
       }
-      const again = answerer.kind === "ticket" ? `${rerun} --json` : rerun;
-      await prepareChannelApps(
-        agentDir,
-        resolve(opts.envFile),
-        unprepared,
-        again,
-        answerer.kind === "ticket" ? answerer.step.person : undefined,
-      ).catch(failStartup);
+      await prepareChannelApps(agentDir, resolve(opts.envFile), unprepared, rerun).catch(failStartup);
       // What the setup kept is this deploy's values from here on.
       loadDotEnv(agentDir);
       pre = await preflight();

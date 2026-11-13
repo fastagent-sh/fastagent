@@ -20,19 +20,9 @@ import { markDevServe, unmarkDevServe } from "../../serving-command.ts";
 import { dotEnvPath, loadEnvValues, namedValueFile } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterEnvFile } from "../instance.ts";
-import type { Person } from "../person.ts";
 import { shellArg } from "../../shell-arg.ts";
 import { isInteractive } from "../shared.ts";
-import {
-  type Ticket,
-  checkTicket,
-  printReport,
-  refusedCheck,
-  runTicket,
-  startTicket,
-  ticketExitCode,
-  ticketReport,
-} from "../ticket.ts";
+import { printReport } from "../ticket.ts";
 import { stripTrailingSlashes } from "../../strip-edges.ts";
 
 export interface ChannelsSetupOptions {
@@ -48,36 +38,78 @@ export interface ChannelsSetupOptions {
   json: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
-  /** `--check <ticket>`: where a setup started without a terminal stands. */
-  check?: string;
-  /** `--timeout <seconds>`: how long a setup started without a terminal stays open. */
-  timeout?: string;
-  /** `--ticket <id>`: the process that runs a ticket's setup. */
-  ticket?: string;
 }
 
-/** Without a terminal, how long a setup stays open for the person to finish their part. */
-const UNATTENDED_TIMEOUT_SECONDS = 900;
-
 export async function runChannelsSetup(name: string, dirArg: string, opts: ChannelsSetupOptions): Promise<void> {
-  if (opts.check !== undefined) return checkSetup(name, opts.check, opts);
   if (opts.recordUrl) return recordUrl(name, dirArg, opts);
   if (!isSetupKind(name)) {
     failUsage(`${name}: \`channels setup\` sets up telegram, slack, feishu and lark`);
   }
-  if (opts.ticket !== undefined) {
-    // The process `startTicket` started: it takes the ticket before anything slow (the definition is loaded to plan),
-    // then does the whole setup, its person the ticket's.
-    await runTicket(opts.ticket, async (step) => ({
-      ...(await carryOut(await planSetup(name, dirArg, opts), step.person)),
-    }));
-    process.exit(0);
-  }
   const plan = await planSetup(name, dirArg, opts);
-  if (opts.input === false || opts.json || !isInteractive()) return setUpUnattended(plan, opts);
-  const outcome = await carryOut(plan).catch(failStartup);
-  console.error("  next steps:");
-  for (const line of outcome.next_steps) console.error(`    ${line}`);
+  const interactive = opts.input !== false && !opts.json && isInteractive();
+  const outcome = await setUpChannel({
+    kind: plan.kind,
+    agentDir: plan.agentDir,
+    file: plan.file,
+    way: plan.way,
+    dev: plan.dev,
+    rerun: plan.rerun,
+    interactive,
+    ...(plan.publicUrl === undefined ? {} : { publicUrl: plan.publicUrl }),
+  }).catch(failStartup);
+
+  if (outcome.status === "need_user_action") {
+    const names = outcome.steps.flatMap((step) => step.fields.map((field) => field.name));
+    const json = {
+      status: "need_user_action",
+      channel: plan.kind,
+      file: outcome.file,
+      steps: outcome.steps,
+      rerun: `${plan.rerun} --json`,
+      terminal_command: plan.rerun,
+      agent_next_steps:
+        `Do not ask the user to paste secrets into the conversation. Ask them to add ${names.join(", ")} to ` +
+        `${outcome.file} (or run \`${plan.rerun}\` in their terminal), then re-run \`${plan.rerun} --json\`.`,
+    };
+    const text = [
+      `need_user_action: ${plan.kind} credentials missing or invalid in ${outcome.file}`,
+      ...outcome.steps.flatMap((step) => [
+        `  ${step.label}: ${step.instructions}`,
+        ...(step.url === undefined ? [] : [`    url: ${step.url}`]),
+        ...(step.error === undefined ? [] : [`    error: ${step.error}`]),
+        `    fields: ${step.fields.map((f) => f.name).join(", ")}`,
+      ]),
+      `  in a terminal: ${plan.rerun}`,
+    ];
+    printReport(opts.json, json, text);
+    process.exit(2);
+  }
+
+  if (plan.writeIngress !== undefined) {
+    await setChannelConfig(plan.agentDir, plan.kind, { ingress: plan.way }, { config: plan.writeIngress });
+    console.error(`[fastagent] wrote channels.${plan.kind}.ingress "${plan.way}" to ${plan.writeIngress}`);
+  }
+  const serve = plan.dev
+    ? "fastagent dev"
+    : `fastagent start --env-file ${shellArg(plan.file)}   # or: fastagent deploy <host> --run --env-file ${shellArg(plan.file)}`;
+  const nextSteps = [serve, ...outcome.after];
+  if (opts.json) {
+    printReport(
+      true,
+      {
+        status: "done",
+        channel: plan.kind,
+        file: plan.file,
+        written: outcome.written,
+        kept: outcome.kept,
+        next_steps: nextSteps,
+      },
+      [],
+    );
+  } else {
+    console.error("  next steps:");
+    for (const line of nextSteps) console.error(`    ${line}`);
+  }
   // Platform sockets left open would hold a one-shot command open after everything durable is done.
   process.exit(0);
 }
@@ -154,96 +186,6 @@ async function planSetup(kind: SetupKind, dirArg: string, opts: ChannelsSetupOpt
       `${opts.config === undefined ? "" : ` --config ${shellArg(resolve(opts.config))}`}` +
       `${opts.envFile === undefined ? "" : ` --env-file ${shellArg(resolve(opts.envFile))}`}`,
   };
-}
-
-/** The setup itself, once its person's part can be done: the values, the way written down, and what comes next. */
-async function carryOut(
-  plan: SetupPlan,
-  person?: Person,
-): Promise<{ written: string[]; kept: string[]; next_steps: string[] }> {
-  const outcome = await setUpChannel({
-    kind: plan.kind,
-    agentDir: plan.agentDir,
-    file: plan.file,
-    way: plan.way,
-    dev: plan.dev,
-    rerun: plan.rerun,
-    ...(plan.publicUrl === undefined ? {} : { publicUrl: plan.publicUrl }),
-    ...(person === undefined ? {} : { person }),
-  });
-  if (plan.writeIngress !== undefined) {
-    await setChannelConfig(plan.agentDir, plan.kind, { ingress: plan.way }, { config: plan.writeIngress });
-    console.error(`[fastagent] wrote channels.${plan.kind}.ingress "${plan.way}" to ${plan.writeIngress}`);
-  }
-  const serve = plan.dev
-    ? "fastagent dev"
-    : `fastagent start --env-file ${shellArg(plan.file)}   # or: fastagent deploy <host> --run --env-file ${shellArg(plan.file)}`;
-  return { written: outcome.written, kept: outcome.kept, next_steps: [serve, ...outcome.after] };
-}
-
-/** The command that reads a setup's ticket, as every such ticket records it. */
-const setupCheck = (kind: string) => `fastagent channels setup ${kind} --check`;
-
-/**
- * A setup with no one at a terminal to ask, for a coding agent: it runs in a process of its own (ticket.ts), and the
- * command returns once the person has a step to take, it is done, or it is still working at it. What only the person
- * has is pasted on a page of the setup's own, never asked for in the agent's conversation and never typed into a file.
- */
-async function setUpUnattended(plan: SetupPlan, opts: ChannelsSetupOptions): Promise<void> {
-  const timeout = opts.timeout === undefined ? UNATTENDED_TIMEOUT_SECONDS : Number(opts.timeout);
-  if (!Number.isInteger(timeout) || timeout <= 0) failUsage("--timeout must be a whole number of seconds");
-  const ticket = await startTicket({
-    // One setup per agent, channel and value file: another one's is its own business.
-    subject: `channels-setup:${plan.kind}:${plan.file}`,
-    action: `set up the ${plan.kind} app`,
-    check: setupCheck(plan.kind),
-    restart: plan.rerun,
-    timeoutSeconds: timeout,
-    waitsFirst: false,
-    whenRunning: "replace",
-    command: {
-      file: process.execPath,
-      args: [
-        ...process.execArgv,
-        process.argv[1] as string,
-        "channels",
-        "setup",
-        plan.kind,
-        plan.agentDir,
-        ...(opts.ingress === undefined ? [] : ["--ingress", opts.ingress]),
-        ...(opts.config === undefined ? [] : ["--config", resolve(opts.config)]),
-        ...(opts.envFile === undefined ? [] : ["--env-file", resolve(opts.envFile)]),
-      ],
-      cwd: process.cwd(),
-    },
-  });
-  reportSetup(ticket, opts, "started");
-  process.exit(ticketExitCode(ticket));
-}
-
-/** `channels setup <name> --check <ticket>`. */
-async function checkSetup(name: string, id: string, opts: ChannelsSetupOptions): Promise<void> {
-  const refused = refusedCheck(id, setupCheck(name));
-  if (refused !== undefined) failUsage(refused);
-  // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
-  const ticket = (await checkTicket(id)) as Ticket;
-  reportSetup(ticket, opts, "checked");
-  process.exit(ticketExitCode(ticket));
-}
-
-/** A setup's ticket for whoever started or checked it: the shared report, and what a finished setup adds. */
-function reportSetup(ticket: Ticket, opts: ChannelsSetupOptions, when: "started" | "checked"): void {
-  const { json, text } = ticketReport(ticket, when, (result) => {
-    const written = (result.written as string[] | undefined) ?? [];
-    const kept = (result.kept as string[] | undefined) ?? [];
-    const next = (result.next_steps as string[] | undefined) ?? [];
-    return {
-      fields: { written, kept, next_steps: next },
-      text: [...(written.length > 0 ? [`wrote ${written.join(", ")}`] : []), ...next.map((line) => `next: ${line}`)],
-      next: "The app is set up. Its next steps are in next_steps.",
-    };
-  });
-  printReport(opts.json, json, text);
 }
 
 async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOptions): Promise<void> {

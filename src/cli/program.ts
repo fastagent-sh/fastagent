@@ -608,18 +608,6 @@ const schedules: CommandSpec = {
   ],
 };
 
-/**
- * How an app's setup runs with no one at a terminal: what the person provides is named, and their steps come back with
- * a ticket to check (`channels setup` in docs/cli.md).
- */
-const UNATTENDED_SETUP: FlagSpec[] = [
-  { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
-  { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
-  { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
-  { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
-  NO_INPUT,
-];
-
 const channels: CommandSpec = {
   name: "channels",
   summary: "a channel's platform app, for one instance",
@@ -629,15 +617,10 @@ const channels: CommandSpec = {
       summary: "set up a channel's platform app for one instance, and keep its credentials",
       description:
         "Guide a person through creating the platform app (a Slack app from a manifest link, a Telegram bot from " +
-        "BotFather, a Feishu app by scan-to-create, a Lark app on its launcher), ask for the values only they can " +
-        "read off its pages, check each with the platform, and keep them in the instance's value file. Safe to run again: a value already there that the platform still accepts is " +
-        "kept. How the channel receives (webhook or connection) decides which values it needs: --ingress, else what " +
-        "the configuration says, else connection for the development instance and webhook for any other. With no " +
-        "terminal (--json), the values are pasted on a page on this machine for the person a coding agent hands the " +
-        "step to, never in its conversation. With --record-url: read the deployment's /health, and once <name> (slack, " +
-        "or lark where its config API answers 404) is registered there, the platform having reached it at the URL a " +
-        "person saved on its app's page, write that URL into the binding (channels.<name>.app.url) of the " +
-        "configuration --config names, so every later deploy of it reports it registered from the start.",
+        "BotFather, a Feishu app by scan-to-create, a Lark app on its launcher), ask for the values in a terminal, " +
+        "check each with the platform, and keep them in the instance's value file. With no terminal or `--json`, " +
+        "validates values already in the file and returns structured missing steps (exit 2) without prompting. With " +
+        "`--record-url`, records the URL confirmed by `/health` into the configuration `--config` names.",
       args: [{ name: "<name>", description: "the channel: telegram, slack, feishu or lark" }, AGENT_ARG],
       flags: [
         {
@@ -671,12 +654,13 @@ const channels: CommandSpec = {
           flags: "--url <url>",
           description: "with --record-url: where to read its /health (default: the configuration's http.publicUrl)",
         },
-        ...UNATTENDED_SETUP,
+        JSON_FLAG,
+        NO_INPUT,
       ],
       examples: [
         { cmd: "fastagent channels setup telegram" },
-        { cmd: "fastagent channels setup slack --json", note: "an agent" },
-        { cmd: "fastagent channels setup slack --config prod.json", note: "a deployment" },
+        { cmd: "fastagent channels setup slack --json", note: "validate or inspect missing steps" },
+        { cmd: "fastagent channels setup slack --config prod.json --env-file prod.env", note: "a deployment" },
         { cmd: "fastagent channels setup slack --record-url --config c.json" },
       ],
       run: async (args, f) =>
@@ -689,9 +673,6 @@ const channels: CommandSpec = {
           ...(typeof f.url === "string" ? { url: f.url } : {}),
           json: f.json === true,
           input: f.input !== false,
-          ...(f.check !== undefined ? { check: f.check as string } : {}),
-          ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-          ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
         }),
     },
   ],
@@ -1040,7 +1021,11 @@ const mcp: CommandSpec = {
       ],
       flags: [
         CHANNEL_ENVIRONMENT,
-        ...UNATTENDED_SETUP,
+        { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
+        { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
+        { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
+        { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+        NO_INPUT,
         { flags: "--scopes <scopes>", description: "comma-separated OAuth scopes; required without a terminal" },
         { flags: "--client-id <id>", description: "a pre-registered public client ID or client metadata URL" },
         { flags: "--callback-port <port>", description: "local callback port (default: allocate an available port)" },

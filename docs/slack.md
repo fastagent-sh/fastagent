@@ -22,8 +22,9 @@ fastagent dev                    # Socket Mode: no public URL needed
 3. Paste the **App-Level Token**: Basic Information → App-Level Tokens → *Generate*, scope `connections:write`. For a
    webhook app, it asks for the **Signing Secret** instead.
 
-Each value is checked with Slack before it is kept. A coding agent runs `channels setup slack --json`, and the person
-pastes the tokens on a local page. `fastagent dev` runs the setup itself the first time.
+Each value is checked with Slack before it is kept. A coding agent runs `channels setup slack --json` (exit 2 with the
+manifest link and env var names until the owner puts them in `.secrets/.env` or runs `channels setup slack` in a
+terminal). `fastagent dev` runs the setup itself the first time.
 
 | Credential | Used for | Needed for |
 |---|---|---|

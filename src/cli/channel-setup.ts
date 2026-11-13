@@ -1,11 +1,6 @@
 /**
- * Setting up one channel's platform app for one instance: ask a person for the values only they
- * have, check each with the platform, and keep what is accepted in the instance's value file. Safe to run again: a value
- * already there that the platform still accepts is kept, one it refuses is asked for again, a value setup makes itself
- * is made once, and an app already created is not created again.
- *
- * What differs per channel is in `channels/<kind>/setup.ts`; this is how they are asked: at a terminal, or, for a coding
- * agent that has none, on a page of this machine's (credentials-page.ts) that its person is sent to through a ticket.
+ * Setting up one channel's platform app for one instance: validate existing values in the instance's value file, and
+ * either prompt interactively in a terminal or return structured missing steps (stateless, exit 2) for a coding agent.
  */
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, text } from "@clack/prompts";
@@ -21,11 +16,9 @@ import {
   type SetupWay,
 } from "../channels/setup.ts";
 import { telegramSetup } from "../channels/telegram/setup.ts";
-import { startCredentialsPage } from "../credentials-page.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { startCloudflareTunnel } from "../tunnel.ts";
 import { loadEnvValues, trackedValueFileNote, unprotectedSecretsNote, writeValues } from "../value-file.ts";
-import { type Person, terminalPerson } from "./person.ts";
 
 const SETUPS = {
   telegram: telegramSetup,
@@ -33,8 +26,6 @@ const SETUPS = {
   feishu: feishuSetup,
   lark: larkSetup,
 } as const satisfies Record<string, ChannelSetup>;
-
-const PRODUCTS: Record<SetupKind, string> = { telegram: "Telegram", slack: "Slack", feishu: "Feishu", lark: "Lark" };
 
 /** The channels whose app `channels setup` sets up. */
 export type SetupKind = keyof typeof SETUPS;
@@ -55,18 +46,34 @@ export interface SetUpChannelInput {
   rerun: string;
   /** Where the platform will reach the instance, when its configuration names it. */
   publicUrl?: string;
-  /** A coding agent's person, through a ticket: asked on a page. Absent: asked at this terminal. */
-  person?: Person;
+  /** Interactive terminal mode prompts for missing values; non-interactive mode validates `file` and returns missing steps. */
+  interactive: boolean;
 }
 
-export interface SetUpOutcome {
-  /** The variables this run wrote. */
-  written: string[];
-  /** The variables that were set already, and are accepted. */
-  kept: string[];
-  /** What is left to the person once it is done. */
-  after: string[];
+interface MissingSetupStep {
+  label: string;
+  fields: { name: string; label: string; secret: boolean }[];
+  instructions: string;
+  url?: string;
+  error?: string;
 }
+
+export type SetUpOutcome =
+  | {
+      status: "done";
+      /** The variables this run wrote. */
+      written: string[];
+      /** The variables that were set already, and are accepted. */
+      kept: string[];
+      /** What is left to the person once it is done. */
+      after: string[];
+    }
+  | {
+      status: "need_user_action";
+      file: string;
+      steps: MissingSetupStep[];
+      interactiveCommand: string;
+    };
 
 /** The variables a channel's app needs for `way`, in the order setup asks for them. */
 export function setupNames(kind: SetupKind, way: SetupWay): string[] {
@@ -76,8 +83,16 @@ export function setupNames(kind: SetupKind, way: SetupWay): string[] {
   );
 }
 
+const terminalCreatePerson = {
+  waitsOn(url: string, instructions: string): void {
+    say(`${instructions}: ${url}`);
+    openExternalUrl(url);
+  },
+  carriesOn(): void {},
+};
+
 export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutcome> {
-  const { kind, agentDir, file, person } = input;
+  const { kind, agentDir, file, interactive } = input;
   const plan = SETUPS[kind]({
     way: input.way,
     appName: basename(agentDir),
@@ -121,19 +136,14 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
     say(`${step.fields.map((one) => one.name).join(", ")} saved to ${file}${note ? ` (${note})` : ""}`);
   };
 
-  const pending: PastedValues[] = [];
-  /** Ask for the steps gathered so far, together: one page, however many tokens. */
-  const ask = async (steps: PastedValues[]): Promise<void> => {
-    if (steps.length === 0) return;
-    if (person === undefined) await askAtTerminal(steps, held, accept);
-    else await askOnPage(kind, steps, held, accept, person);
-  };
-  const flush = (): Promise<void> => ask(pending.splice(0));
+  const missing: MissingSetupStep[] = [];
+  const deferredMakes: { name: string; make(): string }[] = [];
 
   for (const value of plan.values) {
     if (value.kind === "make") {
       if (held.has(value.name)) kept.push(value.name);
-      else await keep([{ name: value.name, value: value.make() }], false);
+      else if (interactive) await keep([{ name: value.name, value: value.make() }], false);
+      else deferredMakes.push(value);
       continue;
     }
     if (value.kind === "create") {
@@ -141,10 +151,24 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
         kept.push(...value.names);
         continue;
       }
-      await flush();
+      if (!interactive) {
+        missing.push({
+          label: `${kind} app credentials`,
+          fields: value.names.map((name) => ({
+            name,
+            label: name,
+            secret: !name.endsWith("_ID"),
+          })),
+          instructions:
+            `Run \`${input.rerun}\` in a terminal to create the ${kind} app by scan-to-create, or create one in the ` +
+            `console and add ${value.names.join(" and ")} to ${file}.`,
+          url: kind === "feishu" ? "https://open.feishu.cn/app" : undefined,
+        });
+        continue;
+      }
       renewed = true;
       await keep(
-        Object.entries(await value.create(person ?? terminalPerson)).map(([name, content]) => ({
+        Object.entries(await value.create(terminalCreatePerson)).map(([name, content]) => ({
           name,
           value: content,
         })),
@@ -153,7 +177,8 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
       continue;
     }
     const names = value.fields.map((one) => one.name);
-    if (!renewed && pending.length === 0 && names.every((name) => held.has(name))) {
+    let refusal: string | undefined;
+    if (!renewed && missing.length === 0 && names.every((name) => held.has(name))) {
       try {
         const note = await value.check(Object.fromEntries(names.map((name) => [name, held.get(name) as string])));
         kept.push(...names);
@@ -163,28 +188,48 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
         continue;
       } catch (error) {
         if (!(error instanceof SetupRefused)) throw error;
-        say(`${names.join(", ")} in ${file} is refused (${error.message}) — asking for another`);
+        refusal = `${error.message}${error.fix === undefined ? "" : ` ${error.fix}`}`;
+        say(`${names.join(", ")} in ${file} is refused (${error.message})`);
       }
     }
-    if (value.capture === undefined) {
-      pending.push(value);
+    if (value.capture !== undefined && missing.length === 0) {
+      const captured = await value.capture(held);
+      if (captured !== undefined) {
+        await keep([{ name: names[0] as string, value: captured }], true);
+        say(`${names[0]} captured and saved to ${file}`);
+        continue;
+      }
+    }
+    if (!interactive) {
+      const guide = guideOf(value, held);
+      missing.push({
+        label: value.label,
+        fields: value.fields.map((f) => ({ name: f.name, label: f.label, secret: f.secret !== false })),
+        instructions: guide.instructions,
+        ...(guide.url === undefined ? {} : { url: guide.url }),
+        ...(refusal === undefined ? {} : { error: refusal }),
+      });
       continue;
     }
-    await flush();
-    const captured = await value.capture(held);
-    if (captured === undefined) {
-      await ask([value]);
-      continue;
-    }
-    await keep([{ name: names[0] as string, value: captured }], true);
-    say(`${names[0]} captured and saved to ${file}`);
+    await askAtTerminal([value], held, accept);
   }
-  await flush();
+
+  if (missing.length > 0) {
+    return {
+      status: "need_user_action",
+      file,
+      steps: missing,
+      interactiveCommand: input.rerun,
+    };
+  }
+  for (const one of deferredMakes) {
+    await keep([{ name: one.name, value: one.make() }], false);
+  }
 
   if (unprotected !== undefined)
     say(`note: ${unprotectedSecretsNote(unprotected, "where this instance keeps its values")}`);
   if (tracked !== undefined) say(`note: ${trackedValueFileNote(tracked)}`);
-  return { written, kept, after: await plan.finish(held) };
+  return { status: "done", written, kept, after: await plan.finish(held) };
 }
 
 const guideOf = (step: PastedValues, held: HeldValues): SetupGuide =>
@@ -226,34 +271,5 @@ async function askAtTerminal(
         clackLog.error(`${error.message}${error.fix === undefined ? "" : ` ${error.fix}`}`);
       }
     }
-  }
-}
-
-async function askOnPage(
-  kind: SetupKind,
-  steps: readonly PastedValues[],
-  held: HeldValues,
-  accept: (step: PastedValues, values: Record<string, string>) => Promise<void>,
-  person: Person,
-): Promise<void> {
-  const product = PRODUCTS[kind];
-  const page = await startCredentialsPage({
-    title: `Connect ${product}`,
-    doneHeading: `${product} connected`,
-    steps: steps.map((step) => ({ label: step.label, guide: guideOf(step, held), fields: step.fields })),
-    accept: (index, values) => accept(steps[index] as PastedValues, values),
-  });
-  const port = new URL(page.url).port;
-  try {
-    person.waitsOn(
-      page.url,
-      `paste ${steps.map((step) => step.label).join(" and ")} on this page. If the CLI runs remotely, forward this ` +
-        `loopback port to the same local port (SSH: ssh -N -L ${port}:127.0.0.1:${port} user@host), then open the ` +
-        "same URL in your browser. Keep the forwarding session open; never paste secrets into the conversation.",
-    );
-    await page.done;
-    person.carriesOn();
-  } finally {
-    await page.close();
   }
 }

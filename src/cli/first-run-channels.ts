@@ -54,6 +54,7 @@ export async function setUpMissingChannels(agentDir: string, opts: { input?: boo
       way: chosenIngress(config, kind, true),
       dev: true,
       rerun: `fastagent channels setup ${kind}`,
+      interactive: true,
       ...(config.http?.publicUrl === undefined ? {} : { publicUrl: config.http.publicUrl }),
     }).catch((error: unknown) =>
       failStartup(
@@ -64,12 +65,14 @@ export async function setUpMissingChannels(agentDir: string, opts: { input?: boo
         ),
       ),
     );
-    // What setup wrote is this process's now, and the dev worker's: a value it replaced would otherwise keep the old one.
-    const values = loadEnvValues(file);
-    for (const name of outcome.written) process.env[name] = values.get(name) as string;
-    if (outcome.after.length > 0) {
-      console.error("  next steps:");
-      for (const line of outcome.after) console.error(`    ${line}`);
+    if (outcome.status === "done") {
+      // What setup wrote is this process's now, and the dev worker's: a value it replaced would otherwise keep the old one.
+      const values = loadEnvValues(file);
+      for (const name of outcome.written) process.env[name] = values.get(name) as string;
+      if (outcome.after.length > 0) {
+        console.error("  next steps:");
+        for (const line of outcome.after) console.error(`    ${line}`);
+      }
     }
   }
 }

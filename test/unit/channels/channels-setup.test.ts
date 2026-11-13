@@ -1,9 +1,8 @@
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runChannelsSetup } from "../../../src/cli/commands/channels.ts";
-import { checkTicket, createTicket } from "../../../src/cli/ticket.ts";
 import { useValueFile } from "../../../src/value-file.ts";
 import { agentWorkspace } from "../../doubles/cli-run.ts";
 
@@ -33,16 +32,6 @@ vi.mock("@clack/prompts", () => ({
 
 const opened: string[] = [];
 vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
-
-/** What the command started, recorded: the process it would start is the ticket's own half, run by hand below. */
-const started: Record<string, unknown>[] = [];
-vi.mock("../../../src/cli/ticket.ts", async (original) => ({
-  ...(await original<typeof import("../../../src/cli/ticket.ts")>()),
-  startTicket: async (input: Record<string, unknown>) => {
-    started.push(input);
-    return { ticket: "0123456789abcdef", status: "working", expiresAt: Date.now() + 60_000, check: input.check };
-  },
-}));
 
 /** What `process.exit` does here: it ends the command, with a code a test can read, instead of the process. */
 class Exit extends Error {
@@ -117,7 +106,6 @@ beforeEach(() => {
   prompts.errors.length = 0;
   prompts.infos.length = 0;
   opened.length = 0;
-  started.length = 0;
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation((code) => {
@@ -179,55 +167,45 @@ describe("channels setup at a terminal", () => {
   });
 });
 
-describe("channels setup for a coding agent", () => {
-  /** The ticket's own process: the page its person is sent to, and what they paste there. */
-  async function onPage(name: string, dir: string, opts: Record<string, unknown> = {}) {
-    const { ticket } = createTicket({
-      subject: `channels-setup:${name}`,
-      action: "set up the app",
-      check: `fastagent channels setup ${name} --check`,
-      restart: "again",
-      timeoutSeconds: 60,
-    });
-    const run = setup(name, dir, { ticket, ...opts });
-    run.catch(() => {});
-    const waiting = async () => {
-      for (let tries = 0; tries < 200; tries++) {
-        const current = await checkTicket(ticket);
-        if (current?.status === "need_user_action" && current.url) return current;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-      throw new Error(`the ticket never asked its person for anything: ${JSON.stringify(await checkTicket(ticket))}`);
-    };
-    const paste = async (fields: Record<string, string>) => {
-      const { url } = await waiting();
-      const response = await fetch(url as string, { method: "POST", body: new URLSearchParams(fields) });
-      return { status: response.status, html: await response.text() };
-    };
-    return { ticket, run, waiting, paste };
-  }
+describe("channels setup for a coding agent (stateless --json)", () => {
+  const printedJson = () => JSON.parse(vi.mocked(console.log).mock.calls.at(-1)?.[0] as string);
 
-  it("asks on a page, takes the values there, and reports what it wrote as the ticket's result", async () => {
-    const dir = await workspace("fa-setup-page-");
+  it("returns structured missing steps and exits 2 when credentials are missing or refused, without prompting", async () => {
+    const dir = await workspace("fa-setup-stateless-");
     platforms();
-    const { ticket, run, waiting, paste } = await onPage("telegram", dir);
-    const asked = await waiting();
-    expect(asked.instructions).toContain("paste Bot token on this page");
-    expect(asked.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/setup\//);
-    const page = await (await fetch(asked.url as string)).text();
-    expect(page).toContain("Bot token");
-    expect(page).toContain("@BotFather");
+    await ends(setup("telegram", dir, { json: true }), 2);
+    expect(prompts.asked).toEqual([]);
+    expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+    expect(printedJson()).toMatchObject({
+      status: "need_user_action",
+      channel: "telegram",
+      file: join(dir, ".secrets", ".env"),
+      steps: [
+        expect.objectContaining({
+          label: "Bot token",
+          url: "https://t.me/BotFather",
+          fields: [{ name: "TELEGRAM_BOT_TOKEN", label: "Bot token", secret: true }],
+        }),
+      ],
+    });
 
-    const refused = await paste({ TELEGRAM_BOT_TOKEN: "not a token" });
-    expect(refused.html).toContain("That is not a bot token.");
-    await expect(read(join(dir, ".secrets", ".env"))).rejects.toMatchObject({ code: "ENOENT" });
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "TELEGRAM_BOT_TOKEN=not-a-token\n");
+    await ends(setup("telegram", dir, { json: true }), 2);
+    expect(printedJson().steps[0].error).toContain("That is not a bot token.");
+  });
 
-    expect((await paste({ TELEGRAM_BOT_TOKEN: GOOD_BOT })).html).toContain("Telegram connected");
-    await ends(run);
-    expect(await read(join(dir, ".secrets", ".env"))).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
-    expect(await checkTicket(ticket)).toMatchObject({
+  it("validates existing credentials in the value file and exits 0 when ready", async () => {
+    const dir = await workspace("fa-setup-ready-");
+    platforms();
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), `TELEGRAM_BOT_TOKEN=${GOOD_BOT}\n`);
+    await ends(setup("telegram", dir, { json: true }), 0);
+    expect(printedJson()).toMatchObject({
       status: "done",
-      result: { written: ["TELEGRAM_BOT_TOKEN"], kept: [], next_steps: expect.arrayContaining(["fastagent dev"]) },
+      channel: "telegram",
+      kept: ["TELEGRAM_BOT_TOKEN"],
+      next_steps: expect.arrayContaining(["fastagent dev"]),
     });
   });
 });
