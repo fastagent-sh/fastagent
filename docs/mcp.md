@@ -66,15 +66,15 @@ legacy HTTP+SSE, live tool-list updates. Reopen the agent to pick up new tools.
 
 ```bash
 fastagent mcp list --json                          # servers and whether they are signed in
-fastagent mcp login linear --scopes read --json    # returns a ticket and the URL for the person
-fastagent mcp login --check <ticket> --json
+fastagent mcp login linear                         # opens browser OAuth in an interactive terminal
 fastagent mcp disconnect linear --json             # this instance's binding only; the grant is not revoked
 ```
 
 - The person opens the URL; the browser returns to `127.0.0.1` on this machine. Never paste a token or the callback
   address into a coding agent's conversation.
-- Without a terminal, `--scopes` is required. `--client-id` uses a pre-registered client; then register
-  `http://127.0.0.1:<port>/mcp/oauth/callback` and pass `--callback-port <port>`.
+- Without a terminal, `mcp login --json` exits 2 (`need_user_action`) with the exact interactive command to run.
+  `--client-id` uses a pre-registered client; register `http://127.0.0.1:<port>/mcp/oauth/callback` and pass
+  `--callback-port <port>`.
 - For a remote CLI, forward the callback port. A deployment signs in on its own: local grants are never copied there.
 - Grants are kept in `.secrets/mcp-auth.json` (an app's: `<state>/mcp-auth.json`). Revoking access is done in the
   provider's account settings.

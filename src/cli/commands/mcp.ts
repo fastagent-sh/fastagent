@@ -10,19 +10,8 @@ import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { openExternalUrl } from "../../open-url.ts";
 import { shellArg } from "../../shell-arg.ts";
-import { isInteractive } from "../shared.ts";
+import { isInteractive, printReport } from "../shared.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
-import {
-  checkTicket,
-  refusedCheck,
-  runTicket,
-  startTicket,
-  ticketExitCode,
-  ticketReport,
-  printReport,
-  type TicketStep,
-  type Ticket,
-} from "../ticket.ts";
 
 export interface McpCommandOptions {
   json?: boolean;
@@ -31,18 +20,7 @@ export interface McpCommandOptions {
   timeout?: string;
   clientId?: string;
   callbackPort?: string;
-  check?: string;
-  ticket?: string;
   input?: boolean;
-}
-const CHECK = "fastagent mcp login --check";
-function report(ticket: Ticket, json: boolean, when: "started" | "checked") {
-  const result = ticketReport(ticket, when, (value) => ({
-    fields: value,
-    text: ["MCP authorization saved and bound; reopen the agent to use it"],
-    next: "Reopen the agent to use its MCP tools.",
-  }));
-  printReport(json, result.json, result.text);
 }
 
 export async function runMcp(
@@ -51,14 +29,6 @@ export async function runMcp(
   dir: string,
   options: McpCommandOptions,
 ): Promise<void> {
-  if (options.check) {
-    const refusal = refusedCheck(options.check, CHECK);
-    if (refusal) return failUsage(refusal);
-    const ticket = await checkTicket(options.check);
-    if (!ticket) return failUsage("MCP sign-in ticket not found");
-    report(ticket, !!options.json, "checked");
-    process.exit(ticketExitCode(ticket));
-  }
   const target = agentDirOrExit(dir);
   const environment = options.environment ?? "dev";
   if (environment !== "dev" && environment !== "production") return failUsage("--env must be dev or production");
@@ -112,87 +82,55 @@ export async function runMcp(
     .map((value) => value.trim())
     .filter(Boolean);
   const unattended = options.json || options.input === false || !isInteractive();
-  if (unattended && scopes === undefined)
-    return failUsage(
-      "mcp login without a terminal needs --scopes <comma-separated-scopes>; consult the MCP service's authorization requirements",
-    );
-  const run = async (step?: TicketStep) => {
-    const grant = await signInMcp({
-      agentDir: target,
-      ...(config === undefined ? {} : { config }),
-      server,
-      store: context.auth.store,
-      scopes,
-      clientId: options.clientId,
-      callbackPort: options.callbackPort === undefined ? undefined : Number(options.callbackPort),
-      timeoutSeconds: seconds,
-      interaction: {
-        signal: step?.signal,
-        async confirmAuthorization(request) {
-          const message = `Authorize ${request.server} at ${request.issuer} for ${request.scopes.join(", ") || "server-defined scopes"}?`;
-          if (step) {
-            console.error(`[fastagent] ${message}`);
-            return true;
-          }
-          const choice = await confirm({ message, initialValue: false });
-          return !isCancel(choice) && choice;
-        },
-        notify(event) {
-          if (event.type === "auth_url") {
-            const instructions = `Authorize the MCP server ${server} in your browser; scope: ${scopes?.join(", ") ?? "as approved"}. The callback is on the machine running this command; do not paste codes into chat.`;
-            if (step) step.person.waitsOn(event.url, instructions);
-            else {
-              console.error(`${instructions}\n${event.url}`);
-              openExternalUrl(event.url);
-            }
-          } else {
-            step?.person.carriesOn();
-            console.error(`[fastagent] ${event.message}`);
-          }
-        },
+  if (unattended) {
+    const scopeArg = scopes?.length ? ` --scopes ${shellArg(scopes.join(","))}` : "";
+    const envArg = environment === "dev" ? "" : ` --env ${environment}`;
+    const cmd = `fastagent mcp login ${shellArg(server)} ${shellArg(target)}${envArg}${scopeArg}`;
+    printReport(
+      options.json,
+      {
+        status: "need_user_action",
+        server,
+        terminal_command: cmd,
+        check_command: `fastagent mcp list ${shellArg(target)}${envArg} --json`,
+        agent_next_steps:
+          "Ask the user to run terminal_command in a terminal of their own to complete the browser OAuth flow, then run check_command.",
       },
-    });
-    await writeMcpBinding(context.stateRoot, server, grant.id);
-    return { server, grant_id: grant.id, scopes: grant.scopes };
-  };
-  if (options.ticket) {
-    await runTicket(options.ticket, (step) => run(step));
-    process.exit(0);
+      [`need_user_action: run in an interactive terminal: ${cmd}`],
+    );
+    process.exit(2);
   }
-  if (unattended && scopes !== undefined) {
-    const args = [
-      process.argv[1] as string,
-      "mcp",
-      "login",
-      server,
-      target,
-      "--env",
-      environment,
-      "--scopes",
-      scopes.join(","),
-      "--timeout",
-      String(seconds),
-    ];
-    if (options.clientId) args.push("--client-id", options.clientId);
-    if (options.callbackPort) args.push("--callback-port", options.callbackPort);
-    const ticket = await startTicket({
-      subject: `mcp:login:${environment}:${target}:${server}`,
-      action: `authorize MCP server ${server}`,
-      check: CHECK,
-      restart: `fastagent ${args.slice(1).map(shellArg).join(" ")}`,
-      timeoutSeconds: seconds,
-      whenRunning: "replace",
-      waitsFirst: false,
-      command: { file: process.execPath, args: [...process.execArgv, ...args], cwd: process.cwd() },
-    });
-    report(ticket, !!options.json, "started");
-    process.exit(ticketExitCode(ticket));
-  }
-  const result = await run().catch((error) => {
+  const grant = await signInMcp({
+    agentDir: target,
+    ...(config === undefined ? {} : { config }),
+    server,
+    store: context.auth.store,
+    scopes,
+    clientId: options.clientId,
+    callbackPort: options.callbackPort === undefined ? undefined : Number(options.callbackPort),
+    timeoutSeconds: seconds,
+    interaction: {
+      async confirmAuthorization(request) {
+        const message = `Authorize ${request.server} at ${request.issuer} for ${request.scopes.join(", ") || "server-defined scopes"}?`;
+        const choice = await confirm({ message, initialValue: false });
+        return !isCancel(choice) && choice;
+      },
+      notify(event) {
+        if (event.type === "auth_url") {
+          const instructions = `Authorize the MCP server ${server} in your browser; scope: ${scopes?.join(", ") ?? "as approved"}. The callback is on the machine running this command; do not paste codes into chat.`;
+          console.error(`${instructions}\n${event.url}`);
+          openExternalUrl(event.url);
+        } else {
+          console.error(`[fastagent] ${event.message}`);
+        }
+      },
+    },
+  }).catch((error) => {
     if (error instanceof McpError && error.code === "canceled") return failUsage(error.message);
     return failStartup(error);
   });
-  printReport(!!options.json, { status: "done", ...result }, [
+  await writeMcpBinding(context.stateRoot, server, grant.id);
+  printReport(!!options.json, { status: "done", server, grant_id: grant.id, scopes: grant.scopes }, [
     "MCP authorization saved and bound; reopen the agent to use it",
   ]);
 }

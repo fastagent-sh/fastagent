@@ -36,7 +36,6 @@ const plan = (over: Partial<RailwayRunPlan> = {}): RailwayRunPlan => ({
   provideSecrets: async () => undefined,
   channels: [],
   intoLinked: false,
-  forAgent: "fastagent deploy railway ../bot --into-linked --run --json",
   delivery: (url) => ({ variables: { FASTAGENT_NAME: "bot", FASTAGENT_CONFIG_JSON: "{}" }, publicUrl: url }),
   ...over,
 });

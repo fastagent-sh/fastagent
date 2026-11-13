@@ -252,13 +252,13 @@ Choose the host and its cost with the owner, and read its section in [Deploy](de
 ```bash
 fastagent secrets list fly                          # which values the target still lacks
 fastagent secrets push fly --env-file prod.env      # set the declared ones from a file
-fastagent deploy fly --run --json                   # returns a ticket
-fastagent deploy fly --check <ticket>               # working → need_user_action … → done, with the URL
+fastagent deploy fly --run --json                   # runs deploy synchronously and returns URL + notes
 ```
 
-The owner types any missing value with `fastagent secrets set <host> <NAME>`. Relay each `need_user_action` (host
-sign-in, Feishu app, the box's model login). A `failed` ticket carries `log_tail`: fix the cause and deploy again
-([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why)). Then check the deployment:
+The owner types any missing value with `fastagent secrets set <host> <NAME>` or completes interactive logins (`fly auth login`,
+`fastagent login <provider> --deployment fly`) in their terminal. If `--run` stops with a non-zero exit code, fix the
+cause and deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why)). Then check
+the deployment:
 
 ```bash
 fastagent invoke --url <deployment URL> "hello"

@@ -17,19 +17,7 @@ import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durabl
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { shellArg } from "../../shell-arg.ts";
-import { enterAgentDirectory, isInteractive } from "../shared.ts";
-import {
-  type Ticket,
-  type TicketStep,
-  checkTicket,
-  printReport,
-  refusedCheck,
-  runTicket,
-  startTicket,
-  stopTicket,
-  ticketExitCode,
-  ticketReport,
-} from "../ticket.ts";
+import { enterAgentDirectory, isInteractive, printReport } from "../shared.ts";
 import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
@@ -122,32 +110,7 @@ async function warnLegacyManifest(agentDir: string, name: string, target: HostDe
   );
 }
 
-/** The command that reads a deploy's ticket, as every such ticket records it. */
-const deployCheck = (host: DeployHost) => `fastagent deploy ${host} --check`;
-
-/** How long a coding agent's deploy stays open: a build, and the person's steps between. */
-const TICKET_TIMEOUT_SECONDS = 3600;
-
 export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  if (opts.check !== undefined) return checkDeploy(host, opts.check, opts);
-  if (opts.stop) failUsage("--stop stops a deploy started with --json: pass --check <ticket> too");
-  if (opts.ticket !== undefined) {
-    // The process `startTicket` started: it takes the ticket before the pre-flight (seconds of building the
-    // definition), then does the whole deploy, its person the ticket's.
-    await runTicket(opts.ticket, (step) => deploy(host, dirArg, opts, step));
-    process.exit(0);
-  }
-  await deploy(host, dirArg, opts);
-}
-
-/** The deploy itself: through a ticket's `step` when one runs it, else at this terminal or with nobody to ask. */
-async function deploy(
-  host: DeployHost,
-  dirArg: string,
-  opts: DeployOptions,
-  step?: TicketStep,
-): Promise<{ url?: string; notes: string[] }> {
-  if (opts.code !== undefined) failUsage("--code hands a code to a deploy's ticket: pass --check <ticket> too");
   if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
   selectAgentEnvironment("production");
   // The configuration the box runs on: the program's defaults, with the instance configuration `--config` delivers,
@@ -239,46 +202,8 @@ async function deploy(
     }
   }
 
-  if (opts.json && step === undefined) {
-    // A coding agent's deploy: what this machine can refuse is refused above, at once; the rest runs in a ticket.
-    const timeout = opts.timeout === undefined ? TICKET_TIMEOUT_SECONDS : Number(opts.timeout);
-    if (!Number.isInteger(timeout) || timeout <= 0) failUsage("--timeout must be a whole number of seconds");
-    const ticket = await startTicket({
-      subject: `deploy:${host}:${agentDir}`,
-      fields: { deployment: host },
-      action: `deploy the agent to ${host}`,
-      check: deployCheck(host),
-      restart: rerun,
-      timeoutSeconds: timeout,
-      waitsFirst: false,
-      // A deploy stopped halfway leaves the host half-changed: one already running is the answer.
-      whenRunning: "join",
-      command: {
-        file: process.execPath,
-        args: [
-          ...process.execArgv,
-          process.argv[1] as string,
-          "deploy",
-          host,
-          agentDir,
-          ...(opts.force ? ["--force"] : []),
-          ...(delivered === undefined ? [] : ["--config", delivered.source.label]),
-          ...(opts.envFile === undefined ? [] : ["--env-file", opts.envFile]),
-          ...(opts.fromEnv ? ["--from-env"] : []),
-          ...(opts.intoLinked ? ["--into-linked"] : []),
-          ...(opts.idleTimeout === undefined ? [] : ["--idle-timeout", opts.idleTimeout]),
-          "--run",
-          "--json",
-        ],
-        cwd: process.cwd(),
-      },
-    });
-    reportDeploy(ticket, "started");
-    process.exit(ticketExitCode(ticket));
-  }
-
   /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
-  const deployWith = async (answerer: Answerer): Promise<{ url?: string; notes: string[] }> => {
+  const deployWith = async (answerer: Answerer): Promise<void> => {
     if (unprepared.length > 0 && opts.envFile !== undefined && answerer.kind === "terminal") {
       await prepareChannelApps(agentDir, resolve(opts.envFile), unprepared, rerun).catch(failStartup);
       // What the setup kept is this deploy's values from here on.
@@ -291,9 +216,6 @@ async function deploy(
     for (const warning of built.warnings) console.error(`[fastagent] warn: ${warning}`);
     const { channels } = pre;
     warnHostOnlyFlags(host, opts);
-    // What follows is the host's work: a deadline meant for the person must never cut it halfway. Its own steps for
-    // the person (a host sign-in, the box's login) wait again, and are bounded again.
-    if (answerer.kind === "ticket") answerer.step.person.carriesOn();
     const reachedAt = await target.deploy({
       opts,
       answerer,
@@ -336,48 +258,19 @@ async function deploy(
       reachedAt,
     );
     for (const line of notes) console.error(`[fastagent] ${line}`);
-    return { ...(reachedAt === undefined ? {} : { url: reachedAt }), notes };
+    if (opts.json) {
+      printReport(
+        true,
+        {
+          status: "done",
+          deployment: host,
+          ...(reachedAt === undefined ? {} : { url: reachedAt }),
+          notes,
+        },
+        [],
+      );
+    }
   };
 
-  if (step !== undefined) return deployWith({ kind: "ticket", step });
-  return deployWith(opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
-}
-
-/** `deploy <host> --check <ticket> [--code <code>]`. */
-async function checkDeploy(host: DeployHost, id: string, opts: DeployOptions): Promise<void> {
-  const refused = refusedCheck(id, deployCheck(host));
-  if (refused !== undefined) failUsage(refused);
-  // There: refusedCheck read it, and a ticket is pruned only a day after it ends.
-  const ticket = opts.stop ? await stopTicket(id) : ((await checkTicket(id, opts.code)) as Ticket);
-  reportDeploy(ticket, "checked");
-  process.exit(ticketExitCode(ticket));
-}
-
-/** A deploy's ticket for the agent that started or checked it, always as JSON: `--json` is how one started. */
-function reportDeploy(ticket: Ticket, when: "started" | "checked"): void {
-  const report = ticketReport(ticket, when, (result) => ({
-    fields: result,
-    text: [],
-    next:
-      result.url === undefined
-        ? "Deployed. Tell the user what the notes say."
-        : `Deployed to ${String(result.url)}. Tell the user what the notes say.`,
-  }));
-  const running = ticket.status === "starting" || ticket.status === "working" || ticket.status === "need_user_action";
-  if (!running) {
-    printReport(true, report.json, []);
-    return;
-  }
-  // A deploy finishing is never cut by its deadline, so one that hangs there ends only on someone's say.
-  const stop = `${ticket.check} ${ticket.ticket} --stop --json`;
-  const hung =
-    ticket.status === "need_user_action"
-      ? ""
-      : " If its log has shown no progress for a long while, stop_command stops it where it is, which can leave the " +
-        "host half-changed: ask the user first.";
-  printReport(
-    true,
-    { ...report.json, stop_command: stop, agent_next_steps: `${String(report.json.agent_next_steps)}${hung}` },
-    [],
-  );
+  await deployWith(opts.json || opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
 }

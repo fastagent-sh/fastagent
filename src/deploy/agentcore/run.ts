@@ -2,13 +2,7 @@
 import type { BoxLoginStep } from "../box-shell.ts";
 import { RESERVED_PATHS } from "../../channels/agentcore-protocol.ts";
 import type { DeclaredChannel } from "../../channels/discover.ts";
-import {
-  type BoxWebhooksProbe,
-  type Registrars,
-  type UrlRecorder,
-  confirmWebhooks,
-  loginGate,
-} from "../channel-ingress.ts";
+import { type BoxWebhooksProbe, type UrlRecorder, confirmWebhooks, loginGate } from "../channel-ingress.ts";
 import type { CliRunner } from "../runner.ts";
 import { awsCli, awsJson } from "./aws-cli.ts";
 import { createHash } from "node:crypto";
@@ -219,7 +213,7 @@ export async function deployAgentcoreRun(
   log: (msg: string) => void,
   writeSecretFile: (content: string) => Promise<string>,
   writeForwarderZip: (bytes: Uint8Array) => Promise<string>,
-  registrars: Registrars,
+  _registrars: object,
   /** Injected in tests; the probe itself stays inside the run so no deploy can skip it. */
   probe: { fetchImpl?: typeof fetch; timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<AgentcoreRunOutcome> {
@@ -560,7 +554,6 @@ export async function deployAgentcoreRun(
     baseUrl: url,
     publicUrl: plan.publicUrl ?? url,
     channels: plan.channels,
-    registrars,
     log,
     ...(plan.recordUrl === undefined ? {} : { record: plan.recordUrl }),
     retryHint: "re-run to retry registration (steps already done are skipped)",

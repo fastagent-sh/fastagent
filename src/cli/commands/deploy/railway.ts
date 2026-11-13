@@ -141,11 +141,10 @@ async function runDeployRailway(params: {
       ...urlRecorder(agentDir, params.config, params.values, params.answerer),
       ...boxLoginStep("railway", params, () => railwayShell(name, agentDir)),
       ...hostLogin(RAILWAY_LOGIN, params.answerer, agentDir),
-      forAgent: `${params.rerun} --json`,
     },
     railway,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(params.values, params.answerer),
+    registrarsFor(params.values),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → ${outcome.url}`);

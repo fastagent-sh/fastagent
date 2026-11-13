@@ -1,6 +1,6 @@
 /** Explicit browser OAuth for MCP; no auth URL, code or token passes through a model turn. */
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createServer } from "node:http";
+import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { resolve } from "node:path";
 import { agentValues } from "../value-file.ts";
 import { declareMcp, mcpInstanceOf, resolveMcpServers } from "./config.ts";
@@ -18,11 +18,40 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import { port, portJoin, portCleanup, portError } from "../effect-port.ts";
 import { McpError, type McpGrantRecord, type McpGrantSummary, type McpSignInRequest } from "../mcp-api.ts";
-import { sendPage, setupRequestUrl, statusCard } from "../setup-page.ts";
 import { discoverMcp, mcpFailure } from "./auth.ts";
 import { mcpFetch, openMcpNetwork } from "./network.ts";
 import { httpServer } from "./host.ts";
 import { grantSummary } from "./grants.ts";
+
+const escapeHtml = (value: string): string =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
+function callbackUrlOf(request: IncomingMessage, response: ServerResponse): URL | undefined {
+  const url = URL.parse(request.url ?? "/", "http://127.0.0.1");
+  if (url === null) {
+    response.writeHead(400).end("invalid request URL\n");
+    return undefined;
+  }
+  return url;
+}
+
+function sendCallbackStatus(response: ServerResponse, status: number, heading: string, detail: string): void {
+  response.statusCode = status;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.setHeader("cache-control", "no-store");
+  response.setHeader("referrer-policy", "no-referrer");
+  response.setHeader("x-content-type-options", "nosniff");
+  response.setHeader(
+    "content-security-policy",
+    "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+  );
+  response.end(
+    `<!doctype html><meta charset="utf-8"><title>MCP authorization — FastAgent</title>` +
+      `<body style="font:16px/1.5 system-ui,sans-serif;max-width:480px;margin:48px auto;padding:0 16px">` +
+      `<h1>${escapeHtml(heading)}</h1><p>${escapeHtml(detail)}</p>` +
+      `<p>Return to your terminal. Do not copy this address.</p></body>`,
+  );
+}
 
 export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSummary> {
   const timeout = request.timeoutSeconds ?? 900;
@@ -86,7 +115,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     const listener = createServer((incoming, response) => {
       // This one-shot listener closes after sign-in; a later flow may bind the same callback port.
       response.setHeader("connection", "close");
-      const url = setupRequestUrl(incoming, response);
+      const url = callbackUrlOf(incoming, response);
       if (!url) return;
       if (
         incoming.headers.host !== `127.0.0.1:${portNumber}` ||
@@ -124,15 +153,12 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
       // Closing the scope tears down the listener; first flush the page or observe the browser disconnect.
       if (response.destroyed) Effect.runSync(completed);
       else response.once("close", () => Effect.runSync(completed));
-      sendPage(response, problem ? 400 : 200, {
-        title: "MCP authorization — FastAgent",
-        card: statusCard({
-          state: problem ? "failed" : "working",
-          heading: problem ? "Authorization stopped" : "Authorization response received",
-          lede: problem?.message ?? "FastAgent is verifying and saving the authorization.",
-          next: "Return to your application or coding agent. Do not copy this address.",
-        }),
-      });
+      sendCallbackStatus(
+        response,
+        problem ? 400 : 200,
+        problem ? "Authorization stopped" : "Authorization response received",
+        problem?.message ?? "FastAgent is verifying and saving the authorization.",
+      );
     });
     yield* Effect.acquireRelease(Effect.succeed(listener), (value) =>
       portCleanup(

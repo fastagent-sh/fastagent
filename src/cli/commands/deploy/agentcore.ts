@@ -231,13 +231,11 @@ async function runDeployAgentcore(params: {
           keyOnTarget = params.modelKey.variables.some((variable) => held.has(variable));
           // Decided before the build and the stack: the deploy resets the runtime's storage and the login with it, so
           // with nobody to log it in again it would end at "not logged in" AFTER replacing a runtime that was serving,
-          // with the webhooks a previous deploy registered still pointing at it. A coding agent's ticket has someone:
-          // its user.
+          // with the webhooks a previous deploy registered still pointing at it.
           if (params.boxLogin && !keyOnTarget && params.answerer.kind === "nobody") {
             return (
               `every AgentCore deploy wipes the runtime's ${params.boxLogin} login, and without a terminal ` +
-              `nobody can log it in again — run this deploy in a terminal; from a coding agent, run ` +
-              `\`${params.rerun} --json\`, which hands the login to its user; or set ` +
+              `nobody can log it in again — run this deploy in a terminal, or set ` +
               `${params.boxLogin}'s API key with \`fastagent secrets set agentcore ${params.modelKey.variables[0] ?? "<its variable>"}\``
             );
           }
@@ -273,7 +271,7 @@ async function runDeployAgentcore(params: {
         await writeFile(path, bytes);
         return path;
       },
-      registrarsFor(params.values, params.answerer),
+      registrarsFor(params.values),
     );
     if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
     console.error(`[fastagent] deployed → ${outcome.runtimeArn}`);

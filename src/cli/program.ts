@@ -427,24 +427,13 @@ const deploy: CommandSpec = {
     },
     {
       flags: "--json",
-      description:
-        "with --run, for a coding agent: the deploy runs in a process of its own and the command returns its " +
-        "ticket, handing each step only a person can take (a host sign-in, a production app, the box's model " +
-        "login) to its user",
+      description: "with --run: print the deploy result as JSON",
     },
-    { flags: "--check <ticket>", description: "where a deploy started with --json stands" },
-    {
-      flags: "--code <code>",
-      description: "with --check: the code a host's approval page showed, when it could not reach this machine",
-    },
-    { flags: "--timeout <seconds>", description: "how long a deploy started with --json stays open (default 3600)" },
-    { flags: "--stop", description: "with --check: stop that deploy where it is (can leave the host half-changed)" },
-    { flags: "--ticket <id>", description: "the process that runs a ticket's deploy", hidden: true },
     NO_INPUT,
   ],
   examples: [
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
-    { cmd: "fastagent deploy fly --run --json", note: "a coding agent" },
+    { cmd: "fastagent deploy fly --run --json", note: "machine-readable result" },
     { cmd: "fastagent deploy docker --run", note: "Compose on this machine" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
     { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
@@ -463,11 +452,6 @@ const deploy: CommandSpec = {
       fromEnv: f.fromEnv === true,
       input: f.input !== false,
       json: f.json === true,
-      ...(f.check !== undefined ? { check: f.check as string } : {}),
-      ...(f.code !== undefined ? { code: f.code as string } : {}),
-      ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
-      stop: f.stop === true,
     }),
 };
 
@@ -869,24 +853,17 @@ const login: CommandSpec = {
     "signs in once for every agent on this machine; it warns when an env variable already authenticates the " +
     "provider. Without a terminal (or with --no-input or --json), for a script or a coding agent, nothing is asked " +
     "and nothing waits: a provider or --method not given is answered with the choices and a command for each (exit " +
-    "2); an account's sign-in starts in a process of its own and the command returns its address and a ticket at " +
-    "once, for the person to sign in at and `login --check <ticket>` to follow; an API key is named, for the person " +
-    "to set in the agent's .secrets/.env themselves.",
+    "2); an account sign-in or an API key returns `need_user_action` (exit 2) naming the interactive command or env " +
+    "variable to set.",
   args: [{ name: "[provider]", description: "provider id or name (skip the provider menu)" }],
   flags: [
     GLOBAL_AUTH,
     { flags: "--method <how>", description: "account or api-key, for a provider that offers both" },
     { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
-    { flags: "--check <ticket>", description: "where a sign-in started without a terminal stands" },
-    {
-      flags: "--code <address>",
-      description: "with --check: the address the browser ended on, when it could not reach this machine",
-    },
     {
       flags: "--timeout <seconds>",
-      description: "how long the sign-in stays open (default 600 without a terminal)",
+      description: "how long an interactive sign-in stays open",
     },
-    { flags: "--ticket <id>", description: "the process that runs a ticket's sign-in", hidden: true },
     {
       flags: "--deployment <host>",
       description:
@@ -909,19 +886,17 @@ const login: CommandSpec = {
     { cmd: "fastagent login" },
     { cmd: "fastagent login openai", note: "ChatGPT, or an API key" },
     { cmd: "fastagent login openai -g", note: "for every agent here" },
-    { cmd: "fastagent login openai --method account --json", note: "an agent" },
-    { cmd: "fastagent login --check 3f9a0c1d2e4b5a67 --json", note: "then" },
+    { cmd: "fastagent login openai --method account --json", note: "check/instruct non-interactively" },
     { cmd: "fastagent login openai --deployment fly", note: "on the box" },
   ],
   notes:
-    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. Exit status: 0 signed in " +
-    "or waiting on the person (need_user_action), 1 cancelled, failed or expired, 2 a provider or method not given. " +
+    "The positional is the PROVIDER (not a dir) — `cd` into your agent before logging in. Exit status: 0 signed in, " +
+    "1 cancelled or failed, 2 a choice not given or interactive action required (`need_user_action`). " +
     "--deployment runs the login on the deployed box through the host's own shell (docker compose exec, fly ssh, " +
     "railway ssh, AgentCore's command shell); this terminal shows it, opens the browser, and catches the browser's " +
     "return to localhost (or asks you to paste that address when its port is taken). The box keeps the credential, " +
     "so it is the only holder of that grant, and logging in again replaces it there. Without a terminal, an " +
-    "account's sign-in on the box returns a ticket as a local one does, its process holding the box's shell; an API " +
-    "key is named, for the person to set on the target themselves (`fastagent secrets set <host> <NAME>`).",
+    "account's sign-in returns the terminal command to run, and an API key is named for the person to set (`fastagent secrets set <host> <NAME>`).",
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
@@ -929,9 +904,6 @@ const login: CommandSpec = {
       json: f.json === true,
       ...(f.method !== undefined ? { method: f.method as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-      ...(f.check !== undefined ? { check: f.check as string } : {}),
-      ...(f.code !== undefined ? { code: f.code as string } : {}),
-      ...(f.ticket !== undefined ? { ticket: f.ticket as string } : {}),
       ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
@@ -1011,22 +983,17 @@ const mcp: CommandSpec = {
       name: "login",
       summary: "sign in to an MCP server",
       description: "Authorize in the browser and save an explicit grant binding for this instance.",
-      examples: [
-        { cmd: "fastagent mcp login linear --scopes read --json" },
-        { cmd: "fastagent mcp login --check <ticket> --json" },
-      ],
+      examples: [{ cmd: "fastagent mcp login linear" }],
       args: [
         { name: "[server]", description: "the name of an MCP server the program or the instance declares" },
         AGENT_ARG,
       ],
       flags: [
         CHANNEL_ENVIRONMENT,
-        { flags: "--json", description: "the outcome as one JSON object, with what to do next (agent_next_steps)" },
-        { flags: "--check <ticket>", description: "where a setup started without a terminal stands" },
-        { flags: "--timeout <seconds>", description: "how long that setup stays open (default 900)" },
-        { flags: "--ticket <id>", description: "the process that runs a ticket's setup", hidden: true },
+        JSON_FLAG,
         NO_INPUT,
-        { flags: "--scopes <scopes>", description: "comma-separated OAuth scopes; required without a terminal" },
+        { flags: "--timeout <seconds>", description: "how long browser OAuth stays open (default 900)" },
+        { flags: "--scopes <scopes>", description: "comma-separated OAuth scopes" },
         { flags: "--client-id <id>", description: "a pre-registered public client ID or client metadata URL" },
         { flags: "--callback-port <port>", description: "local callback port (default: allocate an available port)" },
       ],
@@ -1038,8 +1005,6 @@ const mcp: CommandSpec = {
           scopes: f.scopes as string | undefined,
           clientId: f.clientId as string | undefined,
           callbackPort: f.callbackPort as string | undefined,
-          check: f.check as string | undefined,
-          ticket: f.ticket as string | undefined,
           timeout: f.timeout as string | undefined,
         }),
     },

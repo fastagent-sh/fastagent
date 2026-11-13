@@ -29,7 +29,7 @@ import { loadEnvValues } from "../../value-file.ts";
 import { deploymentName } from "../../deploy/deployment-name.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterDeploymentEnv } from "../instance.ts";
-import { printReport } from "../ticket.ts";
+import { printReport } from "../shared.ts";
 import { join } from "node:path";
 
 /** The targets that keep a deployment's values in a store of their own. */
@@ -64,7 +64,7 @@ async function openStore(host: SecretsHost, agentDir: string, name: string): Pro
       failStartup(new Error("flyctl not found — install it: https://fly.io/docs/flyctl/install, then re-run"));
     }
     if ((await fly(["auth", "whoami"], { capture: true })).code !== 0) {
-      failStartup(new Error(hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN", "fly auth login")));
+      failStartup(new Error(hostSignedOutGate("Fly", "fly auth login", "FLY_API_TOKEN")));
     }
     const toml = await readTextIfExists(join(agentDir, flyTomlFile(name)));
     const app = (toml && parseFlyAppName(toml)) ?? toFlyAppName(name);
@@ -75,9 +75,7 @@ async function openStore(host: SecretsHost, agentDir: string, name: string): Pro
     failStartup(new Error("railway CLI not found — install it: https://docs.railway.com/guides/cli, then re-run"));
   }
   if ((await railway(["whoami"], { capture: true })).code !== 0) {
-    failStartup(
-      new Error(hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)", "railway login")),
-    );
+    failStartup(new Error(hostSignedOutGate("Railway", "railway login", "RAILWAY_API_TOKEN (an account token)")));
   }
   return railwayStore(railway, toRailwayName(name), log, { redeploy: true });
 }

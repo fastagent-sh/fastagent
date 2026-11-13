@@ -119,9 +119,6 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  * out), `process.exitCode`, stdout/stderr, and the signal/exit listeners the command added. Runs are serialized,
  * since they share all of that. It is stdin-less and TTY-less, as `run` is.
  *
- * A ticket's two halves run here too, apart: the command, with `startTicket` mocked to record what it would start, and
- * the step, as `<command> --ticket <id>`, while the test plays the person through the ticket's files.
- *
  * NOT for a test that is about the process itself: stdout/stderr discipline across a real pipe, a signal, a crash.
  * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
  */

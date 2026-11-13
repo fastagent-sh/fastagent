@@ -21,8 +21,7 @@ import { dotEnvPath, loadEnvValues, namedValueFile } from "../../value-file.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { enterEnvFile } from "../instance.ts";
 import { shellArg } from "../../shell-arg.ts";
-import { isInteractive } from "../shared.ts";
-import { printReport } from "../ticket.ts";
+import { isInteractive, printReport } from "../shared.ts";
 import { stripTrailingSlashes } from "../../strip-edges.ts";
 
 export interface ChannelsSetupOptions {

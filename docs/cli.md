@@ -47,7 +47,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input is an error naming the flag to pass, and a person's step is handed back with a ticket. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
 | `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `login`, `auth check`, `add` | Machine-readable output. |
 
@@ -67,10 +67,10 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
 - **Nothing waits on a terminal.** A choice a terminal would ask for has a flag or an argument. Without a terminal,
   or with `--no-input` or `--json`, a choice not given ends the command, exit 2, naming what to pass (`login --json`
   answers `need_choice` with a command for each).
-- **A step only a person can take returns at once**: `channels setup <name> --json` checks the target env file
-  statelessly and exits 2 (`need_user_action`) naming the missing env vars, guide URL, and terminal command until the
-  owner writes them, then exits 0 once verified. An account sign-in (`login`, and `login --deployment` on the box) and
-  `deploy <host> --run --json` return `need_user_action` with a `check_command` / `--check <ticket>`.
+- **A step only a person can take returns at once (`exit 2`)**: `channels setup <name> --json`, `login --json`,
+  and `mcp login --json` never block or spawn background daemons without a terminal; when user input or browser
+  sign-in is required they exit 2 (`need_user_action` / `need_choice`) naming the missing env vars, terminal command,
+  and verification command, then exit 0 once satisfied.
 - **A secret never passes through the agent's conversation.** The person types it at a terminal of their own, or writes
   it where the command names (the agent's `.secrets/.env`) without sending it through the agent.
 - **Results on stdout, everything else on stderr**: progress, notes, warnings and errors. A command whose result is

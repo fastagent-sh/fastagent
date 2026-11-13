@@ -16,8 +16,7 @@ import type { DeploymentApi } from "../../../deploy/api.ts";
 import type { EffectiveConfig } from "../../../harnesses/pi-durable/config.ts";
 import { exists } from "../../../paths.ts";
 import { type BoxLoginStep, type BoxShell, deploymentLoginCommand } from "../../../deploy/box-shell.ts";
-import { loginOnBox, ticketLoginIO } from "../../box-login.ts";
-import type { TicketStep } from "../../ticket.ts";
+import { loginOnBox } from "../../box-login.ts";
 import type { DeployHost } from "../../../deploy/hosts.ts";
 
 export interface DeployOptions {
@@ -34,26 +33,15 @@ export interface DeployOptions {
   fromEnv?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
-  /** `--json`: a coding agent's `--run`, run in a ticket that hands each step only a person can take to its user. */
+  /** `--json`: report the deploy outcome as JSON. */
   json?: boolean;
-  /** `--check <ticket>`: where such a deploy stands. */
-  check?: string;
-  /** `--code <code>` (with `--check`): the code a host's approval page showed, when it could not reach this machine. */
-  code?: string;
-  /** `--stop` (with `--check`): stop that deploy where it is. */
-  stop?: boolean;
-  /** `--timeout <seconds>`: how long it stays open. */
-  timeout?: string;
-  /** `--ticket <id>`: the process that runs it. */
-  ticket?: string;
 }
 
 /**
- * Who takes a deploy's steps only a person can (a host account's sign-in, a production app's confirmation, the box's
- * model login): the person at this terminal, a coding agent's person through the deploy's ticket, or nobody (CI, or a
- * script), for whom such a step stops the deploy naming how to give it.
+ * Who answers interactive steps during deploy: the person at this terminal, or nobody (CI, `--no-input`, `--json`),
+ * for whom an unfulfilled interactive step stops the deploy naming what to run.
  */
-export type Answerer = { kind: "terminal" } | { kind: "ticket"; step: TicketStep } | { kind: "nobody" };
+export type Answerer = { kind: "terminal" } | { kind: "nobody" };
 
 /**
  * What the dispatcher resolved before handing off: the agent directory, the flags, the config and the host-neutral
@@ -96,11 +84,6 @@ export interface HostDeploy {
   deploy(ctx: DeployContext): Promise<string | undefined>;
 }
 
-/** Where a step left to the person goes for `answerer`: a ticket's `afterwards`; nowhere else but the log. */
-export function leftToPerson(answerer: Answerer): ((step: string) => void) | undefined {
-  return answerer.kind === "ticket" ? (step) => answerer.step.person.afterwards(step) : undefined;
-}
-
 /**
  * At a terminal, with a `--config` file to write to: record each URL a person sets on a platform's page once the box
  * confirms it, so later deploys of that configuration, CI included, report it `registered` from the start.
@@ -124,13 +107,11 @@ export function urlRecorder(
   };
 }
 
-/** The registrars every host driver gets; a channel's manual step also goes to `answerer`'s person. */
-export function registrarsFor(values: ReadonlyMap<string, string>, answerer: Answerer): Registrars {
+/** The registrars every host driver gets. */
+export function registrarsFor(values: ReadonlyMap<string, string>): Registrars {
   const attempts = DEPLOY_REGISTRATION_ATTEMPTS;
   const env = Object.fromEntries(values);
-  const leave = leftToPerson(answerer);
   return {
-    ...(leave === undefined ? {} : { leave }),
     telegram: (baseUrl) => registerTelegramWebhook(baseUrl, { attempts, env }),
     feishu: (baseUrl, kind) => registerFeishuWebhook(baseUrl, kind, { attempts, env }),
   };
@@ -160,24 +141,16 @@ export function boxLoginStep<Args extends unknown[]>(
   return {
     boxLogin: {
       command,
-      run: async (...args) => {
-        const request = {
+      run: async (...args) =>
+        loginOnBox({
           host,
           shell: shell(...args),
           provider,
           ifMissing: true,
+          input: answerer.kind === "terminal",
           ...(params.config === undefined ? {} : { configFile: params.config }),
           ...(params.envFile === undefined ? {} : { envFile: params.envFile }),
-        };
-        if (answerer.kind !== "ticket") return loginOnBox({ ...request, input: answerer.kind === "terminal" });
-        // An account sign-in: a key cannot be typed into a ticket.
-        const io = ticketLoginIO(answerer.step, command);
-        const failed = await loginOnBox({ ...request, method: "oauth", input: true, io });
-        if (failed !== undefined) return io.refusal() ?? failed;
-        // Logged in: what follows (the webhooks) is the deploy finishing, never cut by the person's deadline.
-        answerer.step.person.carriesOn();
-        return undefined;
-      },
+        }),
     },
   };
 }

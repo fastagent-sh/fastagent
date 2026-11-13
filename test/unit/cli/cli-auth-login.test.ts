@@ -91,6 +91,25 @@ describe("cli: login and models", () => {
     expect((await runInProcess(["login", "openai", "--method", "key"], cwd)).stderr).toMatch(
       /--method must be account or api-key/,
     );
+
+    const apiKeyNeeded = await runInProcess(["login", "openai", "--method", "api-key", "--json"], cwd);
+    expect(apiKeyNeeded.code).toBe(2);
+    expect(JSON.parse(apiKeyNeeded.stdout)).toMatchObject({
+      status: "need_user_action",
+      provider: "openai",
+      method: "api-key",
+      variables: ["OPENAI_API_KEY"],
+      value_file: join(await realpath(cwd), ".secrets", ".env"),
+    });
+
+    const oauthNeeded = await runInProcess(["login", "openai-codex", "--method", "account", "--json"], cwd);
+    expect(oauthNeeded.code).toBe(2);
+    expect(JSON.parse(oauthNeeded.stdout)).toMatchObject({
+      status: "need_user_action",
+      provider: "openai-codex",
+      method: "account",
+      terminal_command: "fastagent login openai-codex --method account",
+    });
   });
 });
 

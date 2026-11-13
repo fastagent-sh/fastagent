@@ -162,13 +162,12 @@ async function runDeployFly(params: {
       dockerfile: "Dockerfile",
       ...boxLoginStep("fly", params, () => flyShell(appName, agentDir)),
       ...hostLogin(FLY_LOGIN, params.answerer, agentDir),
-      forAgent: `${params.rerun} --json`,
       publicUrl: params.publicUrl,
       ...urlRecorder(agentDir, params.config, params.values, params.answerer),
     },
     fly,
     (m) => console.error(`[fastagent] ${m}`),
-    registrarsFor(params.values, params.answerer),
+    registrarsFor(params.values),
   );
   if (!outcome.ok) failStartup(new Error(`deploy stopped: ${outcome.gate}`));
   console.error(`[fastagent] deployed → https://${appName}.fly.dev`);
