@@ -8,7 +8,7 @@
  *     {@link requestWithDeadline} wait for the pending promise to settle before releasing, aborting first when the
  *     callee takes a signal. {@link fromPromise} is the opt-out for work a caller may walk away from, so a call site
  *     holding a lease, a session or any other resource must not use it.
- *  2. THE CAUSE SURVIVES. Retry classification (`messages.ts` `thrownFailure`), the channels' platform error types
+ *  2. THE CAUSE SURVIVES. The harness's `failureOf` (`instanceof SessionFailed`), the channels' platform error types
  *     and every operator-facing message read the original error, so {@link PromiseFailure} carries it verbatim and
  *     {@link originalError} returns it. Effect's own `tryPromise` maps to `UnknownError` and does not join.
  *
