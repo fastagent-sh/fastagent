@@ -9,7 +9,7 @@ import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
 import { log } from "../log.ts";
 import { beginWork } from "./busy.ts";
-import { portError } from "../effect-port.ts";
+import { originalError } from "../promise-bridge.ts";
 
 /** A turn's place in its conversation. */
 export interface TurnSlot {
@@ -75,7 +75,7 @@ export function createTurnQueue<T extends { conversation: string }>(opts: {
           Effect.catchCause((cause) =>
             Effect.sync(() =>
               log.error(
-                `${label} turn runner rejected (conversation=${rec.conversation}; own your error surface in run()): ${String(portError(cause))}`,
+                `${label} turn runner rejected (conversation=${rec.conversation}; own your error surface in run()): ${String(originalError(cause))}`,
               ),
             ),
           ),

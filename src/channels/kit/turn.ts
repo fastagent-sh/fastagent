@@ -9,7 +9,7 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { type Agent, AgentError, type Message } from "../../agent-api.ts";
-import { type PortFailure, portError, portJoin } from "../../effect-port.ts";
+import { type PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import { beginWork } from "../busy.ts";
 import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
@@ -61,10 +61,10 @@ export function createTaskTracker(label: string): TaskTracker {
     track(task) {
       const workDone = beginWork();
       const fiber = Effect.runFork(
-        portJoin(() => task).pipe(
+        joinPromise(() => task).pipe(
           Effect.asVoid,
           Effect.catchCause((cause) =>
-            Effect.sync(() => log.warn(`${label} side task rejected: ${String(portError(cause))}`)),
+            Effect.sync(() => log.warn(`${label} side task rejected: ${String(originalError(cause))}`)),
           ),
           Effect.ensuring(Effect.sync(workDone)),
         ),
@@ -102,23 +102,23 @@ export async function readPlaceDiscussion<C>(opts: {
 }
 
 function gatedReply(opts: {
-  events: Stream.Stream<TurnEvent, PortFailure>;
+  events: Stream.Stream<TurnEvent, PromiseFailure>;
   held: boolean;
   awaitEarlier: Effect.Effect<void>;
   answerKey: () => string | undefined;
   delivered: (answerKey: string) => boolean;
-  render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>;
+  render: (events: Stream.Stream<TurnEvent, PromiseFailure>) => Effect.Effect<void, PromiseFailure, Scope.Scope>;
   skipped: (answerKey: string) => Effect.Effect<void>;
-}): Effect.Effect<void, PortFailure, Scope.Scope> {
+}): Effect.Effect<void, PromiseFailure, Scope.Scope> {
   if (!opts.held) return opts.render(opts.events);
   return Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<TurnEvent, PortFailure | Cause.Done>();
+    const queue = yield* Queue.unbounded<TurnEvent, PromiseFailure | Cause.Done>();
     const over = Deferred.makeUnsafe<void>();
     yield* Effect.forkScoped(
       Stream.runForEach(opts.events, (event) => Effect.sync(() => void Queue.offerUnsafe(queue, event))).pipe(
         Effect.matchCauseEffect({
           onSuccess: () => Queue.end(queue),
-          onFailure: (cause) => Queue.failCause(queue, cause as Cause.Cause<PortFailure>),
+          onFailure: (cause) => Queue.failCause(queue, cause as Cause.Cause<PromiseFailure>),
         }),
         Effect.ensuring(Effect.sync(() => void Deferred.doneUnsafe(over, Effect.void))),
       ),
@@ -151,10 +151,12 @@ interface TurnHooks {
   admitted(): void;
   observe(message: Message): void;
   reply(
-    events: Stream.Stream<TurnEvent, PortFailure>,
-    render: (events: Stream.Stream<TurnEvent, PortFailure>) => Effect.Effect<void, PortFailure, Scope.Scope>,
-  ): Effect.Effect<void, PortFailure, Scope.Scope>;
-  deliverOnce(deliver: Effect.Effect<void, PortFailure, Scope.Scope>): Effect.Effect<void, PortFailure, Scope.Scope>;
+    events: Stream.Stream<TurnEvent, PromiseFailure>,
+    render: (events: Stream.Stream<TurnEvent, PromiseFailure>) => Effect.Effect<void, PromiseFailure, Scope.Scope>,
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  deliverOnce(
+    deliver: Effect.Effect<void, PromiseFailure, Scope.Scope>,
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
 }
 
 export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, F> {
@@ -175,8 +177,8 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
     discussion: Discussion<F>,
     onAnswered: (answer: string) => void,
     turn: TurnHooks,
-  ): Effect.Effect<void, PortFailure, Scope.Scope>;
-  deliverAnswer(rec: R, answer: string): Effect.Effect<void, PortFailure, Scope.Scope>;
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  deliverAnswer(rec: R, answer: string): Effect.Effect<void, PromiseFailure, Scope.Scope>;
 }
 
 export interface TurnRunner<R, S> {
@@ -190,7 +192,7 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
   rec: R,
   slot: TurnSlot = unqueuedSlot,
   afterRestart = false,
-): Effect.Effect<void, PortFailure> {
+): Effect.Effect<void, PromiseFailure> {
   return Effect.gen(function* () {
     const { label, store, beforeRun } = options;
     let ended: Message | undefined;
@@ -201,8 +203,8 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
         log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`);
         if (options.notifyShared === undefined) return;
         const notify = options.notifyShared;
-        yield* portJoin(() => notify(rec)).pipe(
-          Effect.catchTag("PortFailure", (error) =>
+        yield* joinPromise(() => notify(rec)).pipe(
+          Effect.catchTag("PromiseFailure", (error) =>
             Effect.sync(() =>
               log.warn(`${label} turn ${rec.id}: could not say where its shared answer is: ${String(error.cause)}`),
             ),
@@ -211,12 +213,12 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
       });
     const acknowledged = (
       ack: () => Promise<TurnAck>,
-      reply: Effect.Effect<void, PortFailure, Scope.Scope>,
-    ): Effect.Effect<void, PortFailure, Scope.Scope> =>
+      reply: Effect.Effect<void, PromiseFailure, Scope.Scope>,
+    ): Effect.Effect<void, PromiseFailure, Scope.Scope> =>
       Effect.gen(function* () {
         const started = yield* Effect.forkScoped(
-          portJoin(ack).pipe(
-            Effect.catchTag("PortFailure", (error) =>
+          joinPromise(ack).pipe(
+            Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() => {
                 log.warn(`${label} turn ${rec.id}: could not acknowledge its message: ${String(error.cause)}`);
                 return NO_ACK;
@@ -226,7 +228,7 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
         );
         yield* Effect.addFinalizer((exit) =>
           Fiber.join(started).pipe(
-            Effect.flatMap((mark) => portJoin(() => (exit._tag === "Success" ? mark.complete() : mark.remove()))),
+            Effect.flatMap((mark) => joinPromise(() => (exit._tag === "Success" ? mark.complete() : mark.remove()))),
             Effect.catchCause((cause) =>
               Effect.sync(() =>
                 log.warn(`${label} turn ${rec.id}: could not settle its acknowledgement: ${String(cause)}`),
@@ -266,7 +268,7 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
           yield* deliver;
         }),
     };
-    if (beforeRun && !(yield* portJoin(() => beforeRun(rec)))) return;
+    if (beforeRun && !(yield* joinPromise(() => beforeRun(rec)))) return;
     const decision = store.startAttempt(rec.id);
     if (decision === "exceeded") {
       const stranded = rec.answer;
@@ -306,7 +308,7 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
     const work =
       recovered !== undefined
         ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
-        : portJoin(() => options.discussion(rec)).pipe(
+        : joinPromise(() => options.discussion(rec)).pipe(
             Effect.flatMap((discussion) =>
               options.execute(
                 rec,

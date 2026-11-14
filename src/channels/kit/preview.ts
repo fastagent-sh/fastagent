@@ -11,7 +11,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { Json, SessionEvent } from "../../agent-api.ts";
 import { answerText } from "../../answer-text.ts";
-import { PortFailure, portError, portJoin } from "../../effect-port.ts";
+import { PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import type { TurnEvent } from "./invoke.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
@@ -194,23 +194,23 @@ export function unfinishedTurn(streamError: string | undefined): ChannelFailure 
 }
 
 export function renderReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   opts: {
     label: string;
     onEvent: (event: TurnEvent) => void;
     finish: Effect.Effect<void>;
     answer: () => string;
-    settle: (text: string) => Effect.Effect<void, PortFailure>;
+    settle: (text: string) => Effect.Effect<void, PromiseFailure>;
     formatError: (failure: ChannelFailure) => string | undefined;
     onAnswered?: (answer: string) => void;
   },
-): Effect.Effect<void, PortFailure, Scope.Scope> {
+): Effect.Effect<void, PromiseFailure, Scope.Scope> {
   return Effect.gen(function* () {
     let finalized = false;
     const notify = (failure: ChannelFailure, phase: string) =>
-      Effect.try({ try: () => opts.formatError(failure) ?? "", catch: (cause) => new PortFailure(cause) }).pipe(
+      Effect.try({ try: () => opts.formatError(failure) ?? "", catch: (cause) => new PromiseFailure(cause) }).pipe(
         Effect.flatMap(opts.settle),
-        Effect.catchTag("PortFailure", (error) =>
+        Effect.catchTag("PromiseFailure", (error) =>
           Effect.sync(() => log.error(`${opts.label} failed to deliver the ${phase} notice: ${String(error.cause)}`)),
         ),
       );
@@ -227,7 +227,7 @@ export function renderReply(
       Effect.gen(function* () {
         yield* notify(failure, "agent-failure");
         return yield* Effect.fail(
-          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+          new PromiseFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
         );
       });
     yield* Stream.runForEachWhile(events, (event) => {
@@ -240,7 +240,7 @@ export function renderReply(
             opts.onEvent(event);
             return true;
           },
-          catch: (cause) => new PortFailure(cause),
+          catch: (cause) => new PromiseFailure(cause),
         });
       }
       return Effect.gen(function* () {
@@ -250,7 +250,7 @@ export function renderReply(
           const answer = opts.answer();
           yield* Effect.try({
             try: () => opts.onAnswered?.(answer),
-            catch: (cause) => new PortFailure(cause),
+            catch: (cause) => new PromiseFailure(cause),
           });
           yield* opts.settle(answer);
         } else {
@@ -262,7 +262,7 @@ export function renderReply(
     if (finalized) return;
     const unfinished = unfinishedTurn(streamError);
     if (unfinished === undefined) {
-      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+      return yield* Effect.fail(new PromiseFailure(new Error("stream ended without a terminal event")));
     }
     yield* opts.finish;
     finalized = true;
@@ -292,8 +292,8 @@ export function previewPump(opts: {
       while (dirty && !stopped) {
         dirty = false;
         if (opts.beforeFlush) yield* opts.beforeFlush;
-        yield* portJoin(opts.flush).pipe(
-          Effect.catchTag("PortFailure", (error) =>
+        yield* joinPromise(opts.flush).pipe(
+          Effect.catchTag("PromiseFailure", (error) =>
             Effect.sync(() => {
               if (!reported) {
                 reported = true;
@@ -329,7 +329,7 @@ export function previewPump(opts: {
 
 export interface SerialWriter {
   enqueue(work: () => Promise<void>): void;
-  finish: Effect.Effect<void, PortFailure>;
+  finish: Effect.Effect<void, PromiseFailure>;
 }
 
 export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> {
@@ -338,7 +338,7 @@ export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> 
     const work = Effect.gen(function* () {
       for (;;) {
         const next = yield* Queue.take(queue);
-        yield* portJoin(next).pipe(Effect.uninterruptible);
+        yield* joinPromise(next).pipe(Effect.uninterruptible);
       }
     }).pipe(Effect.catchTag("Done", () => Effect.void));
     const fiber = yield* Effect.forkScoped(work);
@@ -360,7 +360,7 @@ export function serialWriter(): Effect.Effect<SerialWriter, never, Scope.Scope> 
         Effect.flatMap((exit) =>
           Exit.isFailure(exit) && !reported && !Cause.hasInterruptsOnly(exit.cause)
             ? Effect.sync(() =>
-                log.error(`[delivery] a write failed after its turn stopped: ${String(portError(exit.cause))}`),
+                log.error(`[delivery] a write failed after its turn stopped: ${String(originalError(exit.cause))}`),
               )
             : Effect.void,
         ),

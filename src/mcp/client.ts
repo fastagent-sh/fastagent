@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { portAbort, portJoin, portError } from "../effect-port.ts";
+import { abortThenJoin, joinPromise, originalError } from "../promise-bridge.ts";
 import { McpError, type McpAuthorization, type McpOptions } from "../mcp-api.ts";
 import type { McpServer } from "./config.ts";
 import { checkGrantTarget, discoverMcp, grantToken, mcpFailure } from "./auth.ts";
@@ -49,7 +49,7 @@ export async function openMcpClients(
   const run = async <A>(work: Effect.Effect<A, unknown>): Promise<A> => {
     if (closing) throw new McpError("connection", "MCP clients are closed");
     const result = await Effect.runPromiseExit(Effect.forkIn(work, lifetime).pipe(Effect.flatMap(Fiber.join)));
-    if (Exit.isFailure(result)) throw portError(result.cause);
+    if (Exit.isFailure(result)) throw originalError(result.cause);
     return result.value;
   };
   const close = () =>
@@ -68,10 +68,10 @@ export async function openMcpClients(
       await Effect.runPromise(
         Scope.addFinalizer(
           lifetime,
-          portJoin(() => client.close()).pipe(
+          joinPromise(() => client.close()).pipe(
             Effect.catchCause((cause) =>
               Effect.sync(() => {
-                cleanupErrors.push(mcpFailure(portError(cause), "MCP cleanup", server.name));
+                cleanupErrors.push(mcpFailure(originalError(cause), "MCP cleanup", server.name));
               }),
             ),
           ),
@@ -101,10 +101,10 @@ export async function openMcpClients(
         await Effect.runPromise(
           Scope.addFinalizer(
             lifetime,
-            portJoin(() => network.close()).pipe(
+            joinPromise(() => network.close()).pipe(
               Effect.catchCause((cause) =>
                 Effect.sync(() => {
-                  cleanupErrors.push(mcpFailure(portError(cause), "MCP network cleanup", server.name));
+                  cleanupErrors.push(mcpFailure(originalError(cause), "MCP network cleanup", server.name));
                 }),
               ),
             ),
@@ -126,7 +126,7 @@ export async function openMcpClients(
         }
         const request: typeof fetch = (input, init) =>
           run(
-            portJoin(async () => {
+            joinPromise(async () => {
               if (grantId === undefined) return requestFetch(input, init);
               const url = input instanceof Request ? input.url : String(input);
               if (url !== server.url)
@@ -178,10 +178,10 @@ export async function openMcpClients(
       await Effect.runPromise(
         Scope.addFinalizer(
           lifetime,
-          portJoin(() => transport.close()).pipe(
+          joinPromise(() => transport.close()).pipe(
             Effect.catchCause((cause) =>
               Effect.sync(() => {
-                cleanupErrors.push(mcpFailure(portError(cause), "MCP transport cleanup", server.name));
+                cleanupErrors.push(mcpFailure(originalError(cause), "MCP transport cleanup", server.name));
               }),
             ),
           ),
@@ -211,7 +211,7 @@ export async function openMcpClients(
             const forwarded = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
             try {
               return await run(
-                portAbort(
+                abortThenJoin(
                   "MCP tool",
                   () =>
                     client.callTool(

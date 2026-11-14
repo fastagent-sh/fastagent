@@ -32,7 +32,7 @@ import {
   readPlaceDiscussion,
 } from "../kit/turn.ts";
 import { acknowledgeFeishuAsk } from "./reaction.ts";
-import { portJoin } from "../../effect-port.ts";
+import { joinPromise } from "../../promise-bridge.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
@@ -374,7 +374,7 @@ function createFeishuRuntimeFactory(
           ? Promise.resolve()
           : settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, SHARED_ANSWER_NOTICE),
       deliverAnswer: (rec, answer) =>
-        portJoin(() => settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, answer)),
+        joinPromise(() => settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, answer)),
       execute: (rec, discussion, onAnswered, hooks) => {
         // Where a new thread forks from, asked once: the room's read and the thread's session both build on it.
         let forkSource: Promise<ForkSource> | undefined;

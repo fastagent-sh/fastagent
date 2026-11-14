@@ -14,7 +14,7 @@
  */
 import type { Agent } from "../../agent-api.ts";
 import type * as Stream from "effect/Stream";
-import type { PortFailure } from "../../effect-port.ts";
+import type { PromiseFailure } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import {
   type ImageAttachment as ImageRef,
@@ -334,7 +334,7 @@ export function feishuTurnStream(
   },
   transport: FeishuTurnTransport,
   attachments: FeishuTurnAttachments,
-): Stream.Stream<TurnEvent, PortFailure> {
+): Stream.Stream<TurnEvent, PromiseFailure> {
   return turnStream({
     agent,
     label: transport.label,

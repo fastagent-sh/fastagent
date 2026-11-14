@@ -62,7 +62,7 @@ import {
   hasEnded as messageHasEnded,
 } from "../../agent-api.ts";
 import { beginWork } from "../../channels/busy.ts";
-import { type PortFailure, port, portAbort, portError } from "../../effect-port.ts";
+import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
@@ -235,18 +235,18 @@ function durableAgent(
   };
 
   /** An operation as the Promise the API promises: what it names, or a rejection with an AgentError. */
-  const settle = <A>(program: Effect.Effect<A, AgentError | PortFailure | Released>): Promise<A> =>
+  const settle = <A>(program: Effect.Effect<A, AgentError | PromiseFailure | Released>): Promise<A> =>
     Effect.runPromise(
       program.pipe(
         Effect.catchCause((cause) => {
-          const error = portError(cause);
+          const error = originalError(cause);
           if (error instanceof Released) return Effect.fail(error.reason);
           return Effect.fail(error instanceof AgentError ? error : failureOf(error));
         }),
       ),
     );
 
-  const conversationOf = (sessionId: string): Effect.Effect<Conversation, AgentError | PortFailure> =>
+  const conversationOf = (sessionId: string): Effect.Effect<Conversation, AgentError | PromiseFailure> =>
     reads
       .conversation(sessionId)
       .pipe(
@@ -293,7 +293,7 @@ function durableAgent(
   const info = (): Promise<AgentInfo> =>
     settle(
       Effect.gen(function* () {
-        const available = yield* port(() => options.models.getAvailable());
+        const available = yield* fromPromise(() => options.models.getAvailable());
         const named = ({ name, description }: { name: string; description?: string }) => ({
           name,
           ...(description ? { description } : {}),
@@ -324,7 +324,7 @@ function durableAgent(
       }),
     );
 
-  const inFlight = port(() => harness.inspect(context)).pipe(
+  const inFlight = fromPromise(() => harness.inspect(context)).pipe(
     Effect.map(({ submissions }) => submissions.filter((record) => record.type === "input").length),
   );
 
@@ -373,7 +373,7 @@ function durableAgent(
    */
   const admit = (
     request: SendRequest,
-  ): Effect.Effect<{ message: Message; replayed: boolean }, AgentError | PortFailure> =>
+  ): Effect.Effect<{ message: Message; replayed: boolean }, AgentError | PromiseFailure> =>
     Semaphore.withPermits(
       admission,
       1,
@@ -388,7 +388,7 @@ function durableAgent(
         const atCapacity = (yield* inFlight) >= LIMITS.inFlightPerProcess;
         const data: UserEntryData = { requestId, ...(sent === undefined ? {} : { sent }) };
         let submitting = false;
-        const admitted = yield* port(() =>
+        const admitted = yield* fromPromise(() =>
           conversation.commit(async (tx) => {
             if (request.idempotencyKey !== undefined) {
               const seen = await tx.submissionByRequest(conversation.id, requestId);
@@ -413,8 +413,8 @@ function durableAgent(
           }, context),
         ).pipe(
           // Once the submission is in the commit, only pi-durable's explicit refusal proves nothing was recorded.
-          Effect.catchCause((cause): Effect.Effect<never, AgentError | PortFailure> => {
-            const error = portError(cause);
+          Effect.catchCause((cause): Effect.Effect<never, AgentError | PromiseFailure> => {
+            const error = originalError(cause);
             if (error instanceof ConversationBusy) {
               return Effect.fail(agentError("busy", "The session is answering another message", { reason: "running" }));
             }
@@ -435,23 +435,23 @@ function durableAgent(
         if (admitted.kind === "refused") return yield* unanswerable(admitted.refused);
         const messageId = admitted.id;
         return yield* Effect.gen(function* () {
-          const submission = yield* port(() => harness.submission(messageId, context));
+          const submission = yield* fromPromise(() => harness.submission(messageId, context));
           if (submission === undefined) {
             throw new Error(`submission ${messageId} is not in the storage it was admitted to`);
           }
           // Counted once it is read back, whether or not that read succeeds: the wait must not be what reads the
           // storage first, or a failing read would fail it instead of answering this call.
-          const record = yield* port(() => submission.status(context)).pipe(
+          const record = yield* fromPromise(() => submission.status(context)).pipe(
             Effect.ensuring(Effect.sync(() => countUntilSettled(submission))),
           );
           if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
           return { message: yield* reads.message(record), replayed: false };
-        }).pipe(Effect.catchCause((cause) => Effect.fail(unconfirmed(conversation, messageId, portError(cause)))));
+        }).pipe(Effect.catchCause((cause) => Effect.fail(unconfirmed(conversation, messageId, originalError(cause)))));
       }),
     );
 
   /** The message as it is now. */
-  const current = (message: Message): Effect.Effect<Message, PortFailure> =>
+  const current = (message: Message): Effect.Effect<Message, PromiseFailure> =>
     reads.submission(message.id).pipe(
       Effect.flatMap((record) => {
         if (record === undefined) throw new Error(`message ${message.id} is not in the storage it was accepted into`);
@@ -464,13 +464,13 @@ function durableAgent(
     message: Message,
     seconds: number,
     signal: AbortSignal | undefined,
-  ): Effect.Effect<Message, PortFailure | Released> => {
+  ): Effect.Effect<Message, PromiseFailure | Released> => {
     if (messageHasEnded(message) || seconds === 0) return Effect.succeed(message);
-    const ended = port(() => harness.submission(ids.decode(message.id) as Submission["id"], context)).pipe(
+    const ended = fromPromise(() => harness.submission(ids.decode(message.id) as Submission["id"], context)).pipe(
       Effect.flatMap((handle) => {
         if (handle === undefined) throw new Error(`message ${message.id} is not in the storage it was accepted into`);
         const controller = new AbortController();
-        return portAbort(
+        return abortThenJoin(
           "a message's wait",
           () => handle.wait(withAbortSignal(controller.signal, context)),
           () => controller.abort(),
@@ -497,7 +497,7 @@ function durableAgent(
         if (seconds === undefined) return message;
         return yield* awaitEnd(message, seconds, signal).pipe(
           Effect.catchCause((cause): Effect.Effect<never, AgentError | Released> => {
-            const error = portError(cause);
+            const error = originalError(cause);
             if (error instanceof Released) return Effect.fail(error);
             return Effect.fail(
               agentError(
@@ -541,7 +541,7 @@ function durableAgent(
         const { forkFrom, ...settings } = yield* decode(CreateSessionOptions, createOptions ?? {}, "sessions.create");
         const creation = { ...OWNERLESS, agent: yield* changeOf(settings) };
         if (forkFrom === undefined) {
-          return yield* reads.session(yield* port(() => harness.createConversation(creation, context)));
+          return yield* reads.session(yield* fromPromise(() => harness.createConversation(creation, context)));
         }
         const source = yield* conversationOf(forkFrom.sessionId);
         const at =
@@ -555,7 +555,7 @@ function durableAgent(
         }
         const fork =
           at === undefined
-            ? yield* port(async () => {
+            ? yield* fromPromise(async () => {
                 // pi-durable forks at an entry; an empty source has only settings to inherit.
                 const inherited = await harness.snapshot(AgentDoc, source.id, context);
                 return harness.createConversation(
@@ -569,7 +569,7 @@ function durableAgent(
                   context,
                 );
               })
-            : yield* port(() => source.fork(at.id, creation, context));
+            : yield* fromPromise(() => source.fork(at.id, creation, context));
         return yield* reads.session(fork);
       }),
     );
@@ -586,7 +586,7 @@ function durableAgent(
         }
         const conversation = yield* conversationOf(sessionId);
         const change = yield* changeOf(decoded);
-        yield* port(() => conversation.configure(change, context));
+        yield* fromPromise(() => conversation.configure(change, context));
         return yield* reads.session(conversation);
       }),
     );
@@ -665,7 +665,7 @@ function durableAgent(
       Effect.gen(function* () {
         const conversation = yield* conversationOf(sessionId);
         let abortFailed: unknown;
-        const recorded = yield* port(() => {
+        const recorded = yield* fromPromise(() => {
           const before = harness.commit(async (tx) => {
             // Copied out: a document read in a transaction cannot be read once it has settled.
             const run = (await tx.doc(LiveDoc, conversation.id))?.run;
@@ -707,7 +707,7 @@ function durableAgent(
       Effect.gen(function* () {
         const { instructions } = yield* decode(CompactOptions, compactOptions ?? {}, "sessions.compact");
         const conversation = yield* conversationOf(sessionId);
-        yield* port(() => conversation.compact(instructions, context));
+        yield* fromPromise(() => conversation.compact(instructions, context));
       }),
     );
 
@@ -743,7 +743,7 @@ function durableAgent(
   return {
     harness,
     info,
-    usage: () => settle(port(() => harness.usage(context)).pipe(Effect.map((spent) => usageOfState(spent)))),
+    usage: () => settle(fromPromise(() => harness.usage(context)).pipe(Effect.map((spent) => usageOfState(spent)))),
     sessions: {
       create,
       get: (sessionId) => settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session))),
@@ -799,7 +799,7 @@ function readPage(
   conversation: Conversation,
   sessionId: string,
   { after, before, limit = LIMITS.pageDefault }: EntriesOptions,
-): Effect.Effect<Page<Entry>, AgentError | PortFailure> {
+): Effect.Effect<Page<Entry>, AgentError | PromiseFailure> {
   return Effect.gen(function* () {
     const cursor = after ?? before;
     const at = cursor === undefined ? undefined : yield* reads.visibleEntry(conversation, cursor);

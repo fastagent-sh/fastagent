@@ -10,7 +10,7 @@ import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import { type PortFailure, port, portError } from "../../effect-port.ts";
+import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import { RELEASE_ENTRY } from "./entries.ts";
 import { queuedInputs } from "./messages.ts";
@@ -19,7 +19,7 @@ import { queuedInputs } from "./messages.ts";
 export const releaseWaitingQueues = (
   harness: Harness,
   context: Context,
-): Effect.Effect<void, PortFailure, Scope.Scope> =>
+): Effect.Effect<void, PromiseFailure, Scope.Scope> =>
   Effect.gen(function* () {
     const waiting = yield* Queue.unbounded<ConversationId>();
     const observation = harness.observeCommits({
@@ -40,7 +40,7 @@ export const releaseWaitingQueues = (
           Effect.catchCause((cause) =>
             Effect.sync(() =>
               log.error(
-                `[fastagent] could not take the messages waiting in conversation ${conversationId}: ${String(portError(cause))}`,
+                `[fastagent] could not take the messages waiting in conversation ${conversationId}: ${String(originalError(cause))}`,
               ),
             ),
           ),
@@ -49,7 +49,7 @@ export const releaseWaitingQueues = (
       Effect.forever,
       Effect.forkScoped,
     );
-    const inspection = yield* port(() => harness.inspect(context));
+    const inspection = yield* fromPromise(() => harness.inspect(context));
     for (const record of inspection.submissions) {
       if (record.type === "input" && record.status === "queued") Queue.offerUnsafe(waiting, record.conversationId);
     }
@@ -57,12 +57,14 @@ export const releaseWaitingQueues = (
 
 function release(harness: Harness, conversationId: ConversationId, context: Context) {
   return Effect.gen(function* () {
-    const live = yield* port(() => harness.snapshot(LiveDoc, conversationId, context));
+    const live = yield* fromPromise(() => harness.snapshot(LiveDoc, conversationId, context));
     if (live?.run !== undefined) return;
-    const inbox = yield* port(() => harness.snapshot(InboxDoc, conversationId, context));
+    const inbox = yield* fromPromise(() => harness.snapshot(InboxDoc, conversationId, context));
     if (queuedInputs(inbox).length === 0) return;
-    const conversation = yield* port(() => harness.conversation(conversationId, context));
+    const conversation = yield* fromPromise(() => harness.conversation(conversationId, context));
     if (conversation === undefined) return;
-    yield* port(() => conversation.submit({ type: "write", entry: { kind: RELEASE_ENTRY, edits: [] } }, context));
+    yield* fromPromise(() =>
+      conversation.submit({ type: "write", entry: { kind: RELEASE_ENTRY, edits: [] } }, context),
+    );
   });
 }

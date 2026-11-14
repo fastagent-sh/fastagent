@@ -8,7 +8,7 @@ import type * as Fiber from "effect/Fiber";
 import { join } from "node:path";
 import { type Agent, AgentError, type Message, type SendRequest } from "../agent-api.ts";
 import { conversationSessions } from "../conversation-sessions.ts";
-import { PortFailure } from "../effect-port.ts";
+import { PromiseFailure } from "../promise-bridge.ts";
 import { beginWork } from "../channels/busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
@@ -139,7 +139,7 @@ function runTurn(agent: ScheduledAgent, label: string, request: SendRequest, onA
     log.info(`[schedule] ${label} firing (session=${request.sessionId})`);
     const read = yield* Effect.tryPromise({
       try: (signal) => sendAndWait(agent, request, onAccepted, signal),
-      catch: (cause) => new PortFailure(cause),
+      catch: (cause) => new PromiseFailure(cause),
     }).pipe(Effect.result);
     const ms = elapsed();
     if (Result.isFailure(read)) {
@@ -188,7 +188,7 @@ export function fireScheduleOnce(opts: {
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
   slot: Date;
   now?: () => Date;
-}): Effect.Effect<ScheduleFireOutcome, PortFailure> {
+}): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
@@ -214,7 +214,7 @@ export function fireScheduleOnce(opts: {
         log.warn(`[schedule] ${s.name}: skipping — ${reason}`);
         return reason;
       },
-      catch: (cause) => new PortFailure(cause),
+      catch: (cause) => new PromiseFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
     // Before anything is sent: the session it continues (created and recorded the first time), and its prompt.
@@ -223,7 +223,7 @@ export function fireScheduleOnce(opts: {
         sessionId: await scheduleSessions(stateRoot).of(s.name, agent),
         text: typeof s.prompt === "string" ? s.prompt : await s.prompt({ at: slot }),
       }),
-      catch: (cause) => new PortFailure(cause),
+      catch: (cause) => new PromiseFailure(cause),
     }).pipe(Effect.result);
     if (Result.isFailure(prepared)) {
       const failed = `could not prepare the fire: ${String(prepared.failure.cause)}`;
@@ -263,12 +263,12 @@ export function fireScheduleNow(opts: {
   agent: ScheduledAgent;
   stateRoot: string;
   schedule: Schedule;
-}): Effect.Effect<ScheduleFireOutcome & { slot: Date }, PortFailure> {
+}): Effect.Effect<ScheduleFireOutcome & { slot: Date }, PromiseFailure> {
   return Effect.gen(function* () {
     const { agent, stateRoot, schedule } = opts;
     const fire = yield* Effect.try({
       try: () => latestFire(stateRoot, schedule.name),
-      catch: (cause) => new PortFailure(cause),
+      catch: (cause) => new PromiseFailure(cause),
     });
     if (fire !== undefined && fire.outcome === undefined) {
       yield* accountForUnreportedFire(agent, stateRoot, schedule.name, fire);
@@ -297,7 +297,7 @@ function accountForUnreportedFire(
   stateRoot: string,
   name: string,
   fire: Fire,
-): Effect.Effect<void, PortFailure> {
+): Effect.Effect<void, PromiseFailure> {
   return Effect.gen(function* () {
     // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
     // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
@@ -313,7 +313,7 @@ function accountForUnreportedFire(
                 if (error instanceof AgentError && error.code === "not_found") return undefined;
                 throw error;
               }),
-            catch: (cause) => new PortFailure(cause),
+            catch: (cause) => new PromiseFailure(cause),
           });
     if (sessionId === undefined || taken === undefined) {
       log.warn(
@@ -327,7 +327,7 @@ function accountForUnreportedFire(
     log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
     const end = yield* Effect.tryPromise({
       try: (signal) => untilEnded(agent, { sessionId, idempotencyKey: key }, signal),
-      catch: (cause) => new PortFailure(cause),
+      catch: (cause) => new PromiseFailure(cause),
     });
     if (!("ended" in end)) {
       // Unsettled still, so the next boot reads it again.
@@ -405,7 +405,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           // `slot: due` is what two schedulers have in common: both compute the same cron instant, so both try to
           // claim the same name and exactly one wins. Claiming `now()` would give them different names.
           yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
-            Effect.catchTag("PortFailure", (error) =>
+            Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() => {
                 // Nothing to record: this fault happens BEFORE the claim exists (that is what keeps the slot
                 // unburned), so there is no claim to write an outcome into.
@@ -428,7 +428,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     const wakeOnce = Effect.gen(function* () {
       const w = yield* Effect.try({
         try: () => takeFirstDueWakeup(stateRoot, now()),
-        catch: (cause) => new PortFailure(cause),
+        catch: (cause) => new PromiseFailure(cause),
       });
       if (!w) return false;
       const label = `wake ${w.id.slice(0, 8)}`;
@@ -455,9 +455,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
                         requeueWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
                         log.info(`[schedule] ${label}: refused for now — retrying next poll (${r.failed})`);
                       },
-                      catch: (cause) => new PortFailure(cause),
+                      catch: (cause) => new PromiseFailure(cause),
                     }).pipe(
-                      Effect.catchTag("PortFailure", (error) =>
+                      Effect.catchTag("PromiseFailure", (error) =>
                         Effect.sync(() =>
                           log.error(
                             `[schedule] ${label}: refused, and could not be kept for a retry, so it is gone: ${String(error.cause)}`,
@@ -477,7 +477,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       return true;
     }).pipe(
       // Log storage faults before a pending stop can replace the typed failure with interruption.
-      Effect.catchTag("PortFailure", (error) =>
+      Effect.catchTag("PromiseFailure", (error) =>
         Effect.sync(() => {
           log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(error.cause)}`);
           return false;
@@ -519,7 +519,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           lastFires.set(s.name, fire.firedAt);
           if (fire.outcome !== undefined) continue;
           const accounted = accountForUnreportedFire(agent, stateRoot, s.name, fire).pipe(
-            Effect.catchTag("PortFailure", (error) =>
+            Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() =>
                 // Unsettled still, so the next boot reads it again.
                 log.error(

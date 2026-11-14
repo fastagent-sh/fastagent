@@ -13,7 +13,7 @@ import { createSeenRing, createThreadParticipants } from "../kit/state.ts";
 import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { portJoin } from "../../effect-port.ts";
+import { joinPromise } from "../../promise-bridge.ts";
 import { attachmentsDir, codePointPrefix } from "../kit/text.ts";
 import { type PlaceMessage, createAskLog, createRoomThreads, registerRoomThreads } from "../kit/history.ts";
 import {
@@ -417,7 +417,7 @@ function createSlackRuntime(
     },
     notifyDropped,
     deliverAnswer: (turn, answer) =>
-      portJoin(async () => {
+      joinPromise(async () => {
         await deliverSlackAnswer(placeApi(turn), targetOf(turn), answer);
         // The 👀 on the asker's message was added by the run that produced this answer, and `execute`'s
         // acquire/release — the only thing that turns it into ✅ — is not on this path.
@@ -435,7 +435,7 @@ function createSlackRuntime(
     execute: (turn, discussion, onAnswered, hooks) => {
       const messageRef = messageRefOf(turn.id);
       return Effect.acquireUseRelease(
-        portJoin(async () =>
+        joinPromise(async () =>
           reactionEmojis && messageRef
             ? startSlackReaction({
                 api,
@@ -475,13 +475,13 @@ function createSlackRuntime(
             ),
           ),
         (reaction, exit) =>
-          portJoin(async () => {
+          joinPromise(async () => {
             if (Exit.isSuccess(exit)) await reaction?.complete();
             else await reaction?.remove();
           }).pipe(
             // A release does not fail: its defect would make the turn's typed failure one too. Unreachable while
             // the reaction's `complete` and `remove` catch their own failures (reaction.ts).
-            Effect.catchTag("PortFailure", (error) =>
+            Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() => log.warn(`${label} could not settle the Slack reaction: ${String(error.cause)}`)),
             ),
           ),

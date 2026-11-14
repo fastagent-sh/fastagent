@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { type PortFailure, port } from "../../effect-port.ts";
+import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 
 const SCAN_PAGE = 500;
 
@@ -32,7 +32,7 @@ export interface Sessions {
 
 const conversations = (storage: Storage, context: Context) =>
   Stream.paginate(undefined as Parameters<Storage["scanConversations"]>[2], (cursor) =>
-    port(() => storage.scanConversations({}, SCAN_PAGE, cursor, context)).pipe(
+    fromPromise(() => storage.scanConversations({}, SCAN_PAGE, cursor, context)).pipe(
       Effect.map((page) => [[page.items], Option.fromUndefinedOr(page.next)] as const),
     ),
   ).pipe(Stream.flattenIterable);
@@ -41,8 +41,10 @@ const conversations = (storage: Storage, context: Context) =>
 const storedActivity = (storage: Storage, context: Context, conversation: ConversationRecord) =>
   Effect.all(
     [
-      port(() => storage.scanEntries({ conversationId: conversation.id, order: "descending" }, 1, undefined, context)),
-      port(() =>
+      fromPromise(() =>
+        storage.scanEntries({ conversationId: conversation.id, order: "descending" }, 1, undefined, context),
+      ),
+      fromPromise(() =>
         storage.scanSubmissions({ conversationId: conversation.id, order: "descending" }, 1, undefined, context),
       ),
     ],
@@ -59,7 +61,7 @@ export const trackSessions = (
   harness: Harness,
   storage: Storage,
   context: Context,
-): Effect.Effect<Sessions, PortFailure, Scope.Scope> =>
+): Effect.Effect<Sessions, PromiseFailure, Scope.Scope> =>
   Effect.gen(function* () {
     const sessions = new Set<ConversationId>();
     const newest = new Map<ConversationId, number>();

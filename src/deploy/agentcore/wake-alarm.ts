@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
-import { PortFailure, portError, portJoin, portRequest } from "../../effect-port.ts";
+import { PromiseFailure, originalError, joinPromise, requestWithDeadline } from "../../promise-bridge.ts";
 import { type RecurringSchedule, RESERVED_PATHS, type WakeAlarm, type WakeAlarmRequest } from "./protocol.ts";
 import { beginWork } from "../../channels/busy.ts";
 import { log } from "../../log.ts";
@@ -108,7 +108,7 @@ export function createWakeAlarmSink(options: {
       now = () => new Date(clock.currentTimeMillisUnsafe()),
       delay: pause,
     } = options;
-    const delay = (ms: number) => (pause ? portJoin(() => pause(ms)) : Effect.sleep(ms));
+    const delay = (ms: number) => (pause ? joinPromise(() => pause(ms)) : Effect.sleep(ms));
     let running = false;
     let dirty = false;
 
@@ -117,12 +117,12 @@ export function createWakeAlarmSink(options: {
       Effect.gen(function* () {
         const alarms = yield* Effect.try({
           try: () => toAlarms(listWakeups(stateRoot), now()),
-          catch: (cause) => new PortFailure(cause),
+          catch: (cause) => new PromiseFailure(cause),
         });
         const recurring = toRecurring(schedules());
         const url = yield* Effect.try({
           try: () => readWakeAlarmUrl(stateRoot),
-          catch: (cause) => new PortFailure(cause),
+          catch: (cause) => new PromiseFailure(cause),
         });
         if (!url) {
           // Nothing to set, before the forwarder was ever seen: nothing can be pending there either.
@@ -133,7 +133,7 @@ export function createWakeAlarmSink(options: {
         }
         // Sent EMPTY too: the schedules are the whole set, and the forwarder deletes one this set no longer has.
         const body: WakeAlarmRequest = { secret, alarms, schedules: recurring };
-        return yield* portRequest(async (signal) => {
+        return yield* requestWithDeadline(async (signal) => {
           const res = await fetchImpl(`${url.replace(/\/$/, "")}${RESERVED_PATHS.wakeAlarm}`, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -205,7 +205,7 @@ export function createWakeAlarmSink(options: {
                 Effect.sync(() => {
                   log.error(
                     `[schedule] alarm reconcile failed (tried again in ${HEAL_MS / 60_000} minutes while this ` +
-                      `container runs): ${String(portError(cause))}`,
+                      `container runs): ${String(originalError(cause))}`,
                   );
                   return false;
                 }),

@@ -15,16 +15,16 @@ import {
   type MessageStreamEvent,
   type SendRequest,
 } from "../../agent-api.ts";
-import { PortFailure, portError, portJoin } from "../../effect-port.ts";
+import { PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 
 /** Acquire lazily; interruption closes the source, while natural exhaustion needs no extra return. */
-function eventStream<A>(open: () => AsyncIterable<A>, label: string): Stream.Stream<A, PortFailure, Scope.Scope> {
+function eventStream<A>(open: () => AsyncIterable<A>, label: string): Stream.Stream<A, PromiseFailure, Scope.Scope> {
   return Stream.fromPull(
     Effect.gen(function* () {
       let exhausted = false;
       const iterator = yield* Effect.acquireRelease(
-        Effect.try({ try: () => open()[Symbol.asyncIterator](), catch: (cause) => new PortFailure(cause) }),
+        Effect.try({ try: () => open()[Symbol.asyncIterator](), catch: (cause) => new PromiseFailure(cause) }),
         (iterator) => {
           const close = iterator.return?.bind(iterator);
           if (!close || exhausted) return Effect.void;
@@ -38,7 +38,7 @@ function eventStream<A>(open: () => AsyncIterable<A>, label: string): Stream.Str
       return Effect.gen(function* () {
         const result = yield* Effect.tryPromise({
           try: () => iterator.next(),
-          catch: (cause) => new PortFailure(cause),
+          catch: (cause) => new PromiseFailure(cause),
         });
         if (result.done) {
           exhausted = true;
@@ -77,11 +77,11 @@ export function turnStream<R>(opts: {
   turn: (resolved: R) => { content: MessageContent; idempotencyKey: string };
   retryableLoadFailure: (cause: unknown) => boolean;
   steer: SteeredTurn;
-}): Stream.Stream<TurnEvent, PortFailure> {
+}): Stream.Stream<TurnEvent, PromiseFailure> {
   const rejected = (error: AgentErrorData) => Stream.succeed<TurnEvent>({ type: "rejected", error });
   return Stream.unwrap(
     Effect.gen(function* () {
-      const prepared = yield* Effect.result(portJoin(opts.resolve));
+      const prepared = yield* Effect.result(joinPromise(opts.resolve));
       if (Result.isFailure(prepared)) {
         const { cause } = prepared.failure;
         return rejected({
@@ -91,7 +91,7 @@ export function turnStream<R>(opts: {
         });
       }
       const resolved = prepared.success;
-      const session = yield* Effect.result(portJoin(() => opts.session()));
+      const session = yield* Effect.result(joinPromise(() => opts.session()));
       if (Result.isFailure(session)) return rejected(agentFailure("its session", session.failure.cause));
       const sessionId = session.success;
       const enter = opts.enter;
@@ -113,7 +113,7 @@ export function turnStream<R>(opts: {
         Stream.tap((event) => Effect.sync(() => watched(event))),
         Stream.scoped,
         Stream.catchCause((cause) => {
-          const error = portError(cause);
+          const error = originalError(cause);
           return error instanceof AgentError ? rejected(agentFailure("its message", error)) : Stream.failCause(cause);
         }),
       );
