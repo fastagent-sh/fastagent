@@ -26,7 +26,6 @@ import { foldBudget } from "../kit/fold-budget.ts";
 import {
   DROPPED_TURN_NOTICE,
   SHARED_ANSWER_NOTICE,
-  createTaskTracker,
   createTurnRunner,
   dispatchStop,
   isStopText,
@@ -330,8 +329,6 @@ function createFeishuRuntimeFactory(
             history.recordOutput(turn.historyKey as string, turn.conversation, id);
             owners.record(id, { conversation: turn.conversation, ...(turn.id === undefined ? {} : { ask: turn.id }) });
           });
-    // Side tasks (stop feedback) run off the ingress path but drain in turnsIdle.
-    const sideTasks = createTaskTracker(label);
     const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
       chatId: r.chatId,
       replyTo: r.replyTo,
@@ -364,8 +361,6 @@ function createFeishuRuntimeFactory(
         }),
       seen,
       delivered: createSeenRing(join(stateHome, "delivered.json"), label),
-      toStored: (intent) => ({ ...intent, attempts: 0 }),
-      fromStored: ({ attempts: _a, ...intent }) => intent,
       where: (rec) => `chat=${rec.chatId}`,
       notifyDropped,
       acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec), rec.id, label),
@@ -548,7 +543,7 @@ function createFeishuRuntimeFactory(
       if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
         seen.add(m.message_id);
         stops.add(m.message_id);
-        sideTasks.track(
+        runner.track(
           dispatchStop(agent, recordedSession(routed ?? own), label)
             .then((feedback) =>
               placeApi({ historyKey, conversation: routed ?? own })
@@ -605,7 +600,7 @@ function createFeishuRuntimeFactory(
       }
     };
 
-    return { acceptEvent, turnsIdle: () => Promise.all([runner.idle(), sideTasks.drain()]).then(() => undefined) };
+    return { acceptEvent, turnsIdle: runner.idle };
   };
 }
 

@@ -50,12 +50,7 @@ export async function dispatchStop(
   }
 }
 
-export interface TaskTracker {
-  track(task: Promise<unknown>): void;
-  drain(): Promise<void>;
-}
-
-export function createTaskTracker(label: string): TaskTracker {
+function createTaskTracker(label: string): { track(task: Promise<unknown>): void; drain(): Promise<void> } {
   const tasks = new Set<Fiber.Fiber<void>>();
   return {
     track(task) {
@@ -165,8 +160,6 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
   discussion(rec: R): Promise<Discussion<F>>;
   seen?: { add(id: string): void };
   delivered: SeenRing;
-  toStored(rec: R): S;
-  fromStored(stored: S): R;
   where(rec: R): string;
   beforeRun?(rec: R): Promise<boolean>;
   notifyDropped(rec: R): void;
@@ -184,6 +177,8 @@ export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecor
 export interface TurnRunner<R, S> {
   submit(rec: R, persist: boolean): void;
   recover(): S[];
+  /** Track off-queue channel work (e.g. `/stop` feedback) so `idle()` drains it alongside queued turns. */
+  track(task: Promise<unknown>): void;
   idle(): Promise<void>;
 }
 
@@ -357,6 +352,7 @@ export function createTurnRunner<
   F,
 >(options: TurnRunnerOptions<R, S, F>): TurnRunner<R, S> {
   const { label, store, seen } = options;
+  const sideTasks = createTaskTracker(label);
   const queue = createTurnQueue<R>({
     label,
     run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id)),
@@ -364,7 +360,7 @@ export function createTurnRunner<
   const recoveredIds = new Set<string>();
   const submit = (rec: R, persist: boolean): void => {
     if (persist) {
-      store.add(options.toStored(rec));
+      store.add({ ...rec, attempts: 0 } as unknown as S);
       seen?.add(rec.id);
     }
     queue.accept(rec);
@@ -376,10 +372,12 @@ export function createTurnRunner<
       if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
       for (const stored of recovered) {
         recoveredIds.add(stored.id);
-        submit(options.fromStored(stored), false);
+        const { attempts: _attempts, ...intent } = stored;
+        submit(intent as unknown as R, false);
       }
       return recovered;
     },
-    idle: () => queue.idle(),
+    track: (task) => sideTasks.track(task),
+    idle: () => Promise.all([queue.idle(), sideTasks.drain()]).then(() => undefined),
   };
 }

@@ -285,4 +285,38 @@ describe("telegram /stop command", () => {
     );
     expect(sent.some((b) => b.text === "⏹ Stopped.")).toBe(true);
   });
+
+  it("turnsIdle waits for /stop side-task feedback delivery", async () => {
+    let releaseReply!: () => void;
+    const replyGate = new Promise<void>((resolve) => {
+      releaseReply = resolve;
+    });
+    let replyEntered = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/getMe")) {
+          return new Response(JSON.stringify({ ok: true, result: { id: 1, username: "testbot" } }), { status: 200 });
+        }
+        replyEntered = true;
+        await replyGate;
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 9 } }), { status: 200 });
+      }),
+    );
+    const { stopped } = fakeStop("stopped");
+    const stateDir = homeWith({ "42": "session-42" });
+    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", stopped, stateDir });
+    expect((await ch(tgRequest(stopUpdate("/stop")))).status).toBe(200);
+    await flush();
+    expect(replyEntered).toBe(true);
+    let settled = false;
+    const idle = (ch as typeof ch & { turnsIdle: () => Promise<void> }).turnsIdle().then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    releaseReply();
+    await idle;
+    expect(settled).toBe(true);
+  });
 });
