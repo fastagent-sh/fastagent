@@ -343,7 +343,7 @@ function createFeishuRuntimeFactory(
       );
     };
 
-    const runner = createTurnRunner<PendingFeishuTurn, StoredFeishuTurn, PlaceMessage>({
+    const runner = createTurnRunner<StoredFeishuTurn, PlaceMessage>({
       label,
       store,
       // The read ends at the ask and starts after the ask its session was last sent.

@@ -374,7 +374,7 @@ function createSlackRuntime(
     );
   };
 
-  const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, PlaceMessage>({
+  const runner = createTurnRunner<StoredSlackTurn, PlaceMessage>({
     label,
     store,
     // The read ends at the ask (`messageRefOf`: the ts of the message that asked) and starts after the ask its session

@@ -219,7 +219,7 @@ function createTelegramRuntime(
       log.warn(`[telegram] an answer was not recorded into place ${place}: ${String(error)}`);
     }
   };
-  const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
+  const runner = createTurnRunner<StoredTurn, BufferEntry>({
     label: "[telegram]",
     store,
     discussion: async (rec) => {

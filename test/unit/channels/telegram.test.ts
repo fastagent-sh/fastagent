@@ -307,16 +307,20 @@ describe("telegram /stop command", () => {
     const stateDir = homeWith({ "42": "session-42" });
     const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", stopped, stateDir });
     expect((await ch(tgRequest(stopUpdate("/stop")))).status).toBe(200);
-    await flush();
-    expect(replyEntered).toBe(true);
-    let settled = false;
-    const idle = (ch as typeof ch & { turnsIdle: () => Promise<void> }).turnsIdle().then(() => {
-      settled = true;
-    });
-    await flush();
-    expect(settled).toBe(false);
-    releaseReply();
-    await idle;
-    expect(settled).toBe(true);
+    try {
+      await flush();
+      expect(replyEntered).toBe(true);
+      let settled = false;
+      const idle = (ch as typeof ch & { turnsIdle: () => Promise<void> }).turnsIdle().then(() => {
+        settled = true;
+      });
+      await flush();
+      expect(settled).toBe(false);
+      releaseReply();
+      await idle;
+      expect(settled).toBe(true);
+    } finally {
+      releaseReply();
+    }
   });
 });
