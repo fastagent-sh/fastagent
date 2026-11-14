@@ -8,7 +8,7 @@ import type { Agent } from "../agent-api.ts";
 import type { ChannelContext } from "../channel.ts";
 import { conversationSessions, forkedSession } from "../conversation-sessions.ts";
 import * as Effect from "effect/Effect";
-import { portError, portJoin } from "../effect-port.ts";
+import { originalError, joinPromise } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import { ensureStateHome } from "../state-file.ts";
 import { createTurnQueue } from "./turn-queue.ts";
@@ -28,9 +28,11 @@ export function channelContext(agent: Agent, stateRoot: string, name: string): C
     label: `[${name}]`,
     // The channel's own failure surface: `turn` promises a failed one goes to the log, said as the author wrote it.
     run: ({ conversation, work }) =>
-      portJoin(work).pipe(
+      joinPromise(work).pipe(
         Effect.catchCause((cause) =>
-          Effect.sync(() => log.error(`[${name}] turn failed (place=${conversation}): ${String(portError(cause))}`)),
+          Effect.sync(() =>
+            log.error(`[${name}] turn failed (place=${conversation}): ${String(originalError(cause))}`),
+          ),
         ),
       ),
   });

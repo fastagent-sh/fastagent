@@ -16,7 +16,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
-import { port, portJoin, portCleanup, portError } from "../effect-port.ts";
+import { fromPromise, joinPromise, cleanupQuietly, originalError } from "../promise-bridge.ts";
 import { McpError, type McpGrantRecord, type McpGrantSummary, type McpSignInRequest } from "../mcp-api.ts";
 import { discoverMcp, mcpFailure } from "./auth.ts";
 import { mcpFetch, openMcpNetwork } from "./network.ts";
@@ -78,11 +78,11 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
   let saved: McpGrantSummary | undefined;
   const work = Effect.gen(function* () {
     const network = yield* Effect.acquireRelease(
-      port(() => openMcpNetwork(server.url, request.fetch)),
-      (value) => portCleanup("MCP network", () => value.close()),
+      fromPromise(() => openMcpNetwork(server.url, request.fetch)),
+      (value) => cleanupQuietly("MCP network", () => value.close()),
     );
     const fetchImpl = mcpFetch(server.url, network.fetch);
-    const discovery = yield* port(() => discoverMcp(server.url, fetchImpl));
+    const discovery = yield* fromPromise(() => discoverMcp(server.url, fetchImpl));
     if (!discovery.metadata.code_challenge_methods_supported?.includes("S256")) {
       return yield* Effect.fail(
         new McpError("protocol", "MCP authorization server does not advertise PKCE S256", server.name),
@@ -99,7 +99,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     const scopes = [...new Set(request.scopes ?? discovery.resourceMetadata.scopes_supported ?? [])];
     if (scopes.some((scope) => !/^[\x21\x23-\x5B\x5D-\x7E]+$/.test(scope)))
       return yield* Effect.fail(new McpError("configuration", "Invalid OAuth scope", server.name));
-    const approved = yield* port(() =>
+    const approved = yield* fromPromise(() =>
       request.interaction.confirmAuthorization({
         server: server.name,
         resource: discovery.resource,
@@ -162,7 +162,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
       );
     });
     yield* Effect.acquireRelease(Effect.succeed(listener), (value) =>
-      portCleanup(
+      cleanupQuietly(
         "MCP OAuth callback",
         () =>
           new Promise<void>((resolve, reject) => {
@@ -171,7 +171,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
           }),
       ),
     );
-    yield* portJoin(
+    yield* joinPromise(
       () =>
         new Promise<void>((resolve, reject) => {
           listener.once("error", reject);
@@ -188,7 +188,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     const redirectUrl = `http://127.0.0.1:${portNumber}${path}`;
     const registration: OAuthClientInformationMixed = request.clientId
       ? { client_id: request.clientId }
-      : yield* portJoin(() =>
+      : yield* joinPromise(() =>
           registerClient(discovery.issuer, {
             metadata: discovery.metadata,
             clientMetadata: {
@@ -204,7 +204,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
             fetchFn: fetchImpl,
           }),
         );
-    const { authorizationUrl, codeVerifier } = yield* portJoin(() =>
+    const { authorizationUrl, codeVerifier } = yield* joinPromise(() =>
       startAuthorization(discovery.issuer, {
         metadata: discovery.metadata,
         clientInformation: registration,
@@ -220,7 +220,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
         request.interaction.notify({ type: "progress", message: "Saving MCP authorization" });
-        const tokens: OAuthTokens = yield* portJoin(() =>
+        const tokens: OAuthTokens = yield* joinPromise(() =>
           exchangeAuthorization(discovery.issuer, {
             metadata: discovery.metadata,
             clientInformation: registration,
@@ -269,7 +269,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
           ...(tokens.expires_in === undefined ? {} : { expiresAt: Date.now() + tokens.expires_in * 1000 }),
         };
         const id = randomUUID();
-        yield* portJoin(() =>
+        yield* joinPromise(() =>
           request.store.withGrant(id, async (access) => {
             if (access.read()) throw new McpError("storage", "MCP grant ID collision");
             await access.write(record);
@@ -285,7 +285,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
   if (Exit.isFailure(result)) {
     if (Exit.hasInterrupts(result) || request.interaction.signal?.aborted)
       throw new McpError("canceled", "MCP sign-in canceled", request.server);
-    throw mcpFailure(portError(result.cause), "MCP sign-in", request.server);
+    throw mcpFailure(originalError(result.cause), "MCP sign-in", request.server);
   }
   return result.value;
 }

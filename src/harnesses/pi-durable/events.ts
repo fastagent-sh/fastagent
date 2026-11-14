@@ -25,7 +25,7 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { AgentError, type Entry, type Json, type SessionEvent, agentError, errorData } from "../../agent-api.ts";
-import { type PortFailure, port, portError } from "../../effect-port.ts";
+import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
 import { isPublished, replyText, thinkingOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import { type EndedRecord, hasEnded, isInput, sessionOf } from "./messages.ts";
@@ -72,7 +72,7 @@ export function sessionEvents(
       const pending = yield* Effect.acquireRelease(Queue.unbounded<Pending>(), Queue.shutdown);
       let behind = false;
       const observation = yield* Effect.acquireRelease(
-        port(() =>
+        fromPromise(() =>
           harness.observeConversation(
             conversation.id,
             {
@@ -112,12 +112,12 @@ export function sessionEvents(
         Stream.flattenIterable,
       );
       return Stream.concat(Stream.concat(replay, present), events).pipe(
-        Stream.catchCause((cause) => Stream.succeed(streamError(failureOf(portError(cause))))),
+        Stream.catchCause((cause) => Stream.succeed(streamError(failureOf(originalError(cause))))),
         Stream.takeUntil((event) => event.type === "stream_error"),
       );
     }).pipe(
       Effect.catchCause((cause) => {
-        const error = portError(cause);
+        const error = originalError(cause);
         return Effect.fail(error instanceof AgentError ? error : failureOf(error));
       }),
     ),
@@ -150,7 +150,7 @@ function replayed(
   conversation: Conversation,
   after: number,
   through: number,
-): Stream.Stream<SessionEvent, PortFailure> {
+): Stream.Stream<SessionEvent, PromiseFailure> {
   return reads
     .publishedPages(conversation, {
       order: "ascending",
@@ -218,7 +218,7 @@ function liveTranslator(
    * The answers that made calls now starting, read back through the history when the view's window began after them
    * (a Caller attached late in a long round). A call no answer made stays unknown, and `toolEvents` refuses it.
    */
-  const recallToolArgs = (live: LiveState | undefined): Effect.Effect<void, PortFailure> => {
+  const recallToolArgs = (live: LiveState | undefined): Effect.Effect<void, PromiseFailure> => {
     const missing = (live?.tools ?? []).filter(
       (slot) => slot.status !== "pending" && !started.has(slot.callId) && !toolArgs.has(slot.callId),
     );
@@ -277,7 +277,7 @@ function liveTranslator(
     return events;
   };
   /** The entries `view` appended: its window's new ones, after those a window that moved past them left out. */
-  const appended = (view: ConversationView): Effect.Effect<EntryRecord[], PortFailure> =>
+  const appended = (view: ConversationView): Effect.Effect<EntryRecord[], PromiseFailure> =>
     Effect.gen(function* () {
       const fresh = view.entries.filter((entry) => newest === undefined || entry.id > newest);
       const skipped =
@@ -299,7 +299,7 @@ function liveTranslator(
     const gone = [...unended].filter((id) => !now.has(id));
     unended = now;
     return Effect.forEach(gone, (id) =>
-      port(async () => (await harness.submission(id, context))?.status(context)).pipe(
+      fromPromise(async () => (await harness.submission(id, context))?.status(context)).pipe(
         Effect.flatMap((record) =>
           isInput(record) && hasEnded(record) ? reads.message(record as EndedRecord, known) : Effect.undefined,
         ),
@@ -308,7 +308,7 @@ function liveTranslator(
   };
 
   return {
-    translate: (view: ConversationView): Effect.Effect<SessionEvent[], PortFailure> =>
+    translate: (view: ConversationView): Effect.Effect<SessionEvent[], PromiseFailure> =>
       Effect.gen(function* () {
         const records = yield* appended(view);
         learnToolArgs(records);

@@ -14,7 +14,7 @@ import type { TurnEvent } from "../kit/invoke.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { type PortFailure, portJoin } from "../../effect-port.ts";
+import { type PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
@@ -193,7 +193,7 @@ export async function settleFeishuPreview(
  * Consume one turn's event stream into a Feishu-compatible chat, live.
  */
 export function feishuReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: FeishuApi,
   target: FeishuTarget,
   formatError: (failed: FeishuFailure) => string | undefined,
@@ -280,7 +280,7 @@ export function feishuReply(
       },
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
       ...(onAnswered ? { onAnswered } : {}),
-      settle: (text) => portJoin(() => finalize(api, target, preview, text, nextSeq)),
+      settle: (text) => joinPromise(() => finalize(api, target, preview, text, nextSeq)),
     });
   });
 }

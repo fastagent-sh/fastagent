@@ -45,7 +45,7 @@ import {
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { acknowledgeTelegramAsk } from "./reaction.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
-import { portJoin } from "../../effect-port.ts";
+import { joinPromise } from "../../promise-bridge.ts";
 import { pollTelegramUpdates } from "./polling.ts";
 
 interface StoredTurn extends TurnRecordBase {
@@ -256,7 +256,7 @@ function createTelegramRuntime(
       await sendMessage(apiBaseUrl, botToken, targetOf(rec), SHARED_ANSWER_NOTICE, { html: false });
     },
     deliverAnswer: (rec, answer) =>
-      portJoin(async () => {
+      joinPromise(async () => {
         recordAnswer(rec, await deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer), answer);
       }),
     execute: (rec, discussion, onAnswered, turn) =>

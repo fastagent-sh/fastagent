@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { PortFailure, portJoin } from "../../effect-port.ts";
+import { PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import {
   RETRY_NOTICE,
@@ -171,7 +171,7 @@ const isAnswerText = (event: TurnEvent): boolean =>
   (event.type === "delta" && event.channel === "text") || (event.type === "entry" && event.entry.kind === "assistant");
 
 function streamClassicSlackReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -242,7 +242,7 @@ function streamClassicSlackReply(
       settle: (markdown) =>
         Effect.gen(function* () {
           if (previewTs && markdown.trim()) yield* waitForMutationSlot;
-          yield* portJoin(() => settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), update));
+          yield* joinPromise(() => settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), update));
         }),
       onEvent: (event) => {
         const changed = applyTurnEvent(turn, event, now());
@@ -261,7 +261,7 @@ function streamClassicSlackReply(
  * Sharing the loop would mean injecting all three, which is more shape than the two lines it saves.
  */
 function streamNativeSlackReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
@@ -292,7 +292,7 @@ function streamNativeSlackReply(
         // A finalizer does not fail: its defect would make the turn's typed failure one too. Unreachable while
         // `setStatus` catches its own failures, which no test can make it stop doing.
         yield* statuses.finish.pipe(
-          Effect.catchTag("PortFailure", (error) =>
+          Effect.catchTag("PromiseFailure", (error) =>
             Effect.sync(() => log.warn(`${label} could not finish the Slack Agent status: ${String(error.cause)}`)),
           ),
         );
@@ -308,8 +308,8 @@ function streamNativeSlackReply(
       Effect.suspend(() => {
         const ts = streamTs;
         return ts && !stopAttempted
-          ? portJoin(() => stop(ts, `\n\n${GENERIC_FAILURE}`)).pipe(
-              Effect.catchTag("PortFailure", (error) =>
+          ? joinPromise(() => stop(ts, `\n\n${GENERIC_FAILURE}`)).pipe(
+              Effect.catchTag("PromiseFailure", (error) =>
                 Effect.sync(() =>
                   log.error(`${label} failed to stop an abnormal Slack stream: ${String(error.cause)}`),
                 ),
@@ -403,7 +403,7 @@ function streamNativeSlackReply(
       Effect.gen(function* () {
         flushText(true);
         yield* operations.finish;
-        yield* portJoin(async () => {
+        yield* joinPromise(async () => {
           const safeTerminal = sanitizeSlackMarkdown(terminalMarkdown);
           if (renderError !== undefined) {
             if (!streamTs && isSlackNativeUnavailable(renderError)) {
@@ -432,14 +432,14 @@ function streamNativeSlackReply(
         if (!finalized) {
           pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${GENERIC_FAILURE}`;
           yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE).pipe(
-            Effect.catchTag("PortFailure", (error) =>
+            Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() => log.error(`${label} failed to stop an abnormal Slack stream: ${String(error.cause)}`)),
             ),
           );
         }
       }),
     );
-    yield* portJoin(async () => {
+    yield* joinPromise(async () => {
       if (target.channelId.startsWith("D")) {
         await Promise.all([
           api
@@ -464,7 +464,7 @@ function streamNativeSlackReply(
         yield* Effect.gen(function* () {
           const notice = yield* Effect.try({
             try: () => formatError(failure) ?? "",
-            catch: (cause) => new PortFailure(cause),
+            catch: (cause) => new PromiseFailure(cause),
           });
           if (notice) {
             pendingText += `${fullAnswer.trim() ? "\n\n" : ""}${notice}`;
@@ -472,12 +472,12 @@ function streamNativeSlackReply(
           }
           yield* settleNative(fullAnswer.trim() || GENERIC_FAILURE);
         }).pipe(
-          Effect.catchTag("PortFailure", (error) =>
+          Effect.catchTag("PromiseFailure", (error) =>
             Effect.sync(() => log.error(`${label} failed to deliver the agent-failure stream: ${String(error.cause)}`)),
           ),
         );
         return yield* Effect.fail(
-          new PortFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
+          new PromiseFailure(new Error(`agent failed: ${failure.details} (retryable=${failure.retryable})`)),
         );
       });
     const appendAnswer = (text: string): void => {
@@ -529,7 +529,7 @@ function streamNativeSlackReply(
           if (footer) pendingText += footer;
           // Before the terminal write, as in `renderReply`: what the stream has already appended is not delivery —
           // a stream left open by a dead process shows an unfinished answer.
-          yield* Effect.try({ try: () => onAnswered?.(finalAnswer), catch: (cause) => new PortFailure(cause) });
+          yield* Effect.try({ try: () => onAnswered?.(finalAnswer), catch: (cause) => new PromiseFailure(cause) });
           yield* settleNative(finalAnswer);
           return false;
         }
@@ -539,14 +539,14 @@ function streamNativeSlackReply(
     if (finalized) return;
     const unfinished = unfinishedTurn(streamError);
     if (unfinished === undefined) {
-      return yield* Effect.fail(new PortFailure(new Error("stream ended without a terminal event")));
+      return yield* Effect.fail(new PromiseFailure(new Error("stream ended without a terminal event")));
     }
     yield* failWith(unfinished).pipe(Effect.uninterruptible);
   });
 }
 
 export function slackReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: SlackApi,
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,

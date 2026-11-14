@@ -15,7 +15,7 @@ import { HttpApiBuilder, HttpApiError, OpenApi } from "effect/http-api";
 import { type Agent, AgentError, LIMITS, type SessionEvent, agentError, errorData } from "../agent-api.ts";
 import type { ChannelHandler } from "../channel.ts";
 import { secretEquals } from "../channels/secret.ts";
-import { PortFailure, port, portAbort } from "../effect-port.ts";
+import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import {
   API_PREFIX,
@@ -74,7 +74,7 @@ export interface ApiOptions {
 
 /** An operation's failure as the Agent API answers it: an `AgentError` as it is, anything else `internal`, logged. */
 function refusal(operation: string) {
-  return (failure: PortFailure): AgentError => {
+  return (failure: PromiseFailure): AgentError => {
     const error = failure.cause;
     if (error instanceof AgentError) return error;
     log.error(`[api] ${operation} failed: ${String(error)}`);
@@ -86,7 +86,7 @@ function refusal(operation: string) {
 function call<A>(operation: string, run: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, AgentError> {
   return Effect.suspend(() => {
     const controller = new AbortController();
-    return portAbort(
+    return abortThenJoin(
       operation,
       () => run(controller.signal),
       () => controller.abort(),
@@ -168,7 +168,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
   ) =>
     Effect.gen(function* () {
       const iterator = open()[Symbol.asyncIterator]();
-      const first = yield* port(() => iterator.next()).pipe(
+      const first = yield* fromPromise(() => iterator.next()).pipe(
         Effect.onInterrupt(() => Effect.promise(async () => iterator.return?.())),
         Effect.mapError(refusal(operation)),
       );
@@ -182,7 +182,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       const events = (first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest)).pipe(
         // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
         Stream.mapEffect(written),
-        Stream.catchCause((cause) => endedWith(refusal(operation)(new PortFailure(Cause.squash(cause))))),
+        Stream.catchCause((cause) => endedWith(refusal(operation)(new PromiseFailure(Cause.squash(cause))))),
         Stream.interruptWhen(closed),
         Stream.concat(
           Stream.suspend(() =>

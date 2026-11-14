@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
 import { DROPPABLE_FRAME } from "../kit/ingress.ts";
-import { type PortFailure, portJoin } from "../../effect-port.ts";
+import { type PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -104,7 +104,7 @@ export function deliverTelegramAnswer(api: string, botToken: string, target: Tar
  * and surfaces a real failure (bad token, etc.).
  */
 export function telegramReply(
-  events: Stream.Stream<TurnEvent, PortFailure>,
+  events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: string,
   botToken: string,
   target: Target,
@@ -178,7 +178,7 @@ export function telegramReply(
       answer: () => (turn.answer.trim() !== "" ? turn.answer : "(no reply)"),
       ...(onAnswered ? { onAnswered } : {}),
       settle: (text) =>
-        portJoin(async () => {
+        joinPromise(async () => {
           const delivered = await finalize(api, botToken, target, messageId, text);
           onDelivered?.(delivered, text);
         }),

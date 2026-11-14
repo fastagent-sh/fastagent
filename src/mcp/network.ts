@@ -3,7 +3,7 @@ import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import { port, portError } from "../effect-port.ts";
+import { fromPromise, originalError } from "../promise-bridge.ts";
 import { McpError } from "../mcp-api.ts";
 import { checkMcpUrl } from "./config.ts";
 
@@ -134,7 +134,7 @@ export async function openMcpNetwork(
     const url = checkMcpTarget(serverUrl, request.url);
     if (!pins.has(url.origin)) {
       const resolved = await Effect.runPromiseExit(
-        port(async () => {
+        fromPromise(async () => {
           const host = hostname(url);
           const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await resolve(host);
           const first = addresses[0];
@@ -148,7 +148,7 @@ export async function openMcpNetwork(
       );
       if (Exit.isFailure(resolved)) {
         request.signal.throwIfAborted();
-        throw portError(resolved.cause);
+        throw originalError(resolved.cause);
       }
       pins.set(url.origin, resolved.value);
     }

@@ -24,7 +24,7 @@ import {
 } from "./channels/webhooks.ts";
 import { addressedTo, onReached, readReached } from "./channels/webhook-evidence.ts";
 import { channelStateDir } from "./channels/context.ts";
-import { portCleanup } from "./effect-port.ts";
+import { cleanupQuietly } from "./promise-bridge.ts";
 import { API_PREFIX } from "./http/contract.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
 import { log } from "./log.ts";
@@ -432,7 +432,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ),
       );
       return yield* Effect.gen(function* () {
-        if (api !== undefined) yield* Effect.addFinalizer(() => portCleanup("closing the Agent API", api.dispose));
+        if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
         // Registered first, so subscriptions and schedule timers stop before waiting for transports.
         yield* Effect.addFinalizer(() => closeWithin(runs, names, closeTimeoutMs).pipe(Effect.orDie));
         yield* Effect.acquireRelease(

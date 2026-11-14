@@ -1,7 +1,7 @@
 /** AWS AgentCore Runtime adapter: serve the channels, the schedules' fires and the wake pokes through the Runtime's service contract. */
 import { Buffer } from "node:buffer";
 import * as Effect from "effect/Effect";
-import { PortFailure, portJoin } from "../../effect-port.ts";
+import { PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import {
   type AgentcoreEnvelope,
   type CarriedRequest,
@@ -77,18 +77,18 @@ function createActivation(deps: {
   onStateReady: (() => void) | undefined;
   channels: AgentcoreAdapterOptions["channels"];
 }): {
-  prepare(envelope: AgentcoreEnvelope): Effect.Effect<void, PortFailure>;
+  prepare(envelope: AgentcoreEnvelope): Effect.Effect<void, PromiseFailure>;
   /** The channel surface; the construction outcome is cached either way. */
-  channels: Effect.Effect<ChannelHandler, PortFailure>;
+  channels: Effect.Effect<ChannelHandler, PromiseFailure>;
 } {
   const { stateRoot, onStateReady } = deps;
   const stateReady = once(
-    portJoin(async () => {
+    joinPromise(async () => {
       onStateReady?.();
     }),
   );
   const channels = once(
-    portJoin(async () => {
+    joinPromise(async () => {
       const surface = await deps.channels();
       return router(surface.routes);
     }),
@@ -101,7 +101,7 @@ function createActivation(deps: {
           const url = envelope.wake.url;
           yield* Effect.try({
             try: () => rememberWakeAlarmUrl(stateRoot, url),
-            catch: (cause) => new PortFailure(cause),
+            catch: (cause) => new PromiseFailure(cause),
           });
         }
         yield* stateReady;
