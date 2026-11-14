@@ -18,8 +18,20 @@ export function channelStateDir(stateRoot: string, name: string): string {
   return join(stateRoot, "channels", name);
 }
 
+const channelResolveDirs = new WeakMap<ChannelContext, readonly string[]>();
+
+/** Directories a channel's optional runtime dependencies may resolve from (program dir, agent dir). */
+export function resolveDirsFor(ctx: ChannelContext): readonly string[] {
+  return channelResolveDirs.get(ctx) ?? [];
+}
+
 /** The context of the channel `name` (its file's name under `src/channels/`), its state under `stateRoot`. */
-export function channelContext(agent: Agent, stateRoot: string, name: string): ChannelContext {
+export function channelContext(
+  agent: Agent,
+  stateRoot: string,
+  name: string,
+  resolveFrom: readonly string[] = [],
+): ChannelContext {
   if (!isAbsolute(stateRoot)) throw new Error(`a channel's state root must be absolute, got "${stateRoot}"`);
   const stateDir = channelStateDir(stateRoot, name);
   ensureStateHome(stateDir);
@@ -36,7 +48,7 @@ export function channelContext(agent: Agent, stateRoot: string, name: string): C
         ),
       ),
   });
-  return {
+  const ctx: ChannelContext = {
     agent,
     stateDir,
     sessionFor: (key, options) => {
@@ -50,4 +62,6 @@ export function channelContext(agent: Agent, stateRoot: string, name: string): C
     recordedSession: (key) => sessions.get(key),
     turn: (place, work) => turns.accept({ conversation: place, work }),
   };
+  if (resolveFrom.length > 0) channelResolveDirs.set(ctx, [...new Set(resolveFrom)]);
+  return ctx;
 }

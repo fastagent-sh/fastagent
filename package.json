@@ -96,7 +96,6 @@
     "@earendil-works/pi-schema": "1.5.2",
     "@effect/platform-bun": "^4.0.7",
     "@effect/platform-node": "^4.0.7",
-    "@larksuiteoapi/node-sdk": "^1.76.0",
     "@modelcontextprotocol/client": "2.4.0",
     "@smithy/signature-v4": "^5.7.4",
     "chokidar": "^6.0.0",
@@ -109,9 +108,18 @@
     "undici": "^8.6.0",
     "yaml": "^2.9.1"
   },
+  "peerDependencies": {
+    "@larksuiteoapi/node-sdk": "^1.76.0"
+  },
+  "peerDependenciesMeta": {
+    "@larksuiteoapi/node-sdk": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
     "@hono/node-server": "^2.1.5",
+    "@larksuiteoapi/node-sdk": "^1.76.0",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/express": "^5.0.6",
     "@types/proper-lockfile": "^4.1.4",

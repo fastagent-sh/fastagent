@@ -4,6 +4,8 @@
  */
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { writeFileAtomic } from "../atomic-write.ts";
+import { FEISHU_SDK, fastagentBuild } from "../version.ts";
 import { detectRuntime } from "../runtime.ts";
 import { assertInsideAgentDir, exists } from "../paths.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
@@ -151,6 +153,54 @@ export async function scaffoldChannel(dir: string, kind: ChannelKind): Promise<s
   return file;
 }
 
+interface AgentManifest {
+  type?: string;
+  packageManager?: unknown;
+  dependencies?: Record<string, string>;
+  [key: string]: unknown;
+}
+
+async function readAgentManifest(dir: string): Promise<{ path: string; pkg: AgentManifest }> {
+  const pkgPath = join(dir, "package.json");
+  let raw: string;
+  try {
+    raw = await readFile(pkgPath, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it.
+      throw new Error(
+        `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
+          `Add a package.json declaring @fastagent-sh/fastagent there (\`init\` scaffolds one), ` +
+          `or create a fresh agent with \`fastagent init <dir>\``,
+      );
+    }
+    throw e;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${pkgPath}: invalid JSON`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${pkgPath}: package.json must be a JSON object`);
+  }
+  return { path: pkgPath, pkg: parsed as AgentManifest };
+}
+
+/**
+ * Declare the packages a channel loads beyond fastagent in the agent's package.json: Feishu and Lark open a WebSocket
+ * through {@link FEISHU_SDK}, an optional peer of fastagent. Returns the names it added; one already declared is kept.
+ */
+export async function declareChannelDependencies(dir: string, kind: ChannelKind): Promise<string[]> {
+  if (kind !== "feishu" && kind !== "lark") return [];
+  const { path: pkgPath, pkg } = await readAgentManifest(dir);
+  if (pkg.dependencies?.[FEISHU_SDK] !== undefined) return [];
+  pkg.dependencies = { ...pkg.dependencies, [FEISHU_SDK]: (await fastagentBuild()).feishuSdk };
+  writeFileAtomic(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+  return [FEISHU_SDK];
+}
+
 /** The bundle's companion tools (every `.ts` beside `channel.ts` → `src/tools/<name>`). */
 export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Promise<string[]> {
   const written: string[] = [];
@@ -169,27 +219,7 @@ export async function scaffoldCompanionTools(dir: string, kind: ChannelKind): Pr
  * channel file imports it).
  */
 export async function assertChannelReady(dir: string): Promise<void> {
-  const pkgPath = join(dir, "package.json");
-  let raw: string;
-  try {
-    raw = await readFile(pkgPath, "utf8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      // `dir` is the AGENT dir, so `fastagent init` here would nest a second agent inside it.
-      throw new Error(
-        `${dir}: no package.json — a channel adapter is code and needs the agent's own manifest. ` +
-          `Add a package.json declaring @fastagent-sh/fastagent there (\`init\` scaffolds one), ` +
-          `or create a fresh agent with \`fastagent init <dir>\``,
-      );
-    }
-    throw e;
-  }
-  let pkg: { type?: string; packageManager?: unknown; dependencies?: Record<string, string> };
-  try {
-    pkg = JSON.parse(raw);
-  } catch {
-    throw new Error(`${pkgPath}: invalid JSON`);
-  }
+  const { path: pkgPath, pkg } = await readAgentManifest(dir);
   if (pkg.type !== "module") {
     throw new Error(`${pkgPath}: fastagent channels are ESM — set "type": "module"`);
   }

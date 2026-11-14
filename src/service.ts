@@ -99,8 +99,9 @@ export function routesFor(
   stateRoot: string,
   channels: ReadonlyMap<string, AnyChannelModule>,
   webhooks: () => readonly WebhookRegistration[] = () => [],
+  resolveFrom: readonly string[] = [],
 ): ServingSurface {
-  const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot);
+  const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot, resolveFrom);
   for (const key of Object.keys(routes)) {
     if (isApiPath(parseRouteKey(key).path)) {
       throw new Error(`route "${key}" is under ${API_PREFIX}, which the Agent API serves — move it`);
@@ -377,6 +378,8 @@ export interface ServableAgent {
   config: { http?: { publicUrl?: string }; channels?: Readonly<Record<string, { app?: { url?: string } }>> };
   /** The project directory the instance's `.secrets/` belong to. */
   agentDir: string;
+  /** The program directory whose `package.json` holds the agent's own dependencies (source or built `dist/`). */
+  definition?: { dir: string };
   /** Where durable state lives (channel state, schedule fires, wake-ups). */
   stateRoot: string;
   channels: ReadonlyMap<string, AnyChannelModule>;
@@ -388,7 +391,8 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
   const webhooks = webhooksOf(opened);
-  const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list);
+  const resolveFrom = [...(opened.definition ? [opened.definition.dir] : []), agentDir];
+  const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list, resolveFrom);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);
   const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;

@@ -20,7 +20,8 @@ Pick the cloud your tenant is on. One agent can serve both, with two apps.
 ## Set it up
 
 ```bash
-fastagent add feishu              # src/channels/feishu.ts, and the feishu-send and feishu-threads tools
+fastagent add feishu              # src/channels/feishu.ts, the feishu-send and feishu-threads tools, and the WebSocket SDK in package.json
+npm install                       # installs @larksuiteoapi/node-sdk
 fastagent channels setup feishu   # scan or open the link to create the app; credentials are kept for you
 fastagent dev                     # WebSocket: no public URL needed
 ```
@@ -54,7 +55,7 @@ Setup checks the app's scopes and names any your tenant withheld, with a link to
 
 | | WebSocket | Webhook |
 |---|---|---|
-| Needs | App ID + Secret, an always-on process | also the Verification Token, a public URL |
+| Needs | App ID + Secret, an always-on process, `@larksuiteoapi/node-sdk` in the agent's dependencies | also the Verification Token, a public URL |
 | Default for | `dev` | `start` and deployments |
 | Scale to zero | no | yes |
 

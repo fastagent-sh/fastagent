@@ -1,3 +1,6 @@
+import { createRequire } from "node:module";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LongConnection } from "../../channel.ts";
 import { log } from "../../log.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
@@ -24,6 +27,8 @@ export interface FeishuWsConnectionOptions {
   appSecret: string;
   domain: string;
   onEvent(event: FeishuMessageEvent): void | Promise<void>;
+  /** Directories whose own `node_modules` may hold the optional SDK when global/external fastagent cannot see it. */
+  resolveFrom?: readonly string[];
   /** Internal SDK seam for deterministic tests. */
   createClient?: CreateFeishuWsClient;
 }
@@ -38,13 +43,57 @@ function sdkLogger(label: string) {
   };
 }
 
+function isMissingPackage(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 6 && current !== undefined && current !== null; depth++) {
+    if (typeof current !== "object") break;
+    const code = (current as { code?: unknown }).code;
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") return true;
+    const message = current instanceof Error ? current.message : String(current);
+    if (message.includes("Cannot find package") || message.includes("Cannot find module")) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Load `@larksuiteoapi/node-sdk`, falling back to `resolveFrom` (the agent/program directory) so a global `fastagent`
+ * binary or non-hoisted layout finds the SDK installed in the agent's own `node_modules`.
+ */
+async function loadFeishuSdk(resolveFrom: readonly string[] = []): Promise<typeof import("@larksuiteoapi/node-sdk")> {
+  try {
+    return await import("@larksuiteoapi/node-sdk");
+  } catch (cause) {
+    if (!isMissingPackage(cause)) throw cause;
+    for (const dir of resolveFrom) {
+      let resolved: string;
+      try {
+        resolved = createRequire(join(dir, "package.json")).resolve("@larksuiteoapi/node-sdk");
+      } catch (inner) {
+        if (isMissingPackage(inner)) continue;
+        throw inner;
+      }
+      return await import(pathToFileURL(resolved).href);
+    }
+    throw cause;
+  }
+}
+
 async function productionClient(
   options: FeishuWsConnectionOptions,
   callbacks: FeishuWsClientCallbacks,
 ): Promise<FeishuWsClient> {
-  // Webhook-only users stay on the lightweight fetch path; load the proprietary-protocol SDK only when a WebSocket
-  // connection is actually opened.
-  const { EventDispatcher, LoggerLevel, WSClient } = await import("@larksuiteoapi/node-sdk");
+  // An optional peer: only an agent that opens a WebSocket installs it (`fastagent add feishu|lark` declares it).
+  const { EventDispatcher, LoggerLevel, WSClient } = await loadFeishuSdk(options.resolveFrom).catch(
+    (cause: unknown) => {
+      throw new Error(
+        `${options.kind} websocket could not load @larksuiteoapi/node-sdk (${String(cause)}): run ` +
+          `\`npm install @larksuiteoapi/node-sdk\` in the agent directory, or set channels.${options.kind}.ingress to ` +
+          `"webhook" in its fastagent.json`,
+        { cause },
+      );
+    },
+  );
   const label = `[${options.kind}:ws]`;
   const logger = sdkLogger(label);
   const eventDispatcher = new EventDispatcher({ logger, loggerLevel: LoggerLevel.warn }).register({
