@@ -34,14 +34,7 @@ import { createAskLog, readStart } from "../kit/history.ts";
 import { foldBudget } from "../kit/fold-budget.ts";
 import { createMessageOwners, createSeenRing, isSenderConversation, senderConversation } from "../kit/state.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
-import {
-  DROPPED_TURN_NOTICE,
-  NO_ACK,
-  SHARED_ANSWER_NOTICE,
-  createTaskTracker,
-  createTurnRunner,
-  dispatchStop,
-} from "../kit/turn.ts";
+import { DROPPED_TURN_NOTICE, NO_ACK, SHARED_ANSWER_NOTICE, createTurnRunner, dispatchStop } from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { acknowledgeTelegramAsk } from "./reaction.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -185,7 +178,6 @@ function createTelegramRuntime(
     isRecord: isStoredTurn,
     order: (a, b) => Number(a.id) - Number(b.id),
   });
-  const sideTasks = createTaskTracker("[telegram]");
   const targetOf = (r: PendingTurn): Target => ({ chatId: r.chatId, threadId: r.threadId, replyTo: r.replyTo });
 
   // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
@@ -227,7 +219,7 @@ function createTelegramRuntime(
       log.warn(`[telegram] an answer was not recorded into place ${place}: ${String(error)}`);
     }
   };
-  const runner = createTurnRunner<PendingTurn, StoredTurn, BufferEntry>({
+  const runner = createTurnRunner<StoredTurn, BufferEntry>({
     label: "[telegram]",
     store,
     discussion: async (rec) => {
@@ -244,8 +236,6 @@ function createTelegramRuntime(
       return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
     },
     delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),
-    toStored: (intent) => ({ ...intent, attempts: 0 }),
-    fromStored: ({ attempts: _a, ...intent }) => intent,
     where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
     notifyDropped,
     acknowledgeHeld: async (rec) =>
@@ -345,7 +335,7 @@ function createTelegramRuntime(
     // Explicit user stop (`/stop`): a control action, never a turn — it must not queue behind the run it stops.
     // `abort` waits until what it stopped has ended, so the update is acknowledged first.
     if (telegramStop(update, { botUsername: mentionName, botId })) {
-      sideTasks.track(
+      runner.track(
         dispatchStop(agent, recordedSession(r.conversation ?? own), "[telegram]")
           .then((feedback) =>
             sendMessage(apiBaseUrl, botToken, { chatId, threadId, replyTo }, feedback, { html: false }),
@@ -380,7 +370,7 @@ function createTelegramRuntime(
     }
     return;
   };
-  return { accept, turnsIdle: () => runner.idle() };
+  return { accept, turnsIdle: runner.idle };
 }
 
 /** Build a Telegram bot channel that receives by webhook: policy options in, a {@link ChannelModule} out. */

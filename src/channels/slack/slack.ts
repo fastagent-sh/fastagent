@@ -16,14 +16,7 @@ import * as Exit from "effect/Exit";
 import { joinPromise } from "../../promise-bridge.ts";
 import { attachmentsDir, codePointPrefix } from "../kit/text.ts";
 import { type PlaceMessage, createAskLog, createRoomThreads, registerRoomThreads } from "../kit/history.ts";
-import {
-  DROPPED_TURN_NOTICE,
-  createTaskTracker,
-  createTurnRunner,
-  dispatchStop,
-  isStopText,
-  readPlaceDiscussion,
-} from "../kit/turn.ts";
+import { DROPPED_TURN_NOTICE, createTurnRunner, dispatchStop, isStopText, readPlaceDiscussion } from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
 import {
@@ -299,8 +292,6 @@ function createSlackRuntime(
   registerSlackApi(botToken, api); // the send tool delivers through this one (shared-api.ts)
   const auth = createSlackAuthentication(api, label);
 
-  // Side tasks (stop feedback, DM welcomes) run off the ACK path but drain in turnsIdle.
-  const sideTasks = createTaskTracker(label);
   const seen = createSeenRing(join(stateHome, "seen.json"), label);
   // A `/stop` is taken as input but is no discussion: a read leaves it out, the asks themselves are kept.
   const stops = createSeenRing(join(stateHome, "stops.json"), label);
@@ -383,7 +374,7 @@ function createSlackRuntime(
     );
   };
 
-  const runner = createTurnRunner<PendingSlackTurn, StoredSlackTurn, PlaceMessage>({
+  const runner = createTurnRunner<StoredSlackTurn, PlaceMessage>({
     label,
     store,
     // The read ends at the ask (`messageRefOf`: the ts of the message that asked) and starts after the ask its session
@@ -402,8 +393,6 @@ function createSlackRuntime(
       }),
     seen,
     delivered: createSeenRing(join(stateHome, "delivered.json"), label),
-    toStored: (intent) => ({ ...intent, attempts: 0 }),
-    fromStored: ({ attempts: _attempts, ...intent }) => intent,
     where: (turn) => `channel=${turn.channelId}`,
     // Leave the intent untouched when Slack auth failed.
     beforeRun: async (turn) => {
@@ -561,7 +550,7 @@ function createSlackRuntime(
       seen.add(logicalId);
       stops.add(logicalId);
       const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
-      sideTasks.track(
+      runner.track(
         dispatchStop(agent, recordedSession(routed.conversation ?? defaultConversation), label)
           .then((feedback) =>
             placeApi({ historyKey, teamId, conversation: routed.conversation ?? defaultConversation })
@@ -637,7 +626,7 @@ function createSlackRuntime(
     // Reserve in-memory so rapid re-opens don't double-post; persist to the durable set only on a successful post,
     // so a failed post simply retries on the next open.
     welcomeInFlight.add(id);
-    sideTasks.track(
+    runner.track(
       api
         .postMarkdown({ channelId }, body)
         .then(() => {
@@ -659,7 +648,7 @@ function createSlackRuntime(
       maybeWelcome(envelope);
       acceptEvent(envelope);
     },
-    turnsIdle: () => Promise.all([runner.idle(), sideTasks.drain()]).then(() => undefined),
+    turnsIdle: runner.idle,
   };
 }
 

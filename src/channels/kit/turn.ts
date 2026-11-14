@@ -50,12 +50,11 @@ export async function dispatchStop(
   }
 }
 
-export interface TaskTracker {
+function createTaskTracker(label: string): {
   track(task: Promise<unknown>): void;
+  size(): number;
   drain(): Promise<void>;
-}
-
-export function createTaskTracker(label: string): TaskTracker {
+} {
   const tasks = new Set<Fiber.Fiber<void>>();
   return {
     track(task) {
@@ -72,7 +71,13 @@ export function createTaskTracker(label: string): TaskTracker {
       tasks.add(fiber);
       fiber.addObserver(() => tasks.delete(fiber));
     },
-    drain: () => Effect.runPromise(Effect.asVoid(Fiber.awaitAll([...tasks]))),
+    size: () => tasks.size,
+    drain: () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          while (tasks.size > 0) yield* Fiber.awaitAll([...tasks]);
+        }),
+      ),
   };
 }
 
@@ -134,7 +139,8 @@ function gatedReply(opts: {
   });
 }
 
-export type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts">;
+type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts"> &
+  Pick<TurnRecordBase, "id" | "conversation" | "answer" | "answerKey">;
 
 export interface TurnAck {
   complete(): Promise<void>;
@@ -159,37 +165,37 @@ interface TurnHooks {
   ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
 }
 
-export interface TurnRunnerOptions<R extends PendingBase<S>, S extends TurnRecordBase, F> {
+export interface TurnRunnerOptions<S extends TurnRecordBase, F> {
   label: string;
   store: TurnStore<S>;
-  discussion(rec: R): Promise<Discussion<F>>;
+  discussion(rec: PendingBase<S>): Promise<Discussion<F>>;
   seen?: { add(id: string): void };
   delivered: SeenRing;
-  toStored(rec: R): S;
-  fromStored(stored: S): R;
-  where(rec: R): string;
-  beforeRun?(rec: R): Promise<boolean>;
-  notifyDropped(rec: R): void;
-  notifyShared?(rec: R): Promise<void>;
-  acknowledgeHeld?(rec: R): Promise<TurnAck>;
+  where(rec: PendingBase<S>): string;
+  beforeRun?(rec: PendingBase<S>): Promise<boolean>;
+  notifyDropped(rec: PendingBase<S>): void;
+  notifyShared?(rec: PendingBase<S>): Promise<void>;
+  acknowledgeHeld?(rec: PendingBase<S>): Promise<TurnAck>;
   execute(
-    rec: R,
+    rec: PendingBase<S>,
     discussion: Discussion<F>,
     onAnswered: (answer: string) => void,
     turn: TurnHooks,
   ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
-  deliverAnswer(rec: R, answer: string): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  deliverAnswer(rec: PendingBase<S>, answer: string): Effect.Effect<void, PromiseFailure, Scope.Scope>;
 }
 
-export interface TurnRunner<R, S> {
-  submit(rec: R, persist: boolean): void;
+export interface TurnRunner<S extends TurnRecordBase> {
+  submit(rec: PendingBase<S>, persist: boolean): void;
   recover(): S[];
+  /** Track off-queue channel work (e.g. `/stop` feedback) so `idle()` drains it alongside queued turns. */
+  track(task: Promise<unknown>): void;
   idle(): Promise<void>;
 }
 
-function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
-  options: TurnRunnerOptions<R, S, F>,
-  rec: R,
+function runQueuedTurn<S extends TurnRecordBase, F>(
+  options: TurnRunnerOptions<S, F>,
+  rec: PendingBase<S>,
   slot: TurnSlot = unqueuedSlot,
   afterRestart = false,
 ): Effect.Effect<void, PromiseFailure> {
@@ -351,20 +357,17 @@ function runQueuedTurn<R extends PendingBase<S>, S extends TurnRecordBase, F>(
   });
 }
 
-export function createTurnRunner<
-  R extends PendingBase<S> & { id: string; conversation: string },
-  S extends TurnRecordBase,
-  F,
->(options: TurnRunnerOptions<R, S, F>): TurnRunner<R, S> {
+export function createTurnRunner<S extends TurnRecordBase, F>(options: TurnRunnerOptions<S, F>): TurnRunner<S> {
   const { label, store, seen } = options;
-  const queue = createTurnQueue<R>({
+  const sideTasks = createTaskTracker(label);
+  const queue = createTurnQueue<PendingBase<S>>({
     label,
     run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id)),
   });
   const recoveredIds = new Set<string>();
-  const submit = (rec: R, persist: boolean): void => {
+  const submit = (rec: PendingBase<S>, persist: boolean): void => {
     if (persist) {
-      store.add(options.toStored(rec));
+      store.add({ ...rec, attempts: 0 } as unknown as S);
       seen?.add(rec.id);
     }
     queue.accept(rec);
@@ -376,10 +379,16 @@ export function createTurnRunner<
       if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
       for (const stored of recovered) {
         recoveredIds.add(stored.id);
-        submit(options.fromStored(stored), false);
+        const { attempts: _attempts, ...intent } = stored;
+        submit(intent as unknown as PendingBase<S>, false);
       }
       return recovered;
     },
-    idle: () => queue.idle(),
+    track: (task) => sideTasks.track(task),
+    idle: async () => {
+      do {
+        await Promise.all([queue.idle(), sideTasks.drain()]);
+      } while (sideTasks.size() > 0);
+    },
   };
 }
