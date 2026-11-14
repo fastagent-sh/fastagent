@@ -14,6 +14,7 @@ import {
   assertChannelReady,
   channelExists,
   channelSetup,
+  declareChannelDependencies,
   scaffoldChannel,
   scaffoldCompanionTools,
 } from "../../scaffold/add-channel.ts";
@@ -36,6 +37,7 @@ export async function runAddChannel(kind: ChannelKind, dirArg: string, opts: Add
   const inAgent = (p: string): string => (agentFromCwd === undefined ? p : join(agentFromCwd, p));
   const file = join(target, "src", "channels", `${kind}.ts`);
   const created: string[] = [];
+  let declared: string[] = [];
   await (async () => {
     if (await channelExists(target, kind)) {
       console.error(`[fastagent] ${inAgent(relative(target, file))} already exists — keeping it`);
@@ -53,11 +55,15 @@ export async function runAddChannel(kind: ChannelKind, dirArg: string, opts: Add
     if (await appendChannelEnv(target, kind)) {
       console.error(`[fastagent] added ${kind} env vars to ${inAgent(join(SECRETS_DIRNAME, ".env.example"))}`);
     }
+    declared = await declareChannelDependencies(target, kind);
+    for (const name of declared) console.error(`[fastagent] added ${name} to ${inAgent("package.json")}`);
   })().catch(failStartup);
   const install =
     detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
   const next = [
-    `${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}   # if @fastagent-sh/fastagent is not installed yet`,
+    `${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}   # ${
+      declared.length > 0 ? `installs ${declared.join(", ")}` : "if @fastagent-sh/fastagent is not installed yet"
+    }`,
     `fastagent channels setup ${kind}${agentFromCwd === undefined ? "" : ` ${shellArg(agentFromCwd)}`}   # creates the app and asks for its credentials`,
     `edit ${inAgent(relative(target, file))} — customise routing with route() (optional; the defaults already work)`,
     ...channelSetup(kind).steps.map((line) => line.replace("{tools}", inAgent(join("src", "tools")))),

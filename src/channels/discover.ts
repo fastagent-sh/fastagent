@@ -73,6 +73,7 @@ export function mountChannels(
   modules: ReadonlyMap<string, AnyChannelModule>,
   agent: Agent,
   stateRoot: string,
+  resolveFrom: readonly string[] = [],
 ): { routes: Routes; longConnections: LoadedLongConnectionChannel[]; routeChannels: string[] } {
   const routes: Routes = {};
   const owners = new Map<string, string>();
@@ -80,7 +81,7 @@ export function mountChannels(
   const routeChannels: string[] = [];
   for (const [name, module] of modules) {
     const label = `src/channels/${name}`;
-    const ctx = channelContext(agent, stateRoot, name);
+    const ctx = channelContext(agent, stateRoot, name, resolveFrom);
     if (typeof module !== "function") {
       longConnections.push({ name: module.name, connect: (signal) => module.connect(ctx, signal) });
       continue;

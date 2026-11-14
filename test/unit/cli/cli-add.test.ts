@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
@@ -22,6 +22,14 @@ describe("a channel at the command line: the program by `add`, the app by `chann
       // Asks nothing and writes no value: the instance's values are `channels setup`'s.
       expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
       expect(outcome.next_steps.join("\n")).not.toContain("tunnel");
+      // Feishu and Lark open their WebSocket through an optional peer, so `add` declares it for `npm install`.
+      const dependencies = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies;
+      if (kind === "feishu" || kind === "lark") {
+        expect(dependencies["@larksuiteoapi/node-sdk"]).toMatch(/^\^\d/);
+        expect(outcome.next_steps[0]).toContain("installs @larksuiteoapi/node-sdk");
+      } else {
+        expect(dependencies).toEqual({ "@fastagent-sh/fastagent": "*" });
+      }
 
       // The flags that were the app's setup are gone.
       for (const flag of ["--ingress webhook", "--env production", "--no-onboard", "--replace-config"]) {
@@ -56,5 +64,32 @@ describe("a channel at the command line: the program by `add`, the app by `chann
         },
       ],
     });
+  });
+
+  it("keeps an existing @larksuiteoapi/node-sdk range on re-add and refuses a missing manifest cleanly", async () => {
+    const dir = await agentWorkspace("fa-add-feishu-idempotent-", {
+      "package.json": JSON.stringify({
+        type: "module",
+        dependencies: { "@fastagent-sh/fastagent": "*", "@larksuiteoapi/node-sdk": "1.0.0" },
+      }),
+    });
+    const first = await runInProcess(["add", "feishu", dir, "--json"]);
+    expect(first.code, first.stderr).toBe(0);
+    const firstOut = JSON.parse(first.stdout) as { next_steps: string[] };
+    expect(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies["@larksuiteoapi/node-sdk"]).toBe(
+      "1.0.0",
+    );
+    expect(firstOut.next_steps[0]).toContain("if @fastagent-sh/fastagent is not installed yet");
+
+    const second = await runInProcess(["add", "feishu", dir, "--json"]);
+    expect(second.code, second.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).dependencies["@larksuiteoapi/node-sdk"]).toBe(
+      "1.0.0",
+    );
+
+    rmSync(join(dir, "package.json"));
+    const missing = await runInProcess(["add", "feishu", dir]);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("no package.json");
   });
 });

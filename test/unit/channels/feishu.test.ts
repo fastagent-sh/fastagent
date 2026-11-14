@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelContext } from "../../../src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
-import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../../../src/feishu.ts";
+import {
+  type FeishuChannelOptions,
+  feishuChannel as buildFeishuChannel,
+  feishuWebSocketChannel,
+} from "../../../src/feishu.ts";
 import { larkChannel } from "../../../src/lark.ts";
 import { eventSignature } from "../../../src/channels/feishu/crypto.ts";
 import { log } from "../../../src/log.ts";
@@ -265,6 +269,57 @@ describe("construction fails closed", () => {
     expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
       /LARK_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,
     );
+  });
+});
+
+describe("WebSocket ingress optional SDK resolution", () => {
+  afterEach(() => vi.doUnmock("@larksuiteoapi/node-sdk"));
+
+  it("fails the connection naming the package to install and the webhook way out", async () => {
+    vi.doMock("@larksuiteoapi/node-sdk", () => {
+      throw new Error("Cannot find package '@larksuiteoapi/node-sdk'");
+    });
+    feishuFetch();
+    const ctx = channelContext({} as Agent, sandbox.freshRoot(), "feishu");
+    const channel = feishuWebSocketChannel({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
+    const connection = channel.connect(ctx, new AbortController().signal);
+    await expect(connection.ready).rejects.toThrow(
+      /feishu websocket could not load @larksuiteoapi\/node-sdk .*`npm install @larksuiteoapi\/node-sdk`.*channels\.feishu\.ingress to "webhook"/,
+    );
+    await expect(connection.closed).rejects.toThrow("@larksuiteoapi/node-sdk");
+  });
+
+  it("resolves the optional SDK from the agent's own node_modules when bare import fails (global CLI / isolated store)", async () => {
+    vi.doMock("@larksuiteoapi/node-sdk", () => {
+      throw new Error("Cannot find package '@larksuiteoapi/node-sdk'");
+    });
+    const root = sandbox.freshRoot();
+    const agentDir = join(root, "agent");
+    const sdkDir = join(agentDir, "node_modules", "@larksuiteoapi", "node-sdk");
+    mkdirSync(sdkDir, { recursive: true });
+    writeFileSync(join(agentDir, "package.json"), JSON.stringify({ type: "module" }));
+    writeFileSync(join(sdkDir, "package.json"), JSON.stringify({ name: "@larksuiteoapi/node-sdk", main: "index.mjs" }));
+    writeFileSync(
+      join(sdkDir, "index.mjs"),
+      [
+        "export const LoggerLevel = { warn: 2 };",
+        "export class EventDispatcher { register() { return this; } }",
+        "export class WSClient {",
+        "  constructor(opts) { this.opts = opts; }",
+        "  async start() { this.opts.onReady(); }",
+        "  close() {}",
+        "}",
+      ].join("\n"),
+    );
+
+    feishuFetch();
+    const ctx = channelContext({} as Agent, root, "feishu", [agentDir]);
+    const channel = feishuWebSocketChannel({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
+    const ac = new AbortController();
+    const connection = channel.connect(ctx, ac.signal);
+    await expect(connection.ready).resolves.toBeUndefined();
+    ac.abort();
+    await expect(connection.closed).resolves.toBeUndefined();
   });
 });
 

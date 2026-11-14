@@ -6,6 +6,7 @@ import { recordReached } from "../webhook-evidence.ts";
 import { join } from "node:path";
 import { Effect } from "effect";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
+import { resolveDirsFor } from "../context.ts";
 import { log } from "../../log.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
@@ -747,6 +748,7 @@ export function buildFeishuWebSocketChannel(
           appSecret: opts.appSecret,
           domain: opts.apiBaseUrl ?? profile.apiBase,
           onEvent: runtime.acceptEvent,
+          resolveFrom: resolveDirsFor(ctx),
         },
         signal,
       );
