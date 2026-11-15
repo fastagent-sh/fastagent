@@ -21,7 +21,7 @@ as a Telegram, Slack or Feishu bot, on a schedule, or behind your own channel. Y
 new framework to learn.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy fly --run ships it to a live URL." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy docker writes the container it runs in." width="860">
 </p>
 
 ## Get started

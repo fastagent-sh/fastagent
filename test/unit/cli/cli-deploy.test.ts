@@ -29,6 +29,16 @@ describe("cli: deploy docker", () => {
     expect(forced.stderr).toMatch(/does not exclude `\.secrets\/auth\.json` — the build context would BAKE SECRETS/);
   });
 
+  it("prints an image name Docker accepts when the agent's name has an uppercase letter or a leading separator", async () => {
+    const dir = await agentWorkspace("fa-deploy-image-", {
+      "package.json": JSON.stringify({ type: "module", name: "_Support" }),
+    });
+    const written = await runInProcess(["deploy", "docker", dir]);
+    expect(written.code, written.stderr).toBe(0);
+    expect(written.stdout).toMatch(/^docker build --pull -t support /m);
+    expect(written.stdout).toMatch(/^docker run -d --name _Support .* -v _Support-data:\/data .* support$/m);
+  });
+
   it("a container the image marks as deployed refuses to start without the agent its storage belongs to", async () => {
     const dir = await agentWorkspace("fa-deploy-owner-");
     const root = await mkdtemp(join(tmpdir(), "fa-deploy-root-"));

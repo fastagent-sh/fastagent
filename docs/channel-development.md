@@ -48,8 +48,8 @@ owns its reconnects.
 **Routes** are `"/path"` (any method) or `"METHOD /path"`, matched literally. Two keys for one route refuse the start.
 `HEAD` is answered from `GET`; a wrong method gets 405, an unknown path 404.
 
-Keep module top-level code free of secrets and side effects: `deploy` and `add` load the module with stand-in secrets
-to inspect it. Take credentials as options, through `needs`.
+Keep module top-level code free of secrets and side effects: `deploy` and `add` import the module to inspect it.
+Take credentials as options, through `needs`.
 
 ## Verify the platform
 
