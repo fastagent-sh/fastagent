@@ -39,8 +39,8 @@ fastagent dev                 # serve locally, reloading on edits
 fastagent invoke "hello"      # send it one message
 ```
 
-Then add a channel (`fastagent add telegram && fastagent channels setup telegram`) or deploy it
-(`fastagent deploy fly --run`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
+Then add a channel (`fastagent add telegram && fastagent channels setup telegram`) or run it in a container
+(`fastagent deploy docker`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
 ## Embed it in your app
 

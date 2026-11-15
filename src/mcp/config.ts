@@ -1,7 +1,7 @@
 /**
  * The MCP servers an instance opens: the program's (`mcpServers` in `fastagent.config.ts`), and what the instance adds
  * (`mcpServers` in `fastagent.json`). One list, read once, that every reader (the open, `inspectMcp`, sign-in, the
- * secrets list, the build's warning) is given.
+ * build's warning) is given.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -205,7 +205,7 @@ export function mcpSecrets(declarations: readonly McpDeclaration[]): DeclaredSec
 
 /**
  * The header and environment values with no `${VAR}` in them: the format allows a literal credential, and where the
- * file travels (a build publishes it, a deploy bakes or delivers it) each is said. FastAgent cannot tell a secret from a
+ * file travels (a build publishes it, an image carries it) each is said. FastAgent cannot tell a secret from a
  * setting, so what a caller does with one (warn, or refuse where it would be written into a committed file) is its own.
  */
 export function literalCredentials(

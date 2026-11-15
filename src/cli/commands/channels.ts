@@ -1,8 +1,8 @@
 /**
  * `fastagent channels setup <name>`: set up one channel's platform app for one instance: ask a
  * person for the values only they have, check them with the platform, and keep them in the instance's value file.
- * With `--record-url`: record, in the configuration a deploy delivers, the URL a person set on a Slack or Lark app's
- * page, once the deployment confirms the platform reaches it there.
+ * With `--record-url`: record, in the instance configuration `--config` names, the URL a person set on a Slack or Lark
+ * app's page, once the deployment confirms the platform reaches it there.
  */
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -88,9 +88,7 @@ export async function runChannelsSetup(name: string, dirArg: string, opts: Chann
     await setChannelConfig(plan.agentDir, plan.kind, { ingress: plan.way }, { config: plan.writeIngress });
     console.error(`[fastagent] wrote channels.${plan.kind}.ingress "${plan.way}" to ${plan.writeIngress}`);
   }
-  const serve = plan.dev
-    ? "fastagent dev"
-    : `fastagent start --env-file ${shellArg(plan.file)}   # or: fastagent deploy <host> --run --env-file ${shellArg(plan.file)}`;
+  const serve = plan.dev ? "fastagent dev" : `fastagent start --env-file ${shellArg(plan.file)}`;
   const nextSteps = [serve, ...outcome.after];
   if (opts.json) {
     printReport(
@@ -151,7 +149,7 @@ async function planSetup(kind: SetupKind, dirArg: string, opts: ChannelsSetupOpt
   const config =
     opts.config !== undefined ? resolve(opts.config) : dev ? join(agentDir, INSTANCE_CONFIG_FILE) : undefined;
   if (opts.ingress !== undefined && config === undefined) {
-    failUsage("--ingress writes into a configuration: pass --config <file>, the one `deploy --config` delivers");
+    failUsage("--ingress writes into a configuration: pass --config <file>, the instance configuration it runs with");
   }
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const instance =
@@ -191,8 +189,7 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
   if (name !== "slack" && name !== "lark") {
     failUsage(`${name}: only slack and lark have a URL a person sets (the instance points the others itself)`);
   }
-  if (opts.config === undefined)
-    failUsage("--record-url writes into the configuration a deploy delivers: pass --config <file>");
+  if (opts.config === undefined) failUsage("--record-url writes into the instance configuration: pass --config <file>");
   const agentDir = agentDirOrExit(resolve(dirArg));
   selectAgentEnvironment("production");
   enterEnvFile(opts.envFile, { defaultFile: false });
@@ -209,7 +206,7 @@ async function recordUrl(name: string, dirArg: string, opts: ChannelsSetupOption
   if (reach === undefined || base === undefined) {
     failUsage(`${config} names no http.publicUrl: pass --url <the deployment's public URL>`);
   }
-  // The app's credentials are the file `--env-file` names, and the environment only with `--from-env`, as for `deploy`:
+  // The app's credentials are the file `--env-file` names, and the environment only with `--from-env`:
   // a bot token exported in the shell for the development app must not be the one a production URL is recorded against.
   if (opts.envFile === undefined && !opts.fromEnv) {
     failUsage(

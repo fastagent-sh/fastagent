@@ -72,7 +72,7 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     // An out-of-set argument is the parser's too, and names the set.
     const host = await parse(["deploy", "heroku"]);
     expect(host.code).toBe(2);
-    expect(host.err).toMatch(/Allowed choices are docker, fly, railway/);
+    expect(host.err).toMatch(/Allowed choices are docker\./);
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {

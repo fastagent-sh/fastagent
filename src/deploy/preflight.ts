@@ -1,46 +1,23 @@
 /**
- * The host-NEUTRAL deploy pre-flight: everything `fastagent deploy <host>` computes and checks BEFORE the target
- * branch (Docker / Fly / Railway).
+ * What `fastagent deploy docker` checks before it writes the container: that the agent directory builds into an image
+ * that starts, and that the image would carry none of this machine's secrets or state. A finding the image cannot run
+ * with stops the command; everything else is a warning or a note.
  */
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
-import { isModelSpec } from "../model-ref.ts";
-import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
+import { join } from "node:path";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import {
-  environmentAuth,
-  interactiveLoginKind,
-  keyVariables,
-  listModels,
-  loginProviders,
-  modelHint,
-  modelsOver,
-  providerOf,
-} from "../harnesses/models/models.ts";
-import { modelEnvironment } from "../harnesses/models/environment.ts";
-import { type EffectiveConfig, type InstanceConfigSource, instanceConfigIn } from "../harnesses/pi-durable/config.ts";
-import { type AgentDefinition, definitionSecrets } from "../harnesses/pi-durable/definition.ts";
-import { type BuiltDefinition, buildDefinitionShape, loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
-import { DEPLOYED_ENV, INSTANCE_CONFIG_FILE, exists } from "../paths.ts";
-import { type DeclaredChannel, channelIngress } from "../channels/discover.ts";
-import { type DeclaredContent, loadContent } from "../content/declare.ts";
-import type { DeclaredSecret } from "../declared-secrets.ts";
-import { CHANNEL_KINDS } from "../scaffold/add-channel.ts";
-import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
-import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
-import { deliveredConfig, undeliverableText } from "./delivery.ts";
-import {
-  type McpDeclaration,
-  declareMcp,
-  literalCredentialAdvice,
-  literalCredentials,
-  relativeCommands,
-} from "../mcp/config.ts";
+import { resolveConfig } from "../harnesses/pi-durable/config.ts";
+import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
+import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
+import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
+import { isModelSpec } from "../model-ref.ts";
+import { DEPLOYED_ENV, exists } from "../paths.ts";
+import { loadContent } from "../content/declare.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
-import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { loadEnvValues, namedValueFile, trackedValueFile, trackedValueFileNote } from "../value-file.ts";
-import { type DeploymentSecret, deploymentSecrets, isEnvKey } from "./secrets.ts";
+import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
+import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
+import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -48,193 +25,26 @@ interface DeployMessage {
   text: string;
 }
 
-/** The resolved facts every host plan needs (the container shape, channels, model auth, ports/secrets). */
-interface DeployFacts {
-  messages: DeployMessage[];
-  /** Every declared channel with the ingress its module shape says it has, custom ones included. */
-  channels: DeclaredChannel[];
-  /** `src/schedules/` declares at least one schedule. */
-  hasCron: boolean;
-  /**
-   * The values this deploy has to give the target: the environment it runs in (what a CI job or `op run` injects, and
-   * the file `--env-file` names laid under it), read ONCE here so the plan side and the run side cannot disagree about
-   * what this deployment carries. A deployment has no default file.
-   */
-  values: ReadonlyMap<string, string>;
-  /** Where {@link values} come from, as a message names it: the `--env-file`'s path, agent-dir-relative, or "the environment". */
-  valuesFrom: string;
-  /**
-   * The variable the values carry the model's key in, or undefined when no key travels that way
-   * ({@link credentialRoute}).
-   */
-  modelAuth: string | undefined;
-  /**
-   * The variables the model's provider reads its key from, and whether the deployment needs one of them set on its
-   * target: when no key is in the value file and the provider has no login to run on the box, the key is the only way in.
-   */
-  modelKey: { variables: string[]; required: boolean };
-  /**
-   * The provider the deployment must log in to itself (`fastagent login --deployment`): the model's credential does
-   * not travel, because it is neither a variable in the value file nor resolved by the definition's own provider code.
-   * Nothing from this machine's credentials file is ever copied, so a login on the box is its only holder.
-   */
-  boxLogin: string | undefined;
-  /** Every declaration the definition makes — the names the target must hold, by declaring file. */
-  declaredSecrets: readonly DeclaredSecret[];
-  /** The runbook's variable list: the declared names, each hinted by the file that declared it. */
-  secrets: DeploymentSecret[];
-  /** Container facts shared by the plan and the generated Dockerfile — ONE source, so they can't drift. */
-  container: ContainerInput;
-  port: number;
-}
-
-/** Done (facts for the host branch), or a hard gate the CLI stops on (a model that won't reach the box). */
-export type DeployPreflight = { ok: false; gate: string } | ({ ok: true } & DeployFacts);
-
-/**
- * Where a check says what it found. An ISSUE is what would crash-loop the deployed box: under `--run` the first one
- * stops the pre-flight as its gate, generate-only prints it as a warning and goes on.
- */
+/** Where a check says what it found. */
 export interface DeployReport {
   note(text: string): void;
   warn(text: string): void;
-  issue(text: string): void;
 }
 
-/** What a host's clone of a `github` entry reads; optional, since a public repository needs none. */
-const GITHUB_TOKEN_SECRET: DeclaredSecret = {
-  name: "GITHUB_TOKEN",
-  declaredIn: "fastagent.config.ts (a github content entry)",
-  description: "git's credential for a private repository, and for the agent to push",
-  optional: true,
-};
+/** The container to write, or why the agent directory cannot become one that starts. */
+export type ContainerCheck =
+  | { ok: false; gate: string }
+  | { ok: true; messages: DeployMessage[]; container: ContainerInput; port: number };
 
-/**
- * The MCP servers the box will open: the program's, in the image, and the delivered configuration's. A name both
- * declare, or one that cannot be read, is an issue (the box would refuse to open); a literal credential in the
- * program's is a warning, since it ships in the image; in the delivered configuration it is an issue, since a host
- * renders that into a manifest meant to be committed and shows it on the platform (FastAgent cannot tell a secret from
- * a setting, so each literal value is refused and `${VAR}` is the way out); a relative stdio command in the delivered
- * configuration is an issue, since nothing delivers the script it names. (The program's own is relative to its
- * package, and `build` refuses one that it does not copy.)
- * `args` are not checked: FastAgent cannot know which strings are paths. Answers whether the list reads.
- */
-function checkMcp(
-  agentDir: string,
-  programServers: unknown,
-  programFile: string,
-  delivered: InstanceConfigSource | undefined,
-  report: DeployReport,
-): boolean {
-  let declarations: McpDeclaration[];
-  try {
-    declarations = declareMcp(programServers, agentDir, delivered, programFile);
-  } catch (error) {
-    report.issue(messageOf(error));
-    return false;
-  }
-  for (const literal of literalCredentials(declarations)) {
-    const where = `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key}`;
-    const advice = `${literalCredentialAdvice(literal)} and set that name with \`fastagent secrets set <host> <NAME>\``;
-    if (literal.origin === "instance") {
-      report.issue(
-        `${where} is a literal value, and this deploy writes the configuration into a manifest meant to be committed ` +
-          `and shows it on the platform: ${advice}`,
-      );
-    } else {
-      report.warn(`${where} is a literal value, and this deploy puts it in the image: ${advice}`);
-    }
-  }
-  for (const { name, file, command } of relativeCommands(declarations).filter(({ origin }) => origin === "instance")) {
-    report.issue(
-      `${file} mcpServers.${name}: the command "${command}" is a relative path, and a deploy delivers the configuration ` +
-        `but not the script it names: write an absolute path on the box, or a command found on its PATH`,
-    );
-  }
-  return true;
-}
-
-/**
- * What each content entry becomes on the host, one line each, so none is missing there unsaid. A
- * repository, the program's or the delivered configuration's, is cloned there. A directory of this machine is not on
- * the host, and FastAgent maps none onto it, so the delivered configuration naming one is an issue: the deployed agent
- * would lack data it was configured to work on.
- */
-function checkContent(declared: readonly DeclaredContent[], delivered: string | undefined, report: DeployReport): void {
-  const fate = "cloned on the host, and brought up to date in place at each start";
-  for (const entry of declared) {
-    if (entry.kind === "github") {
-      report.note(`works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
-      continue;
-    }
-    report.issue(
-      `works on ${entry.name}: a directory of this machine (${entry.path}), in ${delivered}, which the host does not ` +
-        `have: declare a repository instead (github:owner/repo), or copy what the agent only needs to read into the ` +
-        `agent directory, which every release carries`,
-    );
-  }
-}
-
-/** The pre-flight's one early exit: thrown by a check, turned into `{ ok: false, gate }` by {@link preflightDeploy}. */
 class DeployGate {
-  readonly text: string;
-  constructor(text: string) {
-    this.text = text;
-  }
+  constructor(readonly text: string) {}
 }
 
-interface PreflightInput {
-  agentDir: string;
-  /** The instance's name (`deploymentName`): the agent the box's storage will belong to. */
-  name: string;
-  config: EffectiveConfig;
-  /** The instance configuration this deployment delivers (`--config`), as read. */
-  delivered?: { source: InstanceConfigSource };
-  /** `--run` fully deploys, so a definition that resolves NO model is a GATE (a known crash-loop); else it warns. */
-  run: boolean;
-  /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
-  force: boolean;
-  /** Does this deployment serve the Agent API under `/v1` (deploy/api.ts)? Then a Caller with its key reaches it. */
-  servesApi?: boolean;
-  /** `--from-env`: the environment this command runs in is a source of values, beside the file `--env-file` names. */
-  fromEnv?: boolean;
-}
-
-/**
- * The values a deploy was given, and how to name where they are from. The environment is a source only with
- * `--from-env`, like `secrets push`: it is the shell of whoever runs `deploy`, which holds what that person uses for
- * other things, and a provider key there would decide that the key travels instead of a login on the box. A file
- * `--env-file` names is read as data, so the values are the file's whatever else the environment holds.
- */
-function givenValues(
-  agentDir: string,
-  fromEnv: boolean,
-  file: string | undefined,
-): { values: Map<string, string>; valuesFrom: string } {
-  const fromFile = file === undefined ? undefined : relative(agentDir, file);
-  if (fromEnv) {
-    const values = new Map(
-      Object.entries(process.env).flatMap(([name, value]) => (value === undefined ? [] : [[name, value] as const])),
-    );
-    return { values, valuesFrom: fromFile === undefined ? "the environment" : `the environment or ${fromFile}` };
-  }
-  if (file === undefined || fromFile === undefined) return { values: new Map(), valuesFrom: NO_VALUES_GIVEN };
-  return { values: loadEnvValues(file), valuesFrom: fromFile };
-}
-
-/** Where a deploy's values are from when it was given none: what messages call the source. */
-const NO_VALUES_GIVEN = "the values given to this deploy (--env-file or --from-env)";
-
-/** Run the host-neutral pre-flight. */
-export async function preflightDeploy(input: PreflightInput): Promise<DeployPreflight> {
+export async function checkContainer(input: { agentDir: string; force: boolean }): Promise<ContainerCheck> {
   const messages: DeployMessage[] = [];
   const report: DeployReport = {
     note: (text) => void messages.push({ level: "note", text }),
     warn: (text) => void messages.push({ level: "warn", text }),
-    issue: (text) => {
-      if (input.run) throw new DeployGate(text);
-      messages.push({ level: "warn", text });
-    },
   };
   try {
     return { ok: true, messages, ...(await gatherFacts(input, report)) };
@@ -244,163 +54,58 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
   }
 }
 
-async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, delivered, force, servesApi = false } = input;
-
-  // A deployed agent is built (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
+async function gatherFacts(
+  input: { agentDir: string; force: boolean },
+  report: DeployReport,
+): Promise<{ container: ContainerInput; port: number }> {
+  const { agentDir, force } = input;
+  // The image builds the agent (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
   if (!(await exists(join(agentDir, "package.json")))) {
     throw new DeployGate(
-      `the agent directory has no package.json, and a deployed agent is built: \`fastagent build\` needs one with ` +
+      `the agent directory has no package.json, and the image builds the agent: \`fastagent build\` needs one with ` +
         `"type": "module" and typescript (\`fastagent init\` writes both)`,
     );
   }
+  // The definition the box loads on every start, read here first: one that does not load would build an image that
+  // crash-loops.
+  const definition = await loadSourceDefinition(agentDir).catch((error: unknown) => {
+    throw new DeployGate(`the definition does not load, so the container would not start: ${messageOf(error)}`);
+  });
+  const config = (() => {
+    try {
+      return resolveConfig(definition);
+    } catch (error) {
+      throw new DeployGate(messageOf(error));
+    }
+  })();
+  if (config.model !== undefined && !isModelSpec(config.model)) {
+    throw new DeployGate(
+      `the model in fastagent.config.ts is not a "provider/modelId" spec: ${JSON.stringify(config.model)}`,
+    );
+  }
+  if (config.model === undefined) {
+    report.warn(
+      `no model is set in fastagent.config.ts (\`defaults: { model: "provider/id" }\`): set FASTAGENT_MODEL on the ` +
+        `container, or it refuses to start`,
+    );
+  } else {
+    report.note(`model ${config.model}`);
+  }
 
   const rawProgram = await loadRawProgramConfig(agentDir).catch((error: unknown) => {
-    report.issue(`cannot read fastagent.config.ts: ${messageOf(error)}`);
-    return { value: undefined, file: "fastagent.config.ts" };
+    throw new DeployGate(`cannot read fastagent.config.ts: ${messageOf(error)}`);
   });
-  const content = loadContent(rawProgram.value?.content, delivered?.source, rawProgram.file);
-  checkContent(content, delivered?.source.label, report);
-  const textProblem = delivered === undefined ? undefined : undeliverableText(delivered.source);
-  if (textProblem !== undefined) report.issue(textProblem);
-  const mcpOpens = checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, delivered?.source, report);
-  // The project's own, the development instance's: a deploy carries only the configuration it is given.
-  const own = await instanceConfigIn(agentDir);
-  if (own !== undefined && own.label !== delivered?.source.label) {
-    report.note(
-      `${INSTANCE_CONFIG_FILE} is the development instance's configuration and a deploy does not carry it` +
-        (delivered === undefined ? ": pass --config <file> to deliver one" : `; it carries ${delivered.source.label}`),
-    );
-  }
-
-  // The definition the box will load on every start, read here first: a refusal in it (a module that fails to import,
-  // two tools under one name) builds a perfectly good image that crash-loops on fly/railway/docker. This is the boundary that turns that refusal into a deploy finding, so the error is
-  // carried whole into the issue rather than rethrown.
-  const definition = await loadSourceDefinition(agentDir).catch((error: unknown) => {
-    report.issue(`the definition does not load, so the deployed agent would not start: ${messageOf(error)}`);
-    return undefined;
-  });
-
-  // The model this deployment will run on, and where it came from. Resolved HERE so the plan side and the run side
-  // cannot disagree about it.
-  // The values this deploy was given, and only those: the file `--env-file` names, and the environment when
-  // `--from-env` says so. A key exported in the shell for local tools is not one of them unless asked for.
-  const file = namedValueFile();
-  const { values, valuesFrom } = givenValues(agentDir, input.fromEnv === true, file);
-  if (file !== undefined && trackedValueFile(agentDir, file))
-    report.warn(trackedValueFileNote(relative(agentDir, file)));
-  // A host has no credential of the author's: what it clones with is GITHUB_TOKEN, a value of the target like any other.
-  // This reads this machine's values only, so a target that already holds one is told as much.
-  if (content.length > 0 && !values.get("GITHUB_TOKEN")) {
-    report.note(
-      `no GITHUB_TOKEN in ${valuesFrom}: unless the target holds one, the host clones without a credential, which ` +
-        `reaches public repositories only, and the agent cannot push from its clones. \`fastagent secrets set <host> ` +
-        `GITHUB_TOKEN\` gives it access`,
-    );
-  }
-  const model = resolveDeployModel(config);
-  if (model.invalid !== undefined) {
-    // A gate rather than a warning even without `--run`: a spec the box cannot resolve is a crash loop that no
-    // artifact can say otherwise.
-    throw new DeployGate(
-      `the model in ${model.source} is not a "provider/modelId" spec: ${JSON.stringify(model.invalid)}`,
-    );
-  }
-  if (!model.spec) {
-    const issue =
-      `no model resolves for this deployment — set \`defaults: { model: "provider/id" }\` in fastagent.config.ts (it travels ` +
-      `in the image), or \`model\` in the configuration --config delivers` +
-      // Whoever has the variable set right here sees `fastagent info` report a model, so "no model resolves" reads
-      // like a bug until the message says which environment was read. It states that fact WITHOUT attributing the
-      // value: it may be the operator's shell, or the first-run picker's own pick a second earlier (which prints
-      // its own "set `model:` in your config" hint), and the two remedies are the two sources named above.
-      (process.env.FASTAGENT_MODEL
-        ? `. Note that a FASTAGENT_MODEL in the environment running deploy is not one of those sources — it ` +
-          `belongs to this machine, not to the deployment`
-        : ``);
-    report.issue(issue);
-  } else {
-    report.note(`model ${model.spec} (source: ${model.source})`);
-  }
-  const modelSpec = model.spec;
-
-  const declaredSecrets = [
-    ...(definition ? definitionSecrets(definition, config, mcpOpens ? delivered?.source : undefined) : []),
-    // The host's clone of a github entry reads it, so `secrets list|push|set` and `deploy` know the name.
-    ...(content.some((entry) => entry.kind === "github") ? [GITHUB_TOKEN_SECRET] : []),
-  ];
-  const code = definition ? buildShapes(definition, values, config, report) : undefined;
-  const channels = [...(code?.channels ?? [])].map(
-    ([name, module]): DeclaredChannel => ({
-      name,
-      ingress: channelIngress(module),
-    }),
-  );
-  for (const { name, ingress } of channels) {
-    if ((CHANNEL_KINDS as string[]).includes(name)) continue;
-    const secretsPart = `the variables it declares are the target's to hold (\`fastagent secrets\`), like every other`;
-    report.note(
-      ingress === "long-connection"
-        ? `long-connection channel "${name}" is custom — ${secretsPart}; generated deploy plans keep the process running and skip webhook registration`
-        : `route channel "${name}" is custom — ${secretsPart}; configure its webhook yourself`,
-    );
-  }
-  const longConnectionChannels = channels.filter((c) => c.ingress === "long-connection").map((c) => c.name);
-  // Counted from the registry when the code did not build: a plan that scaled to zero because a schedule failed to
-  // build on deploy day would sleep through it once it is fixed.
-  const hasCron = (code?.schedules.length ?? definition?.registry.schedules.length ?? 0) > 0;
-  if (longConnectionChannels.length > 0) {
-    report.note(
-      `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
-        `(an outbound connection cannot wake a scaled-to-zero service).`,
-    );
-  }
-  if (hasCron) {
-    report.note(
-      `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
-    );
-  }
-  if (code !== undefined && channels.length === 0 && !hasCron && !servesApi) {
-    report.warn(
-      `no channel in src/channels/, no schedule in src/schedules/, and no Agent API on this deployment: nothing ` +
-        `reaches it but its health check. Add a channel (\`fastagent add telegram|slack|feishu|lark\`, or your ` +
-        `own) or a schedule; an agent used only from an app is embedded in it (openAgent), not deployed`,
-    );
-  }
-
-  const providers = code?.providers ?? [];
-  const authPath = resolveAuthPath(agentDir);
-  const route = modelSpec ? await credentialRoute(modelSpec, values, providers) : {};
-  const modelAuth = route.envVar;
-  const boxLogin = route.boxLogin;
-  if (modelSpec && code) {
-    await checkModelExists(agentDir, modelSpec, providers, report, {
-      credentialShips: boxLogin === undefined,
-      valuesFrom,
-    });
-  }
-  const modelProvider = modelSpec ? loginProviders(providers).find((p) => p.id === providerOf(modelSpec)) : undefined;
-  const modelKey = {
-    variables: modelProvider ? await keyVariables(modelProvider) : [],
-    required: boxLogin !== undefined && !hasLogin(boxLogin, providers),
-  };
-  if (boxLogin !== undefined) {
-    if (modelKey.required) {
+  const content = loadContent(rawProgram.value?.content, undefined, rawProgram.file);
+  for (const entry of content) {
+    if (entry.kind === "github") {
       report.note(
-        `${modelSpec}: "${boxLogin}" has no login to run on the box, so its API key (${modelKey.variables.join(" or ")}) ` +
-          `must be set on the target`,
-      );
-    } else {
-      report.note(
-        `${modelSpec}: no credential ships with this deploy (this machine's logins and shell stay here) — once the ` +
-          `box is up, \`--run\` asks it: it keeps what it already authenticates ${boxLogin} with, else logs in ` +
-          `(\`fastagent login ${boxLogin} --deployment\`). Or set ${boxLogin}'s API key on the target ` +
-          `(\`fastagent secrets set <host> ${modelKey.variables[0] ?? "<KEY_NAME>"}\`)`,
+        `works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, cloned in the container ` +
+          `and brought up to date at each start (GITHUB_TOKEN on the container for a private repository)`,
       );
     }
   }
+  checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, report);
 
-  // Container facts (shared by every host) + the warnings that follow.
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
   const kept = await keptDockerfile(agentDir);
@@ -411,96 +116,63 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     bunVersion !== undefined &&
     belowFloor(bunVersion, RUNTIME_FLOOR.bun)
   ) {
-    report.issue(
+    report.warn(
       `package.json pins bun@${bunVersion}, which the image runs (oven/bun:${bunVersion}), and the agent's storage is ` +
         `node:sqlite, which Bun ships from ${RUNTIME_FLOOR.bun}: the container would fail at start. Pin ` +
         `bun@${RUNTIME_FLOOR.bun} or later`,
     );
   }
   const install = runtime === "bun" ? "bun install" : "npm install";
-  const runner = runtime === "bun" ? "bun run fastagent" : "./node_modules/.bin/fastagent";
-  const hasOtherLock =
-    runtime === "node" &&
-    ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
-  // Does the baked agent directory ship a `.git`?
-  const shipsGit = await exists(join(agentDir, ".git"));
-  // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own answer and its
-  // runbook gives it.
-  report.note(
-    `the agent directory is baked as the definition (WYSIWYG — what you see is what ships, git or not, clean or ` +
-      `not); its package.json dependencies are installed in the image. Every release replaces the image and leaves the instance's working directory, state and ` +
-      `credentials in place on the storage — for how long, see this host's storage note below`,
-  );
-  // A code agent with no lockfile builds via a non-frozen install (ranges resolve at build time) — not reproducible.
   if (!hasLockfile) {
+    const otherLock =
+      runtime === "node" &&
+      ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
     const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
     report.warn(
-      hasOtherLock
+      otherLock
         ? `the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
             `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
         : `no ${lock} — the image build resolves deps at build time (not reproducible). ` +
-            `Run \`${install}\` and commit the lockfile for pinned redeploys.`,
+            `Run \`${install}\` and commit the lockfile.`,
     );
   }
-  // The code-path Dockerfile runs `${runner}`.
   if (!listsFastagent(pkg)) {
     report.warn(
-      `package.json does not list @fastagent-sh/fastagent — the image's \`${runner}\` has no local bin to run, ` +
-        `so the container fails at start. Add it to dependencies and re-run \`${install}\`.`,
+      `package.json does not list @fastagent-sh/fastagent — the image has no local fastagent to run, so the ` +
+        `container fails at start. Add it to dependencies and re-run \`${install}\`.`,
     );
   }
-  const paths = await buildContextPaths(agentDir, authPath, namedValueFile());
+  const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
   // A repository content entry or a shipped .git needs git in the image.
-  const needsGit = shipsGit || content.length > 0;
-  const apt = needsGit ? ["git"] : [];
+  const needsGit = (await exists(join(agentDir, ".git"))) || content.length > 0;
+  const name = instanceName(definition.name, config.name);
+  if (kept !== undefined) checkKeptDockerfile(kept, name, report);
   const container: ContainerInput = {
-    agent: input.name,
-    ...(delivered === undefined ? {} : { configFile: delivered.source.label }),
-    ...(file === undefined ? {} : { envFile: file }),
-    machineryPaths: paths.machineryPaths,
+    name,
     runtime,
-    bunVersion,
+    ...(bunVersion === undefined ? {} : { bunVersion }),
     hasLockfile,
-    apt,
-    config: deliveredConfig(delivered?.source.values),
-    shipsGit,
+    apt: needsGit ? ["git"] : [],
+    machineryPaths: paths.machineryPaths,
   };
-  const port = config.http?.port ?? DEFAULT_HTTP_PORT;
-  if (kept !== undefined) checkKeptDockerfile(kept, report);
-
-  return {
-    channels,
-    hasCron,
-    values,
-    valuesFrom,
-    modelAuth,
-    modelKey,
-    boxLogin,
-    container,
-    port,
-    declaredSecrets,
-    secrets: deploymentSecrets(modelAuth, declaredSecrets),
-  };
+  return { container, port: config.http?.port ?? DEFAULT_HTTP_PORT };
 }
 
-/**
- * The definition's code built for its SHAPE with the value file's values (`buildDefinitionShape`): a generate-only
- * deploy runs on a machine that may hold none of them, and whether the value file supplies them is the values gate's
- * question, asked by name. A build that fails is an issue, as a module that fails to load is.
- */
-function buildShapes(
-  definition: AgentDefinition,
-  values: ReadonlyMap<string, string>,
-  config: EffectiveConfig,
-  report: DeployReport,
-): BuiltDefinition | undefined {
+/** A literal value in the program's MCP servers ships in the image; a `${VAR}` reads it from the container instead. */
+function checkMcp(agentDir: string, programServers: unknown, programFile: string, report: DeployReport): void {
+  let declarations: McpDeclaration[];
   try {
-    return buildDefinitionShape(definition, Object.fromEntries(values), config);
+    declarations = declareMcp(programServers, agentDir, undefined, programFile);
   } catch (error) {
-    report.issue(`the definition does not build, so the deployed agent would not start: ${messageOf(error)}`);
-    return undefined;
+    throw new DeployGate(messageOf(error));
+  }
+  for (const literal of literalCredentials(declarations)) {
+    report.warn(
+      `${literal.file} mcpServers.${literal.server}.${literal.field}.${literal.key} is a literal value, and the image ` +
+        `carries it: ${literalCredentialAdvice(literal)} and set that name on the container`,
+    );
   }
 }
 
@@ -508,82 +180,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/**
- * A model no provider of the deployed agent offers fails every message there. Its lists are this machine's: what it
- * kept and what it fetches now, a provider's own list with whatever credential this machine's environment holds. A
- * model only a fetched list has is the box's only once the box fetches that list, which a box with nothing kept does as
- * it opens: pi's published catalog with no credential, a provider's own list with the one this deploy carries, since a
- * login on the box comes after the start it would refuse. Whether a model is only in a provider's own list cannot be
- * told here: a provider in code keeps what it fetched in its own object, which every `Models` over it then lists.
- */
-async function checkModelExists(
-  agentDir: string,
-  spec: string,
-  providers: readonly Provider[],
-  report: DeployReport,
-  box: { credentialShips: boolean; valuesFrom: string },
-): Promise<void> {
-  const provider = providerOf(spec);
-  const modelId = spec.slice(provider.length + 1);
-  const { models } = await modelEnvironment(agentDir, { credentialStore: new InMemoryCredentialStore() }, providers);
-  if (models.getModel(provider, modelId)) {
-    if (models.getProvider(provider)?.refreshModels !== undefined) {
-      if (box.credentialShips) return;
-      report.warn(
-        `provider "${provider}" fetches its own model list, which a box with no list kept, as on a first deploy, ` +
-          `fetches as it starts, with a credential this deploy does not carry (a login on the box comes after the ` +
-          `start): if "${spec}" is only in that list, the box refuses to start on it until ${provider}'s API key is ` +
-          `in ${box.valuesFrom}`,
-      );
-      return;
-    }
-    if (modelsOver(new InMemoryCredentialStore(), providers).getModel(provider, modelId)) return;
-    report.warn(
-      `"${spec}" is in pi's published catalog, not in the pi-ai this FastAgent carries: a box with no catalog kept, ` +
-        `as on a first deploy, fetches it from pi.dev as it starts, and refuses to start on "${spec}" if it cannot`,
-    );
-    return;
-  }
-  report.issue(
-    `no provider of the deployed agent offers "${spec}": ${modelHint(listModels(models), spec)}. Its providers are ` +
-      `pi-ai's built-ins, pi's published catalog and the ones fastagent.config.ts declares`,
-  );
-}
-
-/**
- * HOW THE MODEL'S CREDENTIAL REACHES THE BOX, from what the deploy ships and nothing else. The box is the one authority
- * on what it authenticates with (pi ranks a stored login above the environment, and only the box knows what it has
- * stored, which platform variables it was given, or what role it runs as), so this never asks what authenticates the
- * model on THIS machine: its stored logins and the shell running deploy do not travel. In order:
- *
- * 1. a credential the provider reads from the value file alone (a definition's provider included, which may resolve
- *    its key from a secret it declared): its key variable (which the values gate then requires, as it does every
- *    declared name), or a keyless one such as `AWS_ACCESS_KEY_ID` — never one that needs a file, which would be this
- *    machine's;
- * 2. otherwise the box answers — `boxLogin`: after readiness, `--run` asks it, and it logs in only if it cannot
- *    already authenticate the provider.
- */
-async function credentialRoute(
-  spec: string,
-  values: ReadonlyMap<string, string>,
-  providers: readonly Provider[],
-): Promise<{ envVar?: string; boxLogin?: string }> {
-  const provider = providerOf(spec);
-  // No file of this machine's travels, so a source that needs one (Google ADC, an AWS profile) is the box's to find.
-  const fromValues = await environmentAuth(provider, Object.fromEntries(values), async () => false, providers);
-  if (fromValues !== undefined) {
-    return fromValues.source !== undefined && isEnvKey(fromValues.source) ? { envVar: fromValues.source } : {};
-  }
-  return { boxLogin: provider };
-}
-
-/** Does `provider` offer an interactive login, i.e. can `fastagent login --deployment` authenticate it on the box? */
-function hasLogin(providerId: string, providers: readonly Provider[]): boolean {
-  const provider = loginProviders(providers).find((p) => p.id === providerId);
-  return provider !== undefined && interactiveLoginKind(provider) !== "none";
-}
-
-/** The agent's hand-written Dockerfile, which the deploy keeps; undefined when there is none, or it is the generated one. */
+/** The agent's hand-written Dockerfile, which the command keeps; undefined when there is none, or it is generated. */
 async function keptDockerfile(agentDir: string): Promise<string | undefined> {
   const path = join(agentDir, "Dockerfile");
   const text = (await exists(path)) ? await readFile(path, "utf8") : undefined;
@@ -591,41 +188,27 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops: the build `start` opens, and the marker that makes the box a deployed
- * one. (The instance's configuration and name are variables on the host, not part of any image.)
+ * What a KEPT hand-written Dockerfile drops: the build `start` opens, the marker that makes the box a deployed one, and
+ * the name its storage belongs to.
  */
-function checkKeptDockerfile(dockerfileText: string, report: DeployReport): void {
-  // The INSTRUCTION is the question, not the file's authorship: without the marker `start` takes no storage (no mount
-  // check, no lease, no owner), so a box that lost it runs as a local instance on a disk that is gone at the next
-  // restart. Anywhere in an `ENV` instruction, not just first.
+function checkKeptDockerfile(dockerfileText: string, name: string, report: DeployReport): void {
+  // Without the marker `start` takes no storage (no mount check, no lease, no owner), so a box that lost it runs as a
+  // local instance on a disk that is gone at the next restart. Anywhere in an `ENV` instruction, not just first.
   if (!new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText)) {
-    report.issue(
+    report.warn(
       `your Dockerfile does not set ${DEPLOYED_ENV}, and without it the container starts as a local instance: no ` +
         `mount check, no lease, no storage owner. Add \`ENV ${DEPLOYED_ENV}=1\` (see a generated Dockerfile).`,
     );
-  }
-  // `start` opens dist/. Docker and Fly upload the directory as it is, but `railway up` follows .gitignore, which the
-  // scaffold gives `/dist`: without a build step of its own the image has none, and the box does not start.
-  if (!/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText)) {
+  } else if (!new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText)) {
     report.warn(
-      `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which an upload that follows ` +
-        `.gitignore (Railway) leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
+      `your Dockerfile does not set ${INSTANCE_NAME_ENV}, and a deployed container refuses to start without it. Add ` +
+        `\`ENV ${INSTANCE_NAME_ENV}=${name}\`, or set it on the container.`,
     );
   }
-}
-
-/**
- * WHICH model this deployment runs on, and where that came from: the delivered configuration's `model`, else the
- * program's `defaults.model`. `deploy` has no flag and reads no variable for it: a `FASTAGENT_MODEL` in the shell or in a
- * file belongs to the machine it is on, and what the box runs is what the configuration it is given says. Delivered
- * rewritten whole by every deploy, so no stale variable outlives a change on a host.
- */
-function resolveDeployModel(config: EffectiveConfig): { spec?: string; source: string; invalid?: string } {
-  const source = "fastagent.config";
-  // Checked at the one point that reads it: a `provider`-less spec resolves to nothing on the box, so letting it through
-  // would ship exactly the crash-loop this resolution exists to prevent — the auth probe reports "unconfigured" for it
-  // here and the failure only appears after deployment.
-  const spec = config.model;
-  if (spec && !isModelSpec(spec)) return { source, invalid: spec };
-  return { spec, source };
+  if (!/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText)) {
+    report.warn(
+      `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which a build context that follows ` +
+        `.gitignore leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
+    );
+  }
 }

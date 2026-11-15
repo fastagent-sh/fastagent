@@ -1,10 +1,8 @@
 /** CLI presenter for the auth-status line `reportAuth` prints (invoke/dev/start). */
-import type { DeployHost } from "../deploy/hosts.ts";
 
 /**
  * Format the auth status for a provider, from `AgentModels.authStatus`'s answer. `deployed`: this process is a
- * deployed box, which logs in from the owner's agent directory (`fastagent login --deployment <host>`), never by a
- * login run on it by hand; `host` is which one, when the box can tell (`deployedHost`).
+ * deployed container, which authenticates with the provider's API key from its environment and runs no login.
  */
 export function formatAuthReport(status: {
   provider: string;
@@ -14,36 +12,39 @@ export function formatAuthReport(status: {
   error?: string;
   stored?: string;
   shadowed?: string;
-  deployed?: { host: DeployHost | undefined };
+  deployed?: boolean;
   local?: { authPath: string; valueFile: string };
 }): { line: string; warn?: string } {
   const { provider, path, source, error, stored, shadowed, deployed, local } = status;
   const because = error === undefined ? "" : ` (${error})`;
   const authOverride = local ? `FASTAGENT_AUTH_PATH='${local.authPath.replaceAll("'", "'\\''")}' ` : "";
-  const login = (name: string) =>
-    deployed
-      ? `\`${name} --deployment ${deployed.host ?? "<host>"}\` from the agent directory this was deployed from ` +
-        `(add --config <the file it was deployed with> for an instance that file names)`
-      : `\`${authOverride}${name}\``;
+  const login = (name: string) => `\`${authOverride}${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;
     if (shadowed === undefined) return { line };
     // A stored credential owns its provider in pi, so a key added to the environment later is silently unused.
+    const remedy = deployed
+      ? `remove ${path} from the container's storage`
+      : `log in with it instead: ${login(`fastagent login ${provider}`)}, choosing "API key"`;
     return {
       line,
-      warn:
-        `${shadowed} is set but unused: the stored ${provider} ${stored} credential in ${path} outranks it. To run ` +
-        `on ${shadowed}, log in with it instead: ${login(`fastagent login ${provider}`)}, choosing "API key"`,
+      warn: `${shadowed} is set but unused: the stored ${provider} ${stored} credential in ${path} outranks it. To run on ${shadowed}, ${remedy}`,
     };
   }
   if (stored) {
+    const remedy = deployed
+      ? `remove ${path} from the container's storage and set the provider's API key on the container`
+      : `run ${login("fastagent login")} to replace it`;
     return {
       line: `auth:   stored ${provider} ${stored}, expired/unusable — ${path}`,
-      warn: `the "${provider}" login is expired or unusable${because} — run ${login("fastagent login")} to replace it`,
+      warn: `the "${provider}" login is expired or unusable${because} — ${remedy}`,
     };
   }
+  const remedy = deployed
+    ? "set the provider's API key on the container"
+    : `run ${login("fastagent login")}, or set the provider's API key in ${local?.valueFile ?? ".env"}`;
   return {
     line: `auth:   (none found) — ${path}`,
-    warn: `no credentials for "${provider}"${because} — run ${login("fastagent login")}, or set the provider's API key in ${deployed ? "the deployment's value file" : (local?.valueFile ?? ".env")}; invokes will fail until then`,
+    warn: `no credentials for "${provider}"${because} — ${remedy}; invokes will fail until then`,
   };
 }

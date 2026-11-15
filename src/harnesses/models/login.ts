@@ -3,8 +3,7 @@
  * `AuthInteraction` and persists the credential through the same {@link fastagentCredentialStore} the runtime reads
  * (one writer, one lock/corruption semantics); {@link loginOptionsOver} is the list a picker offers. An embedding host
  * reaches both through host.ts (`signIn`, `signInOptions`); `fastagent login` is a front end of its own
- * ({@link loginFlow}: terminal menus, then {@link loginOver}); `login --deployment` drives the same flow on a deployed
- * box over a relay (cli/login-relay.ts).
+ * ({@link loginFlow}: terminal menus, then {@link loginOver}).
  */
 import { definedValues } from "../../declared-secrets.ts";
 import {

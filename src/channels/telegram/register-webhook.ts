@@ -1,6 +1,6 @@
 /**
- * Telegram webhook registration — the TELEGRAM-domain step both `--tunnel` (dev, tunnel.ts) and `deploy … --run` (the
- * host runners' post-deploy step) invoke.
+ * Telegram webhook registration — the TELEGRAM-domain step `--tunnel` (dev, tunnel.ts) and a serve at its public URL
+ * (webhooks.ts) invoke.
  */
 import { log } from "../../log.ts";
 import { retryWhile, type RegistrationOutcome } from "../registration.ts";
@@ -16,8 +16,7 @@ function isTransientRegistrationError(error: string): boolean {
 /**
  * Register `<baseUrl>/telegram` as the bot's webhook (with the .env secret). Missing tokens print the
  * manual instruction instead of failing. `opts` carries the attempt budget: `--tunnel` takes the
- * default, `deploy --run` passes `DEPLOY_REGISTRATION_ATTEMPTS` (a host starts slower than a tunnel),
- * and tests shrink it.
+ * default, a serve passes `DEPLOY_REGISTRATION_ATTEMPTS` (a host starts slower than a tunnel), and tests shrink it.
  *
  * Reports its outcome as a {@link RegistrationOutcome} fact; gating policy belongs to the caller.
  */

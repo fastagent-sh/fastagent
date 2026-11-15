@@ -1,260 +1,105 @@
 /**
- * `fastagent deploy <host> [agent]`: generate host artifacts from the resolved definition and print an ordered deploy
- * runbook.
+ * `fastagent deploy docker [agent]`: write the portable container (`Dockerfile`, `.dockerignore`) into the agent
+ * directory and print how to build and run it. A file the author owns is kept; `--force` regenerates only the ones
+ * fastagent generated.
  */
-import { join, resolve } from "node:path";
-import type { DeployHost } from "../../deploy/hosts.ts";
-import { loadDotEnv } from "../../env.ts";
-import { unmarkDevServe } from "../../serving-command.ts";
-import { channelAppNames, prepareChannelApps, unpreparedChannelApps } from "./deploy/channel-apps.ts";
-import { displayPath, readTextIfExists, selectAgentEnvironment } from "../../paths.ts";
-import { buildProject } from "../../harnesses/pi-durable/build.ts";
-import { deploymentName } from "../../deploy/deployment-name.ts";
-import { preflightDeploy } from "../../deploy/preflight.ts";
-import { apiReport, deploymentApi } from "../../deploy/api.ts";
-import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
-import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
-import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
-import { failStartup, failUsage } from "../fail.ts";
-import { shellArg } from "../../shell-arg.ts";
-import { enterAgentDirectory, isInteractive, printReport } from "../shared.ts";
-import { dockerHost } from "./deploy/docker.ts";
-import { flyHost } from "./deploy/fly.ts";
-import { railwayHost } from "./deploy/railway.ts";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { checkContainer } from "../../deploy/preflight.ts";
 import {
-  type Answerer,
-  type DeployOptions,
-  type HostDeploy,
-  applyArtifactPlan,
-  planArtifacts,
-} from "./deploy/shared.ts";
+  type Artifact,
+  IMAGE_APP_DIR,
+  STORAGE_DIR,
+  containerArtifacts,
+  isGeneratedDockerfile,
+  isGeneratedDockerignore,
+} from "../../deploy/container.ts";
+import { displayPath, exists, selectAgentEnvironment } from "../../paths.ts";
+import { shellArg } from "../../shell-arg.ts";
+import { agentDirOrExit, failStartup } from "../fail.ts";
 
-export { applyArtifactPlan, planArtifacts };
-
-/** Every host, by the name the CLI takes. */
-export const HOSTS: Record<DeployHost, HostDeploy> = {
-  docker: dockerHost,
-  fly: flyHost,
-  railway: railwayHost,
-};
-
-/** A flag exactly one host honours, and what the OTHERS do instead. */
-interface HostOnlyFlag<Owner extends DeployHost> {
-  flag: string;
-  owner: Owner;
-  passed: (opts: DeployOptions) => boolean;
-  instead: Record<Exclude<DeployHost, Owner>, string>;
+export interface DeployOptions {
+  force?: boolean;
 }
 
-/** Infers `Owner` from the literal's own `owner`, so each row carries its exhaustiveness itself. */
-const hostOnlyFlag = <Owner extends DeployHost>(rule: HostOnlyFlag<Owner>): HostOnlyFlag<Owner> => rule;
-
-/** ONE table for "this flag belongs to that host", because the fact is symmetric and was not stored that way. */
-export const HOST_ONLY_FLAGS = [
-  hostOnlyFlag({
-    flag: "--into-linked",
-    owner: "railway",
-    passed: (opts: DeployOptions) => opts.intoLinked === true,
-    instead: {
-      docker: "ignored for local Docker",
-      fly: "fly --run is idempotent — it reuses an existing app/volume",
-    },
-  }),
-];
+/** One artifact's verdict under the ownership rule: the bytes to write, or `undefined` to keep what is there. */
+interface ArtifactStep {
+  abs: string;
+  content: string | undefined;
+  message: string;
+}
 
 /**
- * Exported for its own test: nothing covered these six sentences, which is how three of them came to disagree about
- * the spelling of a host name.
+ * Decide what happens to each artifact under `target`, under ONE ownership rule: a file fastagent did not generate is
+ * the author's and is never touched; one it generated is kept unless `force` regenerates it.
  */
-export function warnHostOnlyFlags(host: DeployHost, opts: DeployOptions): void {
-  for (const rule of HOST_ONLY_FLAGS) {
-    if (host === rule.owner || !rule.passed(opts)) continue;
-    // The `continue` above is exactly the key set `instead` is typed over, but TS cannot narrow a union member out
-    // through a comparison against a per-rule literal, so the read needs a cast — and a cast is how a hole would
-    // reach the operator as the word "undefined".
-    const instead: string | undefined = (rule.instead as Record<string, string>)[host];
-    // THROWN, not `failStartup`ed, though every other failure in this file exits through that.
-    if (instead === undefined) {
-      throw new Error(`deploy: HOST_ONLY_FLAGS has no "instead" line for ${host} on ${rule.flag}`);
+export async function planArtifacts(target: string, artifacts: Artifact[], force: boolean): Promise<ArtifactStep[]> {
+  const steps: ArtifactStep[] = [];
+  for (const { path, content } of artifacts) {
+    const abs = join(target, path);
+    const existing = (await exists(abs)) ? await readFile(abs, "utf8") : undefined;
+    if (existing !== undefined && !isOurs(path, existing)) {
+      steps.push({
+        abs,
+        content: undefined,
+        message:
+          `[fastagent] kept ${path} — not generated by fastagent, so --force does not touch it ` +
+          `(delete it to let deploy own the path)` +
+          (path === ".dockerignore"
+            ? "; see the warnings above for what it must exclude"
+            : `; the container must still listen on $PORT and run \`fastagent start ${IMAGE_APP_DIR}\``),
+      });
+      continue;
     }
-    // A colon, not "is": one row names a single flag and the other names a pair, and no verb agrees with both.
-    console.error(`[fastagent] warn: ${rule.flag}: ${rule.owner}-only — ${instead}`);
+    if (existing !== undefined && !force) {
+      steps.push({
+        abs,
+        content: undefined,
+        message:
+          existing === content
+            ? `[fastagent] kept ${path} (unchanged)`
+            : `[fastagent] kept ${path} — it no longer matches what deploy would generate; pass --force to regenerate.`,
+      });
+      continue;
+    }
+    steps.push({ abs, content, message: `[fastagent] wrote ${path}` });
+  }
+  return steps;
+}
+
+/** Carry out a {@link planArtifacts} decision. Reports each path, written or kept. */
+export async function applyArtifactPlan(steps: ArtifactStep[]): Promise<void> {
+  for (const step of steps) {
+    if (step.content !== undefined) {
+      await mkdir(dirname(step.abs), { recursive: true });
+      await writeFile(step.abs, step.content);
+    }
+    console.error(step.message);
   }
 }
 
-/**
- * A manifest an earlier version generated under a name no instance has is not read any more, so a hand edit in it would
- * be lost without a word: say so once, naming the file that replaces it.
- */
-async function warnLegacyManifest(agentDir: string, name: string, target: HostDeploy): Promise<void> {
-  const { file, generated, renamed } = target.legacyManifest;
-  if (file === "") return;
-  const text = await readTextIfExists(join(agentDir, file)).catch(failStartup);
-  if (text === undefined || !generated(text)) return;
-  console.error(
-    `[fastagent] warn: ${file} was generated by an earlier version and is no longer read: this instance's manifest is ` +
-      `${renamed(name)}. Rename ${file} to keep edits made in it, or delete it.`,
-  );
+function isOurs(path: string, content: string): boolean {
+  return path === "Dockerfile" ? isGeneratedDockerfile(content) : isGeneratedDockerignore(content);
 }
 
-export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOptions): Promise<void> {
-  if (opts.json && !opts.run) failUsage("--json reports a deploy --run drives: pass --run too");
+export async function runDeploy(dirArg: string, opts: DeployOptions): Promise<void> {
+  const agentDir = agentDirOrExit(resolve(dirArg));
+  // The image is a production instance: its secrets directory is the production one, which the checks keep out of it.
   selectAgentEnvironment("production");
-  // The configuration the box runs on: the program's defaults, with the instance configuration `--config` delivers,
-  // and never the project's own `fastagent.json`, the development instance's.
-  const delivered =
-    opts.config === undefined
-      ? undefined
-      : await readInstanceConfigFile(resolve(opts.config))
-          .then((source) => ({ source }))
-          .catch(failStartup);
-  const deployed = async (dir: string) => ({
-    definition: await loadSourceDefinition(dir),
-    ...(delivered === undefined ? {} : { instance: delivered.source }),
-  });
-  // A deployment has no default value file: its values are this command's environment, with the file `--env-file`
-  // names laid under it.
-  const { agentDir } = await enterAgentDirectory(
-    dirArg,
-    { ...opts, deployment: true, instance: opts.envFile === undefined ? {} : { envFile: opts.envFile } },
-    undefined,
-    deployed,
-  ).catch(failStartup);
-  const name = await deploymentName(agentDir, opts.config).catch(failStartup);
-  const config = await deployed(agentDir)
-    .then(({ definition }) => resolveConfig(definition, delivered?.source))
-    .catch(failStartup);
-  // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
-  unmarkDevServe();
-  const api = deploymentApi({ config });
-  const target = HOSTS[host];
-  await warnLegacyManifest(agentDir, name, target);
-  const preflight = async () => {
-    const facts = await preflightDeploy({
-      agentDir,
-      name,
-      config,
-      ...(delivered === undefined ? {} : { delivered }),
-      run: !!opts.run,
-      force: !!opts.force,
-      servesApi: api.served,
-      fromEnv: !!opts.fromEnv,
-    }).catch(failStartup);
-    if (!facts.ok) failStartup(new Error(`deploy stopped: ${facts.gate}`));
-    target.validate?.({ opts, agentDir, name, pre: facts });
-    return facts;
-  };
-  let pre = await preflight();
-  const agentArg = displayPath(process.cwd(), agentDir);
-  const rerun =
-    `fastagent deploy ${host}${agentArg === undefined ? "" : ` ${shellArg(agentArg)}`}` +
-    `${opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`}` +
-    `${opts.envFile === undefined ? "" : ` --env-file ${shellArg(opts.envFile)}`}` +
-    `${opts.fromEnv ? " --from-env" : ""}` +
-    `${opts.intoLinked ? " --into-linked" : ""} --run`;
-  const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
-  if (unprepared.length > 0) {
-    const supplied = unprepared.flatMap(channelAppNames);
-    const kinds = unprepared.map(({ kind }) => kind);
-    const absent = supplied.filter((name) => !pre.values.get(name)?.trim());
-    if (host === "docker" && unprepared.some(({ way }) => way === "webhook")) {
-      failStartup(
-        new Error(
-          `deploy stopped: ${kinds.join(", ")} receive by webhook here, and this Docker deployment has no ` +
-            `public URL to point the app at — set up your own ingress and supply ${absent.join(", ")} from a separate production app in ${pre.valuesFrom}, or ` +
-            `set ${kinds.map((kind) => `channels.${kind}.ingress`).join(", ")} to "connection" in the configuration ` +
-            `--config delivers`,
-        ),
-      );
-    }
-    // The credentials of the app it makes are kept in a file, and a deployment has no default one.
-    if (opts.envFile === undefined) {
-      const configFlag = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
-      failUsage(
-        `deploy stopped: ${absent.join(", ")} are not in ${pre.valuesFrom}, so a production ${kinds.join(" and ")} app ` +
-          `has to be made, and its credentials need a file to be kept in. Make it with ` +
-          `\`fastagent channels setup ${kinds[0]} --env-file <file>${configFlag}\` (it creates the file), then deploy ` +
-          `again with --env-file <file>; or supply them in the environment of this command and pass --from-env`,
-      );
-    }
-    if (opts.json || opts.input === false || !isInteractive()) {
-      const configFlag = opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`;
-      failUsage(
-        `deploy stopped: ${pre.valuesFrom} has no ${absent.join(", ")}: run ` +
-          `\`fastagent channels setup ${kinds[0]} --env-file ${shellArg(opts.envFile)}${configFlag} --json\` first, or run this deploy in a terminal`,
-      );
-    }
-  }
-
-  /** Everything past the pre-flight, its person's steps taken by `answerer`; the URL and what the API report says. */
-  const deployWith = async (answerer: Answerer): Promise<void> => {
-    if (unprepared.length > 0 && opts.envFile !== undefined && answerer.kind === "terminal") {
-      await prepareChannelApps(agentDir, resolve(opts.envFile), unprepared, rerun).catch(failStartup);
-      // What the setup kept is this deploy's values from here on.
-      loadDotEnv(agentDir);
-      pre = await preflight();
-    }
-    for (const m of pre.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
-    // The box starts the build, never the source: dist/ is made here, from what the image will hold.
-    const built = await buildProject(agentDir).catch(failStartup);
-    for (const warning of built.warnings) console.error(`[fastagent] warn: ${warning}`);
-    const { channels } = pre;
-    warnHostOnlyFlags(host, opts);
-    const reachedAt = await target.deploy({
-      opts,
-      answerer,
-      rerun,
-      agentDir,
-      name,
-      config,
-      pre,
-      api,
-      channels,
-      webhookChannels: channels.filter((channel) => channel.ingress === "webhook"),
-      // The ownership predicate is bound HERE, from the same lookup that chose the host, so no host module can pass
-      // one.
-      // Reporting a stale artifact is enough when only generating them — the operator reads the line and decides. But
-      // `--run` would then deploy FROM it: a determinate mismatch between what ships and what the definition says
-      // (a configuration the manifest does not carry), and gated the same way. `--force` regenerates ours; a file we
-      // did not generate is never touched by either, and the marker line is how an operator takes a path back on
-      // purpose.
-      write: async (artifacts, options) => {
-        const plan = await planArtifacts(agentDir, artifacts, { ...options, isOurs: target.isOurs });
-        if (opts.run && plan.stale.length > 0) {
-          failStartup(
-            new Error(
-              `deploy stopped: ${plan.stale.join(", ")} no longer match what this definition generates (the ` +
-                `instance's configuration is rendered into them), and --run would deploy from them. Re-run with ` +
-                `--force to regenerate, or remove each file's generated-by marker to own it yourself.`,
-            ),
-          );
-        }
-        await applyArtifactPlan(plan);
-      },
-    });
-    // Docker's Compose takes the key from the environment it runs in, whatever `--from-env` says; every other host
-    // was given it by the values this deploy was handed.
-    const compose = host === "docker";
-    const keyHere = apiKeysFrom(compose ? process.env[API_KEY_VARIABLE] : pre.values.get(API_KEY_VARIABLE)).length > 0;
-    const notes = apiReport(
-      api,
-      { valuesFrom: pre.valuesFrom, agentArg, keyHere, run: !!opts.run, compose },
-      reachedAt,
-    );
-    for (const line of notes) console.error(`[fastagent] ${line}`);
-    if (opts.json) {
-      printReport(
-        true,
-        {
-          status: "done",
-          deployment: host,
-          ...(reachedAt === undefined ? {} : { url: reachedAt }),
-          notes,
-        },
-        [],
-      );
-    }
-  };
-
-  await deployWith(opts.json || opts.input === false || !isInteractive() ? { kind: "nobody" } : { kind: "terminal" });
+  const force = opts.force === true;
+  const checked = await checkContainer({ agentDir, force }).catch(failStartup);
+  if (!checked.ok) failStartup(new Error(`deploy stopped: ${checked.gate}`));
+  for (const m of checked.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
+  await applyArtifactPlan(await planArtifacts(agentDir, containerArtifacts(checked.container), force));
+  const { name } = checked.container;
+  const context = displayPath(process.cwd(), agentDir) ?? ".";
+  console.log(
+    [
+      `# Build the image, then run it with a volume at ${STORAGE_DIR} and the agent's values (its model key, its`,
+      `# channels' credentials, FASTAGENT_API_KEY for the Agent API) from a file of your own.`,
+      `docker build --pull -t ${name} ${shellArg(context)}`,
+      `docker run -d --name ${name} --restart unless-stopped -v ${name}-data:${STORAGE_DIR} --env-file <file> ` +
+        `-p ${checked.port}:${checked.port} ${name}`,
+    ].join("\n"),
+  );
 }

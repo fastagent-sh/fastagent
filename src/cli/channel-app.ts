@@ -1,7 +1,7 @@
 /**
  * The binding of a channel whose URL only a person sets (Slack; Lark without its configuration API), recorded in an
- * instance configuration once the deployment confirms the URL (`channels.<name>.app`): what `deploy` at a
- * terminal and `channels setup --record-url` both write.
+ * instance configuration once the deployment confirms the URL (`channels.<name>.app`): what
+ * `channels setup --record-url` writes.
  */
 import { setChannelConfig } from "../authoring.ts";
 import { createSlackApi } from "../channels/slack/slack-api.ts";

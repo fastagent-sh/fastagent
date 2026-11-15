@@ -1,6 +1,6 @@
 /**
- * Feishu/Lark event-URL registration — the platform-domain step both `--tunnel` (dev, tunnel.ts) and `deploy … --run`
- * (the host runners' post-deploy step) invoke, once per mounted kind.
+ * Feishu/Lark event-URL registration — the platform-domain step `--tunnel` (dev, tunnel.ts) and a serve at its public
+ * URL (webhooks.ts) invoke, once per mounted kind.
  */
 import { log } from "../../log.ts";
 import { retryWhile, type RegistrationOutcome } from "../registration.ts";

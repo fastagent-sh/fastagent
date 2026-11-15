@@ -1,7 +1,7 @@
 /** Production serving. */
 import { join, resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
-import { prepareDeployment, releaseFromEnv } from "../../deploy/workspace.ts";
+import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
 import {
   selectAgentEnvironment,
   resolveSecretsDir,
@@ -54,7 +54,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 }
 
 /**
- * On a deployed box (a release id names it), TAKE the storage: it is mounted, held by this process, and this agent's;
+ * On a deployed box (the generated image marks it), TAKE the storage: it is mounted, held by this process, and this agent's;
  * it becomes the instance's root, and the machinery points at it. The program stays where the image built it. Elsewhere,
  * nothing is taken.
  */
@@ -63,7 +63,7 @@ async function prepareStartWorkspace(): Promise<void> {
   const storage = process.env[INSTANCE_ROOT_ENV];
   if (!storage) throw new Error(`${INSTANCE_ROOT_ENV} is required for a deployment`);
   const root = resolve(storage);
-  await prepareDeployment(root, releaseFromEnv());
+  await prepareDeployment(root, storageOwnerFromEnv());
   process.env[INSTANCE_ROOT_ENV] = root;
   // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
   // their state is the one failure they could not diagnose from the logs.

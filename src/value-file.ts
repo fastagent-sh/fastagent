@@ -30,8 +30,7 @@ export function parseEnvContent(content: string): Map<string, string> {
 
 /**
  * READ a value file without entering it: the values as data, never `process.env`. This is how code reasons about an
- * environment OTHER than its own — `deploy` resolves configuration in the environment being deployed, which this
- * file declares, and merging it into the running process would put the two environments in one bag. A missing file
+ * environment OTHER than its own — merging it into the running process would put two environments in one bag. A missing file
  * is no values, which is normal.
  */
 export function loadEnvValues(file: string): Map<string, string> {
@@ -54,8 +53,8 @@ let defaultValueFile = true;
 
 /**
  * Use `path` as the agent's value file from here on, or the default again. `defaultFile: false` is for a command that
- * runs a deployment (`deploy`, `secrets`, `destroy`, `logs`, `login --deployment`, `invoke --url`): it has no default
- * file, only the one `--env-file` names, and otherwise the environment it runs in (what a CI job or `op run` injects).
+ * talks to a deployment or a production app (`invoke --url`, `channels setup` outside dev): it has no default file,
+ * only the one `--env-file` names, and otherwise the environment it runs in (what a CI job or `op run` injects).
  */
 export function useValueFile(path: string | undefined, options: { defaultFile?: boolean } = {}): void {
   selectedValueFile = path;

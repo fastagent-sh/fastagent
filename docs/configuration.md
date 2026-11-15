@@ -40,7 +40,7 @@ Every key is optional. An unknown key refuses the start.
 | `defaults.http.publicUrl` | none | The public `https://` URL platforms reach the instance at. Set, a serve points Telegram, Feishu and Lark there itself |
 | `defaults.http.api` | `true` | Serve the [Agent API](#the-agent-api-over-http) under `/v1` when a key is set. `false` turns it off |
 | `defaults.channels.<name>.ingress` | `dev`: `connection`; else `webhook` | How a channel that can do both receives |
-| `defaults.channels.<name>.app` | none | Slack and Lark only: the app this instance is bound to and its saved URL (written by `deploy --run` and `channels setup --record-url`) |
+| `defaults.channels.<name>.app` | none | Slack and Lark only: the app this instance is bound to and its saved URL (written by `channels setup --record-url`) |
 
 The name and description of the program come from its `package.json`.
 
@@ -62,11 +62,11 @@ bad value refuses the open, naming file and path (`fastagent.json: /http/port ex
 | Command | Reads |
 |---|---|
 | `dev`, `invoke`, `info` | the project's `fastagent.json`, or the one `--config` names |
-| `start`, `deploy` | only the one `--config` names |
+| `start` | only the one `--config` names |
 | an app | the `config` it passes `openAgent` |
 
-`FASTAGENT_CONFIG` is the same as `--config`; `FASTAGENT_CONFIG_JSON` holds the JSON itself (what a deploy sets on a
-host). Paths in it are relative to the file. An instance only adds: a skill or template with a program's name refuses
+`FASTAGENT_CONFIG` is the same as `--config`; `FASTAGENT_CONFIG_JSON` holds the JSON itself (for a container, which
+has no file for it). Paths in it are relative to the file. An instance only adds: a skill or template with a program's name refuses
 the open. `fastagent build` writes the file's JSON Schema as `fastagent.schema.json`; point `$schema` at it.
 
 Code reads the settings through [`needs`](#secrets-in-code): `needs([], (_, settings) => ...)`.
@@ -85,7 +85,7 @@ where each value came from.
 | `http.publicUrl` | `FASTAGENT_HTTP_PUBLIC_URL` | |
 | `channels.<name>.ingress` | `FASTAGENT_INGRESS` | `--ingress slack=webhook,feishu=connection` |
 
-`openAgent` and `deploy` read none of these: give them a configuration.
+`openAgent` reads none of these: give it a configuration.
 
 ## Model selection
 
@@ -98,7 +98,7 @@ Without a terminal it fails with `missing model`. `fastagent models [search]` li
 agent stops at startup when the model it resolves is not in the lists; `openAgent` opens an agent whose configured
 default is not, as [embedding](embedding.md) says.
 
-`deploy` takes the model from the configuration only, never from your shell. The model lists are refreshed from
+The model lists are refreshed from
 [pi.dev](https://pi.dev/models) at most every 4 hours and kept in `<state root>/models/`; `FASTAGENT_OFFLINE=1` skips
 the network.
 
@@ -165,8 +165,8 @@ What the agent works on is declared by name:
 - Private repositories use your git credentials, or `GITHUB_TOKEN`.
 - A project's `AGENTS.md` and skills are files the agent reads there. They never join its prompt; say so in the
   `description` if it should read them first.
-- Changes to the declarations apply at the next start. A deployment only gets repositories: a local directory never
-  reaches a host.
+- Changes to the declarations apply at the next start. A container only gets repositories: a local directory never
+  reaches it.
 
 Edit with `fastagent init --content` and `fastagent content add|remove|list`, or by hand.
 
@@ -188,8 +188,8 @@ like a platform command (`prompts/start.md` for Telegram's `/start`) takes that 
 | `.secrets/production/.env` | Values for `start` |
 
 A provider's credential comes from the agent's `auth.json`, then the provider's variable, then the global file. A
-deployment never reads your files: give it `--env-file` or `--from-env`. `--env-file <file>` works on `dev`, `start`,
-`invoke`, `info` and `schedules run` too.
+container never reads your files: give it its values as environment variables. `--env-file <file>` works on `dev`,
+`start`, `invoke`, `info` and `schedules run`.
 
 ### Secrets in code
 
@@ -212,8 +212,7 @@ export default needs(
 );
 ```
 
-A required secret without a value refuses the start, naming the file. `info` lists every declaration, and `deploy`
-checks the target holds them. `needs` works around tools, extensions, channels, schedules and providers.
+A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions, channels, schedules and providers.
 
 ## Ports and bind address
 
@@ -237,7 +236,7 @@ FASTAGENT_API_KEY=$(openssl rand -hex 32)
 ```
 
 Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`, or check it with
-`fastagent invoke --url <url> "hello"`. `deploy --run` makes a key when the target has none.
+`fastagent invoke --url <url> "hello"`.
 
 ## Where things live
 
@@ -257,7 +256,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/clien
 | | `FASTAGENT_SECRETS_DIR` | `.secrets` (`start`: `.secrets/production`) |
 | | `FASTAGENT_AUTH_PATH` | `<secrets>/auth.json` |
 
-A deployment's root is `/data` (Docker, Fly, Railway). On your own server:
+The container `deploy docker` writes keeps its root at `/data`. On your own server without a container:
 
 ```bash
 fastagent build

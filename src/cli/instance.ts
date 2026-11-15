@@ -145,25 +145,11 @@ export function enterEnvFile(
 }
 
 /**
- * Enter the environment of a command that runs a deployment: the file `--env-file` names when it does, and otherwise
- * only the environment the command runs in, since a deployment has no default file. The proxy it declares is installed.
- */
-export function enterDeploymentEnv(agentDir: string, envFile: string | undefined): void {
-  enterEnvFile(envFile, { defaultFile: false });
-  enterAgentEnv(agentDir);
-}
-
-/**
  * Enter the agent's directory as a command runs it: the value file, whose values become this process's environment
  * and so the instance's secrets, then where the instance is.
  */
-export function enterInstance(
-  agentDir: string,
-  flags: InstanceFlags = {},
-  /** `deployment`: the command runs a deployment, which has no default value file (`enterDeploymentEnv`). */
-  options: { deployment?: boolean } = {},
-): void {
-  enterEnvFile(flags.envFile, { defaultFile: !options.deployment });
+export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void {
+  enterEnvFile(flags.envFile, { defaultFile: true });
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
   // The variables that lay over the configuration are settled here, once, with the flags entered into them, so a value

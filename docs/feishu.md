@@ -60,10 +60,9 @@ Setup checks the app's scopes and names any your tenant withheld, with a link to
 | Scale to zero | no | yes |
 
 Change it with `channels.feishu.ingress` (`connection` or `webhook`). **Use separate apps for dev and production**:
-two instances on one app split its events. `deploy --run` creates the production app (asking for the extra
-`application:application:patch` scope, which lets it register the Request URL and read the Verification Token), or
-pass one made with `fastagent channels setup feishu --config prod.json --env-file prod.env`. On Lark, set the Request
-URL in the console when its API does not allow it.
+two instances on one app split its events. Make the production app with
+`fastagent channels setup feishu --env-file prod.env`, which keeps its credentials in that file. On Lark, set the
+Request URL in the console when its API does not allow it.
 
 Webhook events are checked by the Verification Token, or, with an Encrypt Key, by signature (plaintext is then
 refused). Set an Encrypt Key: without it there is no replay protection, and startup warns.

@@ -61,7 +61,7 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
 const FEISHU_APP_CONFIG_REQUEST: FeishuScopeRequest = {
   request: FEISHU_APP_CONFIG_SCOPE,
   withoutIt:
-    "the Verification Token is not captured and no Request URL is registered for you (channels setup, dev --tunnel, deploy --run)",
+    "the Verification Token is not captured and no Request URL is registered for you (channels setup, dev --tunnel)",
 };
 
 /**

@@ -715,8 +715,8 @@ export function buildFeishuChannel(
     if (!opts.verificationToken) {
       // The scaffolded file reaches this under `start` with nothing set, so the error names both ways out.
       throw new Error(
-        `${factoryName} receives by webhook and needs a non-empty verificationToken: \`fastagent deploy <host> --run\` ` +
-          `or \`fastagent channels setup ${profile.kind} --ingress webhook\` captures ${profile.envPrefix}_VERIFICATION_TOKEN ` +
+        `${factoryName} receives by webhook and needs a non-empty verificationToken: ` +
+          `\`fastagent channels setup ${profile.kind} --ingress webhook\` captures ${profile.envPrefix}_VERIFICATION_TOKEN ` +
           `(console → Events & Callbacks has it too), or set channels.<name>.ingress to "connection" in the instance's ` +
           `fastagent.json to receive by WebSocket instead`,
       );

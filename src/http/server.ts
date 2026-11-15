@@ -30,8 +30,8 @@ import {
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
 /**
- * Whether the definition turns the Agent API off (`http.api: false`): the one reading of it, which every serve the CLI
- * runs and `deploy` make, so a key a host still holds cannot serve an API the definition turned off.
+ * Whether the definition turns the Agent API off (`http.api: false`): the one reading of it, which every serve makes,
+ * so a key a host still holds cannot serve an API the definition turned off.
  */
 export function apiTurnedOff(config: { http?: { api?: boolean } }): boolean {
   return config.http?.api === false;

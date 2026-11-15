@@ -1,47 +1,47 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { CODEX_MODEL } from "../../doubles/codex-model.ts";
-import { agent, call } from "./deploy-preflight-fixtures.ts";
+import { checkContainer } from "../../../src/deploy/preflight.ts";
+import { agent } from "./deploy-preflight-fixtures.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
-describe("deploy/preflight: the host-neutral pre-flight", () => {
-  afterEach(() => vi.unstubAllEnvs());
+const warnings = async (agentDir: string) => {
+  const checked = await checkContainer({ agentDir, force: false });
+  if (!checked.ok) throw new Error(checked.gate);
+  return checked.messages.filter((m) => m.level === "warn").map((m) => m.text);
+};
 
-  it("gates --run when NO source resolves a model (would ship a crash-loop)", async () => {
-    const dir = await agent(); // .secrets/.env holds no FASTAGENT_MODEL, config holds no model
-    vi.stubEnv("FASTAGENT_MODEL", undefined);
-    const pre = await call(dir, {}, { run: true });
-    expect(pre.ok).toBe(false);
-    if (!pre.ok) expect(pre.gate).toMatch(/no model resolves/);
+describe("deploy/preflight: what the container is checked for", () => {
+  it("names the container after the program and warns when no model is set", async () => {
+    const dir = await agent();
+    const checked = await checkContainer({ agentDir: dir, force: false });
+    expect(checked.ok).toBe(true);
+    if (checked.ok) expect(checked.container.name).toBe("agent");
+    expect(await warnings(dir)).toContainEqual(expect.stringMatching(/no model is set in fastagent\.config\.ts/));
   });
 
-  it("a kept ignore that misses the secrets gates NAMING the leaking FILE, not the directory", async () => {
-    const agentDir = await agent();
-    await writeFile(join(agentDir, ".dockerignore"), "**/node_modules\n");
-    const gated = await call(agentDir, { model: "openai/gpt-4o-mini" }, { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok) {
-      expect(gated.gate).toMatch(/BAKE SECRETS INTO THE IMAGE/);
-      expect(gated.gate).toMatch(/`\.secrets\/auth\.json`/); // the FILE — actionable, not a directory
-      expect(gated.gate).toMatch(/`\.secrets\/\.env`/);
-    }
+  it("a kept ignore that misses the secrets warns NAMING each leaking FILE, value files included", async () => {
+    const dir = await agent({ "prod.env": "OPENAI_API_KEY=sk-x\n" });
+    await writeFile(join(dir, ".dockerignore"), "**/node_modules\n");
+    const leak = (await warnings(dir)).find((text) => /BAKE SECRETS INTO THE IMAGE/.test(text));
+    expect(leak).toMatch(/`\.secrets\/auth\.json`/);
+    expect(leak).toMatch(/`\.secrets\/\.env`/);
+    expect(leak).toMatch(/`prod\.env`/);
   });
 
-  it("loads the definition the box will load: a refusal in it gates --run instead of shipping a crash-loop", async () => {
-    const dir = await agent({ "src/tools/x.ts": "export default { name: 'x' };\n" });
-    const config = { model: CODEX_MODEL };
-    const gated = await call(dir, config, { run: true });
-    expect(gated.ok).toBe(false);
-    if (!gated.ok)
-      expect(gated.gate).toMatch(/definition does not build.*src\/tools\/x\.ts: must default-export a tool/);
-    const warned = await call(dir, config, { run: false });
-    expect(warned.ok).toBe(true);
-    if (warned.ok)
-      expect(warned.messages).toContainEqual({
-        level: "warn",
-        text: expect.stringMatching(/definition does not build/),
-      });
+  it("stops when the definition does not load: the container would crash-loop", async () => {
+    const dir = await agent({ "src/tools/x.ts": "throw new Error('broken tool');\n" });
+    const checked = await checkContainer({ agentDir: dir, force: false });
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.gate).toMatch(/definition does not load.*broken tool/s);
+  });
+
+  it("warns when a kept Dockerfile drops the deployed marker or the agent's name", async () => {
+    const dir = await agent();
+    await writeFile(join(dir, "Dockerfile"), "FROM node:24-slim\nENV FASTAGENT_DEPLOYED=1\nRUN npx fastagent build\n");
+    expect(await warnings(dir)).toContainEqual(
+      expect.stringMatching(/does not set FASTAGENT_NAME.*FASTAGENT_NAME=agent/),
+    );
   });
 });

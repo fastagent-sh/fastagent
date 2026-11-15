@@ -23,7 +23,6 @@ import {
 } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { contentLines } from "./content-view.ts";
-import { deployedHost } from "../deploy/hosts.ts";
 import { isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { type InstanceFlags, enterInstance } from "./instance.ts";
@@ -52,18 +51,17 @@ export interface EnteredAgent {
 
 /**
  * How a command enters its agent directory, in the one order that works: the directory, the agent's environment, then
- * the first-run model picker. Returns the default model that then resolves, if any. `deploy` uses this directly: it
- * gates a missing model itself, by what will ship. `before`: what the command checks of the directory before a model
- * is asked for (`schedules run`: that the schedule it names exists).
+ * the first-run model picker. Returns the default model that then resolves, if any. `before`: what the command checks
+ * of the directory before a model is asked for (`schedules run`: that the schedule it names exists).
  */
-export async function enterAgentDirectory(
+async function enterAgentDirectory(
   dirArg: string,
-  opts: { model?: string; input?: boolean; instance?: InstanceFlags; deployment?: boolean },
+  opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string) => Promise<void>,
   load?: LoadProject,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterInstance(agentDir, opts.instance, { deployment: opts.deployment === true });
+  enterInstance(agentDir, opts.instance);
   await before?.(agentDir);
   const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
   return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
@@ -161,7 +159,7 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
     path: models.auth.path,
     ...status,
     ...(isDeployedWorkspace()
-      ? { deployed: { host: deployedHost() } }
+      ? { deployed: true }
       : { local: { authPath: models.auth.path, valueFile: dotEnvPath(agentDir) } }),
   });
   log.info(`[fastagent] ${report.line}`);

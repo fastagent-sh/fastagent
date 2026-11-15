@@ -1,6 +1,6 @@
 /**
  * SHARED: the webhook registrars' outcome. A registrar reports its own FACT; what to do about it is the CALLER's
- * policy — `deploy --run` gates on "failed", the tunnel ignores the result entirely.
+ * policy — a serve reports it on `/health`, the tunnel ignores the result entirely.
  *
  * - `registered`: the platform accepted the webhook / event URL.
  * - `manual`: this run did not fail, but an operator-facing step remains (the registrar printed it). Re-runnability
@@ -14,7 +14,7 @@ export type RegistrationOutcome = "registered" | "manual" | "failed";
 const REGISTRATION_ATTEMPTS = 8;
 const REGISTRATION_RETRY_MS = 10_000;
 
-/** What `deploy --run` spends instead: 180s, because a host CLI returns before the deployment serves. */
+/** What a serve at its public URL spends instead: 180s, because a host routes to a new deployment late. */
 export const DEPLOY_REGISTRATION_ATTEMPTS = 19;
 
 /**
