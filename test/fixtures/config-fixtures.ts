@@ -1,5 +1,9 @@
 import { int, obj, opt, str } from "@earendil-works/pi-schema";
-import { type AgentDefinition, defineDefinition } from "../../src/harnesses/pi-durable/definition.ts";
+import {
+  type AgentDefinition,
+  DEFINITION_FORMAT,
+  defineDefinition,
+} from "../../src/harnesses/pi-durable/definition.ts";
 import { openAgent } from "../../src/harnesses/pi-durable/serve.ts";
 
 export const made: string[] = [];
@@ -8,7 +12,7 @@ const SETTINGS = obj({ repo: str(), digestChannel: opt(str()), retries: opt(int(
 
 export const program = (config: object) =>
   defineDefinition({
-    format: 1,
+    format: DEFINITION_FORMAT,
     builtWith: "0.0.0",
     name: "reviewer",
     version: "1.0.0",

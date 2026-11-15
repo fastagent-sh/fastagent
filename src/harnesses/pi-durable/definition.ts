@@ -9,7 +9,7 @@ import { type AgentConfig, isNeeds } from "./define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 
 /** What an opener of this FastAgent reads; a definition made for another refuses. */
-export const DEFINITION_FORMAT = 1;
+export const DEFINITION_FORMAT = 2;
 
 const DEFINITION = Symbol.for("fastagent.definition");
 declare const SETTINGS: unique symbol;
