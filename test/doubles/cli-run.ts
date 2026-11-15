@@ -257,7 +257,7 @@ export async function fauxAgent(prefix: string, files: Record<string, string> = 
 
 /** Hold the instance's storage as a serve of `dir` does, for the length of `during`. */
 export async function whileServed<T>(dir: string, during: () => Promise<T>): Promise<T> {
-  const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"), "posix", "the test's serve");
+  const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"), "the test's serve");
   try {
     return await during();
   } finally {

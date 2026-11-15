@@ -70,8 +70,8 @@ function reportServing(
   }
 }
 
-/** The line that names WHERE the serve is — every posture reports it, including AgentCore's own surface. */
-export function bindLine(host: string | undefined, boundPort: number): string {
+/** The line that names WHERE the serve is: every posture reports it. */
+function bindLine(host: string | undefined, boundPort: number): string {
   return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
 }
 
@@ -83,7 +83,7 @@ const SHUTDOWN_GRACE_MS = 800;
 const FORCED_EXIT_MS = 1_500;
 
 /** Listen, and report ready — but only once the SERVICE is, which is not the same moment — until a signal closes it. */
-export function serve(
+function serve(
   service: Service,
   bind: { port: number; host?: string },
   onListening?: (boundPort: number) => void,

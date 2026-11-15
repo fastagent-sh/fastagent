@@ -17,8 +17,7 @@
     "test/smoke/e2e/*.ts"
   ],
   "project": ["src/**/*.ts", "test/**/*.ts"],
-  // Scaffold bundles/templates are copied as files at scaffold time, never imported; the AgentCore
-  // forwarder is read as text and runs on Lambda, where its @aws-sdk requires are the runtime's.
-  "ignore": ["src/channels/*/scaffold/**", "src/scaffold/templates/**", "src/deploy/agentcore/forwarder.js"],
+  // Scaffold bundles/templates are copied as files at scaffold time, never imported.
+  "ignore": ["src/channels/*/scaffold/**", "src/scaffold/templates/**"],
   "ignoreBinaries": ["fastagent", "cloudflared", "flock"]
 }

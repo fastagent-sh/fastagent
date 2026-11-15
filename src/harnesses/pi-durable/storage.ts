@@ -3,20 +3,14 @@
  *, and `fastagent invoke`'s own. pi-durable does no cross-process locking of its own, and in
  * WAL mode SQLite lets a second process open and write the same file, which would resume and run the same messages
  * twice. So the database is opened in EXCLUSIVE locking mode: the first access takes the file's lock and keeps it
- * until the process closes it or dies, and a second opener is refused. Locally that is SQLite's own POSIX lock. On a
- * file system where those fail (AgentCore's session storage), the database locks by a `<path>.lock` directory
- * instead, which outlives a stopped microVM: the process that holds the deployment's lease knows such a lock is a dead
- * process's, removes it, and says so.
+ * until the process closes it or dies, and a second opener is refused.
  */
-import { existsSync, mkdirSync, rmdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { log } from "../../log.ts";
-
-export type StorageLocking = "posix" | "leased-dotfile";
 
 /** How long an opener waits for a lock: long enough for a restart's old process to finish closing. */
 const BUSY_TIMEOUT_MS = 5_000;
@@ -28,14 +22,11 @@ const SQLITE_BUSY = 5;
  */
 export async function openLockedStorage(
   path: string,
-  locking: StorageLocking,
   holders?: string,
   busyTimeoutMs = BUSY_TIMEOUT_MS,
 ): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
-  if (locking === "leased-dotfile") breakStaleLock(`${path}.lock`);
-  const location = locking === "posix" ? path : `file:${path}?vfs=unix-dotfile`;
-  const database = new DatabaseSync(location, { timeout: busyTimeoutMs });
+  const database = new DatabaseSync(path, { timeout: busyTimeoutMs });
   const adapter = new NodeSqliteDatabase(database);
   try {
     // In this order: an exclusive lock keeps WAL's index in this process's memory, so no shared memory is needed.
@@ -51,10 +42,4 @@ export async function openLockedStorage(
     const who = holders === undefined ? "" : `: ${holders} is running`;
     throw new Error(`the storage ${path} is held by another process${who}. Stop that one first`, { cause: error });
   }
-}
-
-function breakStaleLock(lock: string): void {
-  if (!existsSync(lock)) return;
-  rmdirSync(lock);
-  log.warn(`[fastagent] removed ${lock}: a process that held the storage stopped without releasing it`);
 }

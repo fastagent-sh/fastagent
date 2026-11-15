@@ -21,7 +21,7 @@ const NO_CLOCK =
 
 /**
  * `ticking` says whether a clock fires the wake-ups kept in `stateRoot` now; a wake-up nothing would fire is refused.
- * Without it, one always does: `dev`, `start` and AgentCore serve whatever they open.
+ * Without it, one always does: `dev` and `start` serve whatever they open.
  */
 export function wakeExtension(
   stateRoot: string,

@@ -18,7 +18,6 @@ import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { shellArg } from "../../shell-arg.ts";
 import { enterAgentDirectory, isInteractive, printReport } from "../shared.ts";
-import { agentcoreHost } from "./deploy/agentcore.ts";
 import { dockerHost } from "./deploy/docker.ts";
 import { flyHost } from "./deploy/fly.ts";
 import { railwayHost } from "./deploy/railway.ts";
@@ -37,7 +36,6 @@ export const HOSTS: Record<DeployHost, HostDeploy> = {
   docker: dockerHost,
   fly: flyHost,
   railway: railwayHost,
-  agentcore: agentcoreHost,
 };
 
 /** A flag exactly one host honours, and what the OTHERS do instead. */
@@ -59,18 +57,7 @@ export const HOST_ONLY_FLAGS = [
     passed: (opts: DeployOptions) => opts.intoLinked === true,
     instead: {
       docker: "ignored for local Docker",
-      agentcore: "ignored for AgentCore",
       fly: "fly --run is idempotent — it reuses an existing app/volume",
-    },
-  }),
-  hostOnlyFlag({
-    flag: "--idle-timeout",
-    owner: "agentcore",
-    passed: (opts: DeployOptions) => opts.idleTimeout !== undefined,
-    instead: {
-      docker: "ignored for local Docker: the container runs until it is stopped",
-      fly: "ignored for Fly: a machine's idle behaviour is fly.toml's auto_stop_machines",
-      railway: "ignored for Railway: a service runs until it is stopped",
     },
   }),
 ];
@@ -139,7 +126,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     .catch(failStartup);
   // Never `dev`, whatever spawned this: a channel's way of receiving is chosen as the box will choose it.
   unmarkDevServe();
-  const api = deploymentApi({ config, hostServes: host !== "agentcore" });
+  const api = deploymentApi({ config });
   const target = HOSTS[host];
   await warnLegacyManifest(agentDir, name, target);
   const preflight = async () => {
@@ -150,9 +137,6 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
       ...(delivered === undefined ? {} : { delivered }),
       run: !!opts.run,
       force: !!opts.force,
-      noResidentProcess: host === "agentcore", // alarms and webhooks wake the container there — no machine to keep up
-      // Every AgentCore deployment starts the storage over.
-      storageResets: host === "agentcore",
       servesApi: api.served,
       fromEnv: !!opts.fromEnv,
     }).catch(failStartup);
@@ -167,7 +151,7 @@ export async function runDeploy(host: DeployHost, dirArg: string, opts: DeployOp
     `${opts.config === undefined ? "" : ` --config ${shellArg(opts.config)}`}` +
     `${opts.envFile === undefined ? "" : ` --env-file ${shellArg(opts.envFile)}`}` +
     `${opts.fromEnv ? " --from-env" : ""}` +
-    `${opts.intoLinked ? " --into-linked" : ""}${opts.idleTimeout === undefined ? "" : ` --idle-timeout ${opts.idleTimeout}`} --run`;
+    `${opts.intoLinked ? " --into-linked" : ""} --run`;
   const unprepared = opts.run ? unpreparedChannelApps(pre.channels, pre.values) : [];
   if (unprepared.length > 0) {
     const supplied = unprepared.flatMap(channelAppNames);

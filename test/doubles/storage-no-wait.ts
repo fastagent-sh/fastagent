@@ -8,5 +8,5 @@ import { vi } from "vitest";
 type Storage = typeof import("../../src/harnesses/pi-durable/storage.ts");
 const real = await vi.importActual<Storage>("../../src/harnesses/pi-durable/storage.ts");
 
-export const openLockedStorage: Storage["openLockedStorage"] = (path, locking, holders) =>
-  real.openLockedStorage(path, locking, holders, 0);
+export const openLockedStorage: Storage["openLockedStorage"] = (path, holders) =>
+  real.openLockedStorage(path, holders, 0);

@@ -31,8 +31,6 @@ export interface AgentDefaults<Settings = unknown> {
      */
     publicUrl?: string;
   };
-  /** How the agent is deployed, where a host needs to be told. */
-  deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   /**
    * Each channel by its file's name: how it receives, for a channel that can do either (`byIngress`). Unset, `dev`
    * receives by WebSocket (no public URL there) and everything else by webhook, which a host that wakes on a request

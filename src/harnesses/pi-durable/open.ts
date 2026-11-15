@@ -296,7 +296,7 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
 
 export interface AssembleAgentOptions {
   storage: Storage;
-  /** Who runs the instance, as far as the prompt says where the agent runs (deployed, on AgentCore). */
+  /** Who runs the instance, as far as the prompt says where the agent runs (deployed or not). */
   runsAs: RunsAs;
   /** What the agent works on (`fastagent.config.ts` / `fastagent.json`), resolved for this instance. */
   content?: readonly ResolvedContent[];

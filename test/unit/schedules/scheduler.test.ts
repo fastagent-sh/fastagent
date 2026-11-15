@@ -10,12 +10,12 @@ import type { Schedule } from "../../../src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
 import {
   createScheduler as scheduler,
-  fireScheduleOnce as fire,
+  fireScheduleNow as fire,
   scheduleSessions,
 } from "../../../src/schedule/scheduler.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
-const fireScheduleOnce = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
+const fireScheduleNow = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
 import { addWakeup, listWakeups } from "../../../src/schedule/wakeups.ts";
 import { readFires } from "../../../src/schedule/state.ts";
 
@@ -131,9 +131,7 @@ describe("schedule/scheduler: fire algorithm", () => {
   });
 });
 
-describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
-  const slot = new Date("2026-07-07T10:00:00Z");
-
+describe("schedule/fireScheduleNow: a fire on demand", () => {
   it("OVERLAP is `skipped`, not `failed` — the previous turn still running is a policy, not a fault", async () => {
     // A schedule's turns share one `schedule:<name>` session, so an occurrence arriving while the
     // previous one runs is refused by that session. Recording it as `failed` made "the last run was
@@ -142,13 +140,13 @@ describe("schedule/fireScheduleOnce: the external-clock fire path", () => {
     // instead: k8s `concurrencyPolicy: Forbid`, Temporal's `Skip` overlap policy.
     const root = await freshRoot();
     const { agent } = recordingAgent(refused("busy"));
-    const outcome = await fireScheduleOnce({ agent, stateRoot: root, schedule: hourly(), slot });
+    const outcome = await fireScheduleNow({ agent, stateRoot: root, schedule: hourly() });
 
     expect(outcome).toMatchObject({ fired: false, skipped: true });
     expect(outcome.failed).toBeUndefined();
     expect(String(outcome.skippedReason)).toContain("still running");
     // The claim STANDS — this occurrence is decided and will not be retried — it just did not fail.
-    expect(claimed(root, "job")).toEqual(["2026-07-07T10-00-00-000Z"]);
+    expect(claimed(root, "job")).toHaveLength(1);
     expect(readFires(root, "job")).toMatchObject([{ outcome: "skipped" }]);
   });
 });

@@ -229,7 +229,7 @@ export interface AuthLayers {
  *
  * No fallback when a path was named: "use this file" is an instruction, not a preference. BOTH knobs
  * {@link resolveAuthPath} reads count as that instruction, `FASTAGENT_SECRETS_DIR` included — it is what the
- * Fly/Railway/AgentCore artifacts set, and a deployed container must read its mounted credentials and nothing else
+ * Fly/Railway artifacts set, and a deployed container must read its mounted credentials and nothing else
  * (the artifact is the truth).
  */
 export function resolveAuthLayers(

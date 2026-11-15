@@ -1,6 +1,6 @@
 /**
  * A definition opened: its code built with its secrets, its model environment, its storage, and the Agent over them.
- * `openAgent` is how an app opens one; `dev`, `start`, AgentCore, `invoke` and `schedules run` open it
+ * `openAgent` is how an app opens one; `dev`, `start`, `invoke` and `schedules run` open it
  * through `openServing`, which also takes where the Agent keeps its sessions and what becomes of an earlier process's
  * messages.
  */
@@ -37,7 +37,7 @@ import {
 } from "./config.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
-import { type StorageLocking, openLockedStorage } from "./storage.ts";
+import { openLockedStorage } from "./storage.ts";
 import { openText } from "./text.ts";
 import { instanceName } from "../../instance-name.ts";
 
@@ -73,7 +73,7 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   /**
-   * Where the Agent keeps its sessions. Default `{ instance: "posix" }`: the instance's `agent.sqlite`, which one process
+   * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, which one process
    * holds at a time (storage.ts), with `wake` and `unwake`, since a serve's clock fires the wake-ups they keep. The other
    * two never meet the storage a serve of the same directory holds, and have no `wake`, since no clock fires for them:
    * `{ file }` is a database of the caller's own, held the same way (`holders`, when given, names in the refusal of a
@@ -106,7 +106,7 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   wakeTicking?: () => boolean;
 }
 
-type ServingStorage = { instance: StorageLocking } | { file: string; holders?: string } | "memory";
+type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
 
 /** Who opens the instance's storage, for the refusal of a second opener. */
 const INSTANCE_HOLDERS =
@@ -171,7 +171,7 @@ const instanceStorageFile = (stateRoot: string) => join(stateRoot, "agent.sqlite
  * instance's state outside a serve without losing a write to a serve's own.
  */
 export async function holdingInstance<T>(stateRoot: string, work: () => T): Promise<T> {
-  const storage = await openLockedStorage(instanceStorageFile(stateRoot), "posix", INSTANCE_HOLDERS);
+  const storage = await openLockedStorage(instanceStorageFile(stateRoot), INSTANCE_HOLDERS);
   try {
     return await work();
   } finally {
@@ -181,8 +181,8 @@ export async function holdingInstance<T>(stateRoot: string, work: () => T): Prom
 
 function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storage> | Storage {
   if (storage === "memory") return new MemoryStorage();
-  if ("file" in storage) return openLockedStorage(storage.file, "posix", storage.holders);
-  return openLockedStorage(instanceStorageFile(stateRoot), storage.instance, INSTANCE_HOLDERS);
+  if (storage === "instance") return openLockedStorage(instanceStorageFile(stateRoot), INSTANCE_HOLDERS);
+  return openLockedStorage(storage.file, storage.holders);
 }
 
 export async function openServing(definition: AgentDefinition, options: OpenServingOptions): Promise<OpenedServing> {
@@ -223,7 +223,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     code.providers,
     { stateRoot, environment: secrets, env, offline: options.offline ?? env.FASTAGENT_OFFLINE === "1" },
   );
-  const chosen = options.storage ?? { instance: "posix" };
+  const chosen = options.storage ?? "instance";
   const storage = await openStorage(stateRoot, chosen);
   let mcp: McpClients | undefined;
   let agent: DurableAgent;

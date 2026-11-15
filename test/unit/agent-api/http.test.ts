@@ -9,7 +9,7 @@ interface Served {
   close(): Promise<void>;
 }
 
-/** The server `listen`, `dev`, `start` and AgentCore serve on, through a real socket. */
+/** The server `listen`, `dev` and `start` serve on, through a real socket. */
 const serving = async (handler: Handler): Promise<Served> => {
   const host = serveHandler(handler, { port: 0 });
   const port = await host.listening;

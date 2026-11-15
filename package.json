@@ -97,7 +97,6 @@
     "@effect/platform-bun": "^4.0.7",
     "@effect/platform-node": "^4.0.7",
     "@modelcontextprotocol/client": "2.4.0",
-    "@smithy/signature-v4": "^5.7.4",
     "chokidar": "^6.0.0",
     "commander": "^15.0.0",
     "croner": "^11.0.0",

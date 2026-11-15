@@ -196,4 +196,4 @@ curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorizat
 
 Deleting a session; per-message usage (messages answered together share their model calls); structured results (have
 a tool take the result as its arguments, and read its `tool_result`); asking the user mid-message; a webhook when a
-message ends (use `get` with `wait`); files other than images; A2A and MCP bindings; the API on AgentCore.
+message ends (use `get` with `wait`); files other than images; A2A and MCP bindings.

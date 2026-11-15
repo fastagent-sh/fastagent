@@ -55,8 +55,6 @@ interface DeployFacts {
   channels: DeclaredChannel[];
   /** `src/schedules/` declares at least one schedule. */
   hasCron: boolean;
-  /** Built schedules (name + cron) for host-specific cron checks such as AgentCore EventBridge compatibility. */
-  schedules: readonly { name: string; cron: string }[];
   /**
    * The values this deploy has to give the target: the environment it runs in (what a CI job or `op run` injects, and
    * the file `--env-file` names laid under it), read ONCE here so the plan side and the run side cannot disagree about
@@ -162,15 +160,8 @@ function checkMcp(
  * the host, and FastAgent maps none onto it, so the delivered configuration naming one is an issue: the deployed agent
  * would lack data it was configured to work on.
  */
-function checkContent(
-  declared: readonly DeclaredContent[],
-  delivered: string | undefined,
-  storageResets: boolean,
-  report: DeployReport,
-): void {
-  const fate = storageResets
-    ? "cloned afresh on every deployment, since the host's storage starts over; what the agent did not push is lost"
-    : "cloned on the host, and brought up to date in place at each start";
+function checkContent(declared: readonly DeclaredContent[], delivered: string | undefined, report: DeployReport): void {
+  const fate = "cloned on the host, and brought up to date in place at each start";
   for (const entry of declared) {
     if (entry.kind === "github") {
       report.note(`works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, ${fate}`);
@@ -203,16 +194,6 @@ interface PreflightInput {
   run: boolean;
   /** `--force` regenerates the artifacts fastagent OWNS, so a kept `.dockerignore`'s content checks do not apply. */
   force: boolean;
-  /**
-   * The target holds no resident process (AgentCore): what wakes it is outside it (webhooks, alarms), so the notes
-   * about keeping one machine running do not apply.
-   */
-  noResidentProcess?: boolean;
-  /**
-   * Does every deployment start this host's storage over (AgentCore)? Then a clone the instance made, and anything the
-   * agent did in it, does not outlive a release. Its own question, apart from {@link noResidentProcess}.
-   */
-  storageResets?: boolean;
   /** Does this deployment serve the Agent API under `/v1` (deploy/api.ts)? Then a Caller with its key reaches it. */
   servesApi?: boolean;
   /** `--from-env`: the environment this command runs in is a source of values, beside the file `--env-file` names. */
@@ -264,7 +245,7 @@ export async function preflightDeploy(input: PreflightInput): Promise<DeployPref
 }
 
 async function gatherFacts(input: PreflightInput, report: DeployReport): Promise<Omit<DeployFacts, "messages">> {
-  const { agentDir, config, delivered, force, noResidentProcess, storageResets = false, servesApi = false } = input;
+  const { agentDir, config, delivered, force, servesApi = false } = input;
 
   // A deployed agent is built (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
   if (!(await exists(join(agentDir, "package.json")))) {
@@ -279,7 +260,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
     return { value: undefined, file: "fastagent.config.ts" };
   });
   const content = loadContent(rawProgram.value?.content, delivered?.source, rawProgram.file);
-  checkContent(content, delivered?.source.label, storageResets, report);
+  checkContent(content, delivered?.source.label, report);
   const textProblem = delivered === undefined ? undefined : undeliverableText(delivered.source);
   if (textProblem !== undefined) report.issue(textProblem);
   const mcpOpens = checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, delivered?.source, report);
@@ -293,8 +274,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   }
 
   // The definition the box will load on every start, read here first: a refusal in it (a module that fails to import,
-  // two tools under one name) builds a perfectly good image that crash-loops on fly/railway/docker and fails every
-  // invocation on AgentCore. This is the boundary that turns that refusal into a deploy finding, so the error is
+  // two tools under one name) builds a perfectly good image that crash-loops on fly/railway/docker. This is the boundary that turns that refusal into a deploy finding, so the error is
   // carried whole into the issue rather than rethrown.
   const definition = await loadSourceDefinition(agentDir).catch((error: unknown) => {
     report.issue(`the definition does not load, so the deployed agent would not start: ${messageOf(error)}`);
@@ -369,13 +349,13 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // Counted from the registry when the code did not build: a plan that scaled to zero because a schedule failed to
   // build on deploy day would sleep through it once it is fixed.
   const hasCron = (code?.schedules.length ?? definition?.registry.schedules.length ?? 0) > 0;
-  if (longConnectionChannels.length > 0 && !noResidentProcess) {
+  if (longConnectionChannels.length > 0) {
     report.note(
       `long-connection channel present (${longConnectionChannels.join(", ")}) — a GENERATED plan keeps one machine running ` +
         `(an outbound connection cannot wake a scaled-to-zero service).`,
     );
   }
-  if (hasCron && !noResidentProcess) {
+  if (hasCron) {
     report.note(
       `src/schedules/ present — a GENERATED plan keeps one machine running (nothing wakes this box at a cron instant).`,
     );
@@ -445,7 +425,7 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   // Does the baked agent directory ship a `.git`?
   const shipsGit = await exists(join(agentDir, ".git"));
   // What a RELEASE does — host-neutral, because how long the storage under it lives is the host's own answer and its
-  // runbook gives it (a Fly volume outlives every deploy; AgentCore's mount does not).
+  // runbook gives it.
   report.note(
     `the agent directory is baked as the definition (WYSIWYG — what you see is what ships, git or not, clean or ` +
       `not); its package.json dependencies are installed in the image. Every release replaces the image and leaves the instance's working directory, state and ` +
@@ -493,7 +473,6 @@ async function gatherFacts(input: PreflightInput, report: DeployReport): Promise
   return {
     channels,
     hasCron,
-    schedules: (code?.schedules ?? []).map(({ name, cron }) => ({ name, cron })),
     values,
     valuesFrom,
     modelAuth,

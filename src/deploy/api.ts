@@ -1,6 +1,5 @@
 /**
- * A deployment's Agent API: served under `/v1` on every host but AgentCore, unless the
- * definition turns it off (`http.api: false`), behind a key the deploy mints and sets on the target the first time
+ * A deployment's Agent API: served under `/v1` unless the definition turns it off (`http.api: false`), behind a key the deploy mints and sets on the target the first time
  * neither the target nor the values the deploy was given has one. And what a deploy reports of it.
  */
 import { randomBytes } from "node:crypto";
@@ -15,13 +14,8 @@ export type DeploymentApi = { served: true } | { served: false; why: string };
  * Decide the API for one deploy, writing nothing. Turned off, it is off on the deployment too, a key the target still
  * holds included: the serve reads the same setting.
  */
-export function deploymentApi(input: {
-  config: EffectiveConfig;
-  /** The host serves the API at all: not AgentCore, reached only through `/invocations`. */
-  hostServes: boolean;
-}): DeploymentApi {
-  const { config, hostServes } = input;
-  if (!hostServes) return { served: false, why: "this host reaches the agent only through its own invocations" };
+export function deploymentApi(input: { config: EffectiveConfig }): DeploymentApi {
+  const { config } = input;
   if (apiTurnedOff(config)) return { served: false, why: API_TURNED_OFF };
   return { served: true };
 }

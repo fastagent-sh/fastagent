@@ -41,7 +41,6 @@ Every key is optional. An unknown key refuses the start.
 | `defaults.http.api` | `true` | Serve the [Agent API](#the-agent-api-over-http) under `/v1` when a key is set. `false` turns it off |
 | `defaults.channels.<name>.ingress` | `dev`: `connection`; else `webhook` | How a channel that can do both receives |
 | `defaults.channels.<name>.app` | none | Slack and Lark only: the app this instance is bound to and its saved URL (written by `deploy --run` and `channels setup --record-url`) |
-| `defaults.deploy.agentcore.idleTimeoutSeconds` | `180` | AgentCore only: how long an idle session keeps its microVM |
 
 The name and description of the program come from its `package.json`.
 
@@ -258,7 +257,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/clien
 | | `FASTAGENT_SECRETS_DIR` | `.secrets` (`start`: `.secrets/production`) |
 | | `FASTAGENT_AUTH_PATH` | `<secrets>/auth.json` |
 
-A deployment's root is `/data` (Docker, Fly, Railway) or `/mnt/data` (AgentCore). On your own server:
+A deployment's root is `/data` (Docker, Fly, Railway). On your own server:
 
 ```bash
 fastagent build
@@ -301,13 +300,12 @@ export default defineSchedule({
 ```
 
 - `cron` has 5 fields; `tz` defaults to UTC; `prompt` is text or `({ at }) => text`.
-- Runs at most every 10 minutes; at most 20 schedules. Cron forms AgentCore cannot run (`L`, `#`, `@daily`, both day
-  fields) are refused everywhere.
+- Runs at most every 10 minutes; at most 20 schedules.
 - Each schedule has one session that every run continues.
 - It delivers nothing itself: name the send tool and the target in the prompt.
 - Each instant runs at most once. After downtime, one missed run is caught up. A run still going makes the next one
   `skipped`.
-- `dev` and `start` run the clock; on AgentCore, EventBridge does.
+- `dev` and `start` run the clock.
 
 `fastagent schedules list` shows the next runs and the last outcome; `fastagent schedules run <name>` runs one now.
 

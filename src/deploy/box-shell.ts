@@ -1,14 +1,14 @@
 /**
  * A running box's owner-authenticated shell, as a byte channel: what `fastagent login --deployment` speaks through.
- * Host-neutral: Docker, Fly and Railway open it by running their own CLI (`processShell`); AgentCore opens a
- * WebSocket (`agentcore/shell.ts`). Whoever opens one only writes bytes in and reads bytes out.
+ * Docker, Fly and Railway open it by running their own CLI (`processShell`). Whoever opens one only writes bytes in and
+ * reads bytes out.
  */
 import { spawn } from "node:child_process";
 import { shellArg } from "../shell-arg.ts";
 import type { Readable, Writable } from "node:stream";
 
 /** One open session on the box, running one command. */
-export interface BoxChannel {
+interface BoxChannel {
   /** What the command writes to its stdout. Ends when the session does. */
   output: Readable;
   /** The command's stdin. */
@@ -22,13 +22,6 @@ export interface BoxShell {
   open(command: string): Promise<BoxChannel>;
   /** Make sure there is a running machine to open the shell on (a host that suspends idle machines). */
   wake?(): Promise<void>;
-  /**
-   * The box's storage root, for a shell that does not carry the server's environment (AgentCore's). Unset: the
-   * shell sees `FASTAGENT_ROOT` as the server does, or the image's default.
-   */
-  storage?: string;
-  /** Where the box's image has the agent. Unset: where a generated image has it. */
-  program?: string;
 }
 
 /** A host CLI that runs a command on the box itself: `bin ...args(command)`, run from `cwd`. */

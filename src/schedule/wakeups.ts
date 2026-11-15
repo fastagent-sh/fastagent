@@ -59,12 +59,6 @@ function isWakeup(e: unknown): e is Wakeup {
   );
 }
 
-/** The wake-ALARM sink: notified after EVERY wakeups-store mutation. */
-let wakeupsSink: ((stateRoot: string) => void) | undefined;
-export function setWakeupsSink(sink: ((stateRoot: string) => void) | undefined): void {
-  wakeupsSink = sink;
-}
-
 function load(stateRoot: string): Wakeup[] {
   const v = readScheduleFile(scheduleFile(stateRoot, "wakeups"));
   if (v === undefined) return []; // absent (first run) or a corrupt file readScheduleFile already warned on
@@ -82,14 +76,9 @@ function load(stateRoot: string): Wakeup[] {
 }
 function save(stateRoot: string, wakeups: Wakeup[]): void {
   writeScheduleFile(scheduleFile(stateRoot, "wakeups"), wakeups);
-  try {
-    wakeupsSink?.(stateRoot);
-  } catch (e) {
-    log.error(`[schedule] wake-alarm sink failed (store write is unaffected): ${String(e)}`);
-  }
 }
 
-/** The current pending wake-ups — read by the wake-alarm sink, which mirrors them into an external clock. */
+/** The current pending wake-ups. */
 export function listWakeups(stateRoot: string): Wakeup[] {
   return load(stateRoot);
 }

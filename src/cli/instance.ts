@@ -220,7 +220,6 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
   return {
     dev: servedByDev(env),
     deployed: isDeployedWorkspace(env),
-    ...(env.FASTAGENT_AGENTCORE === "1" ? { ephemeralRoot: true } : {}),
   };
 }
 

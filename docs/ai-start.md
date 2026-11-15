@@ -236,7 +236,7 @@ fastagent schedules run daily-review   # a real run now (refused while dev serve
 ```
 
 The agent can also schedule its own follow-ups with `wake`; test one while serving. On Fly and Railway a schedule
-keeps the machine up; on AgentCore, EventBridge runs it ([Deploy](deploy.md#scale-to-zero)).
+keeps the machine up ([Deploy](deploy.md#scale-to-zero)).
 
 ## 8. Embed it in an app (optional)
 
@@ -269,7 +269,7 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions, channel and schedule state, the box's login | on the host's volume (Docker, Fly, Railway); AgentCore resets it on every deploy |
+| Sessions, channel and schedule state, the box's login | on the host's volume (Docker, Fly, Railway) |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
 Channels replay an accepted turn at least once, so tools with side effects must tolerate a repeat.
