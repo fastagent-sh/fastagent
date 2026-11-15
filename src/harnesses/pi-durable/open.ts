@@ -17,7 +17,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 import type { ResolvedContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
-import { channelIngress, channelModuleProblem } from "../../channels/discover.ts";
+import { channelModuleProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { loadRawProgramConfig } from "../../program-config.ts";
 import { readPackageJson } from "../../runtime.ts";
@@ -30,7 +30,7 @@ import { log } from "../../log.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
-import { type AgentConfig, type DefinedSchedule, type Needs, isByIngress, isNeeds } from "./define.ts";
+import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
 import {
   type EffectiveConfig,
   type InstanceConfigSource,
@@ -38,14 +38,7 @@ import {
   checkProgramConfig,
   devInstanceConfig,
 } from "./config.ts";
-import {
-  type AgentDefinition,
-  DEFINITION_FORMAT,
-  type IngressConfig,
-  chosenIngress,
-  codeSecrets,
-  defineDefinition,
-} from "./definition.ts";
+import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { type TextSources, programText } from "./text-sources.ts";
@@ -149,49 +142,14 @@ export interface BuiltDefinition {
   schedules: Schedule[];
 }
 
-/** What a build reads of an instance's configuration: its settings, and how its channels receive. */
-export interface BuildConfig extends IngressConfig {
+/** What a build reads of an instance's configuration: its settings. */
+export interface BuildConfig {
   settings: Readonly<Record<string, unknown>>;
 }
 
 /**
- * The channel `name` as `config` has it: the way it chooses of one that receives either way, which must build the
- * module that way receives with; or the one module there is, which must receive the way `config` names, when it names
- * one.
- */
-function chosenChannel(
-  file: string,
-  name: string,
-  value: unknown,
-  config: BuildConfig,
-  build: (value: unknown, source: string) => ChannelModule | LongConnectionChannelModule,
-): ChannelModule | LongConnectionChannelModule {
-  const shapeOf = (module: ChannelModule | LongConnectionChannelModule) =>
-    channelIngress(module) === "webhook" ? "webhook" : "connection";
-  const by = (way: "webhook" | "connection") => (way === "webhook" ? "webhook" : "a connection it opens");
-  if (isByIngress(value)) {
-    const way = chosenIngress(config, name);
-    const module = build(value[way], `${file} (byIngress ${way})`);
-    if (shapeOf(module) !== way) {
-      throw new Error(`${file}: its ${way} way builds a channel that receives by ${by(shapeOf(module))}`);
-    }
-    return module;
-  }
-  const module = build(value, file);
-  const named = config.channels?.[name]?.ingress;
-  if (named !== undefined && shapeOf(module) !== named) {
-    throw new Error(
-      `channels.${name}.ingress is "${named}", and ${file} receives only by ${by(shapeOf(module))}: default-export ` +
-        `byIngress({ webhook, connection }) from it to let an instance choose`,
-    );
-  }
-  return module;
-}
-
-/**
  * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
- * the values it declared, and refuse one that is not what its directory holds. A channel that receives either way is
- * built the way `config` chooses, and only that way's secrets are asked for.
+ * the values it declared, and refuse one that is not what its directory holds.
  */
 export function buildDefinition(
   definition: AgentDefinition,
@@ -199,7 +157,7 @@ export function buildDefinition(
   instance: BuildConfig = { settings: {} },
 ): BuiltDefinition {
   const { settings } = instance;
-  const missing = missingSecrets(codeSecrets(definition, instance), env);
+  const missing = missingSecrets(codeSecrets(definition), env);
   if (missing.length > 0) {
     throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
   }
@@ -219,9 +177,7 @@ export function buildDefinition(
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: chosenChannel(file, name, value, instance, (way, source) =>
-      built<ChannelModule | LongConnectionChannelModule>(source, way, values(way), settings, channelProblem),
-    ),
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), settings, channelProblem),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
@@ -253,17 +209,13 @@ export function buildDefinition(
 }
 
 /**
- * The definition's code built only to read its shape (which channels, with which ingress, which schedules, which
- * providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
+ * The definition's code built only to read its shape (which channels, which schedules, which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
 export function buildDefinitionShape(
   definition: AgentDefinition,
   env: NodeJS.ProcessEnv,
-  config: BuildConfig = {
-    settings: definition.config.defaults?.settings ?? {},
-    ...(definition.config.defaults?.channels === undefined ? {} : { channels: definition.config.defaults.channels }),
-  },
+  config: BuildConfig = { settings: definition.config.defaults?.settings ?? {} },
 ): BuiltDefinition {
   const values: NodeJS.ProcessEnv = Object.fromEntries(
     definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),

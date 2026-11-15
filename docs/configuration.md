@@ -37,16 +37,13 @@ Every key is optional. An unknown key refuses the start.
 | `defaults.starters` | none | Up to 6 example first messages a client may offer |
 | `defaults.settings` | none | Default values of `settings` |
 | `defaults.http.port` | `8787` | Port of `dev` and `start` |
-| `defaults.http.publicUrl` | none | The public `https://` URL platforms reach the instance at. Set, a serve points Telegram, Feishu and Lark there itself |
 | `defaults.http.api` | `true` | Serve the [Agent API](#the-agent-api-over-http) under `/v1` when a key is set. `false` turns it off |
-| `defaults.channels.<name>.ingress` | `dev`: `connection`; else `webhook` | How a channel that can do both receives |
-| `defaults.channels.<name>.app` | none | Slack and Lark only: the app this instance is bound to and its saved URL (written by `channels setup --record-url`) |
 
 The name and description of the program come from its `package.json`.
 
 ### An instance's `fastagent.json`
 
-It overrides `starters`, `model`, `thinkingLevel`, `http`, `channels` and `settings`, and adds what only an instance has:
+It overrides `starters`, `model`, `thinkingLevel`, `http` and `settings`, and adds what only an instance has:
 `name`, `description`, `content`, `mcpServers`, `instructions`, `skills`, `prompts`. Objects merge, arrays replace. A
 bad value refuses the open, naming file and path (`fastagent.json: /http/port expected <= 65535`).
 
@@ -82,8 +79,6 @@ where each value came from.
 | `thinkingLevel` | `FASTAGENT_THINKING_LEVEL` | `--thinking` |
 | `http.port` | `PORT` (`start` only) | `--port` |
 | `http.api` | `FASTAGENT_HTTP_API` | |
-| `http.publicUrl` | `FASTAGENT_HTTP_PUBLIC_URL` | |
-| `channels.<name>.ingress` | `FASTAGENT_INGRESS` | `--ingress slack=webhook,feishu=connection` |
 
 `openAgent` reads none of these: give it a configuration.
 
@@ -222,8 +217,8 @@ bind   dev:   --bind > 127.0.0.1                  start: --bind > all interfaces
 ```
 
 `--bind` takes an IP or `localhost`. A serve answers its channels' routes (each checks its platform), the
-[Agent API](#the-agent-api-over-http) with a key, and `GET /health`: public, `200 {"status": "ok", "webhooks": [...]}`
-once ready and `503 {"status": "starting", …}` before, each webhook channel as `{ channel, outcome }`.
+[Agent API](#the-agent-api-over-http) with a key, and `GET /health`: public, `200 {"status": "ok"}` once ready and
+`503 {"status": "starting"}` before.
 
 ## The Agent API over HTTP
 

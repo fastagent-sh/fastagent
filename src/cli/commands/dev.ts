@@ -10,7 +10,7 @@ import { loadDevProject } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
-import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
+import { cliMountOptions, serveService } from "../serve.ts";
 import { setUpMissingChannels } from "../first-run-channels.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
@@ -27,7 +27,6 @@ export interface DevOptions {
   model?: string;
   /** false ⇔ `--no-watch`. */
   watch?: boolean;
-  tunnel?: boolean;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   instance?: InstanceFlags;
@@ -52,18 +51,16 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     await serveOnce(agentDir, modelSpec, opts);
     return;
   }
-  parsePort(opts.port, "--port", "flag"); // flag-shape checks before spawning
-  // The --bind/--tunnel conflict is decidable from flags alone: refuse it HERE, before a worker and a tunnel exist.
-  assertTunnelBindable(parseBind(opts.bind), opts.tunnel ?? false);
-  await runDevSupervisor(agentDir, { tunnel: opts.tunnel ?? false });
+  // Flag-shape checks before spawning.
+  parsePort(opts.port, "--port", "flag");
+  parseBind(opts.bind);
+  await runDevSupervisor(agentDir);
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
 async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
-  const tunnel = opts.tunnel ?? false;
-  assertTunnelBindable(host, tunnel);
   const opened = await loadDevProject(agentDir)
     .then(({ definition, instance }) =>
       openServing(definition, {
@@ -76,9 +73,5 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   await reportAssembly(opened, modelSpec);
   const { config } = opened;
   const service = await serveAgent(opened, cliMountOptions(config)).catch(failStartup);
-  serveService(
-    service,
-    { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host },
-    { tunnel, agentDir, config },
-  );
+  serveService(service, { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host }, config);
 }

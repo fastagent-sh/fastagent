@@ -1,12 +1,11 @@
-/** What a Telegram bot's setup asks for (channels/setup.ts): its token from BotFather, and for a webhook a secret. */
-import { randomBytes } from "node:crypto";
+/** What a Telegram bot's setup asks for (channels/setup.ts): its token from BotFather. */
 import { type ChannelSetup, SetupRefused, pasteOne } from "../setup.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 
 const TOKEN = /^\d+:[A-Za-z0-9_-]{30,}$/;
 
-export const telegramSetup: ChannelSetup = ({ way }) => {
+export const telegramSetup: ChannelSetup = () => {
   // What the token's own `getMe` said about group privacy, for what is left to the person once the token is kept.
   let readsAllGroupMessages: boolean | undefined;
   return {
@@ -49,10 +48,6 @@ export const telegramSetup: ChannelSetup = ({ way }) => {
           }
         },
       }),
-      // Only a webhook has an inbound request to verify: a polling bot asks Telegram for its updates.
-      ...(way === "webhook"
-        ? [{ kind: "make" as const, name: "TELEGRAM_SECRET_TOKEN", make: () => randomBytes(24).toString("hex") }]
-        : []),
     ],
   };
 };

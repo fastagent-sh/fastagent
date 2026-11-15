@@ -1,27 +1,17 @@
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import {
-  type TelegramChannelOptions,
-  telegramChannel,
-  telegramPollingChannel,
-} from "@fastagent-sh/fastagent/telegram";
+import { needs } from "@fastagent-sh/fastagent";
+import { type TelegramPollingChannelOptions, telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
 
-// A channel = a third-party ADAPTER (telegramChannel: verify + run + reply) configured with YOUR policy.
+// A channel = a third-party ADAPTER (telegramPollingChannel: receive + run + reply) configured with YOUR policy.
 // fastagent registers this file from src/channels/ and hands the adapter the agent, its sessions and a directory of
 // its own; this file holds only policy.
 //
-// How it receives is the instance's choice, `channels.telegram.ingress` in its fastagent.json (webhook | connection).
-// Unset, `fastagent dev` polls Telegram (no public URL, no tunnel), and everything else — `fastagent start`, every
-// deployment — receives by webhook at POST /telegram, the way a host that wakes on a request is reached. A bot is
-// polled by ONE process or reached by one webhook: polling takes the bot's webhook away first.
+// The bot polls Telegram for its updates, so it needs no public URL, in `fastagent dev` and in a container alike. A
+// bot is polled by ONE process: run one instance per bot, and give a deployment a bot of its own.
 //
-// Setup: @BotFather → /newbot → put the bot token in TELEGRAM_BOT_TOKEN. For webhook, also pick a random
-// TELEGRAM_SECRET_TOKEN (verifies that inbound updates really come from Telegram); the instance sets the webhook
-// itself when it serves at a public URL (`http.publicUrl`), or by hand:
-//   curl "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-//     -d url=https://your.host/telegram -d secret_token=$TELEGRAM_SECRET_TOKEN
+// Setup: @BotFather → /newbot → put the bot token in TELEGRAM_BOT_TOKEN (`fastagent channels setup telegram` asks
+// for it and checks it).
 
-// Your policy, the same whichever way the channel receives.
-const policy: Pick<TelegramChannelOptions, "onError" | "route" | "botUsername"> = {
+const policy: Pick<TelegramPollingChannelOptions, "onError" | "route" | "botUsername"> = {
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
   // chat is customer-facing by default — for a public bot, drop this or return a neutral string;
   // full details always go to the server log regardless.
@@ -39,17 +29,7 @@ const policy: Pick<TelegramChannelOptions, "onError" | "route" | "botUsername"> 
   //   route: (u) => defaultTelegramRoute(u, { botUsername: "my_bot" }) && { text: `${telegramEnvelope(u.message!)}\n[extra]` },
 };
 
-// Each way's `needs` declares the env vars it reads: an instance is asked only for its way's, and refused to serve
-// while a required one is unset.
-export default byIngress({
-  webhook: needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
-    telegramChannel({
-      botToken: secrets.TELEGRAM_BOT_TOKEN, // used to send the agent's reply back to the chat
-      secretToken: secrets.TELEGRAM_SECRET_TOKEN, // verifies inbound updates really come from Telegram
-      ...policy,
-    }),
-  ),
-  connection: needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
-    telegramPollingChannel({ botToken: secrets.TELEGRAM_BOT_TOKEN, ...policy }),
-  ),
-});
+// `needs` declares the env vars this file reads: the instance is refused to serve while one is unset.
+export default needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
+  telegramPollingChannel({ botToken: secrets.TELEGRAM_BOT_TOKEN, ...policy }),
+);

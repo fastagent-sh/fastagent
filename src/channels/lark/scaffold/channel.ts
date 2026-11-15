@@ -1,17 +1,12 @@
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fastagent-sh/fastagent/lark";
+import { needs } from "@fastagent-sh/fastagent";
+import { type LarkWebSocketChannelOptions, larkWebSocketChannel } from "@fastagent-sh/fastagent/lark";
 
-// The branded Lark adapter over fastagent's canonical Feishu engine (verify + run + reply), configured
-// with YOUR policy. Lark international (open.larksuite.com) only; a Feishu tenant uses `fastagent add
-// feishu` instead.
+// The branded Lark adapter over fastagent's canonical Feishu engine (receive + run + reply), configured with YOUR policy. Lark
+// international (open.larksuite.com) only; a Feishu tenant uses `fastagent add feishu` instead.
 //
-// How it receives is the instance's choice, `channels.lark.ingress` in its fastagent.json (webhook |
-// connection). Unset, `fastagent dev` opens a long connection OUT (no public URL, no tunnel), and everything
-// else — `fastagent start`, every deployment — receives by webhook at POST /lark, the way a host that
-// wakes on a request is reached.
-// Dev reads .secrets/.env. A container reads its own environment: make a separate production app with
-// `fastagent channels setup lark --env-file prod.env` and give the container that file's values; if Lark refuses its
-// config API, set the Request URL in the console once.
+// The app receives over a long connection this process opens, so it needs no public URL, in `fastagent dev` and in
+// a container alike. Lark hands each event to one of an app's connections: give a deployment an app of its own
+// (`fastagent channels setup lark --env-file prod.env`) and the container that file's values.
 //
 // `fastagent channels setup lark` guides the console setup and validates the credentials. In the developer
 // console:
@@ -20,14 +15,12 @@ import { type LarkChannelOptions, larkChannel, larkWebSocketChannel } from "@fas
 //      (group @mentions), `im:message:send_as_bot` (reply), `im:resource` (attachments), and the
 //      card scope ("Create and update card" — the live preview streams through a card). So the Agent
 //      hears its group chats, also add `im:message.group_msg` (sensitive), `im:message:readonly`,
-//      `im:message.reactions:write_only` and `im:chat.members:read`; for webhook,
-//      `application:application:patch` lets fastagent set the Request URL. What each is for is in the channel guide; the channel warns about any it lacks.
-//   3. Events & Callbacks → subscribe to `im.message.receive_v1`. For webhook, copy the Verification
-//      Token into .env (RECOMMENDED: set an Encrypt Key there and mirror it in LARK_ENCRYPT_KEY).
+//      `im:message.reactions:write_only` and `im:chat.members:read`. What each is for is in the channel guide; the
+//      channel warns about any it lacks.
+//   3. Events & Callbacks → choose long connection → subscribe to `im.message.receive_v1`.
 //   4. create a version and publish the app (a tenant admin approves it), then add the bot to a chat
 
-// Your policy, the same whichever way the channel receives.
-const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
+const policy: Pick<LarkWebSocketChannelOptions, "onError" | "route"> = {
   // A chat is one conversation and a thread is another, each with a session of its own, and where the
   // answer goes follows from that.
   // Dev/personal bot: surface raw errors to the chat so you (and your AI agent) can act on them. The
@@ -44,26 +37,7 @@ const policy: Pick<LarkChannelOptions, "onError" | "route"> = {
   //   route: (e) => defaultLarkRoute(e, { botOpenId: "ou_xxx" }) && { text: `${larkEnvelope(e)}\n[extra]` },
 };
 
-// Each way's `needs` declares the env vars it reads: an instance is asked only for its way's, and
-// refused to serve while a required one is unset. LARK_ENCRYPT_KEY is optional.
-export default byIngress({
-  webhook: needs(
-    [
-      "LARK_APP_ID",
-      "LARK_APP_SECRET",
-      "LARK_VERIFICATION_TOKEN",
-      { name: "LARK_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
-    ],
-    (secrets) =>
-      larkChannel({
-        appId: secrets.LARK_APP_ID,
-        appSecret: secrets.LARK_APP_SECRET,
-        verificationToken: secrets.LARK_VERIFICATION_TOKEN, // authenticates inbound events
-        encryptKey: secrets.LARK_ENCRYPT_KEY,
-        ...policy,
-      }),
-  ),
-  connection: needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
-    larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
-  ),
-});
+// `needs` declares the env vars this file reads: the instance is refused to serve while one is unset.
+export default needs(["LARK_APP_ID", "LARK_APP_SECRET"], (secrets) =>
+  larkWebSocketChannel({ appId: secrets.LARK_APP_ID, appSecret: secrets.LARK_APP_SECRET, ...policy }),
+);

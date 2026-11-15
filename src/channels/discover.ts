@@ -32,17 +32,6 @@ export function channelModuleProblem(value: unknown): string | undefined {
 /** HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in. */
 export type ChannelIngress = "webhook" | "long-connection";
 
-/** One channel a directory declares, with the ingress its module shape says it has. */
-export interface DeclaredChannel {
-  name: string;
-  ingress: ChannelIngress;
-}
-
-/** Declared channels from basenames that share one ingress. */
-export function declaredChannels(names: readonly string[], ingress: ChannelIngress = "webhook"): DeclaredChannel[] {
-  return names.map((name) => ({ name, ingress }));
-}
-
 /** How a channel module is reached: its routes, or the connection it opens. */
 export function channelIngress(module: AnyChannelModule): ChannelIngress {
   return typeof module === "function" ? "webhook" : "long-connection";

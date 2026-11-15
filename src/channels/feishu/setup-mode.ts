@@ -1,14 +1,3 @@
-/** Feishu/Lark app-level event subscription choice: how a channel receives, and what an app is set up for. */
-export type FeishuSubscriptionMode = "webhook" | "connection";
-
-/**
- * Configuring THIS app through the v7 config API: registering a webhook Request URL and switching the subscription
- * mode. Requested for a webhook app only. A tenant may review it, and a scope under review holds the app's whole first
- * version in review, so a WebSocket app, which never uses it, would wait on an admin for nothing (measured: the same
- * creation without it came back active).
- */
-export const FEISHU_APP_CONFIG_SCOPE = "application:application:patch";
-
 /** The one event an agent app cannot serve without: an inbound message. */
 export const FEISHU_MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
 
@@ -57,31 +46,16 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   },
 ];
 
-/** The config scope as an app needs it: webhook only ({@link FEISHU_APP_CONFIG_SCOPE}). */
-const FEISHU_APP_CONFIG_REQUEST: FeishuScopeRequest = {
-  request: FEISHU_APP_CONFIG_SCOPE,
-  withoutIt:
-    "the Verification Token is not captured and no Request URL is registered for you (channels setup, dev --tunnel)",
-};
-
-/**
- * Every scope an app of this ingress needs: what onboarding requests at creation AND what it checks the app holds, so a
- * scope the app is asked for is one whose absence is reported.
- */
-export function feishuAppScopes(ingress: FeishuSubscriptionMode): FeishuScopeRequest[] {
-  return [...(ingress === "webhook" ? [FEISHU_APP_CONFIG_REQUEST] : []), ...FEISHU_AGENT_SCOPES];
-}
-
 /**
  * What a created app carries on top of the platform's agent template — the `addons` merged onto the confirm page. A
  * scope that arrives here needs no console visit; one a tenant withholds is reported after creation (`setup.ts`).
  */
-export function feishuAppAddons(ingress: FeishuSubscriptionMode): {
+export function feishuAppAddons(): {
   scopes: { tenant: string[] };
   events: { items: { tenant: string[] } };
 } {
   return {
-    scopes: { tenant: feishuAppScopes(ingress).map((entry) => entry.request) },
+    scopes: { tenant: FEISHU_AGENT_SCOPES.map((entry) => entry.request) },
     events: { items: { tenant: [FEISHU_MESSAGE_RECEIVE_EVENT] } },
   };
 }

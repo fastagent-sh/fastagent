@@ -21,7 +21,7 @@ export default {
     // model: "openai/gpt-5.5",
     // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
     http: {
-      port: 8787, // the port a serve listens on, for its channels' webhooks and its health check
+      port: 8787, // the port a serve listens on: its health check and the Agent API
       // api: false, // serve no Agent API under /v1, whatever key the environment holds; deploy gives none a key
     },
   },

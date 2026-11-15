@@ -30,17 +30,13 @@ interface ChannelScaffold {
 const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   // A channel's app is set up by `channels setup`, which asks for these values; `add` only names them.
   telegram: {
-    env: [
-      { name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true },
-      { name: "TELEGRAM_SECRET_TOKEN", hint: "webhook only: verifies inbound updates", required: true },
-    ],
+    env: [{ name: "TELEGRAM_BOT_TOKEN", hint: "from @BotFather → /newbot", required: true }],
     steps: ["the agent can send messages or files back by calling the scaffolded {tools}/telegram-send.ts tool"],
   },
   slack: {
     env: [
       { name: "SLACK_BOT_TOKEN", hint: "Install App → Bot User OAuth Token", required: true },
-      { name: "SLACK_APP_TOKEN", hint: "connection only: Basic Information → App-Level Tokens", required: true },
-      { name: "SLACK_SIGNING_SECRET", hint: "webhook only: Basic Information → Signing Secret", required: true },
+      { name: "SLACK_APP_TOKEN", hint: "Basic Information → App-Level Tokens (connections:write)", required: true },
     ],
     steps: [
       "the agent can send messages or files by calling the scaffolded {tools}/slack-send.ts tool",
@@ -61,16 +57,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
         hint: "`channels setup feishu` keeps it (console → Credentials & Basic Info)",
         required: true,
       },
-      {
-        name: "FEISHU_VERIFICATION_TOKEN",
-        hint: "webhook only: `channels setup feishu` captures it (console → Events & Callbacks)",
-        required: true,
-      },
-      {
-        name: "FEISHU_ENCRYPT_KEY",
-        hint: "webhook only; optional but recommended — set one in the console and copy it here",
-        required: false,
-      },
     ],
     steps: [
       "the agent can push messages from scheduled turns via the scaffolded {tools}/feishu-send.ts tool",
@@ -81,16 +67,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
     env: [
       { name: "LARK_APP_ID", hint: "developer console → Credentials & Basic Info", required: true },
       { name: "LARK_APP_SECRET", hint: "developer console → Credentials & Basic Info", required: true },
-      {
-        name: "LARK_VERIFICATION_TOKEN",
-        hint: "webhook only — console → Events & Callbacks; authenticates inbound events",
-        required: true,
-      },
-      {
-        name: "LARK_ENCRYPT_KEY",
-        hint: "webhook only; optional but recommended — set one in the console and copy it here",
-        required: false,
-      },
     ],
     steps: [
       "the agent can push messages from scheduled turns via the scaffolded {tools}/lark-send.ts tool",
@@ -106,8 +82,7 @@ export function channelSetup(kind: ChannelKind): ChannelScaffold {
 
 /**
  * Append a channel's env vars (commented placeholders + hints) to `.env.example`, so a developer who copies it to
- * `.env` finds the vars already there. Every var the channel can declare, whichever way this machine receives it:
- * the file is what a collaborator or CI fills for a deployment, which receives Feishu/Lark by webhook.
+ * `.env` finds the vars already there.
  */
 export async function appendChannelEnv(dir: string, kind: ChannelKind): Promise<boolean> {
   const file = envExamplePath(dir);

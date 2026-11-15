@@ -19,14 +19,13 @@ import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
+import { cliMountOptions, serveService } from "../serve.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
   bind?: string;
   model?: string;
-  tunnel?: boolean;
   input?: boolean;
   instance?: InstanceFlags;
 }
@@ -43,13 +42,11 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // Deployed storage refusals (no mount, a held lease, a missing `flock`, another agent's storage) are the operator's only
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
-  const tunnel = opts.tunnel ?? false;
   // An unset bind stays the wildcard: this is the container posture, and a published port needs it.
-  assertTunnelBindable(bindFlag, tunnel);
   serveService(
     service,
     { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host: bindFlag },
-    { tunnel, agentDir: service.agentDir, config: service.config },
+    service.config,
   );
 }
 

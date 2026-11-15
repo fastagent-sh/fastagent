@@ -88,8 +88,7 @@ async function productionClient(
     (cause: unknown) => {
       throw new Error(
         `${options.kind} websocket could not load @larksuiteoapi/node-sdk (${String(cause)}): run ` +
-          `\`npm install @larksuiteoapi/node-sdk\` in the agent directory, or set channels.${options.kind}.ingress to ` +
-          `"webhook" in its fastagent.json`,
+          `\`npm install @larksuiteoapi/node-sdk\` in the agent directory`,
         { cause },
       );
     },

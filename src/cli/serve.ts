@@ -1,22 +1,11 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { answersLocalhost, bindLabel, classifyBind } from "../bind.ts";
+import { bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "../http/contract.ts";
 import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
 import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../http/server.ts";
 import { log } from "../log.ts";
-import { openExternalUrl } from "../open-url.ts";
-import { declaredChannels } from "../channels/discover.ts";
-import { announceWebhooks, startCloudflareTunnel } from "../tunnel.ts";
-import { failStartup, failUsage } from "./fail.ts";
-
-/** Refuse `--tunnel` with a `--bind` that cloudflared cannot reach. */
-export function assertTunnelBindable(host: string | undefined, tunnel: boolean): void {
-  if (!tunnel || answersLocalhost(host)) return;
-  failUsage(
-    `--tunnel reaches the serve by dialing localhost, which the bind address ${host} does not answer — bind 0.0.0.0 (or 127.0.0.1), or drop --tunnel`,
-  );
-}
+import { failStartup } from "./fail.ts";
 
 /**
  * What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys, none
@@ -32,20 +21,15 @@ export function cliMountOptions(config: EffectiveConfig): ServeOptions {
 }
 
 /**
- * Bind, report, warn about reach, open the tunnel, and close in order on a signal — the tail dev's worker and start
- * share once the service is assembled.
+ * Bind, report, warn about reach, and close in order on a signal — the tail dev's worker and start share once the
+ * service is assembled.
  */
 export function serveService(
   service: ServedAgent,
   bind: { port: number; host?: string },
-  posture: { tunnel: boolean; agentDir: string; config: EffectiveConfig },
+  config: EffectiveConfig,
 ): void {
-  const { host } = bind;
-  const { tunnel, agentDir, config } = posture;
-  serve(service, bind, (p) => {
-    reportServing(service, host, p, config);
-    maybeTunnel(agentDir, service.channels.routes, p, tunnel);
-  });
+  serve(service, bind, (p) => reportServing(service, bind.host, p, config));
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
@@ -55,7 +39,7 @@ function reportServing(
   boundPort: number,
   config: EffectiveConfig,
 ): void {
-  process.send?.({ type: "ready", port: boundPort, routeChannels: service.channels.routes });
+  process.send?.({ type: "ready" });
   log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   log.info(
@@ -117,7 +101,7 @@ function serve(
     async (boundPort) => {
       try {
         // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come up, and reporting
-        // ready before it does tells the supervisor (and --tunnel, and the operator) that a surface is live while a
+        // ready before it does tells the supervisor (and the operator) that a surface is live while a
         // channel is dead.
         await service.ready;
         if (stopping) return;
@@ -141,16 +125,4 @@ function serve(
       failStartup(new Error(`cannot bind http channel on ${bindLabel(host, port)}: ${error.message}`));
     },
   );
-}
-
-/** Start a Cloudflare tunnel for route channels only. */
-function maybeTunnel(agentDir: string, routeChannels: string[], boundPort: number, tunnel: boolean): void {
-  if (!tunnel || process.env.FASTAGENT_DEV_WORKER === "1") return;
-  void startCloudflareTunnel(boundPort).then((instance) => {
-    if (!instance) return;
-    void announceWebhooks(agentDir, instance.url, declaredChannels(routeChannels), { openUrl: openExternalUrl });
-    const cleanup = (): void => instance.close();
-    process.once("SIGINT", cleanup);
-    process.once("SIGTERM", cleanup);
-  });
 }

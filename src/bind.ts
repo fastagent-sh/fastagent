@@ -41,17 +41,6 @@ export function classifyBind(host: string | undefined): "wildcard" | "loopback" 
 }
 
 /**
- * Does a serve bound to `host` answer a dial of the NAME `localhost`? Only the addresses that name resolves to
- * (127.0.0.1 / ::1) and a wildcard bind do — `127.0.0.2` is loopback yet unreachable that way. That is why this is not
- * {@link classifyBind}'s reach question: cloudflared dials by name, so `--tunnel` needs this one.
- */
-export function answersLocalhost(host: string | undefined): boolean {
-  if (classifyBind(host) === "wildcard") return true;
-  const h = normalize(host as string);
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
-/**
  * How to NAME a bind in a message: the wildcard is every interface, so calling it one address would understate it;
  * anything else is dialable as itself.
  */

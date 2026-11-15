@@ -58,14 +58,11 @@ off.
 
 ## Chat channels
 
-Outside `dev`, a channel that can do both receives by webhook. To have it hold a connection instead (Telegram
-polling, Slack Socket Mode, Feishu and Lark WebSocket), which needs no public URL, set
-`defaults.channels.<name>.ingress: "connection"` in `fastagent.config.ts`, or `FASTAGENT_INGRESS=telegram=connection`
-on the container. A webhook channel needs the container's public URL: set it as `defaults.http.publicUrl`, or
-`FASTAGENT_HTTP_PUBLIC_URL` on the container, and the container points Telegram, Feishu and Lark there itself; Slack's
-Request URL is yours to set.
+A channel holds its own connection to the platform (Telegram polling, Slack Socket Mode, Feishu and Lark WebSocket),
+so the container needs no public URL for it, only a process that keeps running.
 
-Use a separate production app for the container: two processes on one bot split its messages.
+Use a separate production app for the container: two processes on one bot split its messages. Make it with
+`fastagent channels setup <name> --env-file prod.env` and give the container that file's values.
 
 ## What ships
 

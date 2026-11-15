@@ -8,10 +8,7 @@ import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, INSTANCE_CONFIG_FILE, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./value-file.ts";
 import { log } from "./log.ts";
-import { openExternalUrl } from "./open-url.ts";
-import { declaredChannels } from "./channels/discover.ts";
 import { activeWork } from "./channels/busy.ts";
-import { type Tunnel, announceWebhooks, startCloudflareTunnel } from "./tunnel.ts";
 
 /** The agent's code (its tools, extensions, channels and schedules), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
@@ -68,15 +65,12 @@ export function listenForRestart(
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(agentDir: string, options: { tunnel?: boolean } = {}): Promise<void> {
+export async function runDevSupervisor(agentDir: string): Promise<void> {
   // The agent directory arrives RESOLVED from the command (which already routed its refusal through failStartup).
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
   let everServed = false; // has any worker successfully bound (sent `ready`) yet?
   let timer: NodeJS.Timeout | undefined;
-  // The supervisor owns the tunnel so the public URL survives worker reloads (a fresh tunnel per save would mean a
-  // new URL + re-registering the webhook on every edit).
-  let tunnel: Tunnel | undefined;
 
   const spawnWorker = (): void => {
     // ipc fd so the worker can signal readiness once it binds; stdio otherwise inherited.
@@ -86,20 +80,8 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
       env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
-    w.on("message", (m: { type?: string; port?: number; routeChannels?: string[] }) => {
-      if (m?.type !== "ready") return;
-      everServed = true;
-      // Start the tunnel once, on the first worker that binds; reuse it across reloads.
-      if (options.tunnel && !tunnel && typeof m.port === "number") {
-        void startCloudflareTunnel(m.port).then((t) => {
-          if (t) {
-            tunnel = t;
-            void announceWebhooks(agentDir, t.url, declaredChannels(m.routeChannels ?? []), {
-              openUrl: openExternalUrl,
-            });
-          }
-        });
-      }
+    w.on("message", (m: { type?: string }) => {
+      if (m?.type === "ready") everServed = true;
     });
     w.on("exit", (code, signal) => {
       if (worker !== w) return; // already superseded
@@ -155,7 +137,6 @@ export async function runDevSupervisor(agentDir: string, options: { tunnel?: boo
 
   const shutdown = (): never => {
     worker?.kill("SIGTERM");
-    tunnel?.close();
     void watcher.close();
     process.exit(0);
   };

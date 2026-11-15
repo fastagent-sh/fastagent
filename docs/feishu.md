@@ -1,6 +1,6 @@
 ---
 title: Feishu channel (Lark compatibility)
-description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, WebSocket or webhook, scopes, when it answers, threads, cards, files, and sending from schedules."
+description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, the WebSocket connection, scopes, when it answers, threads, cards, files, and sending from schedules."
 status: current
 ---
 
@@ -12,8 +12,7 @@ The agent answers as a Feishu or Lark bot, streaming its answer into a Markdown 
 |---|---|---|
 | Console | `open.feishu.cn` | `open.larksuite.com` |
 | Add | `fastagent add feishu` | `fastagent add lark` |
-| Variables | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` (+ `FEISHU_VERIFICATION_TOKEN`, optional `FEISHU_ENCRYPT_KEY` for webhooks) | the same with `LARK_` |
-| Webhook path | `POST /feishu` | `POST /lark` |
+| Variables | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | `LARK_APP_ID`, `LARK_APP_SECRET` |
 
 Pick the cloud your tenant is on. One agent can serve both, with two apps.
 
@@ -45,27 +44,22 @@ Setup checks the app's scopes and names any your tenant withheld, with a link to
 1. Create a custom app and enable the bot capability.
 2. Add the scopes `im:message.p2p_msg:readonly`, `im:message.group_at_msg:readonly`, `im:message:send_as_bot`,
    `im:resource`, the card scope ("Create and update card"), and the ones in the table above.
-3. Subscribe to `im.message.receive_v1`, choosing long connection (for `dev`) or webhook (copy the Verification
-   Token; an Encrypt Key is recommended).
+3. Under Events & Callbacks choose long connection, and subscribe to `im.message.receive_v1`.
 4. Put the values in `.secrets/.env`, then create a version and publish.
 
 </details>
 
-## WebSocket or webhook
+## WebSocket
 
-| | WebSocket | Webhook |
-|---|---|---|
-| Needs | App ID + Secret, an always-on process, `@larksuiteoapi/node-sdk` in the agent's dependencies | also the Verification Token, a public URL |
-| Default for | `dev` | `start` and deployments |
-| Scale to zero | no | yes |
+The app receives over a WebSocket connection, in `dev` and in a deployment alike, so it needs no public URL. It needs
+the App ID and Secret, a process that stays running, and `@larksuiteoapi/node-sdk` in the agent's dependencies.
 
-Change it with `channels.feishu.ingress` (`connection` or `webhook`). **Use separate apps for dev and production**:
-two instances on one app split its events. Make the production app with
-`fastagent channels setup feishu --env-file prod.env`, which keeps its credentials in that file. On Lark, set the
-Request URL in the console when its API does not allow it.
+**Use separate apps for dev and production**: two instances on one app split its events. Make the production app with
+`fastagent channels setup feishu --env-file prod.env`, which keeps its credentials in that file.
 
-Webhook events are checked by the Verification Token, or, with an Encrypt Key, by signature (plaintext is then
-refused). Set an Encrypt Key: without it there is no replay protection, and startup warns.
+`feishuChannel` and `larkChannel` receive by webhook at `POST /feishu` and `POST /lark` instead, checked by the
+Verification Token, or with an Encrypt Key by signature (plaintext is then refused; without one there is no replay
+protection, and startup warns). FastAgent does not set the Request URL: set it in the console yourself.
 
 ## When it answers
 
@@ -103,34 +97,16 @@ posts twice. `fastagent add feishu` again updates the tools and keeps your chann
 ## The channel file
 
 ```ts
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
+import { needs } from "@fastagent-sh/fastagent";
+import { feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
 
-const policy: Pick<FeishuChannelOptions, "onError" | "route"> = {
-  onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
-};
-
-export default byIngress({
-  webhook: needs(
-    [
-      "FEISHU_APP_ID",
-      "FEISHU_APP_SECRET",
-      "FEISHU_VERIFICATION_TOKEN",
-      { name: "FEISHU_ENCRYPT_KEY", description: "when set, plaintext events are refused", optional: true },
-    ],
-    (secrets) =>
-      feishuChannel({
-        appId: secrets.FEISHU_APP_ID,
-        appSecret: secrets.FEISHU_APP_SECRET,
-        verificationToken: secrets.FEISHU_VERIFICATION_TOKEN,
-        encryptKey: secrets.FEISHU_ENCRYPT_KEY,
-        ...policy,
-      }),
-  ),
-  connection: needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
-    feishuWebSocketChannel({ appId: secrets.FEISHU_APP_ID, appSecret: secrets.FEISHU_APP_SECRET, ...policy }),
-  ),
-});
+export default needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
+  feishuWebSocketChannel({
+    appId: secrets.FEISHU_APP_ID,
+    appSecret: secrets.FEISHU_APP_SECRET,
+    onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
+  }),
+);
 ```
 
 `route(event)` replaces the answering policy: return `null` to ignore, or `{ conversation?, chatId?, text? }`. A custom

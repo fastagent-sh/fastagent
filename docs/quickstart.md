@@ -64,7 +64,7 @@ fastagent add telegram    # or slack, feishu, lark
 fastagent dev             # asks for the bot's credentials the first time
 ```
 
-No tunnel needed: Telegram is polled, Slack and Feishu hold a connection. See [Channels](channels.md).
+No public URL needed: Telegram is polled, Slack and Feishu hold a connection. See [Channels](channels.md).
 
 ## 6. Run it on a clock
 

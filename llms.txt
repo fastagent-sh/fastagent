@@ -1,6 +1,6 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, handling webhook events, running on a clock, or behind a custom channel. The harness is pi-durable; models come from pi-ai, with your own providers in code.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, running on a clock, or behind a custom channel. The harness is pi-durable; models come from pi-ai, with your own providers in code.
 
 Key facts:
 
@@ -24,7 +24,7 @@ Key facts:
 - [Configuration](https://fastagent.sh/docs/configuration/): model, providers, content, environment, secrets, ports, tools, channels, and schedules.
 - [CLI reference](https://fastagent.sh/docs/cli/): every command and flag.
 - [Embedding](https://fastagent.sh/docs/embedding/): use FastAgent as a library inside your own app.
-- [Channels](https://fastagent.sh/docs/channels/): connect chat platforms and webhook channels.
+- [Channels](https://fastagent.sh/docs/channels/): connect chat platforms and custom channels.
 - [Telegram channel](https://fastagent.sh/docs/telegram/): Telegram bot setup and tools.
 - [Slack channel](https://fastagent.sh/docs/slack/): Slack app setup and tools.
 - [Feishu / Lark channel](https://fastagent.sh/docs/feishu/): Feishu and Lark bot setup and tools.

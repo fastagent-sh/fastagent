@@ -373,7 +373,10 @@ function createTelegramRuntime(
   return { accept, turnsIdle: runner.idle };
 }
 
-/** Build a Telegram bot channel that receives by webhook: policy options in, a {@link ChannelModule} out. */
+/**
+ * Build a Telegram bot channel that receives by webhook at `POST /telegram`. Whoever hosts it points the bot there
+ * (`setWebhook` with the same `secret_token`): FastAgent registers no URL.
+ */
 export function telegramChannel(options: TelegramChannelOptions): ChannelModule {
   const { secretToken, apiBaseUrl = TELEGRAM_API } = options;
   return (ctx) => {

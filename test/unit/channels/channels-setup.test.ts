@@ -126,11 +126,11 @@ const read = (file: string) => readFile(file, "utf8");
 /** `--env-file` names a file that exists, as it does everywhere: a test that is not about that makes it first. */
 const setup = async (name: string, dir: string, opts: Record<string, unknown> = {}) => {
   if (typeof opts.envFile === "string" && !existsSync(opts.envFile)) await writeFile(opts.envFile, "");
-  return runChannelsSetup(name, dir, { recordUrl: false, json: false, ...opts });
+  return runChannelsSetup(name, dir, { json: false, ...opts });
 };
 
 describe("channels setup at a terminal", () => {
-  it("asks for what the development instance's way needs, checks it, and keeps it: a polling bot needs only its token", async () => {
+  it("asks for what the channel needs, checks it, and keeps it: a polling bot needs only its token", async () => {
     const dir = await workspace("fa-setup-telegram-");
     const calls = platforms();
     prompts.answers.push(GOOD_BOT);
@@ -142,6 +142,17 @@ describe("channels setup at a terminal", () => {
     expect(prompts.infos[0]).toContain("@BotFather");
     expect(opened).toEqual(["https://t.me/BotFather"]);
     expect(calls).toEqual(["telegram getMe"]);
+  });
+
+  it("keeps a deployment's credentials in the file --env-file names, and says how to start with it", async () => {
+    const dir = await workspace("fa-setup-deployment-");
+    platforms();
+    const prod = join(dir, "prod.env");
+    prompts.answers.push(GOOD_BOT);
+    await ends(setup("telegram", dir, { envFile: prod }));
+    expect(await read(prod)).toContain(`TELEGRAM_BOT_TOKEN=${GOOD_BOT}`);
+    expect(existsSync(join(dir, ".secrets", ".env"))).toBe(false);
+    expect(vi.mocked(console.error).mock.calls.flat().join("\n")).toContain(`fastagent start --env-file ${prod}`);
   });
 
   it("refuses the wrong kind of Slack token, and says which one it asked for", async () => {

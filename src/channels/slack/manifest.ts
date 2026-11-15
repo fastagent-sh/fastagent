@@ -47,7 +47,7 @@ export interface SlackAppManifest {
     scopes: { bot: string[] };
   };
   settings: {
-    event_subscriptions: { request_url?: string; bot_events: string[] };
+    event_subscriptions: { bot_events: string[] };
     org_deploy_enabled: boolean;
     socket_mode_enabled: boolean;
     token_rotation_enabled: boolean;
@@ -71,15 +71,8 @@ function slackBotDisplayName(name: string): string {
   return normalized || "fastagent";
 }
 
-/**
- * What an app is created for: a Socket Mode app receives over a socket it opens and has no Request URL; one that
- * receives by webhook needs one, because Slack refuses a manifest that subscribes to events without it. Slack creates
- * the app whether or not that URL answers yet (it shows "Your URL didn't respond" and a Retry), so a placeholder stands
- * in until a person sets the real one on the Event Subscriptions page.
- */
-export type SlackManifestWay = { ingress: "connection" } | { ingress: "webhook"; requestUrl: string };
-
-export function buildSlackManifest(input: { name: string } & SlackManifestWay): SlackAppManifest {
+/** The app FastAgent creates: it receives over a Socket Mode connection, so it has no Request URL. */
+export function buildSlackManifest(input: { name: string }): SlackAppManifest {
   const name = input.name.trim().slice(0, 35) || "FastAgent";
   return {
     display_information: {
@@ -106,12 +99,9 @@ export function buildSlackManifest(input: { name: string } & SlackManifestWay): 
       scopes: { bot: slackBotScopes() },
     },
     settings: {
-      event_subscriptions: {
-        ...(input.ingress === "webhook" ? { request_url: input.requestUrl } : {}),
-        bot_events: slackBotEvents(),
-      },
+      event_subscriptions: { bot_events: slackBotEvents() },
       org_deploy_enabled: false,
-      socket_mode_enabled: input.ingress === "connection",
+      socket_mode_enabled: true,
       // Off, and Slack makes the alternative permanent: an app with rotation on can never turn it off
       // (`cannot_disable_once_enabled`, verified against the API).
       token_rotation_enabled: false,

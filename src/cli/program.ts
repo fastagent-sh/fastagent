@@ -27,10 +27,6 @@ const BIND: FlagSpec = {
   flags: "--bind <addr>",
   description: "bind address (dev: 127.0.0.1; start: 0.0.0.0)",
 };
-const TUNNEL: FlagSpec = {
-  flags: "--tunnel",
-  description: "expose an ephemeral Cloudflare quick tunnel (needs cloudflared) and register webhooks",
-};
 const CHANNEL_ENVIRONMENT: FlagSpec = {
   flags: "--env <environment>",
   description: "credentials and state environment (dev or production)",
@@ -76,21 +72,19 @@ const dev: CommandSpec = {
     BIND,
     MODEL,
     { flags: "--no-watch", description: "serve once, no file-watching" },
-    TUNNEL,
     NO_INPUT,
     ...INSTANCE_FLAGS,
     ...LAYER_FLAGS,
     CONFIG_FLAG,
     ENV_FILE_FLAG,
   ],
-  examples: [{ cmd: "fastagent dev" }, { cmd: "fastagent dev --tunnel", note: "public URL + registered webhooks" }],
+  examples: [{ cmd: "fastagent dev" }],
   run: async (args, f) =>
     (await import("./commands/dev.ts")).runDev(args[0] as string, {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
       watch: f.watch !== false,
-      tunnel: f.tunnel === true,
       input: f.input !== false,
       instance: instanceFlags(f),
     }),
@@ -190,23 +184,18 @@ const start: CommandSpec = {
     PORT,
     BIND,
     MODEL,
-    TUNNEL,
     NO_INPUT,
     ...INSTANCE_FLAGS,
     ...LAYER_FLAGS,
     { ...CONFIG_FLAG, description: "instance configuration (FASTAGENT_CONFIG; ignores project fastagent.json)" },
     ENV_FILE_FLAG,
   ],
-  examples: [
-    { cmd: "fastagent start", note: "after fastagent build" },
-    { cmd: "fastagent start --tunnel", note: "expose via quick tunnel" },
-  ],
+  examples: [{ cmd: "fastagent start", note: "after fastagent build" }],
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
-      tunnel: f.tunnel === true,
       input: f.input !== false,
       instance: instanceFlags(f),
     }),
@@ -361,32 +350,24 @@ const channels: CommandSpec = {
       name: "setup",
       summary: "set up a channel's platform app and store its credentials",
       description:
-        "Guide setup in a terminal, validate values statelessly under --json/--no-input (exit 2 when missing), " +
-        "or record a verified webhook URL with --record-url.",
+        "Guide setup in a terminal, or validate values statelessly under --json/--no-input (exit 2 when missing).",
       args: [{ name: "<name>", description: "telegram, slack, feishu, or lark" }, AGENT_ARG],
       flags: [
-        { flags: "--ingress <mode>", description: "webhook or connection" },
-        { flags: "--config <file>", description: "instance configuration (default: fastagent.json for dev)" },
-        { flags: "--env-file <file>", description: "credentials file (required for deployments)" },
-        { flags: "--from-env", description: "with --record-url: also read credentials from process env" },
-        { flags: "--record-url", description: "record confirmed webhook URL into --config" },
-        { flags: "--url <url>", description: "with --record-url: deployment base URL for /health" },
+        {
+          flags: "--env-file <file>",
+          description: "keep a deployment's credentials in this file (default: the development .secrets/.env)",
+        },
         JSON_FLAG,
         NO_INPUT,
       ],
       examples: [
         { cmd: "fastagent channels setup telegram" },
         { cmd: "fastagent channels setup slack --json", note: "validate or inspect missing steps" },
-        { cmd: "fastagent channels setup slack --record-url --config c.json" },
+        { cmd: "fastagent channels setup feishu --env-file prod.env", note: "a separate app for a deployment" },
       ],
       run: async (args, f) =>
         (await import("./commands/channels.ts")).runChannelsSetup(args[0] as string, args[1] as string, {
-          recordUrl: f.recordUrl === true,
-          ...(typeof f.ingress === "string" ? { ingress: f.ingress } : {}),
-          ...(typeof f.config === "string" ? { config: f.config } : {}),
           ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-          fromEnv: f.fromEnv === true,
-          ...(typeof f.url === "string" ? { url: f.url } : {}),
           json: f.json === true,
           input: f.input !== false,
         }),

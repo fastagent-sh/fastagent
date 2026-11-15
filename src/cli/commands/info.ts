@@ -48,7 +48,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const modelSpec = modelSpecFor(config, opts.model);
   const declared = (() => {
     try {
-      return definitionSecrets(definition, config, instance);
+      return definitionSecrets(definition, instance);
     } catch (error) {
       return failStartup(error);
     }

@@ -4,31 +4,28 @@
  * nothing is asked and nothing waits: the command that does it for a coding agent is named.
  */
 import { codeSecrets } from "../harnesses/pi-durable/definition.ts";
-import { chosenIngress } from "../harnesses/pi-durable/definition.ts";
 import { loadDevProject } from "../harnesses/pi-durable/open.ts";
 import { missingSecrets } from "../declared-secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
-import { isSetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
+import { type SetupKind, isSetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
 import { failStartup, failUsage } from "./fail.ts";
-import { isInteractive, resolveProjectConfig } from "./shared.ts";
+import { isInteractive } from "./shared.ts";
 
-/** The first-party channels the agent mounts whose credentials this process's environment lacks, and the configuration. */
-async function lackingChannels(agentDir: string) {
+/** The first-party channels the agent mounts whose credentials this process's environment lacks. */
+async function lackingChannels(agentDir: string): Promise<SetupKind[]> {
   const project = await loadDevProject(agentDir).catch(failStartup);
-  const config = resolveProjectConfig(project);
-  const missing = missingSecrets(codeSecrets(project.definition, config), process.env);
-  const kinds = project.definition.registry.channels.flatMap(({ file, name }) => {
+  const missing = missingSecrets(codeSecrets(project.definition), process.env);
+  return project.definition.registry.channels.flatMap(({ file, name }) => {
     if (!isSetupKind(name)) return [];
     // Only what the channel's own setup supplies: a channel file of the same name that reads other variables is its
     // author's to fill.
-    const supplied = setupNames(name, chosenIngress(config, name, true));
+    const supplied = setupNames(name);
     return missing.some((secret) => secret.declaredIn === file && supplied.includes(secret.name)) ? [name] : [];
   });
-  return { kinds, config };
 }
 
 export async function setUpMissingChannels(agentDir: string, opts: { input?: boolean } = {}): Promise<void> {
-  const { kinds, config } = await lackingChannels(agentDir);
+  const kinds = await lackingChannels(agentDir);
   if (kinds.length === 0) return;
   if (opts.input === false || !isInteractive()) {
     const lacking = kinds
@@ -51,11 +48,9 @@ export async function setUpMissingChannels(agentDir: string, opts: { input?: boo
       kind,
       agentDir,
       file,
-      way: chosenIngress(config, kind, true),
       dev: true,
       rerun: `fastagent channels setup ${kind}`,
       interactive: true,
-      ...(config.http?.publicUrl === undefined ? {} : { publicUrl: config.http.publicUrl }),
     }).catch((error: unknown) =>
       failStartup(
         new Error(
