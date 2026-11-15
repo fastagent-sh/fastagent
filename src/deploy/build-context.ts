@@ -1,5 +1,5 @@
 /**
- * What a deploy's BUILD CONTEXT (the agent directory) holds that must not ship, and whether an ignore file the author
+ * What the image's BUILD CONTEXT (the agent directory) holds that must not ship, and whether an ignore file the author
  * kept still keeps it out. A kept `.dockerignore` silently replaces the generated one's protections, so the pre-flight
  * asks it the same questions the generated one answers by construction.
  */
@@ -69,12 +69,7 @@ export interface BuildContextPaths {
   depDirs: string[];
 }
 
-export async function buildContextPaths(
-  agentDir: string,
-  authPath: string,
-  /** The file `--env-file` names: its values are secrets, and inside the agent directory it is part of the build context. */
-  valueFile?: string,
-): Promise<BuildContextPaths> {
+export async function buildContextPaths(agentDir: string, authPath: string): Promise<BuildContextPaths> {
   const inContext = (p: string): string | undefined => {
     const rel = relative(agentDir, p);
     return rel === "" || rel.startsWith("..") || isAbsolute(rel) ? undefined : rel.split(sep).join("/");
@@ -87,12 +82,7 @@ export async function buildContextPaths(
   if (secretsRel && secretsRel !== SECRETS_DIRNAME && !secretsRel.startsWith(`${SECRETS_DIRNAME}/`)) {
     secretsDirs.push(secretsRel);
   }
-  // A value file the person chose carries no name the generated rules know (`prod.env` is neither `.env` nor
-  // `.env.*`), so it is excluded by its path, as a relocated secrets dir is.
-  const valueRel = valueFile === undefined ? undefined : inContext(valueFile);
-  const valueElsewhere =
-    valueRel !== undefined && !secretsDirs.some((dir) => valueRel === dir || valueRel.startsWith(`${dir}/`));
-  const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : []), ...(valueElsewhere ? [valueRel] : [])];
+  const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : [])];
   // ONE rule for every checked path: a file that is not there cannot be baked, so gating on it would be a refusal
   // about a spelling rather than about what would ship (an agent that has never run `login` has no auth.json).
   const present = async (rels: string[]): Promise<string[]> => {
@@ -110,10 +100,12 @@ export async function buildContextPaths(
     stateRel !== undefined && !inInstances && (await exists(join(agentDir, stateRel))) ? stateRel : undefined;
   const instancesShip = (await exists(join(agentDir, INSTANCES_DIRNAME))) ? INSTANCES_DIRNAME : undefined;
   const contentShips = (await exists(join(agentDir, CONTENT_DIRNAME))) ? CONTENT_DIRNAME : undefined;
-  // The `.env` family at the level fastagent is RESPONSIBLE for: the agent dir's root.
+  // The value files at the level fastagent is RESPONSIBLE for, the agent dir's root: the `.env` family, and a file a
+  // person named for its values (`prod.env`).
   const envFiles = (await entriesIfExists(agentDir))
+    .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
-    .filter((n) => (n === ".env" || n.startsWith(".env.")) && n !== ".env.example");
+    .filter((n) => (n === ".env" || n.startsWith(".env.") || n.endsWith(".env")) && n !== ".env.example");
   // Everything ACTUALLY inside the secrets dir, minus the two tracked scaffolds the image ships on purpose (they
   // carry no values; the generated ignore re-includes them by name).
   const secretDirFiles = async (dirRel: string): Promise<string[]> => {
@@ -129,7 +121,6 @@ export async function buildContextPaths(
   const leakCandidates = [
     ...(await Promise.all(secretsDirs.map(secretDirFiles))).flat(),
     ...(await present(authElsewhere && authRel !== undefined ? [authRel] : [])),
-    ...(await present(valueElsewhere ? [valueRel] : [])),
     ...envFiles,
   ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
@@ -138,7 +129,7 @@ export async function buildContextPaths(
   return { machineryPaths, leakCandidates, stateShips, instancesShip, contentShips, depDirs };
 }
 
-/** Interrogate BOTH ignore files deploy emits, when the author kept them. */
+/** Interrogate the ignore files Docker reads, when the author kept them. */
 export async function checkKeptIgnoreFiles(
   ctx: { agentDir: string; force: boolean; paths: BuildContextPaths },
   report: DeployReport,
@@ -155,14 +146,14 @@ export async function checkKeptIgnoreFiles(
     const remedy = (lines: string[]): string =>
       keptIsOurs
         ? `Re-run with --force to regenerate it.`
-        : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before deploying (the same lines the generated ${rel} writes).`;
+        : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before building (the same lines the generated ${rel} writes).`;
     const excluded = dockerignoreMatcher(kept);
     // The marker of an agent: without it the deployed box has no agent to open.
     if (excluded(AGENT_CONFIG_FILE)) {
       const text =
         `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
-        `config (the deployed box has no agent to open and crash-loops). Remove that rule before deploying.`;
-      report.issue(text);
+        `config (the container has no agent to open and crash-loops). Remove that rule before building.`;
+      report.warn(text);
     }
     // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
     const leaks = leakCandidates.filter((p) => !excluded(p));
@@ -170,7 +161,7 @@ export async function checkKeptIgnoreFiles(
       const text =
         `your ${rel} (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
         `context would BAKE SECRETS INTO THE IMAGE. ${remedy(leaks.map((p) => `/${p}`))}`;
-      report.issue(text);
+      report.warn(text);
     }
     if (stateShips && !excluded(`${stateShips}/sessions`)) {
       report.warn(
@@ -182,9 +173,8 @@ export async function checkKeptIgnoreFiles(
         `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions, channel state and clones of the agent's content would ship in the image. ${remedy([`/${instancesShip}`])}`,
       );
     }
-    // An issue, not a warning: a release holding content/ is refused on the host, which links its own there.
     if (contentShips && !excluded(`${contentShips}/x`)) {
-      report.issue(
+      report.warn(
         `your ${rel} (kept) does not exclude \`${contentShips}\` — this machine's clones of the agent's content would ship in the image. ${remedy([`/${contentShips}`])}`,
       );
     }

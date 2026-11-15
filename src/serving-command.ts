@@ -9,7 +9,7 @@ export function markDevServe(env: NodeJS.ProcessEnv = process.env): void {
   env[DEV_SERVE_ENV] = "1";
 }
 
-/** For a command that is never `dev` (`start`, `deploy`), run from a shell or a tool that a `dev` process spawned. */
+/** For a command that is never `dev` (`start`), run from a shell or a tool that a `dev` process spawned. */
 export function unmarkDevServe(env: NodeJS.ProcessEnv = process.env): void {
   delete env[DEV_SERVE_ENV];
 }
@@ -19,8 +19,8 @@ export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Who runs an instance, as an open is told: `dev` serves it, or a deployed box (the release id a deploy sets) runs
- * it. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
+ * Who runs an instance, as an open is told: `dev` serves it, or a deployed container (the generated image marks it)
+ * runs it. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
  */
 export interface RunsAs {
   dev: boolean;

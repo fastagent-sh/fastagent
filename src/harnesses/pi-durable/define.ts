@@ -21,8 +21,8 @@ export interface AgentDefaults<Settings = unknown> {
     /** The port a serve listens on, for its channels' webhooks and its health check. */
     port?: number;
     /**
-     * Whether a serve answers the Agent API under `/v1` with a key (default true): `dev`, `start`, and every deployment,
-     * which `deploy` gives a key. `false` keeps it to its channels and schedules, whatever key its environment holds.
+     * Whether a serve answers the Agent API under `/v1` with a key (default true): `dev`, `start`, and every deployment.
+     * `false` keeps it to its channels and schedules, whatever key its environment holds.
      */
     api?: boolean;
     /**

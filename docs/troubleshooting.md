@@ -67,8 +67,8 @@ restart it to re-register, or use your own stable URL as `http.publicUrl`. Check
 
 ### A schedule did not fire
 
-Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A host
-that scaled to zero sleeps through it ([scale to zero](deploy.md#scale-to-zero)). `fastagent schedules list` shows the
+Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A container
+that was stopped or scaled to zero sleeps through it. `fastagent schedules list` shows the
 next and last runs.
 
 ### `busy`
@@ -122,16 +122,16 @@ another process uses the same app and takes some messages: give each instance it
 
 ### Sessions disappear after a redeploy
 
-The state root is not on persistent storage. Generated deployments handle this; on your own server set
-`FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets`.
+The state root is not on persistent storage. The generated container keeps it at `/data`: mount a volume there
+(`-v my-agent-data:/data`). On your own server set `FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets`.
 
 ### A deploy stopped and the message does not say why
 
-The host CLI's output is printed above the error line. The same inputs fail the same way, so read it first.
+`deploy docker` stops only when the container would not start: the agent directory has no `package.json`, or its
+definition does not load. The line after `deploy stopped:` names which.
 
-- **Fly: `authentication handshake failed` or `connecting to Depot builder: timed out`:** a VPN or a proxy's TUN mode
-  blocks Fly's builder. Turn it off for the deploy, or run the printed runbook with `fly deploy --depot=false`.
-- **Fly: `FASTAGENT_SECRETS_DIR may be a potentially sensitive environment variable`:** it is a path. Ignore it.
-- **`no provider of the deployed agent offers "…"`:** the model name is wrong; the message lists close ones.
-- **`auth_required` from `invoke --url`:** the deployment has no credential for its model:
-  `fastagent secrets set <host> <KEY>` or `fastagent login <provider> --deployment <host>`.
+- **`persistent storage is not mounted at /data`:** the container runs without its volume. Add `-v <name>-data:/data`.
+- **`FASTAGENT_NAME is required for a deployment`:** a Dockerfile of your own dropped it. Add
+  `ENV FASTAGENT_NAME=<name>`, as the generated one does.
+- **`auth_required` from `invoke --url`:** the container has no credential for its model: set the provider's API key
+  in its environment.

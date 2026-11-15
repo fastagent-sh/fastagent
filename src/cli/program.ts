@@ -4,7 +4,6 @@
  */
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
-import { DEPLOY_HOSTS, type DeployHost } from "../deploy/hosts.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
 import { CONFIG_FLAG, CONTENT_FLAGS, ENV_FILE_FLAG, INSTANCE_FLAGS, LAYER_FLAGS, instanceFlags } from "./instance.ts";
@@ -39,10 +38,6 @@ const CHANNEL_ENVIRONMENT: FlagSpec = {
 const GLOBAL_AUTH: FlagSpec = {
   flags: "-g, --global",
   description: "use global ~/.fastagent/.secrets/auth.json",
-};
-const DEPLOY_CONFIG: FlagSpec = {
-  flags: "--config <file>",
-  description: "instance config file (`deploy --config`)",
 };
 
 const init: CommandSpec = {
@@ -255,35 +250,13 @@ const add: CommandSpec = {
 
 const deploy: CommandSpec = {
   name: "deploy",
-  summary: "generate deploy artifacts + runbook for docker, fly, or railway (--run drives it)",
-  description: "Generate Dockerfile/.dockerignore + host manifest and runbook, or provision & deploy with --run.",
-  args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
-  flags: [
-    { flags: "--run", description: "execute the deploy against the target CLI" },
-    { flags: "--force", description: "overwrite existing generated artifacts" },
-    { flags: "--config <file>", description: "instance configuration carried in the deployment" },
-    { flags: "--env-file <file>", description: "env file of deployment values (no default file)" },
-    { flags: "--from-env", description: "also read deployment values from this process's environment" },
-    { flags: "--into-linked", description: "(railway --run) deploy into the already-linked Railway project" },
-    { flags: "--json", description: "with --run: print the deploy result as JSON" },
-    NO_INPUT,
-  ],
-  examples: [
-    { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
-    { cmd: "fastagent deploy docker --run", note: "Compose on this machine" },
-    { cmd: "fastagent deploy railway", note: "print the runbook only" },
-  ],
+  summary: "write the portable container (Dockerfile, .dockerignore) and print how to run it",
+  description: "Writes the Dockerfile and .dockerignore into the agent directory; a file you own is kept.",
+  args: [{ name: "<target>", description: "what to deploy as", choices: ["docker"] }, AGENT_ARG],
+  flags: [{ flags: "--force", description: "regenerate the files fastagent generated" }],
+  examples: [{ cmd: "fastagent deploy docker", note: "Dockerfile + .dockerignore, and the docker commands" }],
   run: async (args, f) =>
-    (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
-      run: f.run === true,
-      force: f.force === true,
-      intoLinked: f.intoLinked === true,
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-      fromEnv: f.fromEnv === true,
-      input: f.input !== false,
-      json: f.json === true,
-    }),
+    (await import("./commands/deploy.ts")).runDeploy(args[1] as string, { force: f.force === true }),
 };
 
 const content: CommandSpec = {
@@ -421,72 +394,6 @@ const channels: CommandSpec = {
   ],
 };
 
-const SECRETS_HOST = {
-  name: "<host>",
-  description: "target host with a secret store",
-  choices: ["fly", "railway"],
-};
-
-const secrets: CommandSpec = {
-  name: "secrets",
-  summary: "manage a deployment's secrets on its host",
-  subcommands: [
-    {
-      name: "list",
-      summary: "list declared secrets and whether each is set on the target",
-      args: [SECRETS_HOST, AGENT_ARG],
-      flags: [DEPLOY_CONFIG, JSON_FLAG],
-      examples: [{ cmd: "fastagent secrets list fly" }],
-      run: async (args, f) =>
-        (await import("./commands/secrets.ts")).runSecrets("list", args[0] as "fly", undefined, args[1] as string, {
-          ...(typeof f.config === "string" ? { config: f.config } : {}),
-          json: f.json === true,
-        }),
-    },
-    {
-      name: "set",
-      summary: "set one secret on the target (prompt, stdin, or --generate)",
-      args: [SECRETS_HOST, { name: "<name>", description: "environment variable name" }, AGENT_ARG],
-      flags: [DEPLOY_CONFIG, { flags: "--generate", description: "generate a random value and print once" }],
-      examples: [
-        { cmd: "fastagent secrets set fly OPENAI_API_KEY" },
-        { cmd: "fastagent secrets set fly FASTAGENT_API_KEY --generate" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/secrets.ts")).runSecrets(
-          "set",
-          args[0] as "fly",
-          args[1] as string,
-          args[2] as string,
-          {
-            ...(typeof f.config === "string" ? { config: f.config } : {}),
-            generate: f.generate === true,
-          },
-        ),
-    },
-    {
-      name: "push",
-      summary: "push declared values from --env-file or --from-env",
-      args: [SECRETS_HOST, AGENT_ARG],
-      flags: [
-        DEPLOY_CONFIG,
-        { flags: "--env-file <file>", description: "env file to push" },
-        { flags: "--from-env", description: "push from this process's environment" },
-      ],
-      examples: [
-        { cmd: "fastagent secrets push fly --env-file prod.env" },
-        { cmd: "doppler run -- fastagent secrets push fly --from-env" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/secrets.ts")).runSecrets("push", args[0] as "fly", undefined, args[1] as string, {
-          ...(typeof f.config === "string" ? { config: f.config } : {}),
-          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-          fromEnv: f.fromEnv === true,
-        }),
-    },
-  ],
-};
-
 const login: CommandSpec = {
   name: "login",
   summary: "sign in to a model provider (account OAuth or API key)",
@@ -498,18 +405,9 @@ const login: CommandSpec = {
     { flags: "--method <how>", description: "account or api-key" },
     JSON_FLAG,
     { flags: "--timeout <seconds>", description: "interactive sign-in timeout" },
-    { flags: "--deployment <host>", description: "run login on the deployed box (docker, fly, railway)" },
-    { flags: "--config <file>", description: "with --deployment: instance config" },
-    { flags: "--env-file <file>", description: "with --deployment: host account env file" },
-    { flags: "--stdio", description: "box-side relay mode", hidden: true },
-    { flags: "--if-missing", description: "with --stdio: keep existing credential", hidden: true },
     NO_INPUT,
   ],
-  examples: [
-    { cmd: "fastagent login" },
-    { cmd: "fastagent login openai", note: "ChatGPT or API key" },
-    { cmd: "fastagent login openai --deployment fly", note: "on deployed box" },
-  ],
+  examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai", note: "ChatGPT or API key" }],
   run: async (args, f) =>
     (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
@@ -517,11 +415,6 @@ const login: CommandSpec = {
       json: f.json === true,
       ...(f.method !== undefined ? { method: f.method as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-      ...(f.deployment !== undefined ? { deployment: f.deployment as string } : {}),
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-      stdio: f.stdio === true,
-      ifMissing: f.ifMissing === true,
     }),
 };
 
@@ -635,7 +528,6 @@ const specs: readonly CommandSpec[] = [
   start,
   add,
   channels,
-  secrets,
   deploy,
   login,
   logout,
@@ -648,7 +540,7 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
     examples: [
       { cmd: "fastagent init my-agent && cd my-agent", note: "scaffold an agent" },
       { cmd: "fastagent dev", note: "serve locally and iterate" },
-      { cmd: "fastagent deploy fly --run", note: "ship it" },
+      { cmd: "fastagent deploy docker", note: "a container for any host" },
     ],
     notes: "Docs: https://github.com/fastagent-sh/fastagent",
     ...overrides,

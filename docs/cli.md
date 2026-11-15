@@ -25,18 +25,14 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `build` | compile the agent into `dist/` |
 | `start` | serve the build |
 | `models [search]` | list model specs |
-| `login [provider]`, `logout`, `auth check` | manage model credentials (`login --deployment <host>` signs a deployment in) |
+| `login [provider]`, `logout`, `auth check` | manage model credentials |
 | `content list\|add\|remove` | what the agent works on |
 | `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
 | `add skill <source>` | copy an Agent Skills skill into `skills/` |
 | `channels setup <name>` | create or connect the platform app and keep its credentials |
 | `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
 | `mcp list\|login\|disconnect` | MCP servers and their sign-in |
-| `secrets list\|set\|push <host>` | a deployment's values on its host |
-| `deploy docker\|fly\|railway` | write deployment files; `--run` deploys ([Deploy](deploy.md)) |
-
-`deploy`, `secrets` and `login --deployment` read no value file by default: pass `--env-file` or
-`--from-env`, and `--config` for the instance.
+| `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
 
 ## Global options
 

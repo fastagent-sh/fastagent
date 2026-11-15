@@ -1,8 +1,7 @@
 /**
  * An agent's MODEL ENVIRONMENT as one value: the credential store its messages authenticate through, the models they
  * resolve against (models.ts) with their lists refreshed (catalog.ts), and what authenticates a provider there. Every
- * reader builds it here (the serve, the startup report, a deployed box's `login --if-missing`, `info`, `login`, the
- * model list, `deploy`'s pre-flight), so none can read other credential layers, another registry, or older lists than
+ * reader builds it here (the serve, the startup report, `info`, `login`, the model list), so none can read other credential layers, another registry, or older lists than
  * the Agent does.
  */
 import { join } from "node:path";

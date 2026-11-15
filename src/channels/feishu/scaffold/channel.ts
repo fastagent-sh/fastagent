@@ -8,9 +8,8 @@ import { type FeishuChannelOptions, feishuChannel, feishuWebSocketChannel } from
 // connection). Unset, `fastagent dev` opens a long connection OUT (no public URL, no tunnel), and everything
 // else — `fastagent start`, every deployment — receives by webhook at POST /feishu, the way a host that
 // wakes on a request is reached.
-// Dev reads .secrets/.env. A deployment has no default file: its values are the environment `deploy` runs in, or
-// the file `--env-file` names. Interactive `deploy --run` creates a separate production app, its credentials kept in
-// that file.
+// Dev reads .secrets/.env. A container reads its own environment: make a separate production app with
+// `fastagent channels setup feishu --env-file prod.env` and give the container that file's values.
 //
 // `fastagent channels setup feishu` creates and configures the app (scan-to-create). For a hand-made app, in the
 // developer console:

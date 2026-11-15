@@ -99,9 +99,6 @@ const CHANNEL_SCAFFOLDS: Record<ChannelKind, ChannelScaffold> = {
   },
 };
 
-/** The channel kinds `fastagent add <kind>` can scaffold. */
-export const CHANNEL_KINDS = Object.keys(CHANNEL_SCAFFOLDS) as ChannelKind[];
-
 /** The env vars and next-step lines a scaffolded channel has. */
 export function channelSetup(kind: ChannelKind): ChannelScaffold {
   return CHANNEL_SCAFFOLDS[kind];

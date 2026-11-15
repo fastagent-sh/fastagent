@@ -1,7 +1,7 @@
 /**
- * Deployment-owned initialization of a host's storage: the lease, and the record of which agent the storage is for.
- * The program is the image's, read where it is built; the storage is the instance's root, its working directory with
- * its state, credentials and content (`.state/`, `.secrets/`, `content/`), which outlives every release.
+ * A deployed box's initialization of its storage: the lease, and the record of which agent the storage is for. The
+ * program is the image's; the storage is the instance's root, its working directory with its state, credentials and
+ * content (`.state/`, `.secrets/`, `content/`), which outlives every image.
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -11,56 +11,46 @@ import { once } from "node:events";
 import type { Readable } from "node:stream";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
-import { RELEASE_ID_ENV, exists } from "../paths.ts";
+import { exists } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
 
 const SEGMENT = /^[a-zA-Z0-9_-]+$/;
 
-/** The deployment's own bookkeeping on the storage: the lease, and the release last started on it. */
+/** The box's own bookkeeping on the storage: the lease, and the agent the storage belongs to. */
 const deploymentMeta = (root: string): string => join(root, ".deployment");
 
-/** What a deploy set on the box that the storage remembers: the instance it belongs to, and the release last started. */
-export interface DeploymentRelease {
-  version: 1;
-  id: string;
-  agent: string;
-}
-
-/** The agent's name is one path segment of letters, digits, `-` and `_`, as a content entry's name is. */
-function parseDeploymentRelease(raw: string): DeploymentRelease {
-  const r = JSON.parse(raw) as DeploymentRelease;
-  if (r?.version !== 1 || typeof r.id !== "string" || !r.id || typeof r.agent !== "string" || !SEGMENT.test(r.agent)) {
-    throw new Error("invalid deployment release record");
+/** The agent's name, one path segment of letters, digits, `-` and `_`, as the storage records it. */
+function parseOwner(raw: string): string {
+  const record = JSON.parse(raw) as { version?: unknown; agent?: unknown };
+  if (record?.version !== 1 || typeof record.agent !== "string" || !SEGMENT.test(record.agent)) {
+    throw new Error("invalid storage owner record");
   }
-  return r;
+  return record.agent;
 }
 
-/**
- * The release this box was started as, from the variables a deploy sets on it. A deployed box without a name is a
- * deployment someone assembled by hand, and its storage would belong to nobody.
- */
-export function releaseFromEnv(env: NodeJS.ProcessEnv = process.env): DeploymentRelease {
-  const id = env[RELEASE_ID_ENV];
+/** The agent this box runs, as the generated image names it (`FASTAGENT_NAME`), so its storage belongs to someone. */
+export function storageOwnerFromEnv(env: NodeJS.ProcessEnv = process.env): string {
   const agent = env[INSTANCE_NAME_ENV];
-  if (!id) throw new Error(`${RELEASE_ID_ENV} is required for a deployment`);
-  if (!agent)
-    throw new Error(`${INSTANCE_NAME_ENV} is required for a deployment: it names the agent its storage belongs to`);
-  return parseDeploymentRelease(JSON.stringify({ version: 1, id, agent }));
+  if (!agent) {
+    throw new Error(
+      `${INSTANCE_NAME_ENV} is required for a deployment: it names the agent its storage belongs to, and the ` +
+        "generated Dockerfile sets it",
+    );
+  }
+  if (!SEGMENT.test(agent))
+    throw new Error(`${INSTANCE_NAME_ENV} must be one path segment, got ${JSON.stringify(agent)}`);
+  return agent;
 }
 
-/**
- * Call while holding the deployment lease. Records `release` as the one started on the storage at `root`, refusing a
- * storage another agent's deployments started on: its state is that agent's.
- */
-async function claimDeploymentStorage(root: string, release: DeploymentRelease): Promise<void> {
-  const meta = deploymentMeta(root);
-  const appliedPath = join(meta, "applied.json");
-  const applied = (await exists(appliedPath)) ? parseDeploymentRelease(await readFile(appliedPath, "utf8")) : undefined;
-  if (applied !== undefined && applied.agent !== release.agent) {
-    throw new Error(`deployment selects ${release.agent}, but this storage belongs to ${applied.agent}`);
+/** Call while holding the lease. Records `agent` as the storage's owner, refusing a storage another agent owns. */
+async function claimDeploymentStorage(root: string, agent: string): Promise<void> {
+  const ownerPath = join(deploymentMeta(root), "applied.json");
+  const owner = (await exists(ownerPath)) ? parseOwner(await readFile(ownerPath, "utf8")) : undefined;
+  if (owner !== undefined && owner !== agent) {
+    throw new Error(`this box runs ${agent}, but the storage at ${root} belongs to ${owner}`);
   }
-  log.info(`[fastagent] release ${release.id} on ${root}`);
-  if (applied?.id !== release.id) writeFileAtomic(appliedPath, JSON.stringify(release));
+  log.info(`[fastagent] storage ${root} of ${agent}`);
+  if (owner === undefined) writeFileAtomic(ownerPath, JSON.stringify({ version: 1, agent }));
 }
 
 async function mountedPaths(): Promise<string[]> {
@@ -113,18 +103,18 @@ async function leaseDeployment(metadata: string, waitSeconds = 35): Promise<() =
 
 /**
  * Take the deployment's storage at `root`: it must be a mount, one process holds it (the lease), and it is the
- * storage of the agent `release` names.
+ * storage of `agent`.
  *
  * The lease is NOT returned: it stays held for the process lifetime, because channel activation can
  * start background writers that `close()` does not drain. The kernel drops it when the process exits.
  */
-export async function prepareDeployment(root: string, release: DeploymentRelease): Promise<void> {
+export async function prepareDeployment(root: string, agent: string): Promise<void> {
   await assertStorageMounted(root);
   const meta = deploymentMeta(root);
   await mkdir(meta, { recursive: true });
   const unlock = await leaseDeployment(meta);
   try {
-    await claimDeploymentStorage(root, release);
+    await claimDeploymentStorage(root, agent);
   } catch (error) {
     await unlock();
     throw error;

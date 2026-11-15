@@ -56,9 +56,7 @@ const refusal = (error: unknown) =>
 /** Print the message's answer as it is written, then exit with what it ended as: 0 only for `completed`. */
 /** What to do about a model with no credential, where the answer came from. */
 const LOCAL_AUTH_HINT = "sign in with `fastagent login`, or set the provider's API key in .secrets/.env";
-const DEPLOYED_AUTH_HINT =
-  "give the deployment a credential: `fastagent secrets set <host> <the provider's API key variable>` " +
-  "(`fastagent secrets list <host>` names it), or sign its box in with `fastagent login <provider> --deployment <host>`";
+const DEPLOYED_AUTH_HINT = "set the provider's API key in the deployment's environment";
 
 async function answer(
   events: AsyncIterable<MessageStreamEvent>,

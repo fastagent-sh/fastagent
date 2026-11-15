@@ -16,7 +16,7 @@ node_modules
 .cache
 
 # the development instance's configuration: its app is one person's, so it is personal. What a team shares goes in
-# `defaults` of fastagent.config.ts, or in a deployment's configuration (`deploy --config`).
+# `defaults` of fastagent.config.ts.
 fastagent.json
 
 # fastagent reads the agent's env from .secrets/.env (which un-ignores its own .env.example). A bare

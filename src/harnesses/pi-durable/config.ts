@@ -272,7 +272,7 @@ export async function readInstanceConfigFile(path: string): Promise<InstanceConf
 
 /**
  * The configuration the environment names, when it names one: the file `FASTAGENT_CONFIG` names, or the JSON itself in
- * `FASTAGENT_CONFIG_JSON`, which a deploy sets on a box that has no file for it. Naming both is refused: which one
+ * `FASTAGENT_CONFIG_JSON`, for a container that has no file for it. Naming both is refused: which one
  * counted would be a guess.
  */
 export async function namedInstanceConfig(

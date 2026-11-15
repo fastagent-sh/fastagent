@@ -20,7 +20,6 @@ Use these shared seams instead of writing per-file mocks:
 | Seam | Replaces | Parity / verification |
 | --- | --- | --- |
 | `doubles/cli-run.ts` (`runInProcess`, `fauxAgent`, `agentWorkspace`) | Spawning `src/cli.ts` for command logic | `integration/double-parity/cli-run-parity.integration.test.ts` |
-| `doubles/host-cli-double.ts` (`hostCli`, `recordHostCli`, `awsRunner`, `spawnRunner`) | `src/deploy/runner.ts` (`fly`, `railway`, `aws`, `docker`) | `integration/double-parity/host-cli-double.integration.test.ts` |
 | `doubles/git-double.ts` (`gitAnswersIn`) | `src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
 | `doubles/tsc-double.ts` | `src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
 | `doubles/storage-no-wait.ts` | `src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |

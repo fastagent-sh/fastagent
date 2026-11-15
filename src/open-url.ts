@@ -3,9 +3,8 @@ import { spawn } from "node:child_process";
 /**
  * How to hand `url` to the default browser on `platform`, or undefined when it must not be handed over at all.
  *
- * Only a web page: `https:`, or `http:` on a loopback host. Some callers pass URLs they did not build — a deployed box's
- * login relays its own (`cli/login-relay.ts`), and that box runs code its agent can rewrite — and the platform openers
- * open anything: a local path, a `file:`/`smb:` URL, an argument that starts with `-`. Parsed and re-serialized, so
+ * Only a web page: `https:`, or `http:` on a loopback host. Some callers pass URLs they did not build — a provider's
+ * sign-in or a platform's console names its own — and the platform openers open anything: a local path, a `file:`/`smb:` URL, an argument that starts with `-`. Parsed and re-serialized, so
  * what reaches the opener is what was checked. No shell anywhere: on Windows `start` needs one, and cmd reads the `&`
  * every OAuth URL carries as a command separator, so `rundll32 url.dll,FileProtocolHandler` takes the URL as one
  * argument instead.

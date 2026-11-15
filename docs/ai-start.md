@@ -235,8 +235,8 @@ fastagent schedules list           # next run, last outcome
 fastagent schedules run daily-review   # a real run now (refused while dev serves)
 ```
 
-The agent can also schedule its own follow-ups with `wake`; test one while serving. On Fly and Railway a schedule
-keeps the machine up ([Deploy](deploy.md#scale-to-zero)).
+The agent can also schedule its own follow-ups with `wake`; test one while serving. A schedule fires only while the
+agent runs, so run its container without scaling it to zero.
 
 ## 8. Embed it in an app (optional)
 
@@ -247,18 +247,16 @@ keeps auth, users and data. One instance is one trust domain: give users who mus
 
 ## 9. Deploy
 
-Choose the host and its cost with the owner, and read its section in [Deploy](deploy.md) before creating anything.
+Choose the host and its cost with the owner, and read [Deploy](deploy.md) before creating anything.
 
 ```bash
-fastagent secrets list fly                          # which values the target still lacks
-fastagent secrets push fly --env-file prod.env      # set the declared ones from a file
-fastagent deploy fly --run --json                   # runs deploy synchronously and returns URL + notes
+fastagent deploy docker      # writes Dockerfile + .dockerignore, prints the docker build and run commands
 ```
 
-The owner types any missing value with `fastagent secrets set <host> <NAME>` or completes interactive logins (`fly auth login`,
-`fastagent login <provider> --deployment fly`) in their terminal. If `--run` stops with a non-zero exit code, fix the
-cause and deploy again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why)). Then check
-the deployment:
+The owner keeps the values (the model's API key, channel credentials, `FASTAGENT_API_KEY`) in a file of their own and
+passes it to the container: never in this conversation. If `deploy docker` stops, fix the cause it names and run it
+again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why)). Then check the
+deployment:
 
 ```bash
 fastagent invoke --url <deployment URL> "hello"
@@ -269,7 +267,7 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions, channel and schedule state, the box's login | on the host's volume (Docker, Fly, Railway) |
+| Sessions, channel and schedule state | on the container's volume at `/data` |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
 Channels replay an accepted turn at least once, so tools with side effects must tolerate a repeat.

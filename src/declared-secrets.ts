@@ -2,14 +2,12 @@
  * WHICH ENV VARS THIS AGENT NEEDS, in ONE shape, wherever it was declared (`needs(...)`, next to the code that reads
  * the value).
  *
- * One list, two consequences:
- *  - opening the agent ASSERTS the values first, so a missing one is a startup failure naming the file, not a 401
- *    three days later;
- *  - `deploy --run` refuses a value file that does not supply one.
+ * Opening the agent ASSERTS the values first, so a missing one is a startup failure naming the file, not a 401 three
+ * days later.
  *
  * Agent code does not read `process.env`: `needs` hands back exactly the values it declared, so the declaration cannot
- * drift from the read, and a typo is a type error. The values travel through the process env, and `deploy` carries the
- * whole value file (deploy/secrets.ts) — a declaration makes a value REQUIRED, it does not decide what travels.
+ * drift from the read, and a typo is a type error. The values travel through the process env: a declaration makes a
+ * value REQUIRED, it does not decide what travels.
  */
 
 /** One env var some part of the definition declared, and where that declaration is. */
@@ -42,7 +40,7 @@ export function isEnvName(name: string): boolean {
 }
 
 /** Declared names as a stable list, first declaration winning — the form a carrier iterates. */
-export function dedupeSecrets(declared: readonly DeclaredSecret[]): DeclaredSecret[] {
+function dedupeSecrets(declared: readonly DeclaredSecret[]): DeclaredSecret[] {
   const seen = new Set<string>();
   return declared.filter((s) => !seen.has(s.name) && seen.add(s.name));
 }
