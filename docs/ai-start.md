@@ -22,12 +22,12 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | What | Where |
 |---|---|
 | Goal, standing instructions, when to ask | `SYSTEM.md` |
-| Facts about the project it works on | the project's own files, declared as [content](configuration.md#content) |
+| Facts about the project it works on | the project's own files, which the agent reads with its tools |
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
 | Chat channels | `src/channels/` (use a built-in channel) |
 | Timed work | `src/schedules/`, and the `wake` tool |
-| Model and defaults | `fastagent.config.ts` |
+| Model, providers, MCP servers | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
 
 Let the agent choose its steps; a fixed pipeline belongs in your app only when the product needs one. **A prompt or a
@@ -38,7 +38,7 @@ credentials. Enforce limits where the real operation happens, and isolate the wh
 
 ```bash
 npm install -g @fastagent-sh/fastagent
-fastagent init my-agent                       # or: fastagent init my-agent --content ~/code/app
+fastagent init my-agent
 cd my-agent
 ```
 
@@ -180,7 +180,7 @@ Pick the provider and model with the owner. `fastagent auth check --provider <id
 
 **Never ask for a credential in the conversation**, and keep them out of files, issues and logs.
 
-Set `defaults: { model: "provider/model-id" }` in `fastagent.config.ts`, then:
+Set `model: "provider/model-id"` in `fastagent.config.ts`, then:
 
 ```bash
 fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send anything."

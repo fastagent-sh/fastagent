@@ -3,8 +3,7 @@ import { confirm, isCancel } from "@clack/prompts";
 import { inspectMcp, mcpContext, writeMcpBinding, httpServer } from "../../mcp/host.ts";
 import { signInMcp } from "../../mcp/sign-in.ts";
 import { holdingInstance } from "../../harnesses/pi-durable/serve.ts";
-import { loadMcp, mcpInstance, resolveMcpServers } from "../../mcp/config.ts";
-import { devInstanceConfig, mcpConfigOf, namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
+import { loadMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { McpError } from "../../mcp-api.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { enterAgentEnv } from "../../env.ts";
@@ -34,20 +33,13 @@ export async function runMcp(
   if (environment !== "dev" && environment !== "production") return failUsage("--env must be dev or production");
   selectAgentEnvironment(environment);
   enterAgentEnv(target);
-  // The servers the instance of this environment opens: the program's, and what its configuration adds. `dev` reads the
-  // one `--config` names or else the project's; `start` never reads the project's.
-  const instance = await (environment === "production" ? namedInstanceConfig() : devInstanceConfig(target)).catch(
-    failStartup,
-  );
-  const config = instance === undefined ? undefined : mcpConfigOf(instance);
   if (action === "list") {
-    const servers = await inspectMcp(target, config === undefined ? {} : { config }).catch(failStartup);
+    const servers = await inspectMcp(target).catch(failStartup);
     if (options.json) console.log(JSON.stringify(servers));
     else for (const item of servers) console.log(`${item.name}\t${item.transport}\t${item.authorization}`);
     return;
   }
-  if (!server)
-    return failUsage(`mcp ${action} needs a server name from fastagent.config.ts or the instance's fastagent.json`);
+  if (!server) return failUsage(`mcp ${action} needs a server name from fastagent.config.ts`);
   const context = mcpContext(target);
   if (action === "disconnect") {
     await holdingInstance(context.stateRoot, () => writeMcpBinding(context.stateRoot, server, undefined)).catch(
@@ -68,10 +60,7 @@ export async function runMcp(
     );
     return;
   }
-  httpServer(
-    resolveMcpServers(await loadMcp(target, mcpInstance(config)), context.environment, server, target, {}),
-    server,
-  );
+  httpServer(resolveMcpServers(await loadMcp(target), context.environment, server, target, {}), server);
   const seconds = options.timeout === undefined ? 900 : Number(options.timeout);
   if (!Number.isInteger(seconds) || seconds <= 0)
     return failUsage("--timeout must be a positive whole number of seconds");
@@ -100,7 +89,6 @@ export async function runMcp(
   }
   const grant = await signInMcp({
     agentDir: target,
-    ...(config === undefined ? {} : { config }),
     server,
     store: context.auth.store,
     scopes,

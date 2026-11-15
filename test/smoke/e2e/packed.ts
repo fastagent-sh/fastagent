@@ -42,7 +42,7 @@ import type { AgentConfig } from "@fastagent-sh/fastagent";
 const faux = fauxProvider({ provider: "e2e", models: [{ id: "m" }] });
 faux.setResponses(Array.from({ length: 5 }, () => fauxAssistantMessage("pong")));
 
-export default { defaults: { model: "e2e/m" }, providers: [faux.provider] } satisfies AgentConfig;
+export default { model: "e2e/m", providers: [faux.provider] } satisfies AgentConfig;
 `,
 );
 const fastagent = join(agent, "node_modules", ".bin", "fastagent");

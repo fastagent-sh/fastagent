@@ -1,46 +1,28 @@
-/** `fastagent init <dir> [--content <dir>]...`: scaffold a runnable agent and install its dependencies. */
+/** `fastagent init <dir>`: scaffold a runnable agent, install its dependencies, and start its git repository. */
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { displayPath } from "../../paths.ts";
-import { initAgent } from "../../authoring.ts";
-import { readContentSource } from "../../content/source.ts";
-import { failEdit } from "./content.ts";
-import { contentLines } from "../content-view.ts";
+import { initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import { failStartup } from "../fail.ts";
 
 export interface InitOptions {
   /** false ⇔ `--no-install`. */
   install: boolean;
-  /** `--content` sources, each a directory the agent works on. */
-  content: string[];
 }
 
 export async function runInit(dirArg: string, opts: InitOptions): Promise<void> {
   const dir = resolve(dirArg);
-  // Every source is read, and every entry checked (by initAgent), BEFORE anything is created.
-  const read = await Promise.resolve()
-    .then(() => opts.content.map((source) => readContentSource(source, process.cwd())))
-    .catch(failStartup);
+  const { created } = await scaffoldAgent(dir).catch(failStartup);
   let installFailed = false;
-  const { created, content, repository } = await initAgent(dir, {
-    content: read.map(({ addition }) => addition),
-    ...(opts.install
-      ? {
-          install: async (agentDir: string) => {
-            console.error(`[fastagent] installing dependencies (npm install)…`);
-            installFailed = (await npmInstall(agentDir)) !== 0;
-            if (installFailed) {
-              console.error(
-                `[fastagent] warn: npm install failed — run it manually in ${agentDir} before \`fastagent dev\``,
-              );
-            }
-          },
-        }
-      : {}),
-  }).catch(failEdit(""));
+  if (opts.install) {
+    console.error(`[fastagent] installing dependencies (npm install)…`);
+    installFailed = (await npmInstall(dir)) !== 0;
+    if (installFailed) {
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
+    }
+  }
+  const repository = await initRepository(dir);
   console.error(`[fastagent] created ${dir}`);
-  for (const note of read.flatMap((source) => source.notes)) console.error(`  ${note}`);
-  if (content.length > 0) for (const [label, value] of contentLines(content)) console.error(`  ${label} ${value}`);
   console.error(`  files: ${created.join(", ")}`);
   console.error(`[fastagent] git: ${repository}`);
 

@@ -76,10 +76,10 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
-    const r = await parse(["content", "remvoe", "app"]);
+    const r = await parse(["schedules", "lsit"]);
     expect(r.code).toBe(2);
-    expect(r.err).toMatch(/unknown command 'remvoe'/);
-    expect(r.err).toMatch(/remove/); // did-you-mean
+    expect(r.err).toMatch(/unknown command 'lsit'/);
+    expect(r.err).toMatch(/list/); // did-you-mean
   });
 });
 

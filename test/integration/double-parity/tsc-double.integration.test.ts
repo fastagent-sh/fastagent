@@ -33,7 +33,6 @@ async function seen(compiler: typeof real | typeof double) {
     .sort();
   const out = mkdtempSync(join(dir, ".out-"));
   const emitted = await tsc.emit(out, ROOTS, false);
-  const declared = await tsc.declare(out, "fastagent.config.ts");
   const files = listing(out);
   const imports = Object.fromEntries(
     files
@@ -45,12 +44,12 @@ async function seen(compiler: typeof real | typeof double) {
           .sort(),
       ]),
   );
-  return { sources, codes: [emitted.code, declared.code], files, imports };
+  return { sources, code: emitted.code, files, imports };
 }
 
 it("reads the same sources and emits the same files, importing the same modules, as tsc", async () => {
   const fromTsc = await seen(real);
-  expect(fromTsc.codes).toEqual([0, 0]);
+  expect(fromTsc.code).toBe(0);
   expect(fromTsc.sources).toContain("lib/types.ts");
   expect(await seen(double)).toEqual(fromTsc);
 });

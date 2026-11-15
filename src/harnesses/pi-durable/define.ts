@@ -4,50 +4,24 @@
  * assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import type { Schema } from "@earendil-works/pi-schema";
-import type { ContentEntry } from "../../content/declare.ts";
 import { isEnvName } from "../../declared-secrets.ts";
 import type { McpServerDeclaration } from "../../mcp/config.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
-/** What an instance may set over the program's `defaults`, and what a program's `defaults` are. */
-export interface AgentDefaults<Settings = unknown> {
-  /** Example first messages a client may offer as drafts, up to six: `info().starters`. */
-  starters?: readonly string[];
-  /** `"provider/modelId"`: what a session that names none answers with; a flag or `FASTAGENT_MODEL` may override it. */
+/** What `fastagent.config.ts` default-exports: the agent's own settings, the same for every place it runs. */
+export interface AgentConfig {
+  /** `"provider/modelId"`: what a session that names none answers with; `--model` or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  http?: {
-    /** The port a serve listens on: its health check, the Agent API, and any channel that serves routes. */
-    port?: number;
-    /**
-     * Whether a serve answers the Agent API under `/v1` with a key (default true): `dev`, `start`, and every deployment.
-     * `false` keeps it to its channels and schedules, whatever key its environment holds.
-     */
-    api?: boolean;
-  };
-  /** Values of the program's `settings`; an instance gives the rest. */
-  settings?: Partial<Settings>;
-}
-
-export interface AgentConfig<Settings = unknown> {
-  /** Constant: model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
+  /** Example first messages a client may offer as drafts, up to six: `info().starters`. */
+  starters?: readonly string[];
+  /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
-  /** GitHub repositories every instance of this agent works on. */
-  content?: Record<string, ContentEntry>;
-  /** MCP servers shared by every instance of this agent. */
   mcpServers?: Record<string, McpServerDeclaration>;
-  /** What each instance may choose, as an object schema (`obj({ ... })` from `@earendil-works/pi-schema`); no secrets. */
-  settings?: Schema<Settings>;
-  /** What an instance gets unless its configuration says otherwise. */
-  defaults?: AgentDefaults<Settings>;
 }
-
-/** The settings an `AgentConfig` declares: what `fastagent build` types a package's definition by. */
-export type SettingsOf<Config> = Config extends AgentConfig<infer Settings> ? Settings : unknown;
 
 /** @public */
-export function defineAgent<Settings = unknown>(config: AgentConfig<Settings>): AgentConfig<Settings> {
+export function defineAgent(config: AgentConfig): AgentConfig {
   return config;
 }
 
@@ -70,18 +44,17 @@ export type SecretValues<S extends readonly SecretSpec[]> = {
 export interface Needs<T> {
   readonly kind: "fastagent.needs";
   readonly secrets: readonly { name: string; description?: string; optional: boolean }[];
-  build(values: Record<string, string | undefined>, settings: Readonly<Record<string, unknown>>): T;
+  build(values: Record<string, string | undefined>): T;
 }
 
 /**
- * Wrap a module so it is built when an instance opens, with the values of the secrets it declares and the instance's
- * resolved `settings` (the program's `settings` schema, defaults and the instance's values, checked). Annotate the
- * second parameter with `SettingsOf<typeof config>` to type it. With no secrets, `needs([], (_, settings) => ...)`.
+ * Wrap a module so it is built when the agent opens, with the values of the secrets it declares: a required one
+ * without a value refuses the open, naming this file.
  * @public
  */
-export function needs<const S extends readonly SecretSpec[], T, Settings = Readonly<Record<string, unknown>>>(
+export function needs<const S extends readonly SecretSpec[], T>(
   secrets: S,
-  build: (values: SecretValues<S>, settings: Settings) => T,
+  build: (values: SecretValues<S>) => T,
 ): Needs<T> {
   const declared = secrets.map((spec) =>
     typeof spec === "string"
@@ -99,7 +72,7 @@ export function needs<const S extends readonly SecretSpec[], T, Settings = Reado
   return {
     kind: "fastagent.needs",
     secrets: declared,
-    build: (values, settings) => build(values as SecretValues<S>, settings as Settings),
+    build: (values) => build(values as SecretValues<S>),
   };
 }
 

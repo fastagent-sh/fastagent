@@ -11,10 +11,8 @@ import {
 } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
-import type { Project } from "../../harnesses/pi-durable/open.ts";
-import type { EffectiveConfig } from "../../harnesses/pi-durable/config.ts";
+import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
-import { namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
@@ -31,7 +29,7 @@ export interface StartOptions {
 }
 
 /** What `start` opened and serves. */
-type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
+type StartedService = ServedAgent & { agent: Agent; stateRoot: string };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -43,11 +41,10 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
   // An unset bind stays the wildcard: this is the container posture, and a published port needs it.
-  serveService(
-    service,
-    { port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? service.port, host: bindFlag },
-    service.config,
-  );
+  serveService(service, {
+    port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? DEFAULT_HTTP_PORT,
+    host: bindFlag,
+  });
 }
 
 /**
@@ -62,9 +59,8 @@ async function prepareStartWorkspace(): Promise<void> {
   const root = resolve(storage);
   await prepareDeployment(root, storageOwnerFromEnv());
   process.env[INSTANCE_ROOT_ENV] = root;
-  // Defaults, not overrides: an operator who pointed a directory somewhere else meant it, and silently relocating
-  // their state is the one failure they could not diagnose from the logs.
-  process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
+  // A default, not an override: an operator who pointed it somewhere else meant it, and silently relocating their
+  // credentials is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
 }
 
@@ -72,22 +68,15 @@ async function prepareStartWorkspace(): Promise<void> {
 async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
   await prepareStartWorkspace();
   // The build, never the source: refused when there is none or the project has moved on.
-  let built: Promise<Project> | undefined;
-  // A start never reads the development `fastagent.json`: its instance configuration is the one `--config` names.
-  const loadBuilt = (dir: string) =>
-    (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }).then((definition) => ({ definition })));
+  let built: Promise<AgentDefinition> | undefined;
+  const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
-  const config = await namedInstanceConfig();
-  const opened = await openServing((await loadBuilt(agentDir)).definition, {
-    model: modelSpec,
-    ...instanceInputs(agentDir),
-    ...(config === undefined ? {} : { config }),
-  });
+  const opened = await openServing(await loadBuilt(agentDir), { model: modelSpec, ...instanceInputs(agentDir) });
   const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
-      "[fastagent] note: state lives under the definition; use FASTAGENT_STATE_DIR on persistent storage for deployment.",
+      "[fastagent] note: state lives under the definition; use FASTAGENT_ROOT on persistent storage for deployment.",
     );
   }
   if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
@@ -95,13 +84,6 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Sta
       "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
-  const { config: effective } = opened;
-  const service = await serveAgent(opened, cliMountOptions(effective));
-  return {
-    ...service,
-    agent: opened.agent,
-    stateRoot,
-    port: effective.http?.port ?? DEFAULT_HTTP_PORT,
-    config: effective,
-  };
+  const service = await serveAgent(opened, cliMountOptions());
+  return { ...service, agent: opened.agent, stateRoot };
 }

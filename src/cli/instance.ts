@@ -1,22 +1,15 @@
 /**
  * Where a command's instance is: the flags that place it, over the environment variables that
  * name the same inputs, settled once at the command's entry into absolute paths in this process's environment. A
- * `dev` worker inherits them, and every reader after (`resolveStateRoot`, `resolveWorkdir`, the instance configuration)
- * reads one answer.
+ * `dev` worker inherits them, and every reader after (`resolveStateRoot`, `resolveWorkdir`) reads one answer.
  */
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { baseEnv } from "../child-env.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
-import type { ContentInstance } from "../authoring.ts";
-import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
-  INSTANCE_CONFIG_ENV,
-  INSTANCE_CONFIG_JSON_ENV,
   INSTANCE_ROOT_ENV,
-  INSTANCE_STATE_ENV,
-  INSTANCE_WORKDIR_ENV,
   isDeployedWorkspace,
   resolveOverridePath,
   resolveStateRoot,
@@ -32,19 +25,8 @@ import type { FlagSpec } from "./kernel.ts";
 export interface InstanceFlags {
   name?: string;
   root?: string;
-  state?: string;
-  workdir?: string;
-  config?: string;
   envFile?: string;
-  thinking?: string;
 }
-
-const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string])[] = [
-  ["root", "--root", INSTANCE_ROOT_ENV],
-  ["state", "--state", INSTANCE_STATE_ENV],
-  ["workdir", "--workdir", INSTANCE_WORKDIR_ENV],
-  ["config", "--config", INSTANCE_CONFIG_ENV],
-];
 
 const NAME_FLAG: FlagSpec = {
   flags: "--name <name>",
@@ -54,51 +36,13 @@ const ROOT_FLAG: FlagSpec = {
   flags: "--root <dir>",
   description: `the instance root: its working directory, with its state in <dir>/.state (${INSTANCE_ROOT_ENV})`,
 };
-const STATE_FLAG: FlagSpec = {
-  flags: "--state <dir>",
-  description: `the instance's state, apart from the root (${INSTANCE_STATE_ENV})`,
-};
-const WORKDIR_FLAG: FlagSpec = {
-  flags: "--workdir <dir>",
-  description: `the agent's working directory, apart from the root (${INSTANCE_WORKDIR_ENV})`,
-};
-
-const THINKING_FLAG: FlagSpec = {
-  flags: "--thinking <level>",
-  description:
-    "the reasoning effort, over the configuration's (FASTAGENT_THINKING_LEVEL): off, minimal, low, medium, high, xhigh, max",
-};
 
 /** The flags of a command that opens, or reads the state of, an instance. */
-export const INSTANCE_FLAGS: readonly FlagSpec[] = [NAME_FLAG, ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
-
-/** The flags of a command that runs an instance, or reports how it would run: layers over its configuration. */
-export const LAYER_FLAGS: readonly FlagSpec[] = [THINKING_FLAG];
-
-/** The flags of a command that reads or edits what an instance works on: where it keeps its clones, and its file. */
-export const CONTENT_FLAGS: readonly FlagSpec[] = [
-  ROOT_FLAG,
-  WORKDIR_FLAG,
-  {
-    flags: "--config <file>",
-    description: `the instance configuration to read and edit, a fastagent.json (${INSTANCE_CONFIG_ENV}; default: the project's)`,
-  },
-];
-
-/** `--config`: the instance configuration, a fastagent.json, for a command that opens the agent. */
-export const CONFIG_FLAG: FlagSpec = {
-  flags: "--config <file>",
-  description: `the instance configuration, a fastagent.json (${INSTANCE_CONFIG_ENV}; dev reads the one at the project root)`,
-};
+export const INSTANCE_FLAGS: readonly FlagSpec[] = [NAME_FLAG, ROOT_FLAG];
 
 export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
   const picked: InstanceFlags = {};
-  for (const key of [
-    ...INSTANCE_LOCATION.map(([name]) => name),
-    "name" as const,
-    "envFile" as const,
-    "thinking" as const,
-  ]) {
+  for (const key of ["root", "name", "envFile"] as const) {
     if (typeof flags[key] === "string") picked[key] = flags[key];
   }
   return picked;
@@ -146,20 +90,6 @@ export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void
   enterEnvFile(flags.envFile, { defaultFile: true });
   enterAgentEnv(agentDir);
   enterInstanceLocation(flags);
-  // The variables that lay over the configuration are settled here, once, with the flags entered into them, so a value
-  // the configuration would refuse stops every command the same way and not as a stack trace from whichever opens it.
-  try {
-    environmentConfig(process.env);
-  } catch (error) {
-    failUsage((error as Error).message);
-  }
-}
-
-/** Where a content command reads and edits an agent's content, as its flags and variables say. */
-export function contentInstanceOf(agentDir: string, flags: InstanceFlags = {}): ContentInstance {
-  enterInstanceLocation(flags);
-  const config = process.env[INSTANCE_CONFIG_ENV];
-  return { workdir: resolveWorkdir(agentDir), ...(config === undefined ? {} : { config }) };
 }
 
 /**
@@ -167,19 +97,11 @@ export function contentInstanceOf(agentDir: string, flags: InstanceFlags = {}): 
  * directory the command was started in (here, once), and the directories named are made. Refuses a flag with no path.
  */
 function enterInstanceLocation(flags: InstanceFlags = {}): void {
-  for (const [key, flag, variable] of INSTANCE_LOCATION) {
-    const given = flags[key];
-    if (given !== undefined && given.trim() === "") failUsage(`${flag} needs a path`);
-    const path = resolveOverridePath(given ?? process.env[variable]);
-    if (path === undefined) continue;
-    process.env[variable] = path;
-    // A flag beats every variable: the configuration the flag names is the one, not a guess between it and the JSON.
-    if (key === "config" && given !== undefined) delete process.env[INSTANCE_CONFIG_JSON_ENV];
-    if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
-  }
-  if (flags.thinking !== undefined) {
-    if (flags.thinking.trim() === "") failUsage("--thinking needs a value");
-    process.env.FASTAGENT_THINKING_LEVEL = flags.thinking;
+  if (flags.root !== undefined && flags.root.trim() === "") failUsage("--root needs a path");
+  const root = resolveOverridePath(flags.root ?? process.env[INSTANCE_ROOT_ENV]);
+  if (root !== undefined) {
+    process.env[INSTANCE_ROOT_ENV] = root;
+    makeDirectory(root, flags.root === undefined ? INSTANCE_ROOT_ENV : "--root");
   }
   const name = flags.name ?? enteredInstanceName();
   if (name === undefined) return;
@@ -205,10 +127,7 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
  */
 export function instanceInputs(
   agentDir: string,
-): Pick<
-  OpenServingOptions,
-  "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name" | "overrides"
-> {
+): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
@@ -221,6 +140,5 @@ export function instanceInputs(
     env: baseEnv(process.env),
     ownEnv: process.env,
     runsAs: runsAsIn(process.env),
-    overrides: environmentConfig(process.env),
   };
 }

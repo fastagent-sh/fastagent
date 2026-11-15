@@ -6,7 +6,7 @@ import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
-import { loadDevProject } from "../../harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
@@ -61,17 +61,10 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
-  const opened = await loadDevProject(agentDir)
-    .then(({ definition, instance }) =>
-      openServing(definition, {
-        model: modelSpec,
-        ...instanceInputs(agentDir),
-        ...(instance === undefined ? {} : { config: instance }),
-      }),
-    )
+  const opened = await loadSourceDefinition(agentDir)
+    .then((definition) => openServing(definition, { model: modelSpec, ...instanceInputs(agentDir) }))
     .catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const { config } = opened;
-  const service = await serveAgent(opened, cliMountOptions(config)).catch(failStartup);
-  serveService(service, { port: portFlag ?? config.http?.port ?? DEFAULT_HTTP_PORT, host }, config);
+  const service = await serveAgent(opened, cliMountOptions()).catch(failStartup);
+  serveService(service, { port: portFlag ?? DEFAULT_HTTP_PORT, host });
 }

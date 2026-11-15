@@ -74,12 +74,5 @@ export function projectCompiler(dir: string): ProjectCompiler {
       }
       return { code: errors.length > 0 ? 2 : 0, output: errors.join("\n") };
     },
-
-    async declare(outDir, root): Promise<CompilerResult> {
-      const target = join(outDir, root.replace(/\.([cm]?)ts$/, ".d.$1ts"));
-      await mkdir(dirname(target), { recursive: true });
-      await writeFile(target, "declare const _default: unknown;\nexport default _default;\n");
-      return { code: 0, output: "" };
-    },
   };
 }

@@ -76,22 +76,8 @@ export interface McpOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-/**
- * The instance configuration as far as MCP reads it: an object, or the absolute path of a `fastagent.json`. Its
- * `mcpServers` add to the program's (`fastagent.config.ts`), and a name in both refuses.
- */
-export type McpConfigInput = { mcpServers?: Readonly<Record<string, unknown>>; [key: string]: unknown } | string;
-
-/**
- * What `inspectMcp` is given beside the grants: the instance configuration whose servers it reads with the program's,
- * as `config`, or, with no `config`, the `fastagent.json` in the instance's `root` when it holds one (as `openAgent`
- * reads it).
- */
-export interface McpInspectOptions extends McpOptions {
-  config?: McpConfigInput;
-  /** The instance root, absolute. */
-  root?: string;
-}
+/** What `inspectMcp` is given beside the grants. */
+export type McpInspectOptions = McpOptions;
 
 export interface McpServerSummary {
   name: string;
@@ -131,8 +117,4 @@ export interface McpSignInRequest {
   timeoutSeconds?: number;
   variables?: Readonly<Record<string, string>>;
   fetch?: McpOptions["fetch"];
-  /** The instance configuration whose servers are read with the program's. */
-  config?: McpConfigInput;
-  /** With no `config`, the `fastagent.json` in this instance root, absolute, when it holds one (as `openAgent` reads it). */
-  root?: string;
 }

@@ -10,7 +10,7 @@ vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 describe("cli: deploy docker", () => {
   it("writes the container, prints how to build and run it, and never replaces a file the author owns", async () => {
     const dir = await agentWorkspace("fa-deploy-", {
-      "fastagent.config.ts": `export default { defaults: { model: "${CODEX_MODEL}" } };\n`,
+      "fastagent.config.ts": `export default { model: "${CODEX_MODEL}" };\n`,
       "package.json": JSON.stringify({ type: "module", name: "reviewer" }),
     });
     const first = await runInProcess(["deploy", "docker", dir]);

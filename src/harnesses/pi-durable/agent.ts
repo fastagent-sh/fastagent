@@ -91,8 +91,6 @@ export interface DurableAgentOptions {
   name: string;
   /** `info().agent`: the program's name (default: the instance's) and description. */
   agent?: { name?: string; description?: string };
-  /** `info().description`: the instance's own introduction. */
-  description?: string;
   /** `info().starters`: the example first messages in effect. */
   starters?: readonly string[];
   /** Read for every `info()` and send, so a command the definition gains is offered without a restart. */
@@ -299,7 +297,6 @@ function durableAgent(
         });
         return {
           name: options.name,
-          ...(options.description === undefined ? {} : { description: options.description }),
           agent: {
             name: presented.name ?? options.name,
             ...(presented.description === undefined ? {} : { description: presented.description }),

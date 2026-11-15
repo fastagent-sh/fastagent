@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type McpInstance, declareMcp, loadMcp, mcpSecrets, resolveMcpServers } from "../../../src/mcp/config.ts";
+import { declareMcp, loadMcp, mcpSecrets, resolveMcpServers } from "../../../src/mcp/config.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -14,11 +14,6 @@ afterEach(async () => {
 });
 const program = (servers: unknown, target = dir) =>
   writeFile(join(target, "fastagent.config.ts"), `export default ${JSON.stringify({ mcpServers: servers })};\n`);
-const instance = (servers: unknown, directory?: string): McpInstance => ({
-  values: { mcpServers: servers },
-  label: directory === undefined ? "the config object" : join(directory, "fastagent.json"),
-  ...(directory === undefined ? {} : { directory }),
-});
 
 describe("the servers of the program, from fastagent.config.ts", () => {
   it("reads them with the instance's variables and no ambient secret forwarding", async () => {
@@ -62,14 +57,5 @@ describe("the servers of the program, from fastagent.config.ts", () => {
     { x__y: { command: "node" } },
   ])("refuses an unsupported declaration without printing credential values", async (servers) => {
     expect(() => declareMcp(servers, dir)).toThrow(/fastagent\.config\.ts/);
-  });
-});
-
-describe("the servers an instance adds", () => {
-  it("only add: a name the program declares refuses, naming both files", async () => {
-    await program({ docs: { type: "http", url: "https://docs.example.com/mcp" } });
-    await expect(loadMcp(dir, instance({ docs: { command: "node" } }))).rejects.toThrow(
-      /MCP server "docs" is declared by the program \(fastagent\.config\.ts\) and by the instance \(the config object\)/,
-    );
   });
 });

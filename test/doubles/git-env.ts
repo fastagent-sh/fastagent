@@ -16,9 +16,3 @@ export const withGitIdentity: NodeJS.ProcessEnv = {
   GIT_COMMITTER_NAME: "a",
   GIT_COMMITTER_EMAIL: "a@example.com",
 };
-
-/** Run the rest of this file's tests (in-process git calls included) under {@link withGitIdentity}. */
-export function useGitIdentity(stubEnv: (name: string, value: string | undefined) => unknown): void {
-  for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) stubEnv(key, undefined);
-  for (const [key, value] of Object.entries(withGitIdentity)) if (key.startsWith("GIT_")) stubEnv(key, value);
-}

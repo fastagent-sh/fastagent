@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, models, login, logout, auth, dev, invoke, start, schedules, add, and deploy, with their flags."
+description: "The fastagent CLI reference: init, info, models, login, logout, auth, dev, invoke, start, schedules, add, and deploy, with their flags."
 status: current
 ---
 
@@ -18,7 +18,7 @@ for: from a subdirectory, a command names the agent's root and stops.
 
 | Command | Does |
 |---|---|
-| `init <dir>` | create an agent (`--content` adds what it works on) |
+| `init <dir>` | create an agent |
 | `info` | show what the agent loads, without serving |
 | `dev` | serve locally, restarting on code edits |
 | `invoke <message>` | send one message and print the answer (`--url` for a deployment) |
@@ -26,7 +26,6 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `start` | serve the build |
 | `models [search]` | list model specs |
 | `login [provider]`, `logout`, `auth check` | manage model credentials |
-| `content list\|add\|remove` | what the agent works on |
 | `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
 | `add skill <source>` | copy an Agent Skills skill into `skills/` |
 | `channels setup <name>` | create or connect the platform app and keep its credentials |
@@ -44,7 +43,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `channels setup`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `schedules list`, `content list`, `login`, `auth check`, `add` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `login`, `auth check`, `add` | Machine-readable output. |
 
 ## Exit codes
 

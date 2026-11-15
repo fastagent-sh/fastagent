@@ -1,15 +1,13 @@
 /**
- * The MCP servers an instance opens: the program's (`mcpServers` in `fastagent.config.ts`), and what the instance adds
- * (`mcpServers` in `fastagent.json`). One list, read once, that every reader (the open, `inspectMcp`, sign-in, the
- * build's warning) is given.
+ * The MCP servers an agent opens: `mcpServers` in `fastagent.config.ts`. One list, read once, that every reader (the
+ * open, `inspectMcp`, sign-in, the build's warning) is given.
  */
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
-import { type McpConfigInput, McpError } from "../mcp-api.ts";
-import { AGENT_CONFIG_FILE, INSTANCE_CONFIG_FILE } from "../paths.ts";
+import { McpError } from "../mcp-api.ts";
+import { AGENT_CONFIG_FILE } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 
 const Strings = Schema.Record(Schema.String, Schema.String);
@@ -38,16 +36,8 @@ export interface McpDeclaration {
   server: McpServerDeclaration;
   /** The file that declared it, as a refusal names it. */
   file: string;
-  /** The directory that file is in. None for an object, whose commands with a path must be absolute. */
-  base?: string;
-  origin: "program" | "instance";
-}
-
-/** The instance configuration as far as MCP reads it: its `mcpServers`, and where it is from. */
-export interface McpInstance {
-  values: unknown;
-  label: string;
-  directory?: string;
+  /** The directory that file is in: what a command with a relative path is relative to. */
+  base: string;
 }
 
 /** The `mcpServers` map `raw` holds (undefined is none), checked; every refusal names `file` and, where it can, the server. */
@@ -84,91 +74,17 @@ export function declareServers(raw: unknown, file: string): Record<string, McpSe
   return servers;
 }
 
-/** An instance's servers, checked: what `resolveConfig` asks of a configuration, so its refusal is the file's. */
-export function checkInstanceServers(instance: McpInstance): void {
-  declareServers(mapOf(instance.values), instance.label);
+/** The servers of the program in `dir` (`fastagent.config.ts`). */
+export function declareMcp(programServers: unknown, dir: string, programFile = AGENT_CONFIG_FILE): McpDeclaration[] {
+  return Object.entries(declareServers(programServers, programFile)).map(
+    ([name, server]): McpDeclaration => ({ name, server, file: programFile, base: resolve(dir) }),
+  );
 }
 
-const mapOf = (values: unknown): unknown =>
-  typeof values === "object" && values !== null ? (values as { mcpServers?: unknown }).mcpServers : undefined;
-
-/**
- * The servers of the program (`fastagent.config.ts`) and of `instance`. An instance only adds: a name both declare is
- * refused, naming both, so nothing is shadowed.
- */
-export function declareMcp(
-  programServers: unknown,
-  dir: string,
-  instance?: McpInstance,
-  programFile = AGENT_CONFIG_FILE,
-): McpDeclaration[] {
-  const program = Object.entries(declareServers(programServers, programFile)).map(
-    ([name, server]): McpDeclaration => ({ name, server, file: programFile, base: resolve(dir), origin: "program" }),
-  );
-  if (instance === undefined) return program;
-  const added = Object.entries(declareServers(mapOf(instance.values), instance.label)).map(
-    ([name, server]): McpDeclaration => ({
-      name,
-      server,
-      file: instance.label,
-      ...(instance.directory === undefined ? {} : { base: instance.directory }),
-      origin: "instance",
-    }),
-  );
-  for (const { name } of added) {
-    if (program.some((declared) => declared.name === name)) {
-      throw new McpError(
-        "configuration",
-        `MCP server "${name}" is declared by the program (${programFile}) and by the instance (${instance.label}): an ` +
-          `instance adds to the program's servers and does not replace them — name it otherwise`,
-      );
-    }
-  }
-  return [...program, ...added];
-}
-
-/** Load `mcpServers` from the agent directory's `fastagent.config.ts` (or compiled `fastagent.config.js`) and join `instance`. */
-export async function loadMcp(dir: string, instance?: McpInstance): Promise<McpDeclaration[]> {
+/** Load `mcpServers` from the agent directory's `fastagent.config.ts` (or compiled `fastagent.config.js`). */
+export async function loadMcp(dir: string): Promise<McpDeclaration[]> {
   const { value, file } = await loadRawProgramConfig(dir);
-  return declareMcp(value?.mcpServers, dir, instance, file);
-}
-
-/** An instance configuration given to `inspectMcp` or `signInMcp`: an object, or the absolute path of a `fastagent.json`. */
-export function mcpInstance(config: McpConfigInput | undefined): McpInstance | undefined {
-  if (config === undefined) return undefined;
-  if (typeof config !== "string") return { values: config, label: "the config object" };
-  if (!isAbsolute(config))
-    throw new McpError("configuration", `config must be an absolute path, and is ${JSON.stringify(config)}`);
-  let text: string;
-  try {
-    text = readFileSync(config, "utf8");
-  } catch (error) {
-    throw new McpError(
-      "configuration",
-      `cannot read the instance configuration ${config}: ${(error as Error).message}`,
-    );
-  }
-  try {
-    return { values: JSON.parse(text), label: config, directory: dirname(config) };
-  } catch (error) {
-    throw new McpError("configuration", `${config} is not JSON: ${(error as Error).message}`);
-  }
-}
-
-/** The instance configuration `inspectMcp` and `signInMcp` read: `config`, else the one an instance root holds, as `openAgent` does. */
-export function mcpInstanceOf({
-  config,
-  root,
-}: {
-  config?: McpConfigInput | undefined;
-  root?: string | undefined;
-}): McpInstance | undefined {
-  if (config !== undefined || root === undefined) return mcpInstance(config);
-  if (!isAbsolute(root)) {
-    throw new McpError("configuration", `root must be an absolute path, and is ${JSON.stringify(root)}`);
-  }
-  const path = join(root, INSTANCE_CONFIG_FILE);
-  return existsSync(path) ? mcpInstance(path) : undefined;
+  return declareMcp(value?.mcpServers, dir, file);
 }
 
 function configStrings(server: McpServerDeclaration): string[] {
@@ -210,13 +126,13 @@ export function mcpSecrets(declarations: readonly McpDeclaration[]): DeclaredSec
  */
 export function literalCredentials(
   declarations: readonly McpDeclaration[],
-): { file: string; server: string; field: "headers" | "env"; key: string; origin: McpDeclaration["origin"] }[] {
-  return declarations.flatMap(({ name, server, file, origin }) => {
+): { file: string; server: string; field: "headers" | "env"; key: string }[] {
+  return declarations.flatMap(({ name, server, file }) => {
     const [field, entries]: ["headers" | "env", Readonly<Record<string, string>>] =
       server.type === "http" ? ["headers", server.headers ?? {}] : ["env", server.env ?? {}];
     return Object.entries(entries)
       .filter(([, value]) => value !== "" && !value.includes("${"))
-      .map(([key]) => ({ file, server: name, field, key, origin }));
+      .map(([key]) => ({ file, server: name, field, key }));
   });
 }
 
@@ -294,16 +210,7 @@ export function resolveMcpServers(
         return { name, type: "http", url: checkMcpUrl(server.url, name, file).href, headers };
       }
       let command = expand(server.command);
-      if (!isAbsolute(command) && /[/\\]/.test(command)) {
-        if (base === undefined) {
-          throw new McpError(
-            "configuration",
-            `${file}: the command "${command}" has a path and no file to be relative to: write an absolute path or a bare command`,
-            name,
-          );
-        }
-        command = resolve(base, command);
-      }
+      if (!isAbsolute(command) && /[/\\]/.test(command)) command = resolve(base, command);
       return {
         name,
         type: "stdio",

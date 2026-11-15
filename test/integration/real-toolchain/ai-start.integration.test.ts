@@ -64,7 +64,6 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     const info = JSON.parse((await cli(["info", "--json"])).stdout);
     expect(info).toMatchObject({
       agentDir,
-      content: [],
       tools: ["plan-batches"],
       commands: expect.arrayContaining([expect.objectContaining({ name: "skill:review-batches" })]),
       schedules: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],

@@ -5,7 +5,7 @@ import { containerArtifacts } from "../../../src/deploy/container.ts";
 const input = { name: "reviewer", runtime: "node", hasLockfile: true } as const;
 
 describe("deploy/container: the portable image", () => {
-  it("keeps tracked secrets scaffolds without shipping credentials, value files, state or clones", () => {
+  it("keeps tracked secrets scaffolds without shipping credentials, value files or state", () => {
     const artifacts = containerArtifacts(input);
     const rootIgnore = artifacts.find((artifact) => artifact.path === ".dockerignore")!.content;
 
@@ -27,10 +27,9 @@ describe("deploy/container: the portable image", () => {
       // A value file a person named, which no `.env` rule reaches.
       "prod.env",
       ".state/sessions/session.jsonl",
-      "content/app/README.md",
       ".state/channels/telegram.json",
       ".fastagent/dev/.state/agent.sqlite",
-      ".fastagent/start/content/app/README.md",
+      ".fastagent/start/.state/agent.sqlite",
     ];
 
     expect(tracked.filter((path) => !ships(path))).toEqual([]);
@@ -43,7 +42,6 @@ describe("deploy/container: the portable image", () => {
     expect(dockerfile).toMatch(/^ENV FASTAGENT_DEPLOYED=1$/m);
     expect(dockerfile).toMatch(/^ENV FASTAGENT_NAME=reviewer$/m);
     expect(dockerfile).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
-    for (const name of ["FASTAGENT_CONFIG", "FASTAGENT_MODEL", "FASTAGENT_API_KEY"])
-      expect(dockerfile).not.toContain(name);
+    for (const name of ["FASTAGENT_MODEL", "FASTAGENT_API_KEY"]) expect(dockerfile).not.toContain(name);
   });
 });

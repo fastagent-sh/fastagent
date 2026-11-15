@@ -86,7 +86,7 @@ it("every top-level CLI command in src/cli/program.ts has at least one CLI test"
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-  expect(commands.length).toBeGreaterThan(15);
+  expect(commands.length).toBeGreaterThan(10);
 
   const testCorpus = files
     .filter((file) => file.endsWith(".test.ts"))

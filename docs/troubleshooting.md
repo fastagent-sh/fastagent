@@ -18,11 +18,11 @@ The run has no terminal to ask, and no model is set. Set one:
 ```bash
 fastagent dev --model provider/modelId          # this run
 FASTAGENT_MODEL=provider/modelId fastagent dev   # this shell
-# or defaults.model in fastagent.config.ts       # always
+# or model in fastagent.config.ts               # always
 ```
 
-`fastagent models` lists the specs. A **deployment** reads only the config: set `defaults.model` (or `model` in the
-file `--config` names) and deploy again.
+`fastagent models` lists the specs. A **deployment** reads only the config and its environment: set `model` in
+`fastagent.config.ts` and deploy again, or `FASTAGENT_MODEL` on the container.
 
 ### `auth: (none found)`
 

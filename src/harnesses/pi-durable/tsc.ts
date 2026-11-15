@@ -21,8 +21,6 @@ export interface ProjectCompiler {
   files(roots: readonly string[]): Promise<string[]>;
   /** `roots` and what they import, emitted into `outDir` laid out as in the project; `check` type-checks first. */
   emit(outDir: string, roots: readonly string[], check: boolean): Promise<CompilerResult>;
-  /** The declaration of `root` alone, into `outDir`. */
-  declare(outDir: string, root: string): Promise<CompilerResult>;
 }
 
 /** The compiler of the project in `dir`. Refuses, when called, a project without TypeScript 7 or newer. */
@@ -38,7 +36,6 @@ export function projectCompiler(dir: string): ProjectCompiler {
         .filter(Boolean);
     },
     emit: (outDir, roots, check) => tsc(outDir, roots, check ? [] : ["--noCheck"]),
-    declare: (outDir, root) => tsc(outDir, [root], ["--declaration", "--emitDeclarationOnly", "--noCheck"]),
   };
 }
 

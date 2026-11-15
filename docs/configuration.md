@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts and fastagent.json, models and custom providers, content, the prompt, the environment, secrets, ports, paths, tools, extensions, channels and schedules."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions, channels and schedules."
 status: current
 ---
 
@@ -9,20 +9,22 @@ status: current
 | What | Where |
 |---|---|
 | Behavior | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, code in `src/` |
-| Model, providers, shared content/MCP, defaults | `fastagent.config.ts` (the program) |
-| One instance's values | `fastagent.json`, flags, environment variables |
+| Model, providers, MCP servers, starters | `fastagent.config.ts` |
+| Where one instance runs | flags and environment variables |
 | Secrets | `.secrets/.env`, `.secrets/auth.json` (`fastagent login`), provider variables |
 
-## `fastagent.config.ts` and `fastagent.json`
+## `fastagent.config.ts`
 
-`fastagent.config.ts` belongs to the agent's author and is committed. `fastagent.json` belongs to whoever runs one
-instance. One agent serving two customers is one config and two `fastagent.json` files.
+`fastagent.config.ts` belongs to the agent's author and is committed. It is the same wherever the agent runs; what
+differs between deployments comes from the environment, read through [`needs`](#secrets-in-code).
 
 ```ts
 import { defineAgent } from "@fastagent-sh/fastagent";
 
 export default defineAgent({
-  defaults: { model: "openai/gpt-5.5", http: { port: 8787 } },
+  model: "openai/gpt-5.5",
+  thinkingLevel: "high",
+  starters: ["Summarize today's issues"],
 });
 ```
 
@@ -30,62 +32,18 @@ Every key is optional. An unknown key refuses the start.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `model` | none | `provider/modelId` ([model selection](#model-selection)) |
+| `thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
-| `settings` | none | What each instance may choose, as a schema (`obj({ repo: str() })` from `@earendil-works/pi-schema`). Not for secrets |
-| `defaults.model` | none | `provider/modelId` ([model selection](#model-selection)) |
-| `defaults.thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
-| `defaults.starters` | none | Up to 6 example first messages a client may offer |
-| `defaults.settings` | none | Default values of `settings` |
-| `defaults.http.port` | `8787` | Port of `dev` and `start` |
-| `defaults.http.api` | `true` | Serve the [Agent API](#the-agent-api-over-http) under `/v1` when a key is set. `false` turns it off |
+| `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
 
-The name and description of the program come from its `package.json`.
-
-### An instance's `fastagent.json`
-
-It overrides `starters`, `model`, `thinkingLevel`, `http` and `settings`, and adds what only an instance has:
-`name`, `description`, `content`, `mcpServers`, `instructions`, `skills`, `prompts`. Objects merge, arrays replace. A
-bad value refuses the open, naming file and path (`fastagent.json: /http/port expected <= 65535`).
-
-```json
-{
-  "settings": { "repo": "acme/api" },
-  "instructions": ["./notes/house-rules.md"],
-  "skills": ["./extra-skills"],
-  "prompts": ["./extra-prompts"]
-}
-```
-
-| Command | Reads |
-|---|---|
-| `dev`, `invoke`, `info` | the project's `fastagent.json`, or the one `--config` names |
-| `start` | only the one `--config` names |
-| an app | the `config` it passes `openAgent` |
-
-`FASTAGENT_CONFIG` is the same as `--config`; `FASTAGENT_CONFIG_JSON` holds the JSON itself (for a container, which
-has no file for it). Paths in it are relative to the file. An instance only adds: a skill or template with a program's name refuses
-the open. `fastagent build` writes the file's JSON Schema as `fastagent.schema.json`; point `$schema` at it.
-
-Code reads the settings through [`needs`](#secrets-in-code): `needs([], (_, settings) => ...)`.
-
-### Variables and flags
-
-Order: the program's defaults, then `fastagent.json`, then the variable, then the flag. `fastagent info --json` shows
-where each value came from.
-
-| Sets | Variable | Flag |
-|---|---|---|
-| `model` | `FASTAGENT_MODEL` | `--model` |
-| `thinkingLevel` | `FASTAGENT_THINKING_LEVEL` | `--thinking` |
-| `http.port` | `PORT` (`start` only) | `--port` |
-| `http.api` | `FASTAGENT_HTTP_API` | |
-
-`openAgent` reads none of these: give it a configuration.
+The name and description of the agent come from its `package.json`.
 
 ## Model selection
 
 ```txt
---model > FASTAGENT_MODEL > fastagent.json model > defaults.model
+--model > FASTAGENT_MODEL > model in fastagent.config.ts
 ```
 
 With none set, a command in a terminal lets you pick one (and sign in), then prints the line to keep in the config.
@@ -109,7 +67,7 @@ import { defineAgent, needs } from "@fastagent-sh/fastagent";
 const baseUrl = "http://vllm.internal:8000/v1";
 
 export default defineAgent({
-  defaults: { model: "mygw/deepseek-v3" },
+  model: "mygw/deepseek-v3",
   providers: [
     needs(["MYGW_API_KEY"], ({ MYGW_API_KEY }) =>
       createProvider({
@@ -133,42 +91,10 @@ export default defineAgent({
 
 Read the key through `needs`, never write it into the config: the config ships in the image.
 
-## Content
-
-What the agent works on is declared by name:
-
-- `fastagent.config.ts` (committed): GitHub repositories every instance gets (`content`).
-- `fastagent.json`: repositories and local directories of this instance only.
-
-```json
-{
-  "content": {
-    "app": { "github": "acme/app", "ref": "main", "description": "The product. Open pull requests against main." },
-    "notes": { "path": "~/Documents/notes", "description": "My notes. Cite them." }
-  }
-}
-```
-
-| Key | Meaning |
-|---|---|
-| `github` | `owner/repo`, cloned to `content/<name>` in the working directory and updated at each start |
-| `ref` | Branch, tag or commit; default the repository's default branch |
-| `path` | A local directory, used in place (`fastagent.json` only) |
-| `description` | One sentence telling the agent what it is and how to treat it |
-
-- An update never overwrites the agent's work: if git would, the clone is kept as is and the start warns.
-- Private repositories use your git credentials, or `GITHUB_TOKEN`.
-- A project's `AGENTS.md` and skills are files the agent reads there. They never join its prompt; say so in the
-  `description` if it should read them first.
-- Changes to the declarations apply at the next start. A container only gets repositories: a local directory never
-  reaches it.
-
-Edit with `fastagent init --content` and `fastagent content add|remove|list`, or by hand.
-
 ## The system prompt
 
-`SYSTEM.md` is the whole prompt, read for every message. FastAgent appends: the agent's `AGENTS.md`, its skills, its
-content, and (when deployed) what a self-edit changes. Nothing comes from the machine (no `~/.pi/agent`).
+`SYSTEM.md` is the whole prompt, read for every message. FastAgent appends: the agent's `AGENTS.md`, its skills, where
+it works, and (when deployed) what a self-edit changes. Nothing comes from the machine (no `~/.pi/agent`).
 
 Prompt templates (`prompts/<name>.md`) run on a bare `/<name>`, and on a channel anyone can type one. A template named
 like a platform command (`prompts/start.md` for Telegram's `/start`) takes that command over.
@@ -209,10 +135,13 @@ export default needs(
 
 A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions, channels, schedules and providers.
 
+A value that differs between deployments but is not secret (a repository name, a channel id) is read the same way:
+declare it with `optional: true` and fall back to a default in code.
+
 ## Ports and bind address
 
 ```txt
-port   dev:   --port > http.port > 8787           start: --port > PORT > http.port > 8787
+port   dev:   --port > 8787                       start: --port > PORT > 8787
 bind   dev:   --bind > 127.0.0.1                  start: --bind > all interfaces
 ```
 
@@ -238,16 +167,14 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/clien
 | Path | Holds |
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
+| `<root>/` | The agent's working directory |
 | `<root>/.state/` | Storage (`agent.sqlite`), channel and schedule state. One process at a time |
 | `.secrets/` | `.env`, `auth.json`, MCP grants. Never in git or the image |
-| `<workdir>/content/` | Clones of `github` content |
 
 | Flag | Variable | Default |
 |---|---|---|
 | `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`) |
-| `--state <dir>` | `FASTAGENT_STATE_DIR` | `<root>/.state` |
-| `--workdir <dir>` | `FASTAGENT_WORKDIR` | `<root>` |
-| `--name <name>` | `FASTAGENT_NAME` | `fastagent.json`'s `name`, else the program's |
+| `--name <name>` | `FASTAGENT_NAME` | the package's name |
 | | `FASTAGENT_SECRETS_DIR` | `.secrets` (`start`: `.secrets/production`) |
 | | `FASTAGENT_AUTH_PATH` | `<secrets>/auth.json` |
 

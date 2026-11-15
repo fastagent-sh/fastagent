@@ -29,10 +29,7 @@ async function createAgentService(dir: string, options: ServeOptions = {}) {
   return serveAgent(served, options);
 }
 
-async function agentDir(
-  files: Record<string, string> = {},
-  config = `{ defaults: { model: "${CODEX_MODEL}" } }`,
-): Promise<string> {
+async function agentDir(files: Record<string, string> = {}, config = `{ model: "${CODEX_MODEL}" }`): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
   await writeFile(join(dir, "fastagent.config.ts"), `export default ${config};\n`);
   await writeFile(join(dir, "SYSTEM.md"), "You are a test agent.\n");

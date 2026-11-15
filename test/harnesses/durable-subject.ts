@@ -258,7 +258,6 @@ export function durableSubject(): AgentApiSubject {
       registry,
       name: "subject",
       agent: { name: "Subject Program", description: "A subject." },
-      description: "This instance.",
       starters: ["Say hello", "What can you do?"],
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],

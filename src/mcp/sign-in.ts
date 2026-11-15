@@ -3,7 +3,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { type IncomingMessage, type ServerResponse, createServer } from "node:http";
 import { resolve } from "node:path";
 import { agentValues } from "../value-file.ts";
-import { loadMcp, mcpInstanceOf, resolveMcpServers } from "./config.ts";
+import { loadMcp, resolveMcpServers } from "./config.ts";
 import {
   registerClient,
   startAuthorization,
@@ -64,7 +64,7 @@ export async function signInMcp(request: McpSignInRequest): Promise<McpGrantSumm
     throw new McpError("configuration", "Invalid MCP sign-in timeout or callback port", request.server);
   }
   const dir = resolve(request.agentDir);
-  const declarations = await loadMcp(dir, mcpInstanceOf(request));
+  const declarations = await loadMcp(dir);
   const server = httpServer(
     resolveMcpServers(
       declarations,
