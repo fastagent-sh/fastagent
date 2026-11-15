@@ -96,9 +96,6 @@ await agent.close(); // closes the service, then releases the storage
 - `service.fetch` answers the channels' routes and `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
   `@fastagent-sh/fastagent/client`.
-- `listen` points Telegram, Feishu and Lark webhooks at `http.publicUrl` once ready. If you mount `fetch` on your own
-  server, call `service.registerWebhooks("https://example.com/agent")` once it answers. Slack's Request URL is yours
-  to set.
 
 ### Mounting `fetch`
 
@@ -193,16 +190,11 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
   same state, and a definition built for another FastAgent format each refuse the open, naming what to fix.
 - **What a started process gets**: `env`, the declared packages' commands ahead on its `PATH`, the declared secrets, a
   stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
-- **Not `dev`, not a deployment.** A channel that names no way of receiving receives by webhook.
 - **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
   `sessions.cancel` was stopping it.
-- **`serve()`.** `listen` defaults to `http.port`, else 8787, and with `http.publicUrl` registers the webhook channels
-  once ready. `registerWebhooks(baseUrl?)` sets the URL on every call and rejects only a `baseUrl` that is not an
-  absolute http(s) URL; a platform's refusal is a `failed` outcome in `service.webhooks`. Slack's Request URL (and
-  Lark's without its config API) counts as `registered` once `channels.<name>.app.url` is the URL needed, or once the
-  platform sent an authenticated request to it; otherwise it is `manual`, with the URL to set. `close()` ends the
-  API's event streams, gives requests in flight 500 ms, then stops the channels and schedules. With
-  `http.api: false`, `serve` refuses `apiKeys`.
+- **`serve()`.** `listen` defaults to `http.port`, else 8787. A webhook channel's URL is yours to point the platform
+  at. `close()` ends the API's event streams, gives requests in flight 500 ms, then stops the channels and schedules.
+  With `http.api: false`, `serve` refuses `apiKeys`.
 - **Users kept apart are yours.** An app serving its own users over one instance checks every session id a request
   names, a fork's source included, and that holds only for an agent whose tools reach neither its storage nor its
   files.

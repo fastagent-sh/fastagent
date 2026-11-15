@@ -14,7 +14,7 @@ import { ensureStateHome } from "../state-file.ts";
 import { createTurnQueue } from "./turn-queue.ts";
 
 /** The directory of the channel `name`'s own state under `stateRoot`: its context's `stateDir`. */
-export function channelStateDir(stateRoot: string, name: string): string {
+function channelStateDir(stateRoot: string, name: string): string {
   return join(stateRoot, "channels", name);
 }
 

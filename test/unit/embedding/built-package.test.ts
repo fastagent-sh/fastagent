@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { loadBuiltDefinition, loadProjectBuild } from "../../../src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "../../harnesses/probe-package.ts";
 import { openAgent } from "../../../src/harnesses/pi-durable/serve.ts";
+import { DEFINITION_FORMAT } from "../../../src/harnesses/pi-durable/definition.ts";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -75,6 +76,14 @@ describe("an installed package, opened as instances", () => {
 
   it("is the package's default export, read where it is installed", () => {
     expect(definition).toMatchObject({ name: "@acme/probe", version: "1.0.0", dir: installed });
+  });
+
+  it("refuses a package built in another definition format, naming the FastAgent that built it", async () => {
+    const older = { ...definition, format: DEFINITION_FORMAT - 1, builtWith: "0.31.0" };
+    await expect(openAgent(older, { root: scratch(tmpdir(), "fa-older-format-"), offline: true })).rejects.toThrow(
+      `@acme/probe was built as definition format ${DEFINITION_FORMAT - 1}, and this FastAgent opens format ` +
+        `${DEFINITION_FORMAT}: install @fastagent-sh/fastagent 0.31.0`,
+    );
   });
 
   it("runs two instances side by side that share no state or working directory, and writes nothing into the package", async () => {

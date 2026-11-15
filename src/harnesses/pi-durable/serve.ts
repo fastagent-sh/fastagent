@@ -120,7 +120,7 @@ export interface OpenedServing {
   code: BuiltDefinition;
   /** The configuration this instance opened with: the program's defaults and the instance's over them. */
   config: EffectiveConfig;
-  /** The secrets it was given that hold a value: what its code was built with, and its webhooks are pointed with. */
+  /** The secrets it was given that hold a value: what its code was built with. */
   secrets: Readonly<Record<string, string>>;
   models: ModelEnvironment;
   /** What the agent works on, resolved for this instance. */
@@ -196,7 +196,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, { ...config, dev: options.runsAs.dev });
+  const code = buildDefinition(definition, secrets, config);
   // FastAgent's own work for the instance (cloning content, finding its files) runs in this process's environment and
   // the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };

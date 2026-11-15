@@ -7,17 +7,9 @@ import { isCancel, log as clackLog, password, text } from "@clack/prompts";
 import { feishuSetup } from "../channels/feishu/setup.ts";
 import { larkSetup } from "../channels/lark/setup.ts";
 import { slackSetup } from "../channels/slack/setup.ts";
-import {
-  type ChannelSetup,
-  type HeldValues,
-  type PastedValues,
-  SetupRefused,
-  type SetupGuide,
-  type SetupWay,
-} from "../channels/setup.ts";
+import { type ChannelSetup, type PastedValues, SetupRefused } from "../channels/setup.ts";
 import { telegramSetup } from "../channels/telegram/setup.ts";
 import { openExternalUrl } from "../open-url.ts";
-import { startCloudflareTunnel } from "../tunnel.ts";
 import { loadEnvValues, trackedValueFileNote, unprotectedSecretsNote, writeValues } from "../value-file.ts";
 
 const SETUPS = {
@@ -39,13 +31,10 @@ export interface SetUpChannelInput {
   agentDir: string;
   /** The value file the credentials are kept in. */
   file: string;
-  way: SetupWay;
   /** Whether this is the development instance. */
   dev: boolean;
   /** The command that runs this setup again. */
   rerun: string;
-  /** Where the platform will reach the instance, when its configuration names it. */
-  publicUrl?: string;
   /** Interactive terminal mode prompts for missing values; non-interactive mode validates `file` and returns missing steps. */
   interactive: boolean;
 }
@@ -75,12 +64,10 @@ export type SetUpOutcome =
       interactiveCommand: string;
     };
 
-/** The variables a channel's app needs for `way`, in the order setup asks for them. */
-export function setupNames(kind: SetupKind, way: SetupWay): string[] {
-  const plan = SETUPS[kind]({ way, appName: "", dev: true, rerun: "", startTunnel: startCloudflareTunnel });
-  return plan.values.flatMap((value) =>
-    value.kind === "paste" ? value.fields.map((one) => one.name) : value.kind === "create" ? value.names : [value.name],
-  );
+/** The variables a channel's app needs, in the order setup asks for them. */
+export function setupNames(kind: SetupKind): string[] {
+  const plan = SETUPS[kind]({ appName: "", dev: true });
+  return plan.values.flatMap((value) => (value.kind === "paste" ? value.fields.map((one) => one.name) : value.names));
 }
 
 const terminalCreatePerson = {
@@ -93,14 +80,7 @@ const terminalCreatePerson = {
 
 export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutcome> {
   const { kind, agentDir, file, interactive } = input;
-  const plan = SETUPS[kind]({
-    way: input.way,
-    appName: basename(agentDir),
-    dev: input.dev,
-    rerun: input.rerun,
-    startTunnel: startCloudflareTunnel,
-    ...(input.publicUrl === undefined ? {} : { publicUrl: input.publicUrl }),
-  });
+  const plan = SETUPS[kind]({ appName: basename(agentDir), dev: input.dev });
   const written: string[] = [];
   const kept: string[] = [];
   /** A directory fastagent does not own that now holds a secret: said once, however many values went there. */
@@ -137,15 +117,8 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
   };
 
   const missing: MissingSetupStep[] = [];
-  const deferredMakes: { name: string; make(): string }[] = [];
 
   for (const value of plan.values) {
-    if (value.kind === "make") {
-      if (held.has(value.name)) kept.push(value.name);
-      else if (interactive) await keep([{ name: value.name, value: value.make() }], false);
-      else deferredMakes.push(value);
-      continue;
-    }
     if (value.kind === "create") {
       if (value.names.every((name) => held.has(name))) {
         kept.push(...value.names);
@@ -192,19 +165,8 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
         say(`${names.join(", ")} in ${file} is refused (${error.message})`);
       }
     }
-    if (value.capture !== undefined && missing.length === 0) {
-      const captured = await value.capture(held);
-      if (captured !== undefined) {
-        await keep([{ name: names[0] as string, value: captured }], true);
-        say(`${names[0]} captured and saved to ${file}`);
-        continue;
-      }
-    }
     if (!interactive) {
-      if (missing.length > 0 && (typeof value.guide === "function" || value.capture !== undefined)) {
-        break;
-      }
-      const guide = guideOf(value, held);
+      const { guide } = value;
       missing.push({
         label: value.label,
         fields: value.fields.map((f) => ({ name: f.name, label: f.label, secret: f.secret !== false })),
@@ -214,7 +176,7 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
       });
       continue;
     }
-    await askAtTerminal([value], held, accept);
+    await askAtTerminal([value], accept);
   }
 
   if (missing.length > 0) {
@@ -225,26 +187,18 @@ export async function setUpChannel(input: SetUpChannelInput): Promise<SetUpOutco
       interactiveCommand: input.rerun,
     };
   }
-  for (const one of deferredMakes) {
-    await keep([{ name: one.name, value: one.make() }], false);
-  }
-
   if (unprotected !== undefined)
     say(`note: ${unprotectedSecretsNote(unprotected, "where this instance keeps its values")}`);
   if (tracked !== undefined) say(`note: ${trackedValueFileNote(tracked)}`);
   return { status: "done", written, kept, after: await plan.finish(held) };
 }
 
-const guideOf = (step: PastedValues, held: HeldValues): SetupGuide =>
-  typeof step.guide === "function" ? step.guide(held) : step.guide;
-
 async function askAtTerminal(
   steps: readonly PastedValues[],
-  held: HeldValues,
   accept: (step: PastedValues, values: Record<string, string>) => Promise<void>,
 ): Promise<void> {
   for (const step of steps) {
-    const guide = guideOf(step, held);
+    const { guide } = step;
     clackLog.info(guide.instructions);
     if (guide.url !== undefined) {
       say(`opening ${guide.url}`);

@@ -37,7 +37,6 @@ export interface InstanceFlags {
   config?: string;
   envFile?: string;
   thinking?: string;
-  ingress?: string;
 }
 
 const INSTANCE_LOCATION: readonly (readonly [keyof InstanceFlags, string, string])[] = [
@@ -69,16 +68,12 @@ const THINKING_FLAG: FlagSpec = {
   description:
     "the reasoning effort, over the configuration's (FASTAGENT_THINKING_LEVEL): off, minimal, low, medium, high, xhigh, max",
 };
-const INGRESS_FLAG: FlagSpec = {
-  flags: "--ingress <channel=way,…>",
-  description: "how each named channel receives, webhook or connection, over the configuration's (FASTAGENT_INGRESS)",
-};
 
 /** The flags of a command that opens, or reads the state of, an instance. */
 export const INSTANCE_FLAGS: readonly FlagSpec[] = [NAME_FLAG, ROOT_FLAG, STATE_FLAG, WORKDIR_FLAG];
 
 /** The flags of a command that runs an instance, or reports how it would run: layers over its configuration. */
-export const LAYER_FLAGS: readonly FlagSpec[] = [THINKING_FLAG, INGRESS_FLAG];
+export const LAYER_FLAGS: readonly FlagSpec[] = [THINKING_FLAG];
 
 /** The flags of a command that reads or edits what an instance works on: where it keeps its clones, and its file. */
 export const CONTENT_FLAGS: readonly FlagSpec[] = [
@@ -103,7 +98,6 @@ export function instanceFlags(flags: Record<string, unknown>): InstanceFlags {
     "name" as const,
     "envFile" as const,
     "thinking" as const,
-    "ingress" as const,
   ]) {
     if (typeof flags[key] === "string") picked[key] = flags[key];
   }
@@ -183,13 +177,9 @@ function enterInstanceLocation(flags: InstanceFlags = {}): void {
     if (key === "config" && given !== undefined) delete process.env[INSTANCE_CONFIG_JSON_ENV];
     if (key === "root" || key === "workdir") makeDirectory(path, given === undefined ? variable : flag);
   }
-  for (const [given, flag, variable] of [
-    [flags.thinking, "--thinking", "FASTAGENT_THINKING_LEVEL"],
-    [flags.ingress, "--ingress", "FASTAGENT_INGRESS"],
-  ] as const) {
-    if (given === undefined) continue;
-    if (given.trim() === "") failUsage(`${flag} needs a value`);
-    process.env[variable] = given;
+  if (flags.thinking !== undefined) {
+    if (flags.thinking.trim() === "") failUsage("--thinking needs a value");
+    process.env.FASTAGENT_THINKING_LEVEL = flags.thinking;
   }
   const name = flags.name ?? enteredInstanceName();
   if (name === undefined) return;

@@ -25,7 +25,7 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | Facts about the project it works on | the project's own files, declared as [content](configuration.md#content) |
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
-| Chat and webhooks | `src/channels/` (use a built-in channel) |
+| Chat channels | `src/channels/` (use a built-in channel) |
 | Timed work | `src/schedules/`, and the `wake` tool |
 | Model and defaults | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
@@ -204,7 +204,7 @@ restart it. Restart it yourself after editing `lib/`, which is not watched. Only
 
 With `--json`, `channels setup` validates `.secrets/.env` (or `--env-file`) statelessly: when credentials are missing or
 refused it exits 2 with `need_user_action` (env var names, guide URL, and `rerun` command); once written, re-running
-`--json` verifies them and exits 0. Then run `fastagent dev --no-input` (no tunnel needed) and have the owner send a
+`--json` verifies them and exits 0. Then run `fastagent dev --no-input` (no public URL needed) and have the owner send a
 real message. A passed URL check is not a conversation.
 
 Chat replies are sent for you. Use a send tool (`telegram_send`, `slack_send`, …) only to reach someone outside the

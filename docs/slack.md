@@ -1,6 +1,6 @@
 ---
 title: Slack channel
-description: "Run an agent as a Slack app: create the app, Socket Mode or webhook, when it answers, threads and history, files, rendering, and sending from schedules."
+description: "Run an agent as a Slack app: create the app, Socket Mode, when it answers, threads and history, files, rendering, and sending from schedules."
 status: current
 ---
 
@@ -19,18 +19,16 @@ fastagent dev                    # Socket Mode: no public URL needed
 `channels setup slack` opens Slack's *create an app* page with everything filled in:
 1. Pick the workspace, click **Create**, then **Install App → Install to Workspace → Allow**.
 2. Paste the **Bot User OAuth Token** (`xoxb-…`).
-3. Paste the **App-Level Token**: Basic Information → App-Level Tokens → *Generate*, scope `connections:write`. For a
-   webhook app, it asks for the **Signing Secret** instead.
+3. Paste the **App-Level Token**: Basic Information → App-Level Tokens → *Generate*, scope `connections:write`.
 
 Each value is checked with Slack before it is kept. A coding agent runs `channels setup slack --json` (exit 2 with the
 manifest link and env var names until the owner puts them in `.secrets/.env` or runs `channels setup slack` in a
 terminal). `fastagent dev` runs the setup itself the first time.
 
-| Credential | Used for | Needed for |
-|---|---|---|
-| `SLACK_BOT_TOKEN` (`xoxb-…`) | everything the bot sends and reads | both ways |
-| `SLACK_APP_TOKEN` (`xapp-…`) | opening the Socket Mode connection | Socket Mode |
-| `SLACK_SIGNING_SECRET` | checking each webhook request | webhook |
+| Credential | Used for |
+|---|---|
+| `SLACK_BOT_TOKEN` (`xoxb-…`) | everything the bot sends and reads |
+| `SLACK_APP_TOKEN` (`xapp-…`) | opening the Socket Mode connection |
 
 **Leave token rotation off** (it is off in the app setup creates): it cannot be turned off again, and a rotating
 (`xoxe.…`) token is refused. If it is on, create the app again from the setup's link.
@@ -44,16 +42,14 @@ Bot Token Scopes: `app_mentions:read`, `assistant:write`, `chat:write`, `files:r
 
 </details>
 
-## Socket Mode or webhook
+## Socket Mode
 
-| | Needs | Used by default in |
-|---|---|---|
-| Socket Mode | the app-level token, no public URL | `dev` |
-| Webhook at `POST /slack` | the signing secret, a public URL | `start` and deployments |
+The app receives over a Socket Mode connection, in `dev` and in a deployment alike, so it needs no public URL. Slack
+hands each event to one of an app's connections, so give a deployment an app of its own:
+`fastagent channels setup slack --env-file prod.env`.
 
-Change it with `channels.slack.ingress`. An app in Socket Mode receives only over the socket, so give each instance
-that uses webhooks (a deployment) its own app: `channels setup slack --config prod.json`. A webhook app's
-**Request URL** is yours to set under Event Subscriptions, at `<your URL>/slack`; `deploy` prints it.
+`slackChannel` receives by the Events API at `POST /slack` instead, verified with the app's signing secret. FastAgent
+does not set its Request URL: set it under Event Subscriptions yourself, and turn Socket Mode off.
 
 If Socket Mode connects but nothing answers, Socket Mode may be off in the app's settings
 ([troubleshooting](troubleshooting.md#slack-socket-mode-is-connected-but-nothing-answers)).
@@ -114,27 +110,20 @@ tools and keeps your channel file.
 ## The channel file
 
 ```ts
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import { type SlackChannelOptions, slackChannel, slackSocketChannel } from "@fastagent-sh/fastagent/slack";
+import { needs } from "@fastagent-sh/fastagent";
+import { slackSocketChannel } from "@fastagent-sh/fastagent/slack";
 
-// Your policy, the same whichever way the channel receives.
-const policy: Pick<SlackChannelOptions, "rendering" | "onError"> = {
-  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-  // No session modes: an answer attaches to its question with a thread, and that thread is the conversation.
-  onError: (failed) => `⚠️ ${failed.details}`, // development transparency
-};
-
-export default byIngress({
-  webhook: needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
-    slackChannel({ botToken: secrets.SLACK_BOT_TOKEN, signingSecret: secrets.SLACK_SIGNING_SECRET, ...policy }),
-  ),
-  connection: needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
-    slackSocketChannel({ botToken: secrets.SLACK_BOT_TOKEN, appToken: secrets.SLACK_APP_TOKEN, ...policy }),
-  ),
-});
+export default needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
+  slackSocketChannel({
+    botToken: secrets.SLACK_BOT_TOKEN,
+    appToken: secrets.SLACK_APP_TOKEN,
+    rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+    // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+    // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+    // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+    onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+  }),
+);
 ```
 
 `welcome` sets the one-time greeting on a user's first DM (`false` turns it off). `reactionAck` sets or turns off the

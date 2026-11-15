@@ -18,25 +18,14 @@ export interface AgentDefaults<Settings = unknown> {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: {
-    /** The port a serve listens on, for its channels' webhooks and its health check. */
+    /** The port a serve listens on: its health check, the Agent API, and any channel that serves routes. */
     port?: number;
     /**
      * Whether a serve answers the Agent API under `/v1` with a key (default true): `dev`, `start`, and every deployment.
      * `false` keeps it to its channels and schedules, whatever key its environment holds.
      */
     api?: boolean;
-    /**
-     * The public base URL the platforms reach this instance at, any mount prefix included (`https://x.fly.dev/agent`):
-     * a serve points each webhook channel there. Unset, none is pointed. Never inferred from the environment.
-     */
-    publicUrl?: string;
   };
-  /**
-   * Each channel by its file's name: how it receives, for a channel that can do either (`byIngress`). Unset, `dev`
-   * receives by WebSocket (no public URL there) and everything else by webhook, which a host that wakes on a request
-   * needs.
-   */
-  channels?: Record<string, { ingress?: Ingress }>;
   /** Values of the program's `settings`; an instance gives the rest. */
   settings?: Partial<Settings>;
 }
@@ -116,30 +105,6 @@ export function needs<const S extends readonly SecretSpec[], T, Settings = Reado
 
 export function isNeeds(value: unknown): value is Needs<unknown> {
   return (value as { kind?: unknown } | null)?.kind === "fastagent.needs";
-}
-
-/** How a channel receives: inbound HTTP requests, or a connection it opens itself and keeps. */
-export type Ingress = "webhook" | "connection";
-
-/** A channel that can receive either way, each way's module (or `needs` around it) under its name. */
-export interface ByIngress<T = unknown> {
-  readonly kind: "fastagent.by-ingress";
-  readonly webhook: T | Needs<T>;
-  readonly connection: T | Needs<T>;
-}
-
-/**
- * Default-export from `src/channels/<name>.ts` a channel that receives either way: each instance takes the one its
- * configuration names (`channels.<name>.ingress`), and without one `dev` takes `connection` and everything else
- * `webhook`. Each way declares its own secrets, so an instance is asked only for its way's.
- * @public
- */
-export function byIngress<T>(ways: { webhook: T | Needs<T>; connection: T | Needs<T> }): ByIngress<T> {
-  return { kind: "fastagent.by-ingress", webhook: ways.webhook, connection: ways.connection };
-}
-
-export function isByIngress(value: unknown): value is ByIngress {
-  return (value as { kind?: unknown } | null)?.kind === "fastagent.by-ingress";
 }
 
 /** What `src/schedules/<name>.ts` default-exports. */

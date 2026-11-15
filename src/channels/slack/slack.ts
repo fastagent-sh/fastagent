@@ -2,7 +2,6 @@
  * First-party Slack channel: durable turns/context, files, and edited previews, over one runtime, with two ways in: the
  * Events API's signed HTTP Request URL, and Socket Mode (socket.ts).
  */
-import { recordReached } from "../webhook-evidence.ts";
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
 import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
@@ -652,7 +651,10 @@ function createSlackRuntime(
   };
 }
 
-/** Build a Slack channel that receives by the Events API's HTTP Request URL: signed requests in, durable turns out. */
+/**
+ * Build a Slack channel that receives by the Events API's HTTP Request URL at `POST /slack`: signed requests in,
+ * durable turns out. Whoever hosts it sets that Request URL on the app: FastAgent registers no URL.
+ */
 export function slackChannel(options: SlackChannelOptions): ChannelModule {
   const { signingSecret } = options;
   const policy = resolveSlackPolicy(options);
@@ -660,7 +662,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
     if (!signingSecret)
       throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
     const runtime = createSlackRuntime(policy, ctx);
-    const { stateDir: stateHome } = ctx;
     const handler = createJsonWebhookRoute<SlackEventEnvelope>({
       maxBytes: MAX_EVENT_BYTES,
       turnsIdle: runtime.turnsIdle,
@@ -671,8 +672,6 @@ export function slackChannel(options: SlackChannelOptions): ChannelModule {
           log.warn("[slack] rejected an event with an invalid/stale X-Slack-Signature");
           return text("invalid signature\n", 401);
         }
-        // Slack signed it: the Request URL a person set reaches this instance, at the address it was sent to.
-        recordReached(stateHome, request);
         return undefined;
       },
       handle: async (_request, _raw, envelope) => {

@@ -32,7 +32,7 @@ export function enterAgentEnv(agentDir: string): void {
  * Load the agent's `.env` ({@link valueFileOf}) into `process.env` ({@link applyEnvValues}), treating a MISSING file as
  * normal (no .env). Commands want {@link enterAgentEnv}, which is this plus the proxy that `.env` may declare.
  */
-export function loadDotEnv(agentDir: string): void {
+function loadDotEnv(agentDir: string): void {
   const path = valueFileOf(agentDir);
   if (path === undefined) return;
   applyEnvValues(loadEnvValues(path)); // ONE definition of "a missing value file is normal" (loadEnvValues)

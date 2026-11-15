@@ -1,6 +1,6 @@
 ---
 title: Telegram channel
-description: "Run an agent as a Telegram bot: create the bot, receive by polling or webhook, group behavior, stopping a turn, files, and sending messages from schedules."
+description: "Run an agent as a Telegram bot: create the bot, group behavior, stopping a turn, files, and sending messages from schedules."
 status: current
 ---
 
@@ -24,16 +24,15 @@ exit 0 once valid). `fastagent dev` runs the setup itself the first time.
 choose the bot, choose Disable, then **remove the bot from each group and add it back**. Setup and startup warn when
 it is on.
 
-## Polling or webhook
+## Polling
 
-| | Needs | Used by default in |
-|---|---|---|
-| Long polling | `TELEGRAM_BOT_TOKEN` | `dev` |
-| Webhook at `https://<host>/telegram` | also `TELEGRAM_SECRET_TOKEN` (setup makes one) | `start` and deployments |
+The bot polls Telegram for its updates, in `dev` and in a deployment alike, so it needs no public URL. One bot is
+polled by one process: a second poller of the same bot ends with `another process polls this bot`. Give a deployment
+a bot of its own (`fastagent channels setup telegram --env-file prod.env`).
 
-Change it with `channels.telegram.ingress` (`webhook` or `connection`). One bot is polled by one process or reached
-by one webhook: a second poller of the same bot ends with `another process polls this bot`. A deployment points
-the webhook at itself on every start.
+`telegramChannel` receives by webhook at `POST /telegram` instead, verified with a `secretToken` of your choosing.
+FastAgent does not call `setWebhook` for it: point the bot at the URL yourself, with the same `secret_token`. Polling
+removes the bot's webhook when it starts.
 
 ## When it answers
 
@@ -71,24 +70,15 @@ A schedule or a wake-up has no chat to reply in: its prompt names the chat id, a
 ## The channel file
 
 ```ts
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import { telegramChannel, telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
+import { needs } from "@fastagent-sh/fastagent";
+import { telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
 
-// Optional. The scaffold uses this for development transparency.
-const onError = (failed: { details: string }) => `⚠️ ${failed.details}`;
-
-export default byIngress({
-  webhook: needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
-    telegramChannel({
-      secretToken: secrets.TELEGRAM_SECRET_TOKEN,
-      botToken: secrets.TELEGRAM_BOT_TOKEN,
-      onError,
-    }),
-  ),
-  connection: needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
-    telegramPollingChannel({ botToken: secrets.TELEGRAM_BOT_TOKEN, onError }),
-  ),
-});
+export default needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
+  telegramPollingChannel({
+    botToken: secrets.TELEGRAM_BOT_TOKEN,
+    onError: (failed) => `⚠️ ${failed.details}`, // optional; the scaffold shows details for development
+  }),
+);
 ```
 
 Customize with `route(update)`: return `null` to ignore an update, or `{ conversation?, chatId?, threadId?, text? }`.
@@ -96,14 +86,12 @@ A custom route decides group summoning itself; reuse `defaultTelegramRoute` and 
 
 ```ts
 import { needs } from "@fastagent-sh/fastagent";
-import { defaultTelegramRoute, telegramChannel, telegramEnvelope } from "@fastagent-sh/fastagent/telegram";
+import { defaultTelegramRoute, telegramEnvelope, telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
 
 const botUsername = "my_bot";
 
-// The policy is the same for both ways; this shows the webhook way, and `telegramPollingChannel` takes it unchanged.
-export default needs(["TELEGRAM_BOT_TOKEN", "TELEGRAM_SECRET_TOKEN"], (secrets) =>
-  telegramChannel({
-    secretToken: secrets.TELEGRAM_SECRET_TOKEN,
+export default needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
+  telegramPollingChannel({
     botToken: secrets.TELEGRAM_BOT_TOKEN,
     botUsername,
     route(update) {

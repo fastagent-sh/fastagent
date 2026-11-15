@@ -424,31 +424,6 @@ function textIfExists(path: string): string | undefined {
   return existsSync(path) ? readFileSync(path, "utf8") : undefined;
 }
 
-/**
- * Set what the instance configuration says of the channel `channel` (`channels.<channel>` in `fastagent.json` or
- * `instance.config`).
- */
-export async function setChannelConfig(
-  agentDir: string,
-  channel: string,
-  entry: { ingress?: "webhook" | "connection"; app?: { id: string; team?: string; url?: string } },
-  instance?: Pick<ContentInstance, "config">,
-): Promise<void> {
-  const config = instance?.config ?? join(resolveAgentDir(agentDir), INSTANCE_CONFIG_FILE);
-  await withLockedFile(
-    config,
-    async (): Promise<LockResult<undefined>> => {
-      const text = textIfExists(config);
-      const file = text === undefined ? {} : parseInstanceFile(text, config);
-      const channels = (file.channels ?? {}) as Record<string, Record<string, unknown>>;
-      const next = { ...file, channels: { ...channels, [channel]: { ...channels[channel], ...entry } } };
-      writeFileAtomic(config, `${JSON.stringify(next, null, 2)}\n`, fileMode(config));
-      return { result: undefined };
-    },
-    { mode: fileMode(config), create: false },
-  );
-}
-
 /** The mode a rewrite of `path` keeps: its own, or the definition's default for a new one. */
 function fileMode(path: string): number {
   const stat = statSync(path, { throwIfNoEntry: false });

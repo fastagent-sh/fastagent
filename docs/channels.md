@@ -19,24 +19,17 @@ A channel turns a platform's events into messages for the agent, and sends back 
 `add` writes the channel file (`src/channels/<name>.ts`, yours to edit) and its send tool. The first `fastagent dev`
 then asks for the bot's credentials, or run `fastagent channels setup <name>` yourself.
 
-## Running locally
-
-`fastagent dev` needs no public URL: Telegram is polled, and Slack, Feishu and Lark hold a connection. To try the
-webhook path instead, set the channel to `webhook` and run `fastagent dev --tunnel` (needs `cloudflared`): it opens a
-tunnel and points Telegram and Feishu at it. Slack's Request URL is printed for you to paste.
-
-Rename a channel file to `<name>.ts.disabled` to turn it off. A channel that fails to load stops `dev` and `start`.
-
 ## How a channel receives
 
-A channel file can serve both ways, and the instance chooses:
+A first-party channel opens its own connection to the platform: Telegram is polled, and Slack, Feishu and Lark hold a
+connection. It needs no public URL, so `fastagent dev` on a laptop and `fastagent start` in a container run the same
+channel file. The process must stay running to receive.
 
-| Way | Needs | Default for |
-|---|---|---|
-| `connection` (polling, Socket Mode, WebSocket) | an always-on process, no public URL | `dev` |
-| `webhook` | a public HTTPS URL; can wake a host that scales to zero | `start` and deployments |
+Each platform also has a webhook factory (`telegramChannel`, `slackChannel`, `feishuChannel`, `larkChannel`) that
+serves a route and verifies the platform's signature. FastAgent does not register its URL: whoever hosts it points the
+platform at `https://<host>/<channel>` and keeps the extra secret the factory takes.
 
-Override it with `channels.<name>.ingress` in `fastagent.json`, or `--ingress telegram=webhook`.
+Rename a channel file to `<name>.ts.disabled` to turn it off. A channel that fails to load stops `dev` and `start`.
 
 ## Good to know
 

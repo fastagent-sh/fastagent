@@ -262,12 +262,11 @@ describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
     const ctx = channelContext({} as Agent, "/tmp/unused-feishu-construction", "feishu");
     expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
-    // `start` with nothing set reaches this through the scaffold: the error names both ways out.
     expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /receives by webhook .*`fastagent channels setup feishu --ingress webhook` captures FEISHU_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,
+      /receives by webhook .*FEISHU_VERIFICATION_TOKEN.*feishuWebSocketChannel/,
     );
     expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /LARK_VERIFICATION_TOKEN.*channels\.<name>\.ingress to "connection"/,
+      /LARK_VERIFICATION_TOKEN.*larkWebSocketChannel/,
     );
   });
 });
@@ -275,7 +274,7 @@ describe("construction fails closed", () => {
 describe("WebSocket ingress optional SDK resolution", () => {
   afterEach(() => vi.doUnmock("@larksuiteoapi/node-sdk"));
 
-  it("fails the connection naming the package to install and the webhook way out", async () => {
+  it("fails the connection naming the package to install", async () => {
     vi.doMock("@larksuiteoapi/node-sdk", () => {
       throw new Error("Cannot find package '@larksuiteoapi/node-sdk'");
     });
@@ -284,7 +283,7 @@ describe("WebSocket ingress optional SDK resolution", () => {
     const channel = feishuWebSocketChannel({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
     const connection = channel.connect(ctx, new AbortController().signal);
     await expect(connection.ready).rejects.toThrow(
-      /feishu websocket could not load @larksuiteoapi\/node-sdk .*`npm install @larksuiteoapi\/node-sdk`.*channels\.feishu\.ingress to "webhook"/,
+      /feishu websocket could not load @larksuiteoapi\/node-sdk .*`npm install @larksuiteoapi\/node-sdk`/,
     );
     await expect(connection.closed).rejects.toThrow("@larksuiteoapi/node-sdk");
   });

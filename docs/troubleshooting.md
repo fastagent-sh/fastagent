@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, webhooks, sessions, schedules, and deployment."
+description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, channels, sessions, schedules, and deployment."
 status: current
 ---
 
@@ -59,12 +59,6 @@ Prompt, `AGENTS.md`, skill and template edits apply on the next message. Code (`
 `.secrets/.env`) restarts the worker once running messages finish. Anything else, such as `lib/`, needs a manual
 restart. After a broken edit, fix it and save again.
 
-### Webhooks do not arrive locally
-
-You need `fastagent dev --tunnel` (with `cloudflared`) and the channel set to `webhook`. A new tunnel has a new URL:
-restart it to re-register, or use your own stable URL as `http.publicUrl`. Check the path (`/telegram`, `/slack`,
-`/feishu`, `/lark`) and that the platform's secret matches `.secrets/.env`.
-
 ### A schedule did not fire
 
 Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A container
@@ -84,8 +78,6 @@ Set `HTTPS_PROXY` (in the shell or `.secrets/.env`). Loopback is never proxied; 
 
 ### Telegram
 
-- **Webhook returns 401:** `TELEGRAM_SECRET_TOKEN` does not match what was registered. Restart the serve so it
-  registers again.
 - **Polling ends with "another process polls this bot":** another process polls or a deployment receives for this
   bot. Stop it, or use a separate dev bot.
 - **No reply:** check the token, that the bot may post in the chat, that the message summons it (private, mention or
@@ -94,9 +86,7 @@ Set `HTTPS_PROXY` (in the shell or `.secrets/.env`). Loopback is never proxied; 
 
 ### Slack
 
-- **401:** `SLACK_SIGNING_SECRET` does not match the app's, or a proxy rewrote the body.
-- **No events:** reinstall after scope changes, invite the app to the channel, and check its event subscriptions and
-  Request URL (`https://…/slack`). Click **Retry** in Event Subscriptions once the instance is up.
+- **No events:** reinstall after scope changes, invite the app to the channel, and check its event subscriptions.
 
 ### Slack Socket Mode is connected but nothing answers
 
@@ -106,8 +96,8 @@ another process uses the same app and takes some messages: give each instance it
 
 ### Feishu / Lark
 
-- **URL verification fails:** the service must be running at the saved URL with the right path, and the Verification
-  Token and Encrypt Key must match the console (set both or neither).
+- **No events:** in Events & Callbacks the app must use long connection and subscribe to `im.message.receive_v1`, and
+  the version that does must be published.
 - **Group messages ignored:** the app lacks `im:message.group_msg`. Run `fastagent channels setup feishu` to see
   missing scopes, approve them, and publish a new version.
 

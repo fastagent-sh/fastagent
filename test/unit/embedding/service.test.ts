@@ -51,7 +51,8 @@ describe("serveAgent over an opened directory", () => {
     const service = await createAgentService(dir);
     try {
       expect(await (await service.fetch(new Request("http://h/hook", { method: "POST" }))).text()).toBe("from-channel");
-      expect((await service.fetch(new Request("http://h/health"))).status).toBe(200);
+      const health = await service.fetch(new Request("http://h/health"));
+      expect([health.status, await health.json()]).toEqual([200, { status: "ok" }]);
       expect(service.channels.routes).toEqual(["hook"]);
       // Only routes that verify their caller are served: the agent has no network binding of its own.
       expect(Object.keys(service.routes).sort()).toEqual(["GET /health", "POST /hook"]);
@@ -68,37 +69,6 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
     const service = await createAgentService(dir);
     try {
       expect(service.schedules).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
-    } finally {
-      await service.close();
-    }
-  });
-});
-
-describe("a serve points its webhook channels at itself", () => {
-  /** A `telegram` route channel, as the first-party one is reached, and the secrets that point it. */
-  async function telegramService(config: Record<string, unknown> = {}, secrets: Record<string, string> = {}) {
-    const dir = await agentDir({
-      "src/channels/telegram.mjs": `export default () => ({ "POST /telegram": () => new Response("ok") });`,
-    });
-    const served = await openServing(await loadSourceDefinition(dir), {
-      secrets,
-      env: {},
-      ownEnv: process.env,
-      runsAs: NOT_HOSTED,
-      storage: "memory",
-      config: { values: config, label: "test" },
-    });
-    opened.push(served.agent);
-    return serveAgent(served);
-  }
-  const health = async (service: { fetch(r: Request): Promise<Response> }) =>
-    (await service.fetch(new Request("http://h/health"))).json();
-
-  it("reports every webhook channel pending in /health until a registration ends, as JSON", async () => {
-    const service = await telegramService();
-    try {
-      expect(await health(service)).toEqual({ status: "ok", webhooks: [{ channel: "telegram", outcome: "pending" }] });
-      expect(service.webhooks).toEqual([{ channel: "telegram", outcome: "pending" }]);
     } finally {
       await service.close();
     }

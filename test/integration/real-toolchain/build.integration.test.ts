@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../../../src/harnesses/pi-durable/build.ts";
 import { buildDefinition } from "../../../src/harnesses/pi-durable/open.ts";
+import { DEFINITION_FORMAT } from "../../../src/harnesses/pi-durable/definition.ts";
 import { made, project, FILES, listing } from "./build-fixtures.ts";
 
 afterAll(() => {
@@ -16,7 +17,7 @@ describe("fastagent build", () => {
     // A built package is what an instance reads, never the author's working copy.
     expect(built).not.toHaveProperty("source");
     expect(built).toMatchObject({
-      format: 1,
+      format: DEFINITION_FORMAT,
       builtWith: expect.any(String),
       name: "@acme/support",
       version: "1.2.0",

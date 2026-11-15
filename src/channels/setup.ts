@@ -4,11 +4,8 @@
  * (`channels/<kind>/setup.ts`); `cli/channel-setup.ts` asks, in a terminal or on a page, and writes what is accepted.
  */
 
-/** How a channel receives: which values its app needs depends on it. */
-export type SetupWay = "webhook" | "connection";
-
 /** Where a value is found: what to do, and the page to do it on. */
-export interface SetupGuide {
+interface SetupGuide {
   instructions: string;
   url?: string;
 }
@@ -33,8 +30,8 @@ export interface PastedValues {
   kind: "paste";
   /** What the step is called on a page: "Bot User OAuth Token". */
   label: string;
-  /** Where to find them; a function when the page depends on what an earlier step kept (an app's own console page). */
-  guide: SetupGuide | ((held: HeldValues) => SetupGuide);
+  /** Where to find them. */
+  guide: SetupGuide;
   fields: PasteField[];
   /**
    * Confirm `values` with the platform. Resolves with a note on what they are ("bot @acme_bot"), throws {@link
@@ -42,11 +39,6 @@ export interface PastedValues {
    * network, the platform down), which ends the setup instead of re-asking for a value that may be right.
    */
   check(values: Record<string, string>): Promise<string | undefined>;
-  /**
-   * A way to get the value without asking (one field only): tried first, and the person is asked only when it
-   * resolves undefined, having said why. Not tried for a value that is already held.
-   */
-  capture?(held: HeldValues): Promise<string | undefined>;
 }
 
 /** One pasted variable, checked on its own. */
@@ -56,16 +48,14 @@ export function pasteOne(input: {
   secret?: boolean;
   guide: PastedValues["guide"];
   check(value: string): Promise<string | undefined>;
-  capture?: PastedValues["capture"];
 }): PastedValues {
-  const { name, label, secret, guide, check, capture } = input;
+  const { name, label, secret, guide, check } = input;
   return {
     kind: "paste",
     label,
     guide,
     fields: [{ name, label, ...(secret === undefined ? {} : { secret }) }],
     check: (values) => check(values[name] as string),
-    ...(capture === undefined ? {} : { capture }),
   };
 }
 
@@ -83,28 +73,14 @@ interface SetupPerson {
   carriesOn(): void;
 }
 
-/** A value setup makes itself. */
-interface MadeValue {
-  kind: "make";
-  name: string;
-  make(): string;
-}
-
-export type SetupValue = PastedValues | CreatedValues | MadeValue;
+export type SetupValue = PastedValues | CreatedValues;
 
 /** What a channel needs to say its values: facts about the instance it is set up for. */
 interface SetupContext {
-  way: SetupWay;
   /** A name for an app created for it (the agent's directory). */
   appName: string;
   /** Whether it is the development instance. */
   dev: boolean;
-  /** Where the platform will reach it, when the configuration names one. */
-  publicUrl?: string;
-  /** The command that runs this setup again, for what a person is told to do before it. */
-  rerun: string;
-  /** A public URL for a local port, for a setup the platform must reach while it runs (a challenge to answer). */
-  startTunnel(port: number): Promise<{ url: string; close(): void } | undefined>;
 }
 
 /**

@@ -6,24 +6,9 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { Agent } from "./agent-api.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
-import {
-  type AnyChannelModule,
-  type LoadedLongConnectionChannel,
-  channelIngress,
-  mountChannels,
-} from "./channels/discover.ts";
+import { type AnyChannelModule, type LoadedLongConnectionChannel, mountChannels } from "./channels/discover.ts";
 import { parseRouteKey, router } from "./channels/router.ts";
 import { serveHandler, totalFetch } from "./channels/serve.ts";
-import {
-  type WebhookKind,
-  type WebhookRegistration,
-  pendingWebhooks,
-  registerOwnWebhooks,
-  webhookKinds,
-  webhookPath,
-} from "./channels/webhooks.ts";
-import { addressedTo, onReached, readReached } from "./channels/webhook-evidence.ts";
-import { channelStateDir } from "./channels/context.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { API_PREFIX } from "./http/contract.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -31,9 +16,6 @@ import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { Schedule } from "./schedule/schedule.ts";
-import { stripTrailingSlashes } from "./strip-edges.ts";
-
-export type { WebhookRegistration } from "./channels/webhooks.ts";
 
 /** Default wait for a channel's `closed` before reporting it stuck. */
 const CLOSE_DEADLINE_MS = 5_000;
@@ -84,21 +66,17 @@ export const DEFAULT_HTTP_PORT = 8787;
 interface ServingSurface {
   routes: Routes;
   longConnections: LoadedLongConnectionChannel[];
-  /** Route-channel names; the tunnel registers only this subset. */
+  /** The channels serving routes. */
   routeChannels: string[];
   /** Flip health between 200 and 503. */
   setReady(value: boolean): void;
 }
 
-/**
- * Mount the channels and the health check: JSON, `{ status, webhooks }`, each webhook channel only by name and outcome,
- * since it is public; a step and its reasons are in the log.
- */
+/** Mount the channels and the health check: JSON, `{ status }`. */
 export function routesFor(
   agent: Agent,
   stateRoot: string,
   channels: ReadonlyMap<string, AnyChannelModule>,
-  webhooks: () => readonly WebhookRegistration[] = () => [],
   resolveFrom: readonly string[] = [],
 ): ServingSurface {
   const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot, resolveFrom);
@@ -108,14 +86,7 @@ export function routesFor(
     }
   }
   let ready = longConnections.length === 0;
-  const health = (): Response =>
-    Response.json(
-      {
-        status: ready ? "ok" : "starting",
-        webhooks: webhooks().map(({ channel, outcome }) => ({ channel, outcome })),
-      },
-      { status: ready ? 200 : 503 },
-    );
+  const health = (): Response => Response.json({ status: ready ? "ok" : "starting" }, { status: ready ? 200 : 503 });
   const probed = Object.keys(routes).some((key) => {
     const entry = parseRouteKey(key);
     return entry.path === "/health" && (entry.method === undefined || entry.method === "GET");
@@ -143,19 +114,8 @@ function startSchedules(agent: Agent, stateRoot: string, schedules: readonly Sch
 export interface Service {
   /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
-  /**
-   * Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. Once the
-   * serve is ready it registers the webhook channels at `http.publicUrl`, in the background (`webhooks`).
-   */
+  /** Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
-  /**
-   * Point each webhook channel's platform at `<baseUrl ?? http.publicUrl>/<its path>`, for an app serving `fetch` on its
-   * own server, once that server answers and the serve is ready: set on every call. Answers every webhook channel's
-   * outcome; rejects only for a `baseUrl` that is not an absolute http(s) URL.
-   */
-  registerWebhooks(baseUrl?: string): Promise<WebhookRegistration[]>;
-  /** Every webhook channel's outcome, `pending` until its registration ends; empty only with no webhook channel. */
-  readonly webhooks: readonly WebhookRegistration[];
   /** Settles when every long connection is up: immediately when there are none. */
   ready: Promise<void>;
   /**
@@ -181,105 +141,6 @@ export interface ServedAgent extends Service {
   api: boolean;
 }
 
-/** A serve's webhook channels: their outcomes, and the registration that sets them, one at a time. */
-export interface WebhookRegistry {
-  /** The outcomes, as one array kept current. */
-  list(): readonly WebhookRegistration[];
-  register(baseUrl?: string): Promise<WebhookRegistration[]>;
-  /** Stop hearing the platforms reach it. */
-  dispose(): void;
-}
-
-/** The channels whose platform lets only a person set the URL: Slack, and Lark without its config API. */
-const PERSON_SET: readonly WebhookKind[] = ["slack", "lark"];
-
-/** Where a channel's URL a person set is confirmed: its state (what reached it), and its binding's recorded `url`. */
-interface Confirmation {
-  stateDir(kind: WebhookKind): string;
-  appUrl(kind: WebhookKind): string | undefined;
-}
-
-/** Nothing to point: a serve with no webhook channel. */
-const NONE: readonly WebhookRegistration[] = Object.freeze([]);
-const NO_WEBHOOKS: WebhookRegistry = { list: () => NONE, register: async () => [], dispose: () => {} };
-
-/**
- * The webhook channels among `kinds`, registered with `env`, the instance's own secrets, at `publicUrl` unless a call
- * names another base. Each call waits for the one before it, so two never interleave their platform calls.
- */
-function webhookRegistry(
-  kinds: readonly WebhookKind[],
-  env: NodeJS.ProcessEnv,
-  publicUrl: string | undefined,
-  confirmation: Confirmation,
-  options: { attempts?: number; retryMs?: number } = {},
-): WebhookRegistry {
-  // One array, replaced in place: a Service is spread into the objects that extend it, and each keeps reading this.
-  const current: WebhookRegistration[] = pendingWebhooks(kinds);
-  const replace = (next: readonly WebhookRegistration[]) => current.splice(0, current.length, ...next);
-  let previous: Promise<unknown> = Promise.resolve();
-  let base: string | undefined;
-  // A URL only a person sets is confirmed by the platform reaching it: told as it happens, or read from the record.
-  const confirmed = (kind: WebhookKind, address: string | undefined, at: string): boolean => {
-    const path = webhookPath(kind);
-    if (confirmation.appUrl(kind) === `${at}${path}`) return true;
-    if (address === undefined) return false;
-    if (addressedTo(address, at, path)) return true;
-    log.warn(`[fastagent] ${kind}: the platform reached this instance at ${address}, not ${at}${path}`);
-    return false;
-  };
-  const confirm = (registrations: WebhookRegistration[], at: string | undefined) =>
-    registrations.map((entry) => {
-      const kind = entry.channel as WebhookKind;
-      if (at === undefined || entry.outcome !== "manual" || !PERSON_SET.includes(kind)) return entry;
-      if (!confirmed(kind, readReached(confirmation.stateDir(kind)), at)) return entry;
-      return { channel: entry.channel, outcome: "registered" as const, url: `${at}${webhookPath(kind)}` };
-    });
-  const stops = kinds
-    .filter((kind) => PERSON_SET.includes(kind))
-    .map((kind) =>
-      onReached(confirmation.stateDir(kind), (address) => {
-        const index = current.findIndex((entry) => entry.channel === kind);
-        const entry = current[index];
-        if (base === undefined || entry?.outcome !== "manual" || !confirmed(kind, address, base)) return;
-        current[index] = { channel: kind, outcome: "registered", url: `${base}${webhookPath(kind)}` };
-      }),
-    );
-  return {
-    list: () => current,
-    register(baseUrl) {
-      if (baseUrl !== undefined && !/^https?:\/\/[^/?#\s]+/.test(baseUrl)) {
-        return Promise.reject(new Error(`registerWebhooks: ${JSON.stringify(baseUrl)} is not an absolute http(s) URL`));
-      }
-      const target = baseUrl ?? publicUrl;
-      const at = target === undefined ? undefined : stripTrailingSlashes(target);
-      const run = previous.then(async () => {
-        base = at;
-        replace(pendingWebhooks(kinds));
-        if (at === undefined && kinds.length > 0) {
-          log.info(`[fastagent] webhooks: no http.publicUrl, so nothing points ${kinds.join(", ")} at this instance`);
-        }
-        replace(confirm(await registerOwnWebhooks(at, kinds, env, options), at));
-        return [...current];
-      });
-      previous = run.catch(() => {});
-      return run;
-    },
-    dispose: () => {
-      for (const stop of stops) stop();
-    },
-  };
-}
-
-/** The webhook channels of an opened agent, to be pointed at `http.publicUrl` or at a URL the host names. */
-function webhooksOf(opened: ServableAgent): WebhookRegistry {
-  const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
-  return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
-    stateDir: (kind) => channelStateDir(opened.stateRoot, kind),
-    appUrl: (kind) => opened.config.channels?.[kind]?.app?.url,
-  });
-}
-
 /**
  * A Service over `handler`: answered in process, or served on a server of its own. `endStreams` ends what would hold
  * the server's close open (a Caller watching events), and `shutdown` stops the rest once the server has.
@@ -289,37 +150,19 @@ export function serviceOver(
   ready: Promise<void>,
   shutdown: () => Promise<void>,
   endStreams: () => Promise<void> = async () => {},
-  webhooks: WebhookRegistry = NO_WEBHOOKS,
 ): Service {
   let listener: ReturnType<typeof serveHandler> | undefined;
   let closing: Promise<void> | undefined;
   const fetch = totalFetch(handler);
   return {
     fetch,
-    registerWebhooks: (baseUrl) =>
-      closing !== undefined ? Promise.reject(new Error("the service is closed")) : webhooks.register(baseUrl),
-    webhooks: webhooks.list(),
     listen(port, host) {
       if (closing !== undefined) return Promise.reject(new Error("the service is closed"));
       if (listener !== undefined) return Promise.reject(new Error("the service is already listening"));
       const current = serveHandler(handler, { port, ...(host === undefined ? {} : { host }) });
       listener = current;
       return current.listening.then(
-        (bound) => {
-          // After ready: a host may route to the instance only once its health check passes, and a platform verifies
-          // the URL as it is set. In the background, so the port is answered without waiting for a platform.
-          // A ready that fails is the failure its awaiter reports: nothing is registered for a serve that never was.
-          void ready.then(
-            () =>
-              closing === undefined
-                ? webhooks
-                    .register()
-                    .catch((error: unknown) => log.error(`[fastagent] webhook registration failed: ${String(error)}`))
-                : undefined,
-            () => {},
-          );
-          return bound;
-        },
+        (bound) => bound,
         async (error: unknown) => {
           // A bind that failed holds nothing once its scope is closed, so the service may listen again, elsewhere.
           if (listener === current) listener = undefined;
@@ -333,7 +176,7 @@ export function serviceOver(
       closing ??= (async () => {
         // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
         const failures: unknown[] = [];
-        for (const step of [endStreams, () => listener?.close(), shutdown, webhooks.dispose]) {
+        for (const step of [endStreams, () => listener?.close(), shutdown]) {
           await Promise.resolve()
             .then(step)
             .catch((error: unknown) => failures.push(error));
@@ -360,10 +203,6 @@ export interface ServeOptions {
 /** What the assembly serves. */
 export interface ServableAgent {
   agent: Agent;
-  /** The instance's secrets: what its webhook channels are pointed with. */
-  secrets: Readonly<Record<string, string>>;
-  /** The configuration's part a serve reads: where the platforms reach it, and the URLs a person set there. */
-  config: { http?: { publicUrl?: string }; channels?: Readonly<Record<string, { app?: { url?: string } }>> };
   /** The project directory the instance's `.secrets/` belong to. */
   agentDir: string;
   /** The program directory whose `package.json` holds the agent's own dependencies (source or built `dist/`). */
@@ -378,9 +217,8 @@ export interface ServableAgent {
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  const webhooks = webhooksOf(opened);
   const resolveFrom = [...(opened.definition ? [opened.definition.dir] : []), agentDir];
-  const routed = routesFor(agent, stateRoot, opened.channels, webhooks.list, resolveFrom);
+  const routed = routesFor(agent, stateRoot, opened.channels, resolveFrom);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);
   const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;
@@ -500,7 +338,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ready.catch(() => {});
 
         return {
-          ...serviceOver(handler, ready, close, async () => api?.endStreams(), webhooks),
+          ...serviceOver(handler, ready, close, async () => api?.endStreams()),
           routes: routed.routes,
           agentDir,
           channels: { routes: routed.routeChannels, longConnections: names },

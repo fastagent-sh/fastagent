@@ -1,19 +1,16 @@
-import { byIngress, needs } from "@fastagent-sh/fastagent";
-import { type SlackChannelOptions, slackChannel, slackSocketChannel } from "@fastagent-sh/fastagent/slack";
+import { needs } from "@fastagent-sh/fastagent";
+import { type SlackSocketChannelOptions, slackSocketChannel } from "@fastagent-sh/fastagent/slack";
 
 // Slack channel. `fastagent channels setup slack` creates the app (from a manifest link that sets the scopes, the
 // events and the Socket Mode switch this file needs) and keeps its credentials.
 //
-// How it receives is the instance's choice, `channels.slack.ingress` in its fastagent.json (webhook | connection).
-// Unset, `fastagent dev` opens a Socket Mode connection OUT (no public URL, no tunnel), and everything else —
-// `fastagent start`, every deployment — receives by webhook at POST /slack, the way a host that wakes on a request is
-// reached. An app in Socket Mode receives over the socket ALONE, so an app serves one instance, and a deployment that
-// receives by webhook has an app of its own.
+// The app receives over a Socket Mode connection this process opens, so it needs no public URL, in `fastagent dev`
+// and in a container alike. An app in Socket Mode hands each event to one of its connections: give a deployment an
+// app of its own.
 //
 // Leave token rotation OFF: it cannot be turned off again, and this channel takes one long-lived Bot User OAuth Token.
 
-// Your policy, the same whichever way the channel receives.
-const policy: Pick<SlackChannelOptions, "rendering" | "onError"> = {
+const policy: Pick<SlackSocketChannelOptions, "rendering" | "onError"> = {
   // Slack Agent stream; its inline tool traces show each call's first argument and stay in the delivered message.
   // "classic" settles into the answer alone (and gives up native streaming).
   rendering: "native",
@@ -26,21 +23,11 @@ const policy: Pick<SlackChannelOptions, "rendering" | "onError"> = {
   onError: (failed) => `⚠️ ${failed.details}`,
 };
 
-// Each way's `needs` declares the env vars it reads: an instance is asked only for its way's, and refused to serve
-// while a required one is unset.
-export default byIngress({
-  webhook: needs(["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"], (secrets) =>
-    slackChannel({
-      botToken: secrets.SLACK_BOT_TOKEN, // Install App → Bot User OAuth Token (xoxb-…)
-      signingSecret: secrets.SLACK_SIGNING_SECRET, // Basic Information → Signing Secret
-      ...policy,
-    }),
-  ),
-  connection: needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
-    slackSocketChannel({
-      botToken: secrets.SLACK_BOT_TOKEN,
-      appToken: secrets.SLACK_APP_TOKEN, // Basic Information → App-Level Tokens (xapp-…, connections:write)
-      ...policy,
-    }),
-  ),
-});
+// `needs` declares the env vars this file reads: the instance is refused to serve while one is unset.
+export default needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
+  slackSocketChannel({
+    botToken: secrets.SLACK_BOT_TOKEN, // Install App → Bot User OAuth Token (xoxb-…)
+    appToken: secrets.SLACK_APP_TOKEN, // Basic Information → App-Level Tokens (xapp-…, connections:write)
+    ...policy,
+  }),
+);

@@ -32,7 +32,7 @@ import {
   INSTANCE_CONFIG_JSON_ENV,
   resolveOverridePath,
 } from "../../paths.ts";
-import type { AgentConfig, AgentDefaults, Ingress } from "./define.ts";
+import type { AgentConfig, AgentDefaults } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
 /**
@@ -89,21 +89,6 @@ const CONTENT_ENTRY = union([
   }),
 ]);
 
-/** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
-const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
-
-/** The platform app a channel of one instance is bound to (`channels.<name>.app`). */
-const APP_BINDING = obj({
-  id: str({ description: "The platform's app ID" }),
-  team: opt(str({ description: "Slack's workspace (team) ID" })),
-  url: opt(
-    str({
-      description: "The channel's URL a person set on the platform's app page and the platform verified",
-      pattern: "^https://[^?#\\s]+$",
-    }),
-  ),
-});
-
 /** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
 function partial(settings: Schema): Schema {
   const { required: _required, ...rest } = settings as Record<string, unknown>;
@@ -111,7 +96,7 @@ function partial(settings: Schema): Schema {
 }
 
 /** What the program's defaults and an instance's configuration may hold. `settings` is the program's, or none. */
-function shape(settings: Schema | undefined, instance: boolean) {
+function shape(settings: Schema | undefined) {
   return {
     starters: opt(
       arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
@@ -125,28 +110,7 @@ function shape(settings: Schema | undefined, instance: boolean) {
       obj({
         port: opt(int({ minimum: 0, maximum: 65535, description: "The port a serve listens on" })),
         api: opt(bool({ description: "Whether a serve answers the Agent API under /v1" })),
-        publicUrl: opt(
-          str({
-            description:
-              "The public base URL the platforms reach this instance at, any mount prefix included: the serve " +
-              "points each webhook channel there",
-            pattern: PUBLIC_URL_PATTERN,
-          }),
-        ),
       }),
-    ),
-    channels: opt(
-      map(
-        obj({
-          // The app one instance is bound to: a fact about that instance, which the program's defaults cannot hold.
-          ...(instance ? { app: opt(APP_BINDING) } : {}),
-          ingress: opt(
-            oneOf(["webhook", "connection"] as const, {
-              description: "How the channel receives: webhook (inbound HTTP) or connection (one it opens and keeps)",
-            }),
-          ),
-        }),
-      ),
     ),
     settings: opt(settings === undefined ? obj({}) : partial(settings)),
   };
@@ -157,7 +121,7 @@ export function instanceConfigSchema(settings: Schema | undefined): Schema {
   const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
   return obj({
     $schema: opt(str()),
-    ...shape(settings, true),
+    ...shape(settings),
     name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
     description: opt(str({ description: "One line about this instance, apart from the program's", pattern: "\\S" })),
     content: opt(map(CONTENT_ENTRY)),
@@ -230,7 +194,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
       throw new Error(`${file}: "settings" is not a JSON Schema: ${(error as Error).message}`, { cause: error });
     }
   }
-  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s, false)));
+  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s)));
   return config as AgentConfig;
 }
 
@@ -311,16 +275,6 @@ export async function instanceConfigIn(dir: string): Promise<InstanceConfigSourc
   return existsSync(path) ? readInstanceConfigFile(path) : undefined;
 }
 
-/** A channel's platform app, for one whose URL only a person sets (`channels.<name>.app`). */
-interface ChannelApp {
-  id: string;
-  team?: string;
-  url?: string;
-}
-
-/** The channels whose platform lets only a person set the URL: Slack's always, Lark's where its config API is missing. */
-const PERSON_SET_URL = ["slack", "lark"];
-
 /** What an open reads of the configuration: the program's defaults with an instance's over them. */
 export interface EffectiveConfig {
   /** The instance's name as its configuration gives it; none when it gives none (`instanceName` defaults it). */
@@ -329,8 +283,7 @@ export interface EffectiveConfig {
   starters?: readonly string[];
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  http?: { port?: number; api?: boolean; publicUrl?: string };
-  channels?: Readonly<Record<string, { ingress?: Ingress; app?: ChannelApp }>>;
+  http?: { port?: number; api?: boolean };
   settings: Readonly<Record<string, unknown>>;
   /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */
   sources: Readonly<Record<string, string>>;
@@ -377,7 +330,7 @@ export function resolveConfig(
   const merged: Record<string, unknown> = {};
   const sources: Record<string, string> = {};
   if (defaults !== undefined) {
-    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s, false)));
+    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s)));
     overlay(merged, defaults as Record<string, unknown>, PROGRAM_DEFAULT, sources);
   }
   if (instance !== undefined) {
@@ -388,24 +341,6 @@ export function resolveConfig(
   }
   const values = (merged.settings ?? {}) as Record<string, unknown>;
   check(settings ?? obj({}), values, `the settings of ${definition.name}`);
-  const channels = new Set(definition.registry.channels.map(({ name }) => name));
-  // The file that named a channel: whichever of its leaves one set.
-  const namedIn = (name: string) =>
-    Object.entries(sources).find(([path]) => path.startsWith(`channels.${name}.`))?.[1] ?? "the configuration";
-  for (const [name, entry] of Object.entries((merged.channels ?? {}) as Record<string, { app?: unknown }>)) {
-    if (entry.app !== undefined && !PERSON_SET_URL.includes(name)) {
-      throw new Error(
-        `${namedIn(name)}: channels.${name}.app is for a channel whose ` +
-          `platform lets only a person set its URL (${PERSON_SET_URL.join(", ")})`,
-      );
-    }
-    if (!channels.has(name)) {
-      throw new Error(
-        `${namedIn(name)}: channels.${name} names no channel of ` +
-          `${definition.name} (${channels.size === 0 ? "it has none" : `its channels: ${[...channels].join(", ")}`})`,
-      );
-    }
-  }
   return { ...merged, settings: values, sources };
 }
 
