@@ -27,10 +27,6 @@ const BIND: FlagSpec = {
   flags: "--bind <addr>",
   description: "bind address (dev: 127.0.0.1; start: 0.0.0.0)",
 };
-const CHANNEL_ENVIRONMENT: FlagSpec = {
-  flags: "--env <environment>",
-  description: "credentials and state environment (dev or production)",
-};
 const GLOBAL_AUTH: FlagSpec = {
   flags: "-g, --global",
   description: "use global ~/.fastagent/.secrets/auth.json",
@@ -361,66 +357,9 @@ const auth: CommandSpec = {
   ],
 };
 
-const mcp: CommandSpec = {
-  name: "mcp",
-  summary: "inspect MCP servers and manage explicit OAuth bindings",
-  subcommands: [
-    {
-      name: "list",
-      summary: "inspect declarations and local auth",
-      examples: [{ cmd: "fastagent mcp list --json" }],
-      args: [AGENT_ARG],
-      flags: [CHANNEL_ENVIRONMENT, JSON_FLAG],
-      run: async (args, f) =>
-        (await import("./commands/mcp.ts")).runMcp("list", undefined, args[0] as string, {
-          json: f.json === true,
-          environment: f.env as string | undefined,
-        }),
-    },
-    {
-      name: "login",
-      summary: "sign in to an MCP server via browser OAuth",
-      examples: [{ cmd: "fastagent mcp login linear" }],
-      args: [{ name: "[server]", description: "declared MCP server name" }, AGENT_ARG],
-      flags: [
-        CHANNEL_ENVIRONMENT,
-        JSON_FLAG,
-        NO_INPUT,
-        { flags: "--timeout <seconds>", description: "browser OAuth timeout (default 900)" },
-        { flags: "--scopes <scopes>", description: "comma-separated OAuth scopes" },
-        { flags: "--client-id <id>", description: "pre-registered client ID or metadata URL" },
-        { flags: "--callback-port <port>", description: "local callback port" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/mcp.ts")).runMcp("login", args[0] as string | undefined, args[1] as string, {
-          json: f.json === true,
-          input: f.input !== false,
-          environment: f.env as string | undefined,
-          scopes: f.scopes as string | undefined,
-          clientId: f.clientId as string | undefined,
-          callbackPort: f.callbackPort as string | undefined,
-          timeout: f.timeout as string | undefined,
-        }),
-    },
-    {
-      name: "disconnect",
-      summary: "remove a local OAuth binding",
-      examples: [{ cmd: "fastagent mcp disconnect linear" }],
-      args: [{ name: "<server>", description: "the server name" }, AGENT_ARG],
-      flags: [CHANNEL_ENVIRONMENT, JSON_FLAG],
-      run: async (args, f) =>
-        (await import("./commands/mcp.ts")).runMcp("disconnect", args[0] as string, args[1] as string, {
-          json: f.json === true,
-          environment: f.env as string | undefined,
-        }),
-    },
-  ],
-};
-
 const specs: readonly CommandSpec[] = [
   init,
   models,
-  mcp,
   info,
   build,
   invoke,

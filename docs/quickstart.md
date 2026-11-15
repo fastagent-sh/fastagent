@@ -6,7 +6,7 @@ status: current
 
 # Quickstart
 
-You need Node ≥ 24.15 (or Bun ≥ 1.4) and the CLI: `npm i -g @fastagent-sh/fastagent`.
+You need Node ≥ 24.15 and the CLI: `npm i -g @fastagent-sh/fastagent`.
 
 ## 1. Create an agent
 

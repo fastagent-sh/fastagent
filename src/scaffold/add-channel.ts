@@ -6,7 +6,6 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { FEISHU_SDK, fastagentBuild } from "../version.ts";
-import { detectRuntime } from "../runtime.ts";
 import { assertInsideAgentDir, exists } from "../paths.ts";
 import { channelBundleFiles, channelTemplate } from "./templates.ts";
 import { envExamplePath } from "../value-file.ts";
@@ -196,12 +195,8 @@ export async function assertChannelReady(dir: string): Promise<void> {
     throw new Error(`${pkgPath}: fastagent channels are ESM — set "type": "module"`);
   }
   if (typeof pkg.dependencies?.["@fastagent-sh/fastagent"] !== "string") {
-    const add =
-      detectRuntime(dir, pkg).runtime === "bun"
-        ? "bun add @fastagent-sh/fastagent"
-        : "npm install @fastagent-sh/fastagent";
     throw new Error(
-      `${pkgPath}: @fastagent-sh/fastagent is not a dependency — run \`${add}\` (the channel file imports it)`,
+      `${pkgPath}: @fastagent-sh/fastagent is not a dependency — run \`npm install @fastagent-sh/fastagent\` (the channel file imports it)`,
     );
   }
 }

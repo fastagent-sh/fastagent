@@ -59,7 +59,7 @@ export interface ModelEnvironment {
  * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
  * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. `environment` is
  * the one source of the values a provider authenticates with and of the requests' settings, which this process's
- * environment never adds to; where its files are (`FASTAGENT_AUTH_PATH`, `FASTAGENT_ROOT`) is still read from
+ * environment never adds to; where its files are (`FASTAGENT_ROOT`) is still read from
  * this process's first. The model lists are refreshed before it
  * resolves, kept in the instance's state root (`stateRoot`, else the directory's); `force` asks the network even when
  * they are fresh.
@@ -72,7 +72,7 @@ export async function modelEnvironment(
     force?: boolean;
     stateRoot?: string;
     environment?: Readonly<Record<string, string>>;
-    /** The environment `FASTAGENT_AUTH_PATH` and `FASTAGENT_ROOT` are read from. Default: this process's. */
+    /** The environment `FASTAGENT_ROOT` is read from. Default: this process's. */
     env?: Readonly<Record<string, string | undefined>>;
     /** Refresh the lists without the network. Default: `FASTAGENT_OFFLINE` is `1` in this process's environment. */
     offline?: boolean;

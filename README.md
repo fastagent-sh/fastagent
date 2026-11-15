@@ -30,7 +30,7 @@ With a coding agent (Claude Code, Codex, Cursor, …), paste:
 
 > Read https://fastagent.sh/start.md and build an agent in this project.
 
-By hand (Node ≥ 24.15 or Bun ≥ 1.4):
+By hand (Node ≥ 24.15):
 
 ```bash
 npm i -g @fastagent-sh/fastagent

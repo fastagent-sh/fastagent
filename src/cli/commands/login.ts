@@ -1,6 +1,6 @@
 /**
  * `fastagent login [provider]`: sign in to a model provider, into the project-level auth file
- * (`<agentDir>/.secrets/auth.json`) by default, or `FASTAGENT_AUTH_PATH`. In a terminal it asks, as pi's `/login`
+ * (`<agentDir>/.secrets/auth.json`), or with `-g` the user-global one. In a terminal it asks, as pi's `/login`
  * does; otherwise (a script, a coding agent: no terminal, `--no-input` or `--json`) nothing is asked and nothing
  * blocks: missing choices or interactive auth return structured `need_choice`/`need_user_action` (exit 2).
  */
@@ -15,10 +15,12 @@ import {
 } from "../../harnesses/models/credentials.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { globalHome } from "../../paths.ts";
-import { SignInCancelled, type SignInMethod, type SignInOption } from "../../sign-in-api.ts";
 import {
   LoginRefused,
   PI_DEFAULT_MODELS,
+  SignInCancelled,
+  type SignInMethod,
+  type SignInOption,
   chooseLogin,
   loginFlow,
   loginOptionsOver,
@@ -50,13 +52,13 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
   // need no "is this $HOME?" special case to infer it.
   const loginDir = agentDir ?? globalHome();
-  // FASTAGENT_AUTH_PATH and a proxy may both be configured in the project .env, and the OAuth token exchange must go
-  // through that proxy (region-locked providers).
+  // A proxy may be configured in the project .env, and the OAuth token exchange must go through it (region-locked
+  // providers).
   // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
   // environment the shell hands down, not one agent's value file.
   const shellEnv = { ...process.env };
   enterAgentEnv(loginDir);
-  // `-g` names the global file outright. Otherwise: FASTAGENT_AUTH_PATH > default — the one owner. The
+  // `-g` names the global file outright. Otherwise the agent's own file — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
   // exactly where the operator said, or a second `login` for a provider they already have globally would silently
   // rewrite the global credential instead of creating the project-level override they asked for.
@@ -68,7 +70,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const providers = await providersOf().catch(failStartup);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
-  if (!agentDir && !opts.global && !process.env.FASTAGENT_AUTH_PATH) {
+  if (!agentDir && !opts.global) {
     console.error(
       `[fastagent] no agent here (no fastagent.config.ts) — ` +
         `logging in GLOBALLY (${authPath}). An agent on this machine uses this file for a provider it has no ` +

@@ -21,20 +21,11 @@ describe("cli: login and models", () => {
     const home = await mkdtemp(join(tmpdir(), "fa-login-global-home-"));
     const cwd = await mkdtemp(join(tmpdir(), "fa-login-global-"));
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
-    delete env.FASTAGENT_AUTH_PATH;
     const { code, stderr } = await runInProcess(["login", "no-such-provider"], cwd, env);
     expect(code).not.toBe(0);
     // The marker names itself, at both positions the lookup checks.
     expect(stderr).toMatch(/no agent here \(no fastagent\.config\.ts\)/);
     await expect(stat(join(cwd, ".secrets"))).rejects.toMatchObject({ code: "ENOENT" }); // nothing created in the non-agent dir
-
-    // …and it is silent when FASTAGENT_AUTH_PATH outranks the fallback: an announcement naming a file the
-    // run does not write would be worse than none.
-    const directed = await runInProcess(["login", "no-such-provider"], cwd, {
-      ...env,
-      FASTAGENT_AUTH_PATH: join(cwd, "auth.json"),
-    });
-    expect(directed.stderr).not.toMatch(/logging in GLOBALLY/);
 
     // Standing INSIDE an agent is NOT "outside an agent" — findAgentDir refuses that position with
     // its own way out, and login must tell the same story as every other command instead of quietly

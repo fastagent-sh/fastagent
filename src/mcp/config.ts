@@ -1,6 +1,6 @@
 /**
  * The MCP servers an agent opens: `mcpServers` in `fastagent.config.ts`. One list, read once, that every reader (the
- * open, `inspectMcp`, sign-in, the build's warning) is given.
+ * open, `info`, the build's warning) is given.
  */
 import { isAbsolute, resolve } from "node:path";
 import * as Schema from "effect/Schema";
@@ -159,7 +159,7 @@ export function literalCredentialAdvice({ field, key }: { field: "headers" | "en
     : `write \${${name}}`;
 }
 
-export function checkMcpUrl(value: string, server?: string, file = "mcpServers"): URL {
+function checkMcpUrl(value: string, server?: string, file = "mcpServers"): URL {
   const url = URL.parse(value);
   if (
     !url ||

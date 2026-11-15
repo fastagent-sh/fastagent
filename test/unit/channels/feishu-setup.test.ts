@@ -42,7 +42,6 @@ beforeEach(async () => {
   opened.length = 0;
   prompts.answers.length = 0;
   prompts.asked.length = 0;
-  vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.mocked(registerFeishuApp).mockClear();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {

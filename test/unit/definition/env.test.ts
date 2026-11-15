@@ -6,15 +6,15 @@ import { applyEnvValues } from "../../../src/env.ts";
 import { dotEnvPath, loadEnvValues } from "../../../src/value-file.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
-  it("default <root>/.secrets/.env; FASTAGENT_SECRETS_DIR moves it together with auth.json", () => {
+  it("is <root>/.secrets/.env, and <root>/.secrets/production/.env for production", () => {
     expect(dotEnvPath("/w", {} as NodeJS.ProcessEnv)).toBe(join("/w", ".secrets", ".env"));
-    expect(dotEnvPath("/w", { FASTAGENT_SECRETS_DIR: "/data/.secrets" } as NodeJS.ProcessEnv)).toBe(
-      join("/data/.secrets", ".env"),
+    expect(dotEnvPath("/w", { FASTAGENT_ENVIRONMENT: "production" } as NodeJS.ProcessEnv)).toBe(
+      join("/w", ".secrets", "production", ".env"),
     );
   });
 });
 
-// A portable .env loader (Node has process.loadEnvFile; Bun does not — same parse must run on both).
+// The .env loader fastagent parses with itself, one dialect wherever it runs.
 describe("loadEnvValues + applyEnvValues", () => {
   const write = async (content: string): Promise<string> => {
     const dir = await mkdtemp(join(tmpdir(), "fa-env-"));

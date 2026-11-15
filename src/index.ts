@@ -1,7 +1,6 @@
 /**
  * The package's one entry, besides each first-party channel's: the Agent API, opening an agent
- * directory and serving it, what a host embedding agents needs beside them (model credentials and sign-in), and what
- * an author writes.
+ * directory and serving it, and what an author writes.
  */
 export type {
   Agent,
@@ -41,38 +40,8 @@ export {
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-export {
-  SignInCancelled,
-  type Credential,
-  type CredentialStore,
-  type ProviderAuth,
-  type SignInEvent,
-  type SignInInteraction,
-  type SignInMethod,
-  type SignInOption,
-  type SignInPrompt,
-  type SignInRequest,
-  type SignInResult,
-} from "./sign-in-api.ts";
-export { credentialFile, providerAuth, signIn, signInOptions } from "./harnesses/models/host.ts";
-export {
-  McpError,
-  type McpErrorCode,
-  type McpOptions,
-  type McpInspectOptions,
-  type McpAuthorization,
-  type McpGrantRecord,
-  type McpGrantSummary,
-  type McpGrantStore,
-  type McpGrantAccess,
-  type McpServerSummary,
-  type McpSignInRequest,
-  type McpSignInInteraction,
-} from "./mcp-api.ts";
+export { McpError, type McpErrorCode } from "./mcp-api.ts";
 export { baseEnv } from "./child-env.ts";
-export { inspectMcp } from "./mcp/host.ts";
-export { signInMcp } from "./mcp/sign-in.ts";
-export { mcpGrantFile } from "./mcp/grants.ts";
 
 export {
   defineAgent,

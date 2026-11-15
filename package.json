@@ -94,7 +94,6 @@
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
     "@earendil-works/pi-schema": "1.5.2",
-    "@effect/platform-bun": "^4.0.7",
     "@effect/platform-node": "^4.0.7",
     "@modelcontextprotocol/client": "2.4.0",
     "chokidar": "^6.0.0",

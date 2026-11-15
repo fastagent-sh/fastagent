@@ -7,8 +7,7 @@ import { resolve } from "node:path";
 import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import { buildModelPickerOptions } from "./models-view.ts";
-import { type LoginIO, loginFlow } from "../harnesses/models/login.ts";
-import { SignInCancelled } from "../sign-in-api.ts";
+import { type LoginIO, SignInCancelled, loginFlow } from "../harnesses/models/login.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
@@ -145,9 +144,7 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
     provider,
     path: models.auth.path,
     ...status,
-    ...(isDeployedWorkspace()
-      ? { deployed: true }
-      : { local: { authPath: models.auth.path, valueFile: dotEnvPath(agentDir) } }),
+    ...(isDeployedWorkspace() ? { deployed: true } : { local: { valueFile: dotEnvPath(agentDir) } }),
   });
   log.info(`[fastagent] ${report.line}`);
   if (report.warn) log.warn(`[fastagent] ${report.warn}`);

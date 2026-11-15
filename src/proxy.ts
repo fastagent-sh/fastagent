@@ -1,9 +1,4 @@
-// Namespace import (not `import { install }`): Bun's `undici` is a native shim that omits `install`, and a STATIC
-// NAMED import of a missing export fails at link time.
 import * as undici from "undici";
-
-/** The Bun runtime (`process.versions.bun` is set only there). */
-const isBun = typeof process.versions.bun === "string";
 
 /**
  * What is ALWAYS exempt from the proxy. `EnvHttpProxyAgent` proxies EVERYTHING while NO_PROXY is empty — loopback
@@ -23,7 +18,7 @@ const LOOPBACK = "localhost,127.0.0.1,::1";
  * Its own function because installing happens ONCE per process, so these branches are unreachable through
  * {@link installProxyFetch} — and the wildcard one is the kind that is silently wrong until someone reads it.
  */
-export function noProxyList(env: NodeJS.ProcessEnv = process.env): string {
+function noProxyList(env: NodeJS.ProcessEnv = process.env): string {
   // Mirroring undici's own precedence (lowercase first) so our value cannot disagree with the one it would read.
   // `||`, not `??`: a `NO_PROXY=` line in a .env is an empty string, and undici treats it as "proxy everything".
   const declared = (env.no_proxy || env.NO_PROXY)?.trim();
@@ -45,16 +40,15 @@ const originalFetch = globalThis.fetch;
 /**
  * Point this process's fetch at the proxy the environment declares, with loopback exempt by default.
  *
- * Two jobs in one, and both are needed UNDER NODE: Node's fetch does not honor HTTP(S)_PROXY at all, and Node 26's
- * bundled fetch skips gzip decompression when it dispatches through npm undici (empty `stopReason:"stop"`), so fetch
- * and the dispatcher must come from the SAME undici. No-op under Bun, whose native fetch already does both (and
- * lacks these entry points).
+ * Two jobs in one: Node's fetch does not honor HTTP(S)_PROXY at all, and Node 26's bundled fetch skips gzip
+ * decompression when it dispatches through npm undici (empty `stopReason:"stop"`), so fetch and the dispatcher must
+ * come from the SAME undici.
  *
  * Call it through `enterAgentEnv` (env.ts) rather than directly: the proxy may be declared in the agent's own `.env`,
  * so it has to be read first. The only direct callers are the ones with no agent directory to read.
  */
 export function installProxyFetch(): void {
-  if (isBun || installed) return;
+  if (installed) return;
   undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent({ noProxy: noProxyList() }));
   // Skipping `install` leaves the caller's fetch in place, and with it Node 26's missing gzip decompression above.
   if (globalThis.fetch === originalFetch) undici.install();

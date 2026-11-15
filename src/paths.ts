@@ -14,8 +14,7 @@ export function globalHome(): string {
 
 /**
  * The secrets segment inside an agent dir (or the global home). Every path fastagent resolves — `.env`,
- * `.env.example`, auth.json, the scaffold's write — derives from it, so they cannot drift apart.
- * `FASTAGENT_SECRETS_DIR` relocates the RESOLVED dir ({@link resolveSecretsDir}), never this name; the scaffolded
+ * `.env.example`, auth.json, the scaffold's write — derives from it, so they cannot drift apart. The scaffolded
  * ignore templates spell it out as literal text, so renaming this constant means editing them too.
  */
 export const SECRETS_DIRNAME = ".secrets";
@@ -161,10 +160,10 @@ export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.e
 
 /**
  * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (the agent's `.env` +
- * auth.json). Explicit paths win; production otherwise uses `.secrets/production`, dev uses `.secrets`.
+ * auth.json): `.secrets/production` for production, `.secrets` for dev.
  */
 export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env.FASTAGENT_SECRETS_DIR) ?? environmentPath(dir, SECRETS_DIRNAME, env);
+  return environmentPath(dir, SECRETS_DIRNAME, env);
 }
 
 /**

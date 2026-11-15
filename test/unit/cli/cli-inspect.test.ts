@@ -72,17 +72,16 @@ describe("cli: info", () => {
   });
 });
 
-describe("cli: mcp list", () => {
-  it("shows the program's servers, and `info` the same", async () => {
+describe("cli: info's MCP servers", () => {
+  it("are the program's, and nothing a tool's own file declares", async () => {
     const dir = await agentWorkspace("fa-cli-mcp-list-", {
       "fastagent.config.ts": `export default ${JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } })};\n`,
       ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }),
     });
-    const listed = await runInProcess(["mcp", "list", dir, "--json"]);
-    expect(listed.code, listed.stderr).toBe(0);
-    expect(JSON.parse(listed.stdout).map((server: { name: string }) => server.name)).toEqual(["docs"]);
     const info = await runInProcess(["info", "--json"], dir);
     expect(info.code, info.stderr).toBe(0);
-    expect(JSON.parse(info.stdout).mcp.map((server: { name: string }) => server.name)).toEqual(["docs"]);
+    expect(JSON.parse(info.stdout).mcp).toEqual([
+      { name: "docs", transport: "http", url: "https://docs.example.com/mcp" },
+    ]);
   });
 });

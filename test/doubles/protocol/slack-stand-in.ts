@@ -4,12 +4,11 @@ import type { Socket } from "node:net";
 
 /**
  * A Slack stand-in speaking the real Socket Mode protocol: `apps.connections.open`, the WebSocket handshake, text frames,
- * pings. One double for the runtime's own WebSocket, driven on Node by slack-socket.test.ts and on Bun by
- * test/smoke/bun/slack-socket.ts.
+ * pings. Driven by slack-socket.test.ts.
  */
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-export function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
+function frame(opcode: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   const length =
     payload.length < 126
       ? Buffer.from([payload.length])
@@ -36,7 +35,7 @@ function* clientFrames(buffer: Buffer): Generator<{ opcode: number; payload: Buf
   }
 }
 
-export interface Peer {
+interface Peer {
   socket: Socket;
   say(message: unknown): void;
   texts: string[];
