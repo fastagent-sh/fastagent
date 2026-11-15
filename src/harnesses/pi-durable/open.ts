@@ -4,7 +4,7 @@
  * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
  */
 import { basename, resolve } from "node:path";
-import type { ModelThinkingLevel, Models, Provider } from "@earendil-works/pi-ai";
+import type { Models, Provider } from "@earendil-works/pi-ai";
 import {
   type Extension,
   type HarnessSettings,
@@ -228,9 +228,8 @@ export interface AssembleAgentOptions {
   models: Models;
   /** Why the lists of {@link models} are not current, when they are not: said with a default model none offers. */
   catalogProblem?: string;
-  /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
+  /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
-  thinkingLevel?: ModelThinkingLevel;
   settings?: HarnessSettings;
   /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
   stateRoot?: string;
@@ -304,7 +303,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       wakeExtension(options.stateRoot, options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }),
     );
   }
-  const thinkingLevel = options.thinkingLevel ?? config.thinkingLevel;
+  const { thinkingLevel } = config;
   return openDurableAgent({
     storage: options.storage,
     models,

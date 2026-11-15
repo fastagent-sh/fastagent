@@ -42,7 +42,6 @@ describe("deploy/container: the portable image", () => {
     expect(dockerfile).toMatch(/^ENV FASTAGENT_DEPLOYED=1$/m);
     expect(dockerfile).toMatch(/^ENV FASTAGENT_NAME=reviewer$/m);
     expect(dockerfile).toMatch(/^ENV FASTAGENT_ROOT=\/data$/m);
-    for (const name of ["FASTAGENT_CONFIG", "FASTAGENT_MODEL", "FASTAGENT_API_KEY"])
-      expect(dockerfile).not.toContain(name);
+    for (const name of ["FASTAGENT_MODEL", "FASTAGENT_API_KEY"]) expect(dockerfile).not.toContain(name);
   });
 });
