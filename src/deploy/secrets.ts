@@ -3,7 +3,6 @@
  *
  * Docker, Fly and Railway keep a deployment's values in a store of their own and are never handed a file (secret-store.ts):
  * what the definition declares (`needs()`, plus the model's env key) says which names must have a value there.
- * AgentCore's store is a Secrets Manager secret (agentcore/store.ts).
  */
 import { type DeclaredSecret, dedupeSecrets } from "../declared-secrets.ts";
 

@@ -1,5 +1,5 @@
 /**
- * `src/deploy/runner.ts` for a unit test whose subject is what a command asks of a host CLI (fly, railway, aws, docker)
+ * `src/deploy/runner.ts` for a unit test whose subject is what a command asks of a host CLI (fly, railway, docker)
  * and does with the answer, not the process: each CLI is a function the test registers with `hostCli`, and a CLI no test
  * registered is not installed (exit 127), as `spawnRunner` reports one that cannot start. What a CLI prints to a stream
  * the command does not capture goes to this process's stdout or stderr, where a spawned CLI's would have gone. Installed
@@ -78,10 +78,4 @@ export function spawnRunner(bin: string, cwd: string, options: { stdoutToStderr?
       stderr: opts?.captureStderr ? stderr : undefined,
     };
   };
-}
-
-/** As `awsRunner` is: the AWS CLI through `spawnRunner`, its pager off. */
-export function awsRunner(cwd: string): CliRunner {
-  const aws = spawnRunner("aws", cwd);
-  return (args, opts) => aws(args, { ...opts, env: { ...opts?.env, AWS_PAGER: "" } });
 }

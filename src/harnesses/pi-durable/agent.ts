@@ -179,8 +179,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
 }
 
 /**
- * A message not yet settled is the process's work in flight (busy.ts): what AgentCore's ping and `dev`'s restart wait
- * for. Whatever ends the wait, settling or the harness closing, ends the count.
+ * A message not yet settled is the process's work in flight (busy.ts): what `dev`'s restart waits for. Whatever ends the wait, settling or the harness closing, ends the count.
  */
 function countUntilSettled(submission: Submission): void {
   const done = beginWork();

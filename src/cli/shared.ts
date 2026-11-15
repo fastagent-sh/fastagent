@@ -181,7 +181,7 @@ async function resolveFirstRunModel(
     const project = await (load ?? loadDevProject)(agentDir);
     return { project, config: resolveConfig(project.definition, project.instance) };
   };
-  // A custom loader's refusal is the caller's to report: AgentCore runs this inside a request, where an exit kills the container.
+  // A custom loader's refusal is the caller's to report.
   const { project, config } = await (load === undefined ? configured().catch(failStartup) : configured());
   const spec = modelSpecFor(config, options.model);
   if (spec) return spec;

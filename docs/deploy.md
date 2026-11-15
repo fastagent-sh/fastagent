@@ -1,13 +1,13 @@
 ---
 title: Deploy
-description: "Ship an agent to local Docker, Fly.io, Railway or AWS Bedrock AgentCore: one command, the values it needs, channels, logins, and what each host keeps."
+description: "Ship an agent to local Docker, Fly.io or Railway: one command, the values it needs, channels, logins, and what each host keeps."
 status: current
 ---
 
 # Deploy
 
 ```bash
-fastagent deploy fly --run --env-file prod.env    # or docker, railway, agentcore
+fastagent deploy fly --run --env-file prod.env    # or docker, railway
 ```
 
 Without `--run`, `deploy` only writes the files (a `Dockerfile` and the host's manifest) and prints the steps. With
@@ -18,7 +18,6 @@ Without `--run`, `deploy` only writes the files (a `Dockerfile` and the host's m
 | [Docker](#local-docker) | Docker Compose ≥ 2.3.3 | a volume at `/data` |
 | [Fly.io](#flyio) | `flyctl` | a volume at `/data` |
 | [Railway](#railway) | Railway CLI 5.x | a volume at `/data` |
-| [AgentCore](#aws-bedrock-agentcore) | AWS CLI v2, Docker with buildx | `/mnt/data`, **reset on every deploy** |
 
 ## Before you deploy
 
@@ -40,18 +39,17 @@ what the user must run in a terminal (`fly auth login`, `fastagent channels setu
 ## Several instances
 
 A deployment is named by the `name` in its `--config` file, else by the program. Each gets its own host resources and
-its own manifest (`fly.<name>.toml`, `fastagent.<name>.compose.yml`, `agentcore.<name>.template.yaml`); the image is
-shared.
+its own manifest (`fly.<name>.toml`, `fastagent.<name>.compose.yml`); the image is shared.
 
 ```bash
 fastagent deploy fly --run --config acme.json      # { "name": "acme" }
 fastagent deploy fly --run --config globex.json    # { "name": "globex" }
 ```
 
-`secrets`, `logs`, `destroy` and `login --deployment` take the same `--config` to pick the instance.
+`secrets` and `login --deployment` take the same `--config` to pick the instance.
 
 - The configuration is set on the host as `FASTAGENT_CONFIG_JSON`. After changing it, run `deploy <host> --force`
-  (Docker, Fly, AgentCore) or `--run` again (Railway).
+  (Docker, Fly) or `--run` again (Railway).
 - Your project's own `fastagent.json` is never deployed.
 - A deployed configuration cannot hold a local directory, instance `skills`/`prompts`/`instructions`, a relative MCP
   `command`, or a literal secret. Write `${NAME}` and set the value with `fastagent secrets set <host> <NAME>`.
@@ -67,11 +65,11 @@ fastagent invoke --url https://<app>.fly.dev "hello"
 ```
 
 Rotate a key with `FASTAGENT_API_KEY=new,old`, move the callers, then drop `old`. `http: { api: false }` turns the API
-off. AgentCore serves none.
+off.
 
 ## Chat channels
 
-- **Webhooks point themselves.** On Fly, Railway and AgentCore the box points Telegram, Feishu and Lark at its own URL
+- **Webhooks point themselves.** On Fly and Railway the box points Telegram, Feishu and Lark at its own URL
   on every start. Slack's Request URL is yours to set: `--run` prints it, and at a terminal with `--config` records it in that file
   once Slack reaches it.
 - **Use separate production apps.** Two instances on one bot split its messages. Run
@@ -142,57 +140,6 @@ another Railway project is refused unless you pass `--into-linked`.
 Wake-ups do not keep a machine up: a stopped machine runs what is due when a request next wakes it. To run on a clock
 and still scale to zero, have an outside cron call a channel of your own or the Agent API.
 
-## AWS Bedrock AgentCore
-
-```bash
-fastagent deploy agentcore --run
-```
-
-Builds an arm64 image on your machine, pushes it to ECR, and deploys one CloudFormation stack: the runtime, a
-forwarder Lambda with a public URL for webhooks, and EventBridge schedules for cron and wake-ups. The values live in one
-Secrets Manager secret, `fastagent/<name>` (about $0.40 a month).
-
-What to know:
-- **Every deploy resets the state**, and so does 14 days idle: sessions, channel state, wake-ups and a box login. Use
-  an API key, and Fly or Railway for state that must last.
-- **Idle cost:** a session keeps its microVM for `--idle-timeout` seconds (default 180) after going idle.
-- **Redeploys stop the running session**; in-flight work is lost.
-- **No long connections, no Agent API.** Webhook bodies are capped at about 4 MiB.
-
-```bash
-fastagent logs agentcore --follow                     # the runtime (--source forwarder for the Lambda)
-fastagent destroy agentcore                           # list what would be deleted
-fastagent destroy agentcore --run                     # delete stack, bucket, repository, secret, logs, alarms
-```
-
-CloudWatch keeps logs forever by default: set a retention. `destroy` leaves webhook registrations on the platforms;
-clear them yourself.
-
-### The permissions a deployer needs
-
-This policy ran every AgentCore command end to end as the only policy of an IAM user (replace `<region>` and
-`<account-id>`; attach it as a customer managed policy). Its `Iam` statement can create any `fastagent-*` role, so
-treat its holder as able to escalate within the account.
-
-```json
-{"Version":"2012-10-17","Statement":[
-  {"Sid": "Cfn", "Effect": "Allow", "Action": ["cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet", "cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:DeleteStack", "cloudformation:GetTemplateSummary"], "Resource": "arn:aws:cloudformation:<region>:<account-id>:stack/fastagent-*/*"},
-  {"Sid": "CfnGlobal", "Effect": "Allow", "Action": ["cloudformation:GetTemplateSummary", "cloudformation:ListStacks"], "Resource": "*"},
-  {"Sid": "Iam", "Effect": "Allow", "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PassRole", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:TagRole", "iam:UpdateAssumeRolePolicy"], "Resource": "arn:aws:iam::<account-id>:role/fastagent-*"},
-  {"Sid": "Lambda", "Effect": "Allow", "Action": ["lambda:CreateFunction", "lambda:DeleteFunction", "lambda:GetFunction", "lambda:GetFunctionConfiguration", "lambda:UpdateFunctionCode", "lambda:UpdateFunctionConfiguration", "lambda:AddPermission", "lambda:RemovePermission", "lambda:GetPolicy", "lambda:CreateFunctionUrlConfig", "lambda:DeleteFunctionUrlConfig", "lambda:GetFunctionUrlConfig", "lambda:UpdateFunctionUrlConfig", "lambda:ListTags", "lambda:TagResource"], "Resource": "arn:aws:lambda:<region>:<account-id>:function:fastagent-*"},
-  {"Sid": "LambdaGlobal", "Effect": "Allow", "Action": ["lambda:GetAccountSettings"], "Resource": "*"},
-  {"Sid": "AgentCore", "Effect": "Allow", "Action": ["bedrock-agentcore:CreateAgentRuntime", "bedrock-agentcore:UpdateAgentRuntime", "bedrock-agentcore:DeleteAgentRuntime", "bedrock-agentcore:GetAgentRuntime", "bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:ListTagsForResource", "bedrock-agentcore:TagResource", "bedrock-agentcore:CreateWorkloadIdentity", "bedrock-agentcore:DeleteWorkloadIdentity", "bedrock-agentcore:GetWorkloadIdentity", "bedrock-agentcore:StopRuntimeSession", "bedrock-agentcore:InvokeAgentRuntime", "bedrock-agentcore:CreateAgentRuntimeEndpoint", "bedrock-agentcore:GetAgentRuntimeEndpoint", "bedrock-agentcore:UpdateAgentRuntimeEndpoint", "bedrock-agentcore:DeleteAgentRuntimeEndpoint", "bedrock-agentcore:ListAgentRuntimeEndpoints", "bedrock-agentcore:UntagResource", "bedrock-agentcore:PassCapacityProvider", "bedrock-agentcore:InvokeAgentRuntimeCommandShell"], "Resource": "*"},
-  {"Sid": "EcrAuth", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
-  {"Sid": "Ecr", "Effect": "Allow", "Action": ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:DeleteRepository", "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource": "arn:aws:ecr:<region>:<account-id>:repository/fastagent/*"},
-  {"Sid": "S3", "Effect": "Allow", "Action": ["s3:CreateBucket", "s3:PutBucketPublicAccessBlock", "s3:ListBucket", "s3:ListBucketVersions", "s3:GetBucketLocation", "s3:PutObject", "s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:DeleteBucket"], "Resource": ["arn:aws:s3:::fa-*", "arn:aws:s3:::fa-*/*"]},
-  {"Sid": "Secrets", "Effect": "Allow", "Action": ["secretsmanager:CreateSecret", "secretsmanager:DescribeSecret", "secretsmanager:GetSecretValue", "secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret", "secretsmanager:TagResource"], "Resource": "arn:aws:secretsmanager:<region>:<account-id>:secret:fastagent/*"},
-  {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents", "logs:DeleteLogGroup", "logs:PutRetentionPolicy"], "Resource": "*"},
-  {"Sid": "Scheduler", "Effect": "Allow", "Action": ["scheduler:ListSchedules", "scheduler:GetSchedule", "scheduler:DeleteSchedule"], "Resource": "*"},
-  {"Sid": "SlrRead", "Effect": "Allow", "Action": "iam:GetRole", "Resource": ["arn:aws:iam::<account-id>:role/AWSServiceRoleForBedrockAgentCoreRuntimeIdentity", "arn:aws:iam::<account-id>:role/aws-service-role/runtime-identity.bedrock-agentcore.amazonaws.com/AWSServiceRoleForBedrockAgentCoreRuntimeIdentity"]},
-  {"Sid": "Slr", "Effect": "Allow", "Action": "iam:CreateServiceLinkedRole", "Resource": "*", "Condition": {"StringEquals": {"iam:AWSServiceName": ["runtime-identity.bedrock-agentcore.amazonaws.com", "network.bedrock-agentcore.amazonaws.com"]}}}
-]}
-```
-
 ## What ships
 
 The image holds the agent directory (at `/app`) minus `.secrets/`, `.state/`, `content/`, `node_modules`, `.env*` and
@@ -200,7 +147,7 @@ the file `--env-file` names. It installs `git` when the agent is a repository or
 root holds what changes:
 
 ```text
-/data/                # or /mnt/data on AgentCore
+/data/
 ├── .state/           # sessions, channel and schedule state
 ├── .secrets/         # the box's own login
 ├── content/          # clones of github content

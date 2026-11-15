@@ -86,7 +86,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 | Agent API / HTTP (`src/agent-api.ts`, `src/http/`) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
 | CLI command or flag (`src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
 | Channel (`src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, send tool | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
-| Deploy / Host CLI (`src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts, `run`/`destroy`/`logs` paths | `hostCli` / `recordHostCli` (`test/doubles/host-cli-double.ts`); no secrets in artifacts or argv |
+| Deploy / Host CLI (`src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts, `run` paths | `hostCli` / `recordHostCli` (`test/doubles/host-cli-double.ts`); no secrets in artifacts or argv |
 | Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
 | Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
 | Bugfix | Minimal regression test reproducing the bug | L1 preferred; use L2 only when process/lock/tool behavior is essential |

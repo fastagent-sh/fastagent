@@ -123,7 +123,7 @@ another process uses the same app and takes some messages: give each instance it
 ### Sessions disappear after a redeploy
 
 The state root is not on persistent storage. Generated deployments handle this; on your own server set
-`FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets`. On AgentCore every deploy resets it.
+`FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets`.
 
 ### A deploy stopped and the message does not say why
 

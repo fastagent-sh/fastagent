@@ -40,7 +40,7 @@ import type { AgentDefinition } from "./definition.ts";
  * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
  * file's directory's).
  */
-export type InstanceConfig<Settings = unknown> = Omit<AgentDefaults<Settings>, "deploy"> & {
+export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
   /** The instance's name, one path segment. Default: the program's name made one. */
   name?: string;
   content?: Record<string, ContentEntry>;
@@ -74,7 +74,7 @@ const MAX_STARTER_LENGTH = 200;
 
 const CONSTANTS = ["providers", "content", "mcpServers"];
 /** Keys that were the program's own before they became defaults. */
-const FORMER_CONSTANTS = ["model", "thinkingLevel", "http", "deploy"];
+const FORMER_CONSTANTS = ["model", "thinkingLevel", "http"];
 
 /** An instance's content entry: a repository, or a directory (its detailed refusals are content/declare.ts's). */
 const CONTENT_ENTRY = union([
@@ -88,12 +88,6 @@ const CONTENT_ENTRY = union([
     description: opt(str({ description: "One sentence for the agent: what this is, and how to treat it" })),
   }),
 ]);
-
-/**
- * AWS's own bounds for idleRuntimeSessionTimeout: a value outside them is refused by CloudFormation minutes into
- * `deploy agentcore --run`, after the image build.
- */
-export const IDLE_TIMEOUT_BOUNDS = { minimum: 60, maximum: 1209600 } as const;
 
 /** An absolute `https://` URL without a trailing slash, query or fragment: what `<publicUrl>/<path>` is built from. */
 const PUBLIC_URL_PATTERN = "^https://[^/?#\\s]+(/[^?#\\s]*[^/?#\\s])?$";
@@ -141,11 +135,6 @@ function shape(settings: Schema | undefined, instance: boolean) {
         ),
       }),
     ),
-    deploy: opt(
-      obj({
-        agentcore: opt(obj({ idleTimeoutSeconds: opt(int(IDLE_TIMEOUT_BOUNDS)) })),
-      }),
-    ),
     channels: opt(
       map(
         obj({
@@ -166,11 +155,9 @@ function shape(settings: Schema | undefined, instance: boolean) {
 /** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
 export function instanceConfigSchema(settings: Schema | undefined): Schema {
   const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
-  // What a deployment is built with is the program's default or a `deploy` flag; the box never reads it.
-  const { deploy: _deploy, ...runtime } = shape(settings, true);
   return obj({
     $schema: opt(str()),
-    ...runtime,
+    ...shape(settings, true),
     name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
     description: opt(str({ description: "One line about this instance, apart from the program's", pattern: "\\S" })),
     content: opt(map(CONTENT_ENTRY)),
@@ -343,7 +330,6 @@ export interface EffectiveConfig {
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
   http?: { port?: number; api?: boolean; publicUrl?: string };
-  deploy?: { agentcore?: { idleTimeoutSeconds?: number } };
   channels?: Readonly<Record<string, { ingress?: Ingress; app?: ChannelApp }>>;
   settings: Readonly<Record<string, unknown>>;
   /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */

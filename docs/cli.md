@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, content, models, login, logout, auth, dev, invoke, start, schedules, add, deploy, logs, and destroy, with their flags."
+description: "The fastagent CLI reference: init, info, content, models, login, logout, auth, dev, invoke, start, schedules, add, and deploy, with their flags."
 status: current
 ---
 
@@ -33,10 +33,9 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
 | `mcp list\|login\|disconnect` | MCP servers and their sign-in |
 | `secrets list\|set\|push <host>` | a deployment's values on its host |
-| `deploy docker\|fly\|railway\|agentcore` | write deployment files; `--run` deploys ([Deploy](deploy.md)) |
-| `logs agentcore`, `destroy agentcore` | AgentCore logs, and tearing it down |
+| `deploy docker\|fly\|railway` | write deployment files; `--run` deploys ([Deploy](deploy.md)) |
 
-`deploy`, `secrets`, `logs`, `destroy` and `login --deployment` read no value file by default: pass `--env-file` or
+`deploy`, `secrets` and `login --deployment` read no value file by default: pass `--env-file` or
 `--from-env`, and `--config` for the instance.
 
 ## Global options

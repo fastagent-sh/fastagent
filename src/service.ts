@@ -132,20 +132,8 @@ export function routesFor(
 }
 
 /** Start the clock: the definition's schedules, and the wake-ups the agent sets for itself, on every serve. */
-export function startSchedules(
-  agent: Agent,
-  stateRoot: string,
-  schedules: readonly Schedule[],
-  options: { localClock?: boolean } = {},
-): Pick<Scheduler, "stop"> {
-  const scheduler = Effect.runSync(
-    createScheduler({
-      agent,
-      stateRoot,
-      schedules,
-      ...(options.localClock === false ? { localClock: false } : {}),
-    }),
-  );
+function startSchedules(agent: Agent, stateRoot: string, schedules: readonly Schedule[]): Pick<Scheduler, "stop"> {
+  const scheduler = Effect.runSync(createScheduler({ agent, stateRoot, schedules }));
   scheduler.start();
   if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
   return scheduler;
@@ -284,7 +272,7 @@ function webhookRegistry(
 }
 
 /** The webhook channels of an opened agent, to be pointed at `http.publicUrl` or at a URL the host names. */
-export function webhooksOf(opened: ServableAgent): WebhookRegistry {
+function webhooksOf(opened: ServableAgent): WebhookRegistry {
   const kinds = webhookKinds([...opened.channels].map(([name, module]) => ({ name, ingress: channelIngress(module) })));
   return webhookRegistry(kinds, opened.secrets, opened.config.http?.publicUrl, {
     stateDir: (kind) => channelStateDir(opened.stateRoot, kind),

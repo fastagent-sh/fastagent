@@ -321,19 +321,14 @@ export function definitionSections(
     section("content", () =>
       contentSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true, content }),
     ),
-    section("self_change", () =>
-      options.runsAs.deployed ? selfChangeSection(options.wake, options.runsAs.ephemeralRoot === true) : undefined,
-    ),
+    section("self_change", () => (options.runsAs.deployed ? selfChangeSection(options.wake) : undefined)),
   ];
 }
 
-function selfChangeSection(wake: boolean, ephemeralRoot: boolean): string {
-  const storage = ephemeralRoot
-    ? "Every deployment of a new version resets this host's storage entirely, your directory with it, so anything " +
-      "that must outlive a deployment belongs in an external system (a git remote, an issue tracker, a database)."
-    : "Your directory is this host's storage and survives deployments of a new version.";
+function selfChangeSection(wake: boolean): string {
   return (
-    `Your directory survives restarts, including uncommitted work; /tmp does not. ${storage} ` +
+    "Your directory survives restarts, including uncommitted work; /tmp does not. Your directory is this host's " +
+    "storage and survives deployments of a new version. " +
     `Your definition (SYSTEM.md, AGENTS.md, skills/, prompts/, src/ and the configuration) is the author's release, ` +
     `read as it was built from where it is installed: a copy of it you make in your directory is not read. A tool you install ` +
     `yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. A ` +

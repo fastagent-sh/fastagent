@@ -19,14 +19,12 @@ export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
- * Who runs an instance, as an open is told: `dev` serves it, a deployed box (the release id a deploy sets) runs it,
- * on AgentCore. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
+ * Who runs an instance, as an open is told: `dev` serves it, or a deployed box (the release id a deploy sets) runs
+ * it. The CLI reads its own process's variables for these (`runsAsIn`); an app's instance is none of them.
  */
 export interface RunsAs {
   dev: boolean;
   deployed: boolean;
-  /** Every deploy wipes the storage root, so persistent work belongs in external systems. */
-  ephemeralRoot?: boolean;
 }
 
-export const NOT_HOSTED: RunsAs = { dev: false, deployed: false, ephemeralRoot: false };
+export const NOT_HOSTED: RunsAs = { dev: false, deployed: false };

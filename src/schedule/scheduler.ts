@@ -34,12 +34,6 @@ export interface SchedulerOptions {
   stateRoot: string;
   /** The definition's schedules. */
   schedules: readonly Schedule[];
-  /**
-   * Run a resident timer per schedule (default). Off where something outside the process delivers each instant as
-   * its own fire (AgentCore's recurring EventBridge schedules): one path per instant, so its delivery's reply says
-   * whether it ran.
-   */
-  localClock?: boolean;
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
   now?: () => Date;
 }
@@ -180,8 +174,8 @@ export interface ScheduleFireOutcome {
   ms: number;
 }
 
-/** Shared resident/external claim → run → settle. */
-export function fireScheduleOnce(opts: {
+/** Claim → run → settle one occurrence. */
+function fireScheduleOnce(opts: {
   agent: ScheduledAgent;
   stateRoot: string;
   schedule: Schedule;
@@ -361,13 +355,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const fork = Effect.runForkWith(yield* Effect.context<never>());
-    const {
-      agent,
-      stateRoot,
-      schedules,
-      localClock = true,
-      now = () => new Date(clock.currentTimeMillisUnsafe()),
-    } = options;
+    const { agent, stateRoot, schedules, now = () => new Date(clock.currentTimeMillisUnsafe()) } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
 
@@ -496,7 +484,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
 
     /** Arm `s` to fire next at `due`, or say it never will. */
     const arm = (s: Schedule, due: Date | undefined): void => {
-      if (!localClock) return;
       if (!due) {
         log.warn(`[schedule] ${s.name}: cron "${s.cron}" will never fire again — not armed`);
         return;
@@ -538,7 +525,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           // so "missed" is not a fact this process has. Every boot after the first resumes from the claim.
           const last = lastFires.get(s.name);
           const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
-          if (localClock && due && due.getTime() <= current.getTime()) {
+          if (due && due.getTime() <= current.getTime()) {
             log.info(`[schedule] ${s.name}: catching up a missed run`);
           }
           arm(s, due);

@@ -147,4 +147,3 @@ user sees when a turn fails; show `failed.details` only to developers.
 - An accepted message is answered after a restart, at least once: a tool may run twice.
 - One workspace per app. No Marketplace distribution.
 - Edits and deletions do not change what a session already holds.
-- AgentCore resets the channel's state on every deploy.

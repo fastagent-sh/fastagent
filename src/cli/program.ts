@@ -44,10 +44,6 @@ const DEPLOY_CONFIG: FlagSpec = {
   flags: "--config <file>",
   description: "instance config file (`deploy --config`)",
 };
-const DEPLOY_ENV_FILE: FlagSpec = {
-  flags: "--env-file <file>",
-  description: "host account env file (no default file for deployments)",
-};
 
 const init: CommandSpec = {
   name: "init",
@@ -259,7 +255,7 @@ const add: CommandSpec = {
 
 const deploy: CommandSpec = {
   name: "deploy",
-  summary: "generate deploy artifacts + runbook for docker, fly, railway, or agentcore (--run drives it)",
+  summary: "generate deploy artifacts + runbook for docker, fly, or railway (--run drives it)",
   description: "Generate Dockerfile/.dockerignore + host manifest and runbook, or provision & deploy with --run.",
   args: [{ name: "<host>", description: "deploy target", choices: [...DEPLOY_HOSTS] }, AGENT_ARG],
   flags: [
@@ -269,7 +265,6 @@ const deploy: CommandSpec = {
     { flags: "--env-file <file>", description: "env file of deployment values (no default file)" },
     { flags: "--from-env", description: "also read deployment values from this process's environment" },
     { flags: "--into-linked", description: "(railway --run) deploy into the already-linked Railway project" },
-    { flags: "--idle-timeout <seconds>", description: "(agentcore) idle microVM timeout, 60–1209600s" },
     { flags: "--json", description: "with --run: print the deploy result as JSON" },
     NO_INPUT,
   ],
@@ -277,14 +272,12 @@ const deploy: CommandSpec = {
     { cmd: "fastagent deploy fly --run", note: "provision + deploy + webhooks" },
     { cmd: "fastagent deploy docker --run", note: "Compose on this machine" },
     { cmd: "fastagent deploy railway", note: "print the runbook only" },
-    { cmd: "fastagent deploy agentcore --run", note: "arm64 image + stack + webhooks" },
   ],
   run: async (args, f) =>
     (await import("./commands/deploy.ts")).runDeploy(args[0] as DeployHost, args[1] as string, {
       run: f.run === true,
       force: f.force === true,
       intoLinked: f.intoLinked === true,
-      ...(typeof f.idleTimeout === "string" ? { idleTimeout: f.idleTimeout } : {}),
       ...(typeof f.config === "string" ? { config: f.config } : {}),
       ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
       fromEnv: f.fromEnv === true,
@@ -431,7 +424,7 @@ const channels: CommandSpec = {
 const SECRETS_HOST = {
   name: "<host>",
   description: "target host with a secret store",
-  choices: ["fly", "railway", "agentcore"],
+  choices: ["fly", "railway"],
 };
 
 const secrets: CommandSpec = {
@@ -494,49 +487,6 @@ const secrets: CommandSpec = {
   ],
 };
 
-const destroy: CommandSpec = {
-  name: "destroy",
-  summary: "delete AWS resources `deploy agentcore` created",
-  description: "Dry-run inventory by default; pass --run to delete stack, ECR repo, secret, logs, and schedules.",
-  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
-  flags: [DEPLOY_CONFIG, DEPLOY_ENV_FILE, { flags: "--run", description: "actually delete resources" }],
-  examples: [
-    { cmd: "fastagent destroy agentcore", note: "dry-run inventory" },
-    { cmd: "fastagent destroy agentcore --run", note: "delete resources" },
-  ],
-  run: async (args, f) =>
-    (await import("./commands/destroy.ts")).runDestroy(args[0] as string, args[1] as string, {
-      run: f.run === true,
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-    }),
-};
-
-const logs: CommandSpec = {
-  name: "logs",
-  summary: "tail a deployed AgentCore host's CloudWatch logs",
-  args: [{ name: "<host>", description: "deployed host", choices: ["agentcore"] }, AGENT_ARG],
-  flags: [
-    DEPLOY_CONFIG,
-    DEPLOY_ENV_FILE,
-    { flags: "--source <source>", description: "runtime (default) or forwarder" },
-    { flags: "--since <duration>", description: "history window (e.g. 30m or 2h)" },
-    { flags: "--follow", description: "follow new log events" },
-  ],
-  examples: [
-    { cmd: "fastagent logs agentcore --follow", note: "agent runtime" },
-    { cmd: "fastagent logs agentcore --source forwarder --follow", note: "Lambda forwarder" },
-  ],
-  run: async (args, f) =>
-    (await import("./commands/logs.ts")).runLogs(args[0] as string, args[1] as string, {
-      ...(typeof f.config === "string" ? { config: f.config } : {}),
-      ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-      source: f.source as string | undefined,
-      since: f.since as string | undefined,
-      follow: f.follow === true,
-    }),
-};
-
 const login: CommandSpec = {
   name: "login",
   summary: "sign in to a model provider (account OAuth or API key)",
@@ -548,7 +498,7 @@ const login: CommandSpec = {
     { flags: "--method <how>", description: "account or api-key" },
     JSON_FLAG,
     { flags: "--timeout <seconds>", description: "interactive sign-in timeout" },
-    { flags: "--deployment <host>", description: "run login on the deployed box (docker, fly, railway, agentcore)" },
+    { flags: "--deployment <host>", description: "run login on the deployed box (docker, fly, railway)" },
     { flags: "--config <file>", description: "with --deployment: instance config" },
     { flags: "--env-file <file>", description: "with --deployment: host account env file" },
     { flags: "--stdio", description: "box-side relay mode", hidden: true },
@@ -687,8 +637,6 @@ const specs: readonly CommandSpec[] = [
   channels,
   secrets,
   deploy,
-  logs,
-  destroy,
   login,
   logout,
   auth,

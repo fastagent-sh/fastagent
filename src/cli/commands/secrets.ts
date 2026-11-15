@@ -9,15 +9,13 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 import { isCancel, password } from "@clack/prompts";
 import { isEnvName } from "../../declared-secrets.ts";
-import { agentcoreName, agentcoreSecretName } from "../../deploy/agentcore/plan.ts";
-import { agentcoreSecretStore } from "../../deploy/agentcore/store.ts";
 import { deploymentApi } from "../../deploy/api.ts";
 import { flyTomlFile, parseFlyAppName, toFlyAppName } from "../../deploy/fly/plan.ts";
 import { flyStore } from "../../deploy/fly/store.ts";
 import { toRailwayName } from "../../deploy/railway/plan.ts";
 import { railwayStore } from "../../deploy/railway/store.ts";
 import { preflightDeploy } from "../../deploy/preflight.ts";
-import { awsRunner, spawnRunner } from "../../deploy/runner.ts";
+import { spawnRunner } from "../../deploy/runner.ts";
 import type { SecretStore } from "../../deploy/secret-store.ts";
 import { declaredNames, hostSignedOutGate, secretNeeds } from "../../deploy/secrets.ts";
 import { readInstanceConfigFile, resolveConfig } from "../../harnesses/pi-durable/config.ts";
@@ -33,7 +31,7 @@ import { printReport } from "../shared.ts";
 import { join } from "node:path";
 
 /** The targets that keep a deployment's values in a store of their own. */
-export type SecretsHost = "fly" | "railway" | "agentcore";
+export type SecretsHost = "fly" | "railway";
 
 export interface SecretsOptions {
   /** `--config <file>`: the instance configuration the deployment delivers; its channels decide which names it reads. */
@@ -50,14 +48,11 @@ export interface SecretsOptions {
 const LABELS: Record<SecretsHost, string> = {
   fly: "Fly",
   railway: "Railway",
-  agentcore: "AWS Secrets Manager",
 };
 
 /** The store of `host` for the instance `name` of the agent in `agentDir`, its CLI signed in. */
 async function openStore(host: SecretsHost, agentDir: string, name: string): Promise<SecretStore> {
   const log = (message: string) => console.error(`[fastagent] ${message}`);
-  if (host === "agentcore")
-    return agentcoreSecretStore(awsRunner(agentDir), agentcoreSecretName(agentcoreName(name)), log);
   if (host === "fly") {
     const fly = spawnRunner("fly", agentDir, { stdoutToStderr: true });
     if ((await fly(["version"], { capture: true })).code === 127) {
@@ -81,12 +76,12 @@ async function openStore(host: SecretsHost, agentDir: string, name: string): Pro
 }
 
 /** What the definition declares for the deployment. */
-async function declared(agentDir: string, configFile: string | undefined, host: SecretsHost) {
+async function declared(agentDir: string, configFile: string | undefined) {
   const name = await deploymentName(agentDir, configFile);
   const instance = configFile === undefined ? undefined : await readInstanceConfigFile(resolve(configFile));
   const definition = await loadSourceDefinition(agentDir);
   const config = resolveConfig(definition, instance);
-  const api = deploymentApi({ config, hostServes: host !== "agentcore" });
+  const api = deploymentApi({ config });
   const facts = await preflightDeploy({
     agentDir,
     name,
@@ -94,8 +89,6 @@ async function declared(agentDir: string, configFile: string | undefined, host: 
     ...(instance === undefined ? {} : { delivered: { source: instance } }),
     run: false,
     force: false,
-    noResidentProcess: false,
-    storageResets: false,
     servesApi: api.served,
   });
   if (!facts.ok) throw new Error(facts.gate);
@@ -152,19 +145,9 @@ export async function runSecrets(
   }
 }
 
-/** When a written value reaches what is running: an AgentCore session reads its secret when it starts. */
-function noteWhenItTakesEffect(host: SecretsHost): void {
-  if (host === "agentcore") {
-    console.error(
-      "[fastagent] note: the runtime reads the secret when a session starts: a session already running keeps its values " +
-        "until it ends (its idle timeout) or the next deploy",
-    );
-  }
-}
-
 async function list(store: SecretStore, host: SecretsHost, agentDir: string, opts: SecretsOptions): Promise<void> {
   const label = LABELS[host];
-  const { needs, names, modelKeys } = await declared(agentDir, opts.config, host);
+  const { needs, names, modelKeys } = await declared(agentDir, opts.config);
   // A target with no app yet holds nothing: every name is missing, which is an answer and not a failure.
   const present = await store.exists();
   if (!present)
@@ -199,7 +182,7 @@ async function set(
   agentDir: string,
 ): Promise<void> {
   const label = LABELS[host];
-  const { names, apiNames } = await declared(agentDir, opts.config, host);
+  const { names, apiNames } = await declared(agentDir, opts.config);
   if (!names.includes(name) && !apiNames.includes(name)) {
     console.error(`[fastagent] warn: ${name} is not declared by the definition, so nothing reads it on ${label}`);
   }
@@ -208,14 +191,13 @@ async function set(
   await store.ensure();
   await store.write({ [name]: value });
   console.error(`[fastagent] set ${name} on ${label}`);
-  noteWhenItTakesEffect(host);
   // The one time a value is shown: it was made here and nobody holds it yet.
   if (minted) console.log(value);
 }
 
 async function push(store: SecretStore, host: SecretsHost, agentDir: string, opts: SecretsOptions): Promise<void> {
   const label = LABELS[host];
-  const { names, apiNames } = await declared(agentDir, opts.config, host);
+  const { names, apiNames } = await declared(agentDir, opts.config);
   const known = new Set([...names, ...apiNames]);
   let source: ReadonlyMap<string, string>;
   let where: string;
@@ -245,5 +227,4 @@ async function push(store: SecretStore, host: SecretsHost, agentDir: string, opt
   console.error(
     `[fastagent] pushed ${Object.keys(toWrite).length} value(s) from ${where} to ${label}: ${Object.keys(toWrite).join(", ")}`,
   );
-  noteWhenItTakesEffect(host);
 }

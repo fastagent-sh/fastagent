@@ -28,7 +28,7 @@ export interface ChannelContext {
   recordedSession(key: string): string | undefined;
   /**
    * Run `work` after the route has answered, one at a time per `place` (a chat, a thread) in the order they arrived,
-   * counted as work in flight, which `dev`'s restart and AgentCore's `/ping` wait for. It keeps no record: a turn the
+   * counted as work in flight, which `dev`'s restart waits for. It keeps no record: a turn the
    * process stops before it runs is lost unless the platform delivers its event again. A failure goes to the log.
    */
   turn(place: string, work: () => Promise<void>): void;

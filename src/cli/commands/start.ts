@@ -16,7 +16,7 @@ import type { EffectiveConfig } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { namedInstanceConfig } from "../../harnesses/pi-durable/config.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
-import { DEFAULT_HTTP_PORT, type ServableAgent, serveAgent, type ServedAgent } from "../../service.ts";
+import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import { assertTunnelBindable, cliMountOptions, serveService } from "../serve.ts";
@@ -31,8 +31,8 @@ export interface StartOptions {
   instance?: InstanceFlags;
 }
 
-/** What `start` opened and serves: the agent too, for a deployment's own check of what it runs. */
-export type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
+/** What `start` opened and serves. */
+type StartedService = ServedAgent & { agent: Agent; stateRoot: string; port: number; config: EffectiveConfig };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -40,14 +40,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   setLogLevel("info");
   selectAgentEnvironment("production");
   unmarkDevServe();
-  if (process.env.FASTAGENT_AGENTCORE === "1") {
-    const { runAgentcoreStart } = await import("../../deploy/agentcore/start.ts");
-    runAgentcoreStart(dirArg, opts, {
-      ...(portFlag === undefined ? {} : { portFlag }),
-      ...(bindFlag === undefined ? {} : { bindFlag }),
-    });
-    return;
-  }
   // Deployed storage refusals (no mount, a held lease, a missing `flock`, another agent's storage) are the operator's only
   // clue in a crash-looping container.
   const service = await openStartService(dirArg, opts).catch(failStartup);
@@ -62,12 +54,12 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
 }
 
 /**
- * Stage one — TAKE the storage, on a deployed box (a release id names it): it is mounted, held by this process,
- * and this agent's; it becomes the instance's root, and the machinery points at it. The program stays where the image
- * built it, `dirArg`. Returns that directory. Elsewhere, nothing is taken.
+ * On a deployed box (a release id names it), TAKE the storage: it is mounted, held by this process, and this agent's;
+ * it becomes the instance's root, and the machinery points at it. The program stays where the image built it. Elsewhere,
+ * nothing is taken.
  */
-export async function prepareStartWorkspace(dirArg: string): Promise<string> {
-  if (!isDeployedWorkspace()) return dirArg;
+async function prepareStartWorkspace(): Promise<void> {
+  if (!isDeployedWorkspace()) return;
   const storage = process.env[INSTANCE_ROOT_ENV];
   if (!storage) throw new Error(`${INSTANCE_ROOT_ENV} is required for a deployment`);
   const root = resolve(storage);
@@ -77,22 +69,11 @@ export async function prepareStartWorkspace(dirArg: string): Promise<string> {
   // their state is the one failure they could not diagnose from the logs.
   process.env.FASTAGENT_STATE_DIR ||= join(root, ".state");
   process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
-  return dirArg;
 }
 
-export async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
-  return openPreparedStartService(await prepareStartWorkspace(dirArg), opts);
-}
-
-/** Stage two: open the built definition in `dirArg` and serve it. */
-export async function openPreparedStartService(
-  dirArg: string,
-  opts: StartOptions,
-  runtime: {
-    storage?: "posix" | "leased-dotfile";
-    mount?: (opened: ServableAgent) => Promise<ServedAgent>;
-  } = {},
-): Promise<StartedService> {
+/** Take the storage on a deployed box, then open the built definition in `dirArg` and serve it. */
+async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
+  await prepareStartWorkspace();
   // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<Project> | undefined;
   // A start never reads the development `fastagent.json`: its instance configuration is the one `--config` names.
@@ -104,7 +85,6 @@ export async function openPreparedStartService(
     model: modelSpec,
     ...instanceInputs(agentDir),
     ...(config === undefined ? {} : { config }),
-    storage: { instance: runtime.storage ?? "posix" },
   });
   const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);
@@ -119,7 +99,7 @@ export async function openPreparedStartService(
     );
   }
   const { config: effective } = opened;
-  const service = await (runtime.mount ? runtime.mount(opened) : serveAgent(opened, cliMountOptions(effective)));
+  const service = await serveAgent(opened, cliMountOptions(effective));
   return {
     ...service,
     agent: opened.agent,

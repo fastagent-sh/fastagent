@@ -24,6 +24,5 @@ export default {
       port: 8787, // the port a serve listens on, for its channels' webhooks and its health check
       // api: false, // serve no Agent API under /v1, whatever key the environment holds; deploy gives none a key
     },
-    // deploy: { agentcore: { idleTimeoutSeconds: 180 } }, // `deploy agentcore` only: idle microVM tail, 60–1209600s
   },
 } satisfies AgentConfig;

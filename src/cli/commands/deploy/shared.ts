@@ -23,8 +23,6 @@ export interface DeployOptions {
   run?: boolean;
   force?: boolean;
   intoLinked?: boolean;
-  /** `--idle-timeout <seconds>` (agentcore): how long an idle session keeps its microVM, over the program's default. */
-  idleTimeout?: string;
   /** `--config <file>`: the instance configuration the deployment delivers. */
   config?: string;
   /** `--env-file <file>`: the values to give the target. */
@@ -131,7 +129,7 @@ export function boxLoginStep<Args extends unknown[]>(
     config?: string | undefined;
     envFile?: string | undefined;
   },
-  /** The shell, from whatever the driver learns only after deploying (AgentCore's runtime ARN). */
+  /** The shell into the box the driver just deployed. */
   shell: (...args: Args) => BoxShell,
 ): { boxLogin?: BoxLoginStep<Args> } {
   const provider = params.boxLogin;

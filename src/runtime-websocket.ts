@@ -1,6 +1,6 @@
 /**
  * The runtime's own WebSocket and the pings it can send, for the two places that hold a WebSocket open against a
- * service that drops one nobody pings: Slack's Socket Mode and AgentCore's command shell.
+ * service that drops one nobody pings: Slack's Socket Mode.
  *
  * Node's undici sends a ping with `undici.ping` and reports the pong on a diagnostics channel; Bun 1.4.4 and later has
  * both in its `undici` shim. Before that the shim has no `ping` and its WebSocket is the runtime's own, which pings with

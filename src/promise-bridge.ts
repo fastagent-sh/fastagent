@@ -4,9 +4,8 @@
  *
  *  1. INTERRUPTION JOINS. A Promise has no abort hook, so interrupting the fiber that awaits one does not stop the
  *     work behind it. Releasing its resources anyway is how a disposed session gets written to, or a lease is handed
- *     to the next turn while the previous one is still running. {@link joinPromise}, {@link abortThenJoin} and
- *     {@link requestWithDeadline} wait for the pending promise to settle before releasing, aborting first when the
- *     callee takes a signal. {@link fromPromise} is the opt-out for work a caller may walk away from, so a call site
+ *     to the next turn while the previous one is still running. {@link joinPromise} and {@link abortThenJoin} wait for
+ *     the pending promise to settle before releasing, aborting first when the callee takes a signal. {@link fromPromise} is the opt-out for work a caller may walk away from, so a call site
  *     holding a lease, a session or any other resource must not use it.
  *  2. THE CAUSE SURVIVES. The harness's `failureOf` (`instanceof SessionFailed`), the channels' platform error types
  *     and every operator-facing message read the original error, so {@link PromiseFailure} carries it verbatim and
@@ -73,27 +72,6 @@ export function abortThenJoin<A>(
             Effect.andThen(Effect.exit(wait(pending))),
           )
         : Effect.void,
-  );
-}
-
-/** A request with a deadline: the signal is closed on EVERY exit (it owns the response body, which a
- *  settled call has to release too), and the real request is joined before ownership is given up. */
-export function requestWithDeadline<A>(
-  run: (signal: AbortSignal) => Promise<A>,
-  timeoutMs: number,
-): Effect.Effect<A, PromiseFailure> {
-  return Effect.acquireUseRelease(
-    Effect.sync(() => {
-      const controller = new AbortController();
-      // Publish the controller before entering foreign code, including a synchronous fetch throw.
-      return { controller, pending: Promise.resolve().then(() => run(controller.signal)) };
-    }),
-    ({ pending }) =>
-      wait(pending).pipe(
-        Effect.timeout(timeoutMs),
-        Effect.mapError((error) => (error instanceof PromiseFailure ? error : new PromiseFailure(error))),
-      ),
-    ({ controller, pending }) => Effect.sync(() => controller.abort()).pipe(Effect.andThen(Effect.exit(wait(pending)))),
   );
 }
 
