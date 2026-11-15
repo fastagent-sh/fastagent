@@ -73,8 +73,7 @@ describe("the environment of the processes an agent starts", () => {
     const workdir = join(dir, "work");
     mkdirSync(workdir);
     const agent = await openAgent(await loadSourceDefinition(dir), {
-      workdir,
-      stateDir: join(dir, "state"),
+      root: workdir,
       offline: true,
       env: { PATH: "/usr/bin:/bin", HOME: "/home/instance" },
       secrets: {

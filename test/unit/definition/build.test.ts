@@ -20,9 +20,7 @@ describe("fastagent build", () => {
       "LICENSE",
       "SYSTEM.md",
       "build.json",
-      "fastagent.config.d.ts",
       "fastagent.config.js",
-      "fastagent.schema.json",
       "index.d.ts",
       "index.js",
       "lib/shout.js",
@@ -38,10 +36,7 @@ describe("fastagent build", () => {
       version: "1.2.0",
       description: "Answers support questions.",
       type: "module",
-      exports: {
-        ".": { types: "./index.d.ts", default: "./index.js" },
-        "./fastagent.schema.json": "./fastagent.schema.json",
-      },
+      exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
       dependencies: { lodash: "^4" },
       peerDependencies: { "@fastagent-sh/fastagent": "^0.29.0", "@earendil-works/pi-durable": "1.5.0" },
     });

@@ -5,7 +5,6 @@
  * messages.
  */
 import { dirname, isAbsolute, join } from "node:path";
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
@@ -18,8 +17,6 @@ import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
 import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
-import { loadContent } from "../../content/declare.ts";
-import { type ResolvedContent, cloneContent, resolveContent } from "../../content/resolve.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
@@ -27,23 +24,15 @@ import type { Agent } from "../../agent-api.ts";
 import { STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
-import {
-  type EffectiveConfig,
-  type InstanceConfig,
-  type InstanceConfigSource,
-  instanceConfigIn,
-  readInstanceConfigFile,
-  resolveConfig,
-} from "./config.ts";
+import type { AgentConfig } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { openLockedStorage } from "./storage.ts";
-import { openText } from "./text.ts";
 import { instanceName } from "../../instance-name.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   mcp?: McpOptions;
-  /** The instance's name, over the configuration's. Default: the configuration's, else the definition's as one segment. */
+  /** The instance's name. Default: the definition's, as one segment. */
   name?: string;
   /**
    * The values the instance's code, its MCP servers and its model's authentication read by name (`needs`, `${VAR}`,
@@ -57,21 +46,16 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    */
   env: Readonly<Record<string, string>>;
   /**
-   * The environment FastAgent's own work for the instance runs in: cloning content, finding `git`, and where a CLI
-   * instance's files are. The CLI gives this process's; an app, its `env`. The instance's secrets are added to it.
+   * The environment FastAgent's own work for the instance runs in: where a CLI instance's files are, and whether it is
+   * offline. The CLI gives this process's; an app, its `env`. The instance's secrets are added to it.
    */
   ownEnv: Readonly<Record<string, string | undefined>>;
-  /** Who runs the instance: what decides how a channel that names no way receives, and whether its prompt describes a deployment. */
+  /** Who runs the instance: whether its prompt describes a deployment. */
   runsAs: RunsAs;
   /** Whether the model lists are refreshed without the network. Default: `ownEnv`'s `FASTAGENT_OFFLINE` is `1`. */
   offline?: boolean;
-  /** What the instance sets over the program's defaults (`fastagent.json`, or an object); none runs on the defaults. */
-  config?: InstanceConfigSource;
-  /** Layers over `config`, each with its source: the CLI's environment variables (`environmentConfig`). */
-  overrides?: readonly InstanceConfigSource[];
-  /** What a deployment sets over the definition's defaults (a flag, `FASTAGENT_MODEL`). */
+  /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
-  thinkingLevel?: ModelThinkingLevel;
   /**
    * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, which one process
    * holds at a time (storage.ts), with `wake` and `unwake`, since a serve's clock fires the wake-ups they keep. The other
@@ -83,17 +67,17 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   /** What becomes of the messages an earlier process left unfinished in the storage. Default `"resume"`. */
   unfinished?: Unfinished;
   /**
-   * The instance's directory: its working directory, where its content is cloned, its secrets and, by default, its
-   * state are. Default: the definition's own, which is how a source project runs. A built package is read-only and is
-   * opened with a directory of its own.
+   * The instance's directory: its working directory, where its secrets and, by default, its state are. Default: the
+   * definition's own, which is how a source project runs. A built package is read-only and is opened with a directory
+   * of its own.
    */
   workdir?: string;
   /**
    * The directory whose `.secrets/` (values, model credentials, MCP grants) and default state
-   * root the instance reads. Default: the working directory. Temporary: secrets and content become inputs of their own.
+   * root the instance reads. Default: the working directory.
    */
   projectDir?: string;
-  /** The instance's state root, over `FASTAGENT_STATE_DIR` and the project directory's own. */
+  /** The instance's state root. Default: the project directory's own (`resolveStateRoot`). */
   stateRoot?: string;
   /**
    * Where the instance keeps its model credentials and MCP grants when it is given no store: `"secrets"`, the project's
@@ -118,13 +102,11 @@ export interface OpenedServing {
   /** The instance's name: what `info().name` reports. */
   name: string;
   code: BuiltDefinition;
-  /** The configuration this instance opened with: the program's defaults and the instance's over them. */
-  config: EffectiveConfig;
+  /** The definition's configuration (`fastagent.config.ts`). */
+  config: AgentConfig;
   /** The secrets it was given that hold a value: what its code was built with. */
   secrets: Readonly<Record<string, string>>;
   models: ModelEnvironment;
-  /** What the agent works on, resolved for this instance. */
-  content: readonly ResolvedContent[];
   /** The project directory: whose `.secrets/` the instance reads. */
   agentDir: string;
   /** The agent's working directory. */
@@ -134,33 +116,6 @@ export interface OpenedServing {
   /** The definition's channels and schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   channels: BuiltDefinition["channels"];
   schedules: BuiltDefinition["schedules"];
-}
-
-/**
- * The content, once per process, before the agent opens: the locations are fixed until a restart, what is in them is
- * read per message. This process runs the agent, so a repository with no checkout here is cloned, or its clone brought
- * up to date in place where git can do so without touching the agent's work, first; then resolved again as what is now
- * on disk.
- */
-async function contentForThisRun(
-  programContent: unknown,
-  instance: InstanceConfigSource | undefined,
-  workdir: string,
-  env: NodeJS.ProcessEnv,
-): Promise<ResolvedContent[]> {
-  const declared = loadContent(programContent, instance);
-  const places = { workdir };
-  for (const entry of resolveContent(declared, places)) {
-    if (entry.kind !== "github") continue;
-    const done = await cloneContent(entry, env);
-    if (done.outcome === "kept") {
-      log.warn(`[fastagent] content "${entry.name}": the clone in ${entry.location} is kept as it is, ${done.reason}`);
-    } else {
-      const said = { cloned: "cloned", updated: "brought up to date", current: "already up to date" }[done.outcome];
-      log.info(`[fastagent] github ${entry.repo}${entry.ref ? ` at ${entry.ref}` : ""}: ${said} in ${entry.location}`);
-    }
-  }
-  return resolveContent(declared, places);
 }
 
 /** The instance's database, under its state root. */
@@ -189,16 +144,15 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const { dir } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const config = resolveConfig(definition, options.config, options.overrides);
-  const name = instanceName(definition.name, options.name ?? config.name);
-  const text = openText(dir, options.config);
-  const mcpServers = declareMcp(definition.config.mcpServers, dir, options.config);
+  const { config } = definition;
+  const name = instanceName(definition.name, options.name);
+  const mcpServers = declareMcp(config.mcpServers, dir);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
   // may run several agents, each with its own values.
   const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets, config);
-  // FastAgent's own work for the instance (cloning content, finding its files) runs in this process's environment and
-  // the instance's secrets. What the AGENT starts gets an environment assembled from inputs.
+  const code = buildDefinition(definition, secrets);
+  // FastAgent's own work for the instance (finding its files) runs in this process's environment and the instance's
+  // secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };
   const processEnv = processEnvironment(
     {
@@ -209,7 +163,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     },
     dirname(workdir),
   );
-  const content = await contentForThisRun(definition.config.content, options.config, workdir, env);
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const authPath =
     options.authPath ??
@@ -242,16 +195,12 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       runsAs: options.runsAs,
       storage,
       code,
-      config,
-      text,
-      content,
       workdir,
       processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
       ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
-      ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
     });
@@ -284,7 +233,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     config,
     secrets,
     models,
-    content,
     agentDir: projectDir,
     workdir,
     stateRoot,
@@ -300,11 +248,6 @@ export interface LocalAgent extends Agent {
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;
-  /**
-   * What the agent works on, as it opened: the snapshot that runs. `listContent` reads the declaration on disk, which
-   * an edit changes before the next open, so a difference between the two says a reopen is due.
-   */
-  readonly content: readonly ResolvedContent[];
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
   /** Close what `serve` started, then release the instance's storage. */
@@ -316,17 +259,10 @@ export interface ServeAgentOptions {
   apiKeys?: readonly string[];
 }
 
-/** The instance root, the agent's working directory with its state in `.state/`; or the two apart. */
-export type InstanceLocation = { root: string } | { stateDir: string; workdir: string };
-
-export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
-  /**
-   * The instance configuration, over the program's defaults: an object, or the absolute path of a `fastagent.json`.
-   * Given `root` and no `config`, `<root>/fastagent.json` when there is one; nothing is read for `stateDir` and
-   * `workdir`, and nothing is created.
-   */
-  config?: InstanceConfig<Settings> | string;
-  /** The instance's name, over `config`'s: one path segment. Default: `config`'s, else the definition's as one. */
+export interface OpenAgentOptions {
+  /** The instance root, absolute: the agent's working directory, with its state in `<root>/.state`. */
+  root: string;
+  /** The instance's name: one path segment. Default: the definition's, as one. */
   name?: string;
   /**
    * The values the agent's code (`needs`), its MCP servers (`${VAR}`) and its model's authentication read by name. The
@@ -348,48 +284,23 @@ export type OpenAgentOptions<Settings = unknown> = InstanceLocation & {
   credentials?: CredentialStore;
   /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
   offline?: boolean;
-};
-
-/** The `config` input as a source: an object as it is, a path (absolute, like every path here) read. */
-async function configOf(config: OpenAgentOptions["config"]): Promise<InstanceConfigSource | undefined> {
-  if (config === undefined) return undefined;
-  if (typeof config !== "string") return { values: config, label: "the config object" };
-  if (!isAbsolute(config)) throw new Error(`config must be an absolute path, and is ${JSON.stringify(config)}`);
-  return readInstanceConfigFile(config);
 }
 
-/** Where the instance is, every path absolute: a relative one would be an input the process's cwd chooses. */
-function locationOf(location: InstanceLocation): { workdir: string; stateRoot: string } {
-  const absolute = (path: unknown, name: string): string => {
-    if (typeof path !== "string" || !isAbsolute(path)) {
-      throw new Error(`${name} must be an absolute path, and is ${JSON.stringify(path)}`);
-    }
-    return path;
-  };
-  if ("root" in location && ("stateDir" in location || "workdir" in location)) {
-    throw new Error("give the instance a root, or a stateDir and a workdir, not both");
+/** The instance root, which must be absolute: a relative one would be an input the process's cwd chooses. */
+function locationOf({ root }: { root: unknown }): { workdir: string; stateRoot: string } {
+  if (typeof root !== "string" || !isAbsolute(root)) {
+    throw new Error(`root must be an absolute path, and is ${JSON.stringify(root)}`);
   }
-  if ("root" in location) {
-    const root = absolute(location.root, "root");
-    return { workdir: root, stateRoot: join(root, STATE_DIRNAME) };
-  }
-  return { workdir: absolute(location.workdir, "workdir"), stateRoot: absolute(location.stateDir, "stateDir") };
+  return { workdir: root, stateRoot: join(root, STATE_DIRNAME) };
 }
 
 /**
  * Open one instance of `definition`, the default export of an agent's package, the way `dev` and `start` do before they
- * serve: its code built with the secrets it declares, its environment, its content and the instance's storage, which
+ * serve: its code built with the secrets it declares, its environment and the instance's storage, which
  * one process holds at a time. Nothing reaches the agent until `serve`.
  */
-export async function openAgent<Settings = unknown>(
-  definition: AgentDefinition<Settings>,
-  options: OpenAgentOptions<Settings>,
-): Promise<LocalAgent> {
+export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<LocalAgent> {
   const { workdir, stateRoot } = locationOf(options);
-  const config =
-    options.config === undefined && "root" in options
-      ? await instanceConfigIn(options.root)
-      : await configOf(options.config);
   // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
   let ticking = false;
   const opened = await openServing(assertDefinition(definition), {
@@ -401,7 +312,6 @@ export async function openAgent<Settings = unknown>(
     runsAs: NOT_HOSTED,
     offline: options.offline === true,
     ...(options.name === undefined ? {} : { name: options.name }),
-    ...(config === undefined ? {} : { config }),
     wakeTicking: () => ticking,
     keeps: "state",
     ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
@@ -416,7 +326,6 @@ export async function openAgent<Settings = unknown>(
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
-    content: opened.content,
     harness: agent.harness,
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.

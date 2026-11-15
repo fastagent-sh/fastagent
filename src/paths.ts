@@ -1,7 +1,6 @@
 /**
  * ADDRESSING: which directory is the agent — the one holding `fastagent.config.ts`, named by the caller — plus the
- * machinery paths that follow from it. Nothing about what the agent works on is derived from where it sits; that is
- * its declared content (src/content/).
+ * machinery paths that follow from it.
  */
 import { type Stats, statSync } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
@@ -36,19 +35,11 @@ function environmentPath(dir: string, segment: string, env: NodeJS.ProcessEnv): 
 export const STATE_DIRNAME = ".state";
 
 /**
- * Where fastagent clones the repositories an agent's content declares, `content/<name>` in the instance's working
- * directory. Never an env override: a machine that has a checkout of its own adds it as a directory instead.
- */
-export const CONTENT_DIRNAME = "content";
-
-/**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
  * author writes (`tools/`, `channels/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
-/** The instance configuration a development project holds beside its `fastagent.config.ts`. */
-export const INSTANCE_CONFIG_FILE = "fastagent.json";
 
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
@@ -143,23 +134,8 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
   return resolve(expanded);
 }
 
-/**
- * A path as an instance configuration writes it, absolute: `~/` is the home directory, a relative one is `base`'s (the
- * configuration file's directory). Undefined for a relative one when there is no file to anchor it.
- */
-export function configurationPath(path: string, base: string | undefined): string | undefined {
-  if (path === "~" || path.startsWith("~/")) return join(homedir(), path.slice(1));
-  if (isAbsolute(path)) return resolve(path);
-  return base === undefined ? undefined : resolve(base, path);
-}
-
-/** Where an instance is, from the environment: the root, or its state and its workspace apart. */
+/** Where an instance is, from the environment: its root, the agent's working directory with its state inside. */
 export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
-export const INSTANCE_WORKDIR_ENV = "FASTAGENT_WORKDIR";
-export const INSTANCE_STATE_ENV = "FASTAGENT_STATE_DIR";
-export const INSTANCE_CONFIG_ENV = "FASTAGENT_CONFIG";
-/** The instance configuration as the JSON itself, for a container that has no file for it. */
-export const INSTANCE_CONFIG_JSON_ENV = "FASTAGENT_CONFIG_JSON";
 
 /** Where fastagent keeps what it makes for a local instance of the project in `dir`, one directory per environment. */
 export const INSTANCES_DIRNAME = ".fastagent";
@@ -167,35 +143,20 @@ export const INSTANCES_DIRNAME = ".fastagent";
 /**
  * The instance root of the project in `dir` when none is given: `.fastagent/dev/` for `dev`,
  * and `.fastagent/start/` for the commands that run what `start` runs, kept apart so a trial of the production build
- * never reads or writes the development sessions and clones.
+ * never reads or writes the development sessions.
  */
 function defaultInstanceRoot(dir: string, env: NodeJS.ProcessEnv): string {
   return join(resolve(dir), INSTANCES_DIRNAME, env[AGENT_ENVIRONMENT_ENV] === "production" ? "start" : "dev");
 }
 
-/**
- * The resolved state root — the durable machine-state home (sessions/, channels/<kind>/, schedule/): the state
- * directory, else `.state` in the instance root, which is the project's default one when none is given.
- */
-export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return (
-    resolveOverridePath(env[INSTANCE_STATE_ENV]) ??
-    join(resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, env), STATE_DIRNAME)
-  );
-}
-
-/** The agent's working directory: the workspace directory, else the instance root, which is the project's default one. */
+/** The agent's working directory: the instance root, else the project's default one. */
 export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return (
-    resolveOverridePath(env[INSTANCE_WORKDIR_ENV]) ??
-    resolveOverridePath(env[INSTANCE_ROOT_ENV]) ??
-    defaultInstanceRoot(dir, env)
-  );
+  return resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, env);
 }
 
-/** Where fastagent clones the content entry `name` of the agent in `dir`. */
-export function contentEntryPath(dir: string, name: string): string {
-  return join(resolve(dir), CONTENT_DIRNAME, name);
+/** The durable machine-state home (sessions, channels' and schedules' state): `.state` in the instance root. */
+export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(resolveWorkdir(dir, env), STATE_DIRNAME);
 }
 
 /**

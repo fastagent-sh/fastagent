@@ -4,7 +4,7 @@
  * nothing is asked and nothing waits: the command that does it for a coding agent is named.
  */
 import { codeSecrets } from "../harnesses/pi-durable/definition.ts";
-import { loadDevProject } from "../harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { missingSecrets } from "../declared-secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
 import { type SetupKind, isSetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
@@ -13,9 +13,9 @@ import { isInteractive } from "./shared.ts";
 
 /** The first-party channels the agent mounts whose credentials this process's environment lacks. */
 async function lackingChannels(agentDir: string): Promise<SetupKind[]> {
-  const project = await loadDevProject(agentDir).catch(failStartup);
-  const missing = missingSecrets(codeSecrets(project.definition), process.env);
-  return project.definition.registry.channels.flatMap(({ file, name }) => {
+  const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+  const missing = missingSecrets(codeSecrets(definition), process.env);
+  return definition.registry.channels.flatMap(({ file, name }) => {
     if (!isSetupKind(name)) return [];
     // Only what the channel's own setup supplies: a channel file of the same name that reads other variables is its
     // author's to fill.

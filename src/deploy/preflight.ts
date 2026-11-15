@@ -6,13 +6,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import { resolveConfig } from "../harnesses/pi-durable/config.ts";
 import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
-import { isModelSpec } from "../model-ref.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
-import { loadContent } from "../content/declare.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
@@ -71,21 +68,10 @@ async function gatherFacts(
   const definition = await loadSourceDefinition(agentDir).catch((error: unknown) => {
     throw new DeployGate(`the definition does not load, so the container would not start: ${messageOf(error)}`);
   });
-  const config = (() => {
-    try {
-      return resolveConfig(definition);
-    } catch (error) {
-      throw new DeployGate(messageOf(error));
-    }
-  })();
-  if (config.model !== undefined && !isModelSpec(config.model)) {
-    throw new DeployGate(
-      `the model in fastagent.config.ts is not a "provider/modelId" spec: ${JSON.stringify(config.model)}`,
-    );
-  }
+  const { config } = definition;
   if (config.model === undefined) {
     report.warn(
-      `no model is set in fastagent.config.ts (\`defaults: { model: "provider/id" }\`): set FASTAGENT_MODEL on the ` +
+      `no model is set in fastagent.config.ts (\`model: "provider/id"\`): set FASTAGENT_MODEL on the ` +
         `container, or it refuses to start`,
     );
   } else {
@@ -95,15 +81,6 @@ async function gatherFacts(
   const rawProgram = await loadRawProgramConfig(agentDir).catch((error: unknown) => {
     throw new DeployGate(`cannot read fastagent.config.ts: ${messageOf(error)}`);
   });
-  const content = loadContent(rawProgram.value?.content, undefined, rawProgram.file);
-  for (const entry of content) {
-    if (entry.kind === "github") {
-      report.note(
-        `works on ${entry.name}: github ${entry.repo}${entry.ref ? `@${entry.ref}` : ""}, cloned in the container ` +
-          `and brought up to date at each start (GITHUB_TOKEN on the container for a private repository)`,
-      );
-    }
-  }
   checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, report);
 
   const pkg = await readPackageJson(agentDir);
@@ -145,9 +122,9 @@ async function gatherFacts(
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);
 
-  // A repository content entry or a shipped .git needs git in the image.
-  const needsGit = (await exists(join(agentDir, ".git"))) || content.length > 0;
-  const name = instanceName(definition.name, config.name);
+  // A shipped .git needs git in the image.
+  const needsGit = await exists(join(agentDir, ".git"));
+  const name = instanceName(definition.name);
   if (kept !== undefined) checkKeptDockerfile(kept, name, report);
   const container: ContainerInput = {
     name,
@@ -157,14 +134,14 @@ async function gatherFacts(
     apt: needsGit ? ["git"] : [],
     machineryPaths: paths.machineryPaths,
   };
-  return { container, port: config.http?.port ?? DEFAULT_HTTP_PORT };
+  return { container, port: DEFAULT_HTTP_PORT };
 }
 
 /** A literal value in the program's MCP servers ships in the image; a `${VAR}` reads it from the container instead. */
 function checkMcp(agentDir: string, programServers: unknown, programFile: string, report: DeployReport): void {
   let declarations: McpDeclaration[];
   try {
-    declarations = declareMcp(programServers, agentDir, undefined, programFile);
+    declarations = declareMcp(programServers, agentDir, programFile);
   } catch (error) {
     throw new DeployGate(messageOf(error));
   }

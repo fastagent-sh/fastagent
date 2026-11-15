@@ -1,63 +1,10 @@
-/**
- * The configuration of an instance: what the program declares as its `defaults` and
- * its `settings` schema, what an instance sets over them, and the one value they resolve to, each leaf with the place
- * it came from. One JSON Schema describes the shape: it checks the program's defaults and an instance's file alike,
- * and `fastagent build` publishes it as `fastagent.schema.json`.
- */
-import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+/** The program's `fastagent.config.ts`, checked: the one place an agent's settings are written. */
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import {
-  type Schema,
-  arr,
-  bool,
-  compile,
-  int,
-  map,
-  obj,
-  oneOf,
-  opt,
-  str,
-  union,
-  unknown,
-} from "@earendil-works/pi-schema";
-import { type ContentEntry, declareContent, instanceContent } from "../../content/declare.ts";
-import { type McpServerDeclaration, checkInstanceServers, declareServers } from "../../mcp/config.ts";
-import { checkInstanceName } from "../../instance-name.ts";
+import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
+import { declareServers } from "../../mcp/config.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import {
-  INSTANCE_CONFIG_ENV,
-  INSTANCE_CONFIG_FILE,
-  INSTANCE_CONFIG_JSON_ENV,
-  resolveOverridePath,
-} from "../../paths.ts";
-import type { AgentConfig, AgentDefaults } from "./define.ts";
+import type { AgentConfig } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
-
-/**
- * What an instance may set over the program's defaults: `fastagent.json`, or the same shape as an object. Beside the
- * defaults, what only an instance adds: content, and instructions, skills and prompt templates (relative paths are the
- * file's directory's).
- */
-export type InstanceConfig<Settings = unknown> = AgentDefaults<Settings> & {
-  /** The instance's name, one path segment. Default: the program's name made one. */
-  name?: string;
-  content?: Record<string, ContentEntry>;
-  /** MCP servers the instance adds to the program's: a name both declare refuses the open. */
-  mcpServers?: Record<string, McpServerDeclaration>;
-  instructions?: string[];
-  skills?: string[];
-  prompts?: string[];
-};
-
-/** An instance configuration and where it is from, said in a refusal and as a value's source. */
-export interface InstanceConfigSource {
-  values: unknown;
-  label: string;
-  /** The configuration file's directory, which its relative paths are relative to. None for an object. */
-  directory?: string;
-}
 
 const THINKING_LEVELS = [
   "off",
@@ -68,292 +15,57 @@ const THINKING_LEVELS = [
   "xhigh",
   "max",
 ] as const satisfies readonly ModelThinkingLevel[];
-const PROGRAM_DEFAULT = "program default";
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const CONSTANTS = ["providers", "content", "mcpServers"];
-/** Keys that were the program's own before they became defaults. */
-const FORMER_CONSTANTS = ["model", "thinkingLevel", "http"];
+const KEYS = ["model", "thinkingLevel", "starters", "providers", "mcpServers"];
 
-/** An instance's content entry: a repository, or a directory (its detailed refusals are content/declare.ts's). */
-const CONTENT_ENTRY = union([
-  obj({
-    github: str({ description: "The repository, owner/repo" }),
-    ref: opt(str({ description: "The branch, tag or commit to clone" })),
-    description: opt(str({ description: "One sentence for the agent: what this is, and how to treat it" })),
-  }),
-  obj({
-    path: str({ description: "A directory of this machine: absolute, ~/, or relative to this file" }),
-    description: opt(str({ description: "One sentence for the agent: what this is, and how to treat it" })),
-  }),
-]);
+/** The keys whose values are plain data; `providers` and `mcpServers` are checked by their own readers. */
+const DATA: Schema = obj({
+  model: opt(str({ description: 'The default model, "provider/modelId"', minLength: 3 })),
+  thinkingLevel: opt(oneOf(THINKING_LEVELS)),
+  starters: opt(
+    arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
+      description: "Example first messages a client may offer as drafts",
+      maxItems: MAX_STARTERS,
+    }),
+  ),
+});
 
-/** The program's `settings` with no property required: an instance gives some of them, the program's defaults the rest. */
-function partial(settings: Schema): Schema {
-  const { required: _required, ...rest } = settings as Record<string, unknown>;
-  return rest as Schema;
-}
-
-/** What the program's defaults and an instance's configuration may hold. `settings` is the program's, or none. */
-function shape(settings: Schema | undefined) {
-  return {
-    starters: opt(
-      arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
-        description: "Example first messages a client may offer as drafts",
-        maxItems: MAX_STARTERS,
-      }),
-    ),
-    model: opt(str({ description: 'The default model, "provider/modelId"', minLength: 3 })),
-    thinkingLevel: opt(oneOf(THINKING_LEVELS)),
-    http: opt(
-      obj({
-        port: opt(int({ minimum: 0, maximum: 65535, description: "The port a serve listens on" })),
-        api: opt(bool({ description: "Whether a serve answers the Agent API under /v1" })),
-      }),
-    ),
-    settings: opt(settings === undefined ? obj({}) : partial(settings)),
-  };
-}
-
-/** The JSON Schema of an instance's `fastagent.json` for a program with `settings`: what `fastagent build` publishes. */
-export function instanceConfigSchema(settings: Schema | undefined): Schema {
-  const paths = (description: string) => opt(arr(str({ minLength: 1 }), { description, uniqueItems: true }));
-  return obj({
-    $schema: opt(str()),
-    ...shape(settings),
-    name: opt(str({ description: "The instance's name: one path segment of letters, digits, - and _" })),
-    description: opt(str({ description: "One line about this instance, apart from the program's", pattern: "\\S" })),
-    content: opt(map(CONTENT_ENTRY)),
-    mcpServers: opt(
-      map(unknown(), {
-        description:
-          "MCP servers this instance adds to the program's, by name, in the MCP ecosystem's entry shape (checked when the instance opens)",
-      }),
-    ),
-    instructions: paths("Files of instructions added after the program's AGENTS.md, relative to this file"),
-    skills: paths(
-      "Directories of skills (one SKILL.md per subdirectory) added to the program's, relative to this file",
-    ),
-    prompts: paths("Directories of prompt templates (one .md file each) added to the program's, relative to this file"),
-  });
-}
-
-/** Refuse `value`, naming `where`, when `schema` does not accept it: each failing path, and why. */
-function check(schema: Schema, value: unknown, where: string): void {
-  const validator = compile(schema);
-  if (validator.check(value)) return;
-  const problems = validator
-    .errors(value)
-    .map(({ path, message }) => `${path === "" ? "(the value)" : path} ${message}`);
-  throw new Error(`${where}: ${problems.join("; ")}`);
-}
-
-/** Defaults, or an instance's values, in the shape both have; `schemaWhere` names the model's place in a refusal. */
-function checkValues(
-  values: unknown,
-  settings: Schema | undefined,
-  where: string,
-  shapeOf: (s?: Schema) => Schema,
-): void {
-  check(shapeOf(settings), values, where);
-  const { model } = values as { model?: string };
-  if (model !== undefined) modelRefOf(model, `${where}: /model`);
-}
-
-/**
- * The program's `fastagent.config.ts` default export, checked: the constants it may hold, its `settings` schema, and
- * its defaults in the shape an instance's configuration has. Without one, no constants and no defaults.
- */
+/** The program's `fastagent.config.ts` default export, checked; `{}` without one. */
 export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (config === undefined) return {};
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  const { settings, defaults, providers, content, mcpServers } = config as AgentConfig;
-  const keys = [...CONSTANTS, "settings", "defaults"];
   for (const key of Object.keys(config)) {
-    if (keys.includes(key)) continue;
-    const moved = FORMER_CONSTANTS.includes(key)
-      ? ': it is a default now, under "defaults"'
-      : key === "extensions"
-        ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
-        : "";
-    throw new Error(`${file}: unknown key "${key}"${moved} (keys: ${keys.join(", ")})`);
+    if (KEYS.includes(key)) continue;
+    const hint =
+      key === "defaults"
+        ? ": its keys are top-level now (model, thinkingLevel, starters)"
+        : key === "extensions"
+          ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
+          : "";
+    throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
+  const { model, thinkingLevel, starters, providers, mcpServers } = config as AgentConfig;
+  const validator = compile(DATA);
+  const data = { model, thinkingLevel, starters };
+  if (!validator.check(data)) {
+    const problems = validator
+      .errors(data)
+      .map(({ path, message }) => `${path === "" ? "(the value)" : path} ${message}`);
+    throw new Error(`${file}: ${problems.join("; ")}`);
+  }
+  if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
-  if (content !== undefined) declareContent(content, { origin: "program", file });
   if (mcpServers !== undefined) declareServers(mcpServers, file);
-  if (settings !== undefined) {
-    if ((settings as { type?: unknown } | null)?.type !== "object") {
-      throw new Error(`${file}: "settings" must be an object schema (obj({ ... }) from @earendil-works/pi-schema)`);
-    }
-    try {
-      compile(settings);
-    } catch (error) {
-      throw new Error(`${file}: "settings" is not a JSON Schema: ${(error as Error).message}`, { cause: error });
-    }
-  }
-  if (defaults !== undefined) checkValues(defaults, settings, `${file} defaults`, (s) => obj(shape(s)));
   return config as AgentConfig;
 }
 
-/** An instance configuration, checked against the shape of a program with `settings`. */
-function checkInstanceConfig(source: InstanceConfigSource, settings: Schema | undefined): InstanceConfig {
-  const { values, label } = source;
-  if (typeof values === "object" && values !== null) {
-    // Its own refusals name the entry and say what is wrong with it, which a schema's cannot.
-    instanceContent(source);
-    checkInstanceServers(source);
-    const { name } = values as { name?: unknown };
-    if (typeof name === "string") {
-      try {
-        checkInstanceName(name);
-      } catch (error) {
-        throw new Error(`${label}: ${(error as Error).message}`);
-      }
-    }
-  }
-  checkValues(values, settings, label, instanceConfigSchema);
-  const { $schema: _schema, ...config } = values as Record<string, unknown>;
-  return config as InstanceConfig;
-}
-
-/** A `fastagent.json` read: refused when it cannot be read or is not JSON, naming the file. */
-export async function readInstanceConfigFile(path: string): Promise<InstanceConfigSource> {
-  let text: string;
-  try {
-    text = await readFile(path, "utf8");
-  } catch (error) {
-    throw new Error(`cannot read the instance configuration ${path}: ${(error as Error).message}`, { cause: error });
-  }
-  try {
-    return { values: JSON.parse(text), label: path, directory: dirname(path) };
-  } catch (error) {
-    throw new Error(`${path} is not JSON: ${(error as Error).message}`, { cause: error });
-  }
-}
-
-/**
- * The configuration the environment names, when it names one: the file `FASTAGENT_CONFIG` names, or the JSON itself in
- * `FASTAGENT_CONFIG_JSON`, for a container that has no file for it. Naming both is refused: which one
- * counted would be a guess.
- */
-export async function namedInstanceConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<InstanceConfigSource | undefined> {
-  const path = resolveOverridePath(env[INSTANCE_CONFIG_ENV]);
-  const json = env[INSTANCE_CONFIG_JSON_ENV];
-  if (path !== undefined && json) {
-    throw new Error(`${INSTANCE_CONFIG_ENV} and ${INSTANCE_CONFIG_JSON_ENV} are both set: name the configuration once`);
-  }
-  if (json) return { values: parseConfigJson(json), label: INSTANCE_CONFIG_JSON_ENV };
-  return path === undefined ? undefined : readInstanceConfigFile(path);
-}
-
-/** The configuration as `inspectMcp` and `signInMcp` take it: the file's path when it is one, else the values. */
-export function mcpConfigOf(source: InstanceConfigSource): string | Record<string, unknown> {
-  return source.directory === undefined ? (source.values as Record<string, unknown>) : source.label;
-}
-
-function parseConfigJson(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${INSTANCE_CONFIG_JSON_ENV} is not JSON: ${(error as Error).message}`, { cause: error });
-  }
-}
-
-/** The instance configuration `dev` runs a project with: the one named by `--config` or `FASTAGENT_CONFIG`, else the project's own. */
-export async function devInstanceConfig(dir: string): Promise<InstanceConfigSource | undefined> {
-  return (await namedInstanceConfig()) ?? (await instanceConfigIn(dir));
-}
-
-/** The `fastagent.json` a directory holds, when it holds one: a development project's root, or an instance root. */
-export async function instanceConfigIn(dir: string): Promise<InstanceConfigSource | undefined> {
-  const path = join(dir, INSTANCE_CONFIG_FILE);
-  return existsSync(path) ? readInstanceConfigFile(path) : undefined;
-}
-
-/** What an open reads of the configuration: the program's defaults with an instance's over them. */
-export interface EffectiveConfig {
-  /** The instance's name as its configuration gives it; none when it gives none (`instanceName` defaults it). */
-  name?: string;
-  description?: string;
-  starters?: readonly string[];
-  model?: string;
-  thinkingLevel?: ModelThinkingLevel;
-  http?: { port?: number; api?: boolean };
-  settings: Readonly<Record<string, unknown>>;
-  /** Where each value is from, by its path (`http.port`, `settings.repo`): "program default", or the instance's label. */
-  sources: Readonly<Record<string, string>>;
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** Put `layer` over `into`: objects merge, anything else replaces; each leaf written is recorded as from `label`. */
-function overlay(
-  into: Record<string, unknown>,
-  layer: Record<string, unknown>,
-  label: string,
-  sources: Record<string, string>,
-  at = "",
-): void {
-  for (const [key, value] of Object.entries(layer)) {
-    const path = at === "" ? key : `${at}.${key}`;
-    if (key === "__proto__") throw new Error(`${label}: ${path} is not a setting: "__proto__" cannot be a key`);
-    if (!isRecord(value)) {
-      into[key] = value;
-      sources[path] = label;
-      continue;
-    }
-    if (!isRecord(into[key])) {
-      into[key] = {};
-      delete sources[path];
-    }
-    overlay(into[key] as Record<string, unknown>, value, label, sources, path);
-  }
-}
-
-/**
- * The configuration an instance of `definition` opens with: the program's defaults, the instance's over them, then
- * `overrides` (the environment's, see `environmentConfig`), the merged settings checked against the program's
- * `settings` schema (a required one no one gave refuses, naming it).
- */
-export function resolveConfig(
-  definition: AgentDefinition,
-  instance?: InstanceConfigSource,
-  overrides: readonly InstanceConfigSource[] = [],
-): EffectiveConfig {
-  const { defaults, settings } = definition.config;
-  const merged: Record<string, unknown> = {};
-  const sources: Record<string, string> = {};
-  if (defaults !== undefined) {
-    checkValues(defaults, settings, `${definition.name} defaults`, (s) => obj(shape(s)));
-    overlay(merged, defaults as Record<string, unknown>, PROGRAM_DEFAULT, sources);
-  }
-  if (instance !== undefined) {
-    overlay(merged, checkInstanceConfig(instance, settings) as Record<string, unknown>, instance.label, sources);
-  }
-  for (const layer of overrides) {
-    overlay(merged, checkInstanceConfig(layer, settings) as Record<string, unknown>, layer.label, sources);
-  }
-  const values = (merged.settings ?? {}) as Record<string, unknown>;
-  check(settings ?? obj({}), values, `the settings of ${definition.name}`);
-  return { ...merged, settings: values, sources };
-}
-
-/**
- * What `info()` reports of who the agent is: the program's name and description as the package gives them, the
- * instance's own description (none when it gives none: the program's is not a fallback), and the starters in effect.
- */
-export function agentPresentation(
-  definition: AgentDefinition,
-  config: EffectiveConfig,
-): {
+/** What `info()` reports of who the agent is: the package's name and description, and its starters. */
+export function agentPresentation(definition: AgentDefinition): {
   agent: { name: string; description?: string };
-  description?: string;
   starters?: readonly string[];
 } {
   return {
@@ -361,14 +73,6 @@ export function agentPresentation(
       name: definition.name,
       ...(definition.description === undefined ? {} : { description: definition.description }),
     },
-    ...(config.description === undefined ? {} : { description: config.description }),
-    ...(config.starters === undefined ? {} : { starters: config.starters }),
+    ...(definition.config.starters === undefined ? {} : { starters: definition.config.starters }),
   };
-}
-
-/** The value at a dotted `path` of `config`. */
-export function configValue(config: EffectiveConfig, path: string): unknown {
-  let value: unknown = config;
-  for (const key of path.split(".")) value = isRecord(value) ? value[key] : undefined;
-  return value;
 }

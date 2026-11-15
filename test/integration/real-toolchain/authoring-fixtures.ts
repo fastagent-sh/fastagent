@@ -3,24 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withGitIdentity } from "../../doubles/git-env.ts";
-import { type SourceOptions, readContentSource } from "../../../src/content/source.ts";
-
-/** What `content add <dir>` adds. */
-export const directory = (dir: string, options: SourceOptions = {}) => readContentSource(dir, "/", options).addition;
 
 const SRC = fileURLToPath(new URL("../../../src/", import.meta.url));
 
 /**
- * Create an agent and open it in a plain Node process. vitest aliases `@fastagent-sh/fastagent` to this checkout's
+ * Scaffold an agent and open it in a plain Node process. vitest aliases `@fastagent-sh/fastagent` to this checkout's
  * source, which would make every import resolve; a child process run from a temp directory resolves it the way an
  * app that never ran `npm install` there does: not at all.
  */
 export function createAndOpen(dir: string): Promise<string> {
   const script = `
-    import { createAgent } from ${JSON.stringify(join(SRC, "authoring.ts"))};
+    import { scaffoldAgent } from ${JSON.stringify(join(SRC, "scaffold/init.ts"))};
     import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/open.ts"))};
     import { openServing } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/serve.ts"))};
-    await createAgent(${JSON.stringify(dir)});
+    await scaffoldAgent(${JSON.stringify(dir)});
     await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { secrets: {}, env: {}, ownEnv: process.env, runsAs: { dev: false, deployed: false }, storage: "memory" })).then(
       async (opened) => {
         await opened.agent.close();

@@ -1,7 +1,6 @@
 /**
  * Where an instance is, as a command's flags and the environment place it: the resolvers'
- * precedence, and that each command that opens or reads an instance follows them. The merge of what the configuration
- * says is config.test.ts's.
+ * precedence, and that each command that opens or reads an instance follows them.
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -11,7 +10,7 @@ import { agentWorkspace, built, whileRunning } from "../../doubles/cli-run.ts";
 describe("commands that open an instance", () => {
   it("with no flags, start runs from .fastagent/start/, apart from dev's .fastagent/dev/", async () => {
     const dir = await agentWorkspace("fa-instance-default-start-", {
-      "fastagent.config.ts": `export default { defaults: { model: "openai/gpt-4o-mini" } };\n`,
+      "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
       ".secrets/production/.env": "OPENAI_API_KEY=sk-test\n",
     });
     await built(dir);

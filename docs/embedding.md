@@ -23,19 +23,17 @@ import support from "@acme/support-agent"; // the default export of a package `f
 const agent = await openAgent(support, {
   root: "/var/lib/myapp/support",
   secrets: { ZENDESK_TOKEN: vault.read("zendesk") }, // what the agent's code and model read by name
-  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands and FastAgent's own installing and cloning start from; without it, nothing
+  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands start from; without it, nothing
   model: "openai/gpt-5.5",
 });
 // ...
 await agent.close(); // on shutdown: releases the instance's storage
 ```
 
-- Paths are absolute. `root` is the agent's working directory, with its state in `<root>/.state`; pass
-  `{ stateDir, workdir }` to put them apart.
+- `root` is absolute: the agent's working directory, with its state in `<root>/.state`.
 - The agent reads only the `secrets` and `env` you give it, never your process's environment. `baseEnv(process.env)`
   passes `PATH`, `HOME`, locale and proxy.
-- Opening installs its declared environment, clones its content, and refreshes model lists (`offline: true` skips the
-  network).
+- Opening refreshes the model lists (`offline: true` skips the network).
 - One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
   stop work for good, `agent.sessions.cancel(sessionId)` first.
 - MCP servers: sign in with `inspectMcp` and `signInMcp`, then pass `mcp: { store, bindings }` ([MCP servers](mcp.md)).
@@ -183,18 +181,15 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
 - **Its inputs, and nothing else.** Of the process's environment FastAgent reads only `FASTAGENT_LOG_LEVEL`: no
   variable places, configures or serves the instance, and none reaches a process the agent starts. It reads no file its
   inputs do not name, the machine's model credentials included, and writes neither `process.env` nor the package. A
-  model provider's SDK still reads its own credential chain. Installing packages and cloning content run in `env`
-  plus `secrets`: an app that clones over SSH adds `SSH_AUTH_SOCK` to `env`.
-- **Refusals at open, never later.** A relative path, a required secret or setting without a value, a `config` the
-  schema refuses, a name the program already declares (content, MCP server, skill, template), a second open over the
-  same state, and a definition built for another FastAgent format each refuse the open, naming what to fix.
+  model provider's SDK still reads its own credential chain.
+- **Refusals at open, never later.** A relative `root`, a required secret without a value, a second open over the same
+  state, and a definition built for another FastAgent format each refuse the open, naming what to fix.
 - **What a started process gets**: `env`, the declared packages' commands ahead on its `PATH`, the declared secrets, a
   stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
 - **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
   `sessions.cancel` was stopping it.
-- **`serve()`.** `listen` defaults to `http.port`, else 8787. A webhook channel's URL is yours to point the platform
-  at. `close()` ends the API's event streams, gives requests in flight 500 ms, then stops the channels and schedules.
-  With `http.api: false`, `serve` refuses `apiKeys`.
+- **`serve()`.** A webhook channel's URL is yours to point the platform at. `close()` ends the API's event streams,
+  gives requests in flight 500 ms, then stops the channels and schedules.
 - **Users kept apart are yours.** An app serving its own users over one instance checks every session id a request
   names, a fork's source included, and that holds only for an agent whose tools reach neither its storage nor its
   files.
@@ -203,13 +198,8 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
 
 An app that runs agents for a person on their machine:
 
-- `createAgent(dir, { content })` makes an agent as `fastagent init` does. `addContent`, `removeContent` and
-  `listContent` edit what it works on; changes apply at the next open (`agent.content` is what the open agent has).
-  `addMcpServer` and `removeMcpServer` edit the instance's [MCP servers](mcp.md#in-an-app) the same way.
-- Open with a `stateDir` of your own to run beside `fastagent dev` on the same project. Each instance has its own
+- Open with a `root` of your own to run beside `fastagent dev` on the same project. Each instance has its own
   sessions. Only one of them should `serve()`, or schedules fire twice; an instance nobody serves refuses `wake`.
-- Without `config`, an instance reads `<root>/fastagent.json`, which the agent itself can write (MCP servers
-  included). Pass `config` (even `{}`) to prevent that.
 - `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
 - A configured default model that the model lists no longer have (a provider retired it, a catalog update renamed it)
   does not stop the open: `info().defaultModel` is absent, `info().unusableDefault` gives the configured `spec` and the

@@ -13,7 +13,7 @@ FastAgent serves an agent directory as a live service. Pick what you want to do.
 | Build an agent, step by step (also the guide to give a coding agent) | [Agent development guide](ai-start.md) |
 | Try it in five minutes | [Quickstart](quickstart.md) |
 | Know what FastAgent is and is not | [Overview](overview.md) |
-| Set the model, keys, content, tools, schedules | [Configuration](configuration.md) |
+| Set the model, keys, tools, schedules | [Configuration](configuration.md) |
 | Put it in Telegram, Slack or Feishu | [Channels](channels.md): [Telegram](telegram.md), [Slack](slack.md), [Feishu / Lark](feishu.md) |
 | Write my own channel | [Channel development](channel-development.md) |
 | Give it MCP tools | [MCP servers](mcp.md) |

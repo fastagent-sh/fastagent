@@ -14,7 +14,6 @@ import {
   defineExtension,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
-import type { ResolvedContent } from "../../content/resolve.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
 import { channelModuleProblem } from "../../channels/discover.ts";
@@ -31,17 +30,10 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
-import {
-  type EffectiveConfig,
-  type InstanceConfigSource,
-  agentPresentation,
-  checkProgramConfig,
-  devInstanceConfig,
-} from "./config.ts";
+import { agentPresentation, checkProgramConfig } from "./config.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
-import { type TextSources, programText } from "./text-sources.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
@@ -54,24 +46,11 @@ async function loadConfig(dir: string): Promise<AgentConfig> {
 
 /** The default model a process here runs with: `--model` > `FASTAGENT_MODEL` > the configuration's `model`. */
 export function modelSpecFor(
-  config: Pick<EffectiveConfig, "model">,
+  config: Pick<AgentConfig, "model">,
   flag: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return flag ?? (env.FASTAGENT_MODEL || config.model);
-}
-
-/** A definition and the instance configuration it opens with: what a command resolves before it opens an agent. */
-export interface Project {
-  definition: AgentDefinition;
-  instance?: InstanceConfigSource;
-}
-
-/** The development project in `dir`, as `dev` opens it: its source and the `fastagent.json` at its root, if any. */
-export async function loadDevProject(dir: string): Promise<Project> {
-  const definition = await loadSourceDefinition(dir);
-  const instance = await devInstanceConfig(dir);
-  return instance === undefined ? { definition } : { definition, instance };
 }
 
 /** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */
@@ -101,10 +80,9 @@ function built<T>(
   source: string,
   value: unknown,
   values: Record<string, string | undefined>,
-  settings: Readonly<Record<string, unknown>>,
   accept: (v: unknown) => string | undefined,
 ): T {
-  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values, settings) : value;
+  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
   const problem = accept(resolved);
   if (problem !== undefined) throw new Error(`${source}: ${problem}`);
   return resolved as T;
@@ -142,21 +120,11 @@ export interface BuiltDefinition {
   schedules: Schedule[];
 }
 
-/** What a build reads of an instance's configuration: its settings. */
-export interface BuildConfig {
-  settings: Readonly<Record<string, unknown>>;
-}
-
 /**
  * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
  * the values it declared, and refuse one that is not what its directory holds.
  */
-export function buildDefinition(
-  definition: AgentDefinition,
-  env: NodeJS.ProcessEnv,
-  instance: BuildConfig = { settings: {} },
-): BuiltDefinition {
-  const { settings } = instance;
+export function buildDefinition(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
   const missing = missingSecrets(codeSecrets(definition), env);
   if (missing.length > 0) {
     throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
@@ -166,23 +134,23 @@ export function buildDefinition(
   const { registry, config } = definition;
   const tools = registry.tools.map(({ file, value }) => ({
     source: file,
-    ...named(built<ToolRegistration>(file, value, values(value), settings, toolProblem)),
+    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
   }));
   const extensions = [
     ...registry.extensions.map(({ file, value }) => ({
       source: file,
-      ...named(built<Extension>(file, value, values(value), settings, extensionProblem)),
+      ...named(built<Extension>(file, value, values(value), extensionProblem)),
     })),
   ];
   const channels = registry.channels.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), settings, channelProblem),
+    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelProblem),
   }));
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
-    value: built<DefinedSchedule>(file, value, values(value), settings, scheduleProblem),
+    value: built<DefinedSchedule>(file, value, values(value), scheduleProblem),
   }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
@@ -201,7 +169,7 @@ export function buildDefinition(
     tools: tools.map(({ value }) => value),
     extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
-      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), settings, providerProblem),
+      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
     channels: new Map(channels.map(({ name, value }) => [name, value])),
     schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
@@ -212,16 +180,12 @@ export function buildDefinition(
  * The definition's code built only to read its shape (which channels, which schedules, which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
-export function buildDefinitionShape(
-  definition: AgentDefinition,
-  env: NodeJS.ProcessEnv,
-  config: BuildConfig = { settings: definition.config.defaults?.settings ?? {} },
-): BuiltDefinition {
+export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
   const values: NodeJS.ProcessEnv = Object.fromEntries(
     definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),
   );
   for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
-  return buildDefinition(definition, values, config);
+  return buildDefinition(definition, values);
 }
 
 /**
@@ -250,18 +214,12 @@ export interface AssembleAgentOptions {
   storage: Storage;
   /** Who runs the instance, as far as the prompt says where the agent runs (deployed or not). */
   runsAs: RunsAs;
-  /** What the agent works on (`fastagent.config.ts` / `fastagent.json`), resolved for this instance. */
-  content?: readonly ResolvedContent[];
   /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
   name?: string;
   /** The agent's working directory: the definition's own, unless the instance is elsewhere. */
   workdir?: string;
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
-  /** The configuration this instance opens with (`resolveConfig`). */
-  config: EffectiveConfig;
-  /** The text it reads for each message (`openText`). Default: the program's own. */
-  text?: TextSources;
   mcpTools?: ToolRegistration[];
   /**
    * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
@@ -307,8 +265,8 @@ function resolveDefaultModel(
 /** Open the definition as an Agent over `models`: the coding tools, then its own. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir } = definition;
-  const { code, models, config } = options;
-  const text = options.text ?? programText(dir);
+  const { code, models } = options;
+  const { config } = definition;
   const spec = options.model ?? config.model;
   const { model, unusableDefault } = resolveDefaultModel(
     spec,
@@ -331,11 +289,10 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
-      sections: definitionSections(dir, options.content ?? [], {
+      sections: definitionSections(dir, {
         wake: ownWake || options.stateRoot !== undefined,
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
-        text,
         source: definition.source === true,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
@@ -353,7 +310,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     models,
     registry,
     name: options.name ?? instanceName(definition.name),
-    ...agentPresentation(definition, config),
+    ...agentPresentation(definition),
     ...(model === undefined ? {} : { model }),
     ...(unusableDefault === undefined ? {} : { unusableDefault }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
@@ -361,6 +318,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
-    commands: () => readCommands(text),
+    commands: () => readCommands(dir),
   });
 }

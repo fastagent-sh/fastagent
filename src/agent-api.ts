@@ -33,7 +33,7 @@ export class Usage extends Schema.Opaque<Usage>()(
 
 const Named = Schema.Struct({ name: Schema.String, description: Schema.optionalKey(Schema.String) });
 
-/** The program an instance runs: its own name and introduction, whatever the instance is called. */
+/** The program an instance runs: its own name and description, whatever the instance is called. */
 const AgentProgram = Schema.Struct({
   name: Schema.String,
   description: Schema.optionalKey(Schema.String),
@@ -43,8 +43,6 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
   Schema.Struct({
     /** The instance's name. */
     name: Schema.String,
-    /** The instance's own introduction, when it gives one: not the program's, and not a fallback to it. */
-    description: Schema.optionalKey(Schema.String),
     /** The program the instance runs. */
     agent: AgentProgram,
     /**

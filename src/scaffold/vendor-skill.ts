@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { readSkills } from "../harnesses/pi-durable/text.ts";
-import { programText } from "../harnesses/pi-durable/text-sources.ts";
 import { assertInsideAgentDir } from "../paths.ts";
 import { stripTrailingSlashes } from "../strip-edges.ts";
 
@@ -158,7 +157,7 @@ export async function vendorSkill(
   // would prefix-pollute a sibling `<name>-x` and break on Windows path separators). A skill it refuses is said by
   // that loader, and is missing here.
   const rel = join("skills", name);
-  const skill = readSkills(programText(agentDir).skills).find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);
+  const skill = readSkills(agentDir).find((sk) => relative(agentDir, dirname(sk.filePath)) === rel);
   return {
     name: skill?.name ?? name,
     description: skill?.description,

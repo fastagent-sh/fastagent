@@ -13,19 +13,17 @@ own channel. You keep writing the agent as files. FastAgent runs it.
 
 ```txt
 reviewer/
-├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ defaults, providers })
+├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ model, providers })
 ├── SYSTEM.md             # the system prompt
 ├── AGENTS.md             # optional: how this agent is built and changed
 ├── skills/  prompts/     # optional: skills, and prompt templates run as /<name>
 ├── src/tools/            # optional: tools
 ├── src/channels/         # optional: Telegram, Slack, Feishu or your own
-├── src/schedules/        # optional: prompts run on a cron
-└── fastagent.json        # optional: this instance's settings (a deployment gets its own)
+└── src/schedules/        # optional: prompts run on a cron
 ```
 
-`fastagent init` creates it as a git repository. The projects it works on stay outside it, declared as its
-[content](configuration.md#content). The agent can edit its own prompt and skills; a change applies from its next
-message.
+`fastagent init` creates it as a git repository. The agent can edit its own prompt and skills; a change applies from
+its next message.
 
 ## The few ideas you need
 
@@ -36,7 +34,7 @@ message.
 | **Tool** | A typed action the model can call. Its arguments are checked before it runs. |
 | **Skill** | Markdown know-how the agent loads when it needs it. |
 | **Channel** | Turns a platform's events into messages, after checking they really come from that platform. |
-| **Instance** | One running copy of the agent, with its own storage, secrets and settings. |
+| **Instance** | One running copy of the agent, with its own storage and secrets. |
 
 Everything (a channel, a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
 interface, the [Agent API](agent-api.md).

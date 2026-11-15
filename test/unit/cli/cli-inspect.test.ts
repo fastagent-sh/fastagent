@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentWorkspace, besideAgent, runInProcess } from "../../doubles/cli-run.ts";
-import { gitAnswersIn } from "../../doubles/git-double.ts";
+import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
@@ -28,7 +27,6 @@ describe("cli: info", () => {
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
     expect(info).toMatchObject({
-      description: null,
       starters: [],
       agent: { name: expect.any(String), description: null },
     });
@@ -36,6 +34,22 @@ describe("cli: info", () => {
     expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toMatchObject({ code: "ENOENT" }); // read-only: never creates the state root
+  });
+
+  it("refuses a fastagent.config.ts in the old shape, saying its keys are top-level now", async () => {
+    const dir = await agentWorkspace("fa-info-defaults-", {
+      "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-5.5" } };\n',
+    });
+    const refused = await runInProcess(["info", dir], undefined, withoutModel());
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toMatch(/fastagent\.config\.ts: unknown key "defaults": its keys are top-level now/);
+    // The top-level shape is the one read.
+    const flat = await agentWorkspace("fa-info-flat-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+    });
+    const read = await runInProcess(["info", flat, "--json"], undefined, withoutModel());
+    expect(read.code, read.stderr).toBe(0);
+    expect(JSON.parse(read.stdout).model).toBe("openai/gpt-5.5");
   });
 
   it("info says why the definition does not open, naming the module, as dev and start would refuse it", async () => {
@@ -59,50 +73,16 @@ describe("cli: info", () => {
 });
 
 describe("cli: mcp list", () => {
-  it("shows the program's servers and the ones the project's fastagent.json adds, and `info` the same", async () => {
+  it("shows the program's servers, and `info` the same", async () => {
     const dir = await agentWorkspace("fa-cli-mcp-list-", {
       "fastagent.config.ts": `export default ${JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } })};\n`,
-      "fastagent.json": JSON.stringify({
-        mcpServers: { notes: { type: "http", url: "https://notes.example.com/mcp" } },
-      }),
       ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }),
     });
     const listed = await runInProcess(["mcp", "list", dir, "--json"]);
     expect(listed.code, listed.stderr).toBe(0);
-    expect(JSON.parse(listed.stdout).map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
+    expect(JSON.parse(listed.stdout).map((server: { name: string }) => server.name)).toEqual(["docs"]);
     const info = await runInProcess(["info", "--json"], dir);
     expect(info.code, info.stderr).toBe(0);
-    expect(JSON.parse(info.stdout).mcp.map((server: { name: string }) => server.name)).toEqual(["docs", "notes"]);
-
-    await writeFile(join(dir, "fastagent.json"), JSON.stringify({ mcpServers: { docs: { command: "node" } } }));
-    const refused = await runInProcess(["mcp", "list", dir, "--json"]);
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(
-      /MCP server "docs" is declared by the program \(fastagent\.config\.ts\) and by the instance/,
-    );
-  });
-});
-
-describe("cli: content", () => {
-  it("adds, lists as JSON, removes content, and exits 2 on an unknown name", async () => {
-    const dir = await agentWorkspace("fa-cli-content-");
-    const rawDocsDir = besideAgent(dir, "docs");
-    await mkdir(rawDocsDir, { recursive: true });
-    const docsDir = await realpath(rawDocsDir);
-    gitAnswersIn(docsDir, { "rev-parse --show-toplevel": undefined });
-
-    const added = await runInProcess(["content", "add", docsDir, dir]);
-    expect(added.code, added.stderr).toBe(0);
-
-    const listed = await runInProcess(["content", "list", dir, "--json"]);
-    expect(listed.code, listed.stderr).toBe(0);
-    expect(JSON.parse(listed.stdout).content).toEqual([expect.objectContaining({ name: "docs", location: docsDir })]);
-
-    const removed = await runInProcess(["content", "remove", "docs", dir]);
-    expect(removed.code, removed.stderr).toBe(0);
-
-    const missing = await runInProcess(["content", "remove", "docs", dir]);
-    expect(missing.code).toBe(2);
-    expect(missing.stderr).toMatch(/no content named "docs"/);
+    expect(JSON.parse(info.stdout).mcp.map((server: { name: string }) => server.name)).toEqual(["docs"]);
   });
 });

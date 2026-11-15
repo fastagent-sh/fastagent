@@ -3,7 +3,7 @@
  * will export, one frozen shape every opener assembles from. Its declared inputs are read once, when it is made.
  */
 import type { DeclaredSecret } from "../../declared-secrets.ts";
-import { type McpInstance, declareMcp, mcpSecrets } from "../../mcp/config.ts";
+import { declareMcp, mcpSecrets } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { type AgentConfig, isNeeds } from "./define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
@@ -12,7 +12,6 @@ import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 export const DEFINITION_FORMAT = 2;
 
 const DEFINITION = Symbol.for("fastagent.definition");
-declare const SETTINGS: unique symbol;
 
 /** A secret an instance must or may be given: each name once, required when any declaration requires it. */
 interface DeclaredInput {
@@ -22,10 +21,7 @@ interface DeclaredInput {
   declaredIn: readonly string[];
 }
 
-/** `AgentDefinition<Settings>`: typed by the program's settings, so an embedder's `settings` input is checked. */
-export interface AgentDefinition<Settings = unknown> {
-  /** Phantom: carries `Settings` to the open's input types; nothing exists at run time. */
-  readonly [SETTINGS]?: Settings;
+export interface AgentDefinition {
   readonly [DEFINITION]: true;
   readonly format: number;
   /** The FastAgent version that made it: what a refusal of its format asks the opener to install. */
@@ -33,7 +29,7 @@ export interface AgentDefinition<Settings = unknown> {
   /** The package's name (`package.json`'s, else the directory's): `info().agent.name`. */
   readonly name: string;
   readonly version: string;
-  /** The package's `description`: `info().agent.description` unless an instance gives its own. */
+  /** The package's `description`: `info().agent.description`. */
   readonly description?: string;
   /** True for a source project the author works in (`dev`), absent for a built package, which an instance only reads. */
   readonly source?: true;
@@ -74,8 +70,7 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
   const config = Object.freeze({
     ...spec.config,
     ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
-    ...(spec.config.settings === undefined ? {} : { settings: deepFreeze(structuredClone(spec.config.settings)) }),
-    ...(spec.config.defaults === undefined ? {} : { defaults: deepFreeze(structuredClone(spec.config.defaults)) }),
+    ...(spec.config.starters === undefined ? {} : { starters: Object.freeze([...spec.config.starters]) }),
   });
   return Object.freeze({
     [DEFINITION]: true as const,
@@ -84,15 +79,6 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
     registry,
     inputs: Object.freeze({ secrets: Object.freeze(byName(definitionSecrets(spec))) }),
   });
-}
-
-/** Plain data, frozen all the way down: a schema and defaults are JSON, which no instance may change. */
-function deepFreeze<T>(value: T): T {
-  if (typeof value === "object" && value !== null) {
-    for (const inner of Object.values(value)) deepFreeze(inner);
-    Object.freeze(value);
-  }
-  return value;
 }
 
 /** One input per name, in name order: required when any declaration requires it, and every place it is declared. */
@@ -135,13 +121,7 @@ export function codeSecrets(definition: Declaring): DeclaredSecret[] {
   );
 }
 
-/**
- * Every declaration of a secret, each where it is: the code's, then the references of the MCP servers, the program's
- * and, given `instance`, the ones it adds.
- */
-export function definitionSecrets(definition: Declaring, instance?: McpInstance): DeclaredSecret[] {
-  return [
-    ...codeSecrets(definition),
-    ...mcpSecrets(declareMcp(definition.config.mcpServers, definition.dir, instance)),
-  ];
+/** Every declaration of a secret, each where it is: the code's, then the references of the MCP servers. */
+export function definitionSecrets(definition: Declaring): DeclaredSecret[] {
+  return [...codeSecrets(definition), ...mcpSecrets(declareMcp(definition.config.mcpServers, definition.dir))];
 }

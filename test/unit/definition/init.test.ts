@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDefinition, loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../../../src/harnesses/pi-durable/text.ts";
-import { programText } from "../../../src/harnesses/pi-durable/text-sources.ts";
 import { scaffoldAgent } from "../../../src/scaffold/init.ts";
 
 import { vendorSkill } from "../../../src/scaffold/vendor-skill.ts";
@@ -39,9 +38,6 @@ describe("init: scaffoldAgent", () => {
     const ig = ignore({ ignorecase: false }).add(rootIgnore);
     expect(ig.ignores(".env")).toBe(true);
     expect(ig.ignores(".env.local")).toBe(true);
-    // The development instance's configuration is personal (its app is one person's); a team shares `defaults`.
-    expect(ig.ignores("fastagent.json")).toBe(true);
-    expect(ig.ignores("prod.json")).toBe(false);
     const secretsIgnore = ignore({ ignorecase: false }).add(
       await readFile(join(dir, ".secrets", ".gitignore"), "utf8"),
     );
@@ -102,13 +98,13 @@ describe("init: scaffoldAgent", () => {
     const definition = await loadSourceDefinition(dir);
     expect(definition.name).toBe("reviewer");
     expect(buildDefinition(definition, {})).toMatchObject({ tools: [], channels: new Map(), schedules: [] });
-    expect(readSkills(programText(dir).skills).map((s) => s.name)).toEqual(["writing-great-skills"]);
+    expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 
   it("refuses a directory that is not empty, naming what is there; an empty or new one is fine", async () => {
     const project = await freshDir();
     await writeFile(join(project, "tsconfig.json"), "{}");
-    await expect(scaffoldAgent(project)).rejects.toThrow(/is not empty \(it holds tsconfig\.json\).*fastagent init/);
+    await expect(scaffoldAgent(project)).rejects.toThrow(/is not empty \(it holds tsconfig\.json\)/);
     expect(await exists(join(project, "SYSTEM.md"))).toBe(false); // side-effect-free refusal
 
     const agent = await freshDir();
@@ -170,7 +166,7 @@ describe("add: fastagent add skill (vendor)", () => {
     expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
     expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
     expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
-    expect(readSkills(programText(ws).skills).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
+    expect(readSkills(ws).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
 
     await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });

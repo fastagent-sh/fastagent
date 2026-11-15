@@ -12,17 +12,14 @@ import { SignInCancelled } from "../sign-in-api.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
 import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
-import { type EffectiveConfig, resolveConfig } from "../harnesses/pi-durable/config.ts";
-import { environmentConfig } from "../harnesses/pi-durable/environment-config.ts";
+import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
 import {
-  type Project,
   buildDefinitionShape,
   definitionProviders,
-  loadDevProject,
+  loadSourceDefinition,
   modelSpecFor,
 } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
-import { contentLines } from "./content-view.ts";
 import { isDeployedWorkspace } from "../paths.ts";
 import { log } from "../log.ts";
 import { type InstanceFlags, enterInstance } from "./instance.ts";
@@ -31,17 +28,8 @@ import { openExternalUrl } from "../open-url.ts";
 import { bindAddress, isBindAddress } from "../bind.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
 
-/**
- * The configuration a command that runs the project resolves: the program's defaults, the instance's file, then the
- * variables a flag was entered into. The one place the layers are put together, so a command that asks how the
- * instance runs (a channel's ingress, a thinking level) agrees with the open that runs it.
- */
-export function resolveProjectConfig(project: Project, env: NodeJS.ProcessEnv = process.env): EffectiveConfig {
-  return resolveConfig(project.definition, project.instance, environmentConfig(env));
-}
-
-/** The project a command runs, when it is not the development one (`start` runs the build). */
-type LoadProject = (agentDir: string) => Promise<Project>;
+/** The definition a command runs, when it is not the source one (`start` runs the build). */
+type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;
 
 /** An agent directory a command entered, and the default model that then resolves, if any. */
 export interface EnteredAgent {
@@ -58,7 +46,7 @@ async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string) => Promise<void>,
-  load?: LoadProject,
+  load?: LoadDefinition,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
   enterInstance(agentDir, opts.instance);
@@ -76,13 +64,13 @@ export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string) => Promise<void>,
-  load?: LoadProject,
+  load?: LoadDefinition,
 ): Promise<Required<EnteredAgent>> {
   const entered = await enterAgentDirectory(dirArg, opts, before, load);
   const { modelSpec } = entered;
   if (!modelSpec) {
     failUsage(
-      `missing model: set --model, "defaults.model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
+      `missing model: set --model, "model" in fastagent.config.ts, or FASTAGENT_MODEL (e.g. "openai/gpt-5.5"; ` +
         "`fastagent models` lists them)",
     );
   }
@@ -102,7 +90,6 @@ export async function reportAssembly(
 ): Promise<void> {
   const { code, models, agentDir, workdir, stateRoot, config } = opened;
   reportLine("agent", `${opened.name} — ${workdir}`);
-  for (const [label, value] of contentLines(opened.content)) reportLine(label, value);
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(models, modelSpec, agentDir);
   const names = (list: readonly { name: string }[]) => list.map(({ name }) => name).join(", ") || "(none)";
@@ -173,22 +160,19 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
 async function resolveFirstRunModel(
   agentDir: string,
   options: { model?: string; input?: boolean } = {},
-  load?: LoadProject,
+  load?: LoadDefinition,
 ): Promise<string | undefined> {
-  const configured = async () => {
-    const project = await (load ?? loadDevProject)(agentDir);
-    return { project, config: resolveConfig(project.definition, project.instance) };
-  };
+  const loaded = (load ?? loadSourceDefinition)(agentDir);
   // A custom loader's refusal is the caller's to report.
-  const { project, config } = await (load === undefined ? configured().catch(failStartup) : configured());
-  const spec = modelSpecFor(config, options.model);
+  const definition = await (load === undefined ? loaded.catch(failStartup) : loaded);
+  const spec = modelSpecFor(definition.config, options.model);
   if (spec) return spec;
   if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
   if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
   const providers =
     load === undefined
       ? await definitionProviders(agentDir, process.env).catch(failStartup)
-      : buildDefinitionShape(project.definition, process.env).providers;
+      : buildDefinitionShape(definition, process.env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
@@ -199,7 +183,7 @@ async function resolveFirstRunModel(
 
 /** The line of `fastagent.config.ts` that keeps a picked model: what the picker prints, and what it must accept. */
 function pickedModelLine(model: string): string {
-  return `defaults: { model: ${JSON.stringify(model)} }`;
+  return `model: ${JSON.stringify(model)}`;
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */

@@ -6,7 +6,7 @@ import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup } from "./fail.ts";
-import { CONFIG_FLAG, CONTENT_FLAGS, ENV_FILE_FLAG, INSTANCE_FLAGS, LAYER_FLAGS, instanceFlags } from "./instance.ts";
+import { ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 
 const AGENT_ARG = {
   name: "[agent]",
@@ -41,24 +41,10 @@ const init: CommandSpec = {
   summary: "create an agent in a directory of its own and install its dependencies",
   description: "Scaffold SYSTEM.md, writing-great-skills, fastagent.config.ts, package.json, and .gitignore.",
   args: [{ name: "<dir>", description: "the new agent directory (created if missing)" }],
-  flags: [
-    {
-      flags: "--content <source>",
-      description: "directory or github:owner/repo the agent works on (repeatable)",
-      repeatable: true,
-    },
-    { flags: "--no-install", description: "scaffold everything but skip npm install" },
-  ],
-  examples: [
-    { cmd: "fastagent init my-agent", note: "an agent that only talks" },
-    { cmd: "fastagent init reviewer --content ~/code/app", note: "works on ~/code/app" },
-    { cmd: "fastagent init triage --content github:acme/app", note: "works on a clone" },
-  ],
+  flags: [{ flags: "--no-install", description: "scaffold everything but skip npm install" }],
+  examples: [{ cmd: "fastagent init my-agent" }],
   run: async (args, f) =>
-    (await import("./commands/init.ts")).runInit(args[0] as string, {
-      install: f.install !== false,
-      content: (f.content as string[] | undefined) ?? [],
-    }),
+    (await import("./commands/init.ts")).runInit(args[0] as string, { install: f.install !== false }),
 };
 
 const dev: CommandSpec = {
@@ -74,8 +60,6 @@ const dev: CommandSpec = {
     { flags: "--no-watch", description: "serve once, no file-watching" },
     NO_INPUT,
     ...INSTANCE_FLAGS,
-    ...LAYER_FLAGS,
-    CONFIG_FLAG,
     ENV_FILE_FLAG,
   ],
   examples: [{ cmd: "fastagent dev" }],
@@ -93,9 +77,9 @@ const dev: CommandSpec = {
 const info: CommandSpec = {
   name: "info",
   summary: "print what the directory builds into, without serving",
-  description: "Inspect model, tools, extensions, channels, schedules, commands, secrets, and content read-only.",
+  description: "Inspect model, tools, extensions, channels, schedules, commands and secrets read-only.",
   args: [AGENT_ARG],
-  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ...LAYER_FLAGS, CONFIG_FLAG, ENV_FILE_FLAG],
+  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (args, f) =>
     (await import("./commands/info.ts")).runInfo(args[0] as string, {
@@ -132,8 +116,6 @@ const invoke: CommandSpec = {
     { flags: "--url <base>", description: "send to a served Agent API base URL" },
     { flags: "--key <key>", description: "API key for --url" },
     ...INSTANCE_FLAGS,
-    ...LAYER_FLAGS,
-    CONFIG_FLAG,
     ENV_FILE_FLAG,
   ],
   examples: [
@@ -180,16 +162,7 @@ const start: CommandSpec = {
   summary: "serve the built dist/ in production posture (no watching)",
   description: "Serve the compiled dist/ build; refuses a missing or stale build (`fastagent build`).",
   args: [AGENT_ARG],
-  flags: [
-    PORT,
-    BIND,
-    MODEL,
-    NO_INPUT,
-    ...INSTANCE_FLAGS,
-    ...LAYER_FLAGS,
-    { ...CONFIG_FLAG, description: "instance configuration (FASTAGENT_CONFIG; ignores project fastagent.json)" },
-    ENV_FILE_FLAG,
-  ],
+  flags: [PORT, BIND, MODEL, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent start", note: "after fastagent build" }],
   run: async (args, f) =>
     (await import("./commands/start.ts")).runStart(args[0] as string, {
@@ -248,58 +221,6 @@ const deploy: CommandSpec = {
     (await import("./commands/deploy.ts")).runDeploy(args[1] as string, { force: f.force === true }),
 };
 
-const content: CommandSpec = {
-  name: "content",
-  summary: "list, add or remove what the agent works on",
-  description: "Manage instance content entries in fastagent.json (program entries live in fastagent.config.ts).",
-  subcommands: [
-    {
-      name: "list",
-      summary: "each content entry and where it is",
-      args: [AGENT_ARG],
-      flags: [JSON_FLAG, ...CONTENT_FLAGS],
-      examples: [{ cmd: "fastagent content list" }],
-      run: async (args, f) =>
-        (await import("./commands/content.ts")).runContentList(args[0] as string, f.json === true, instanceFlags(f)),
-    },
-    {
-      name: "add",
-      summary: "add a GitHub repository or a directory of this machine as content",
-      args: [{ name: "<source>", description: "a directory, or github:owner/repo" }, AGENT_ARG],
-      flags: [
-        { flags: "--ref <ref>", description: "repository branch, tag, or commit" },
-        { flags: "--name <name>", description: "entry name" },
-        { flags: "--description <text>", description: "one-sentence description for the agent" },
-        ...CONTENT_FLAGS,
-      ],
-      examples: [
-        { cmd: "fastagent content add ~/code/app", note: "a directory" },
-        { cmd: "fastagent content add github:acme/docs", note: "a clone" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/content.ts")).runContentAdd(args[0] as string, args[1] as string, {
-          ...(typeof f.ref === "string" ? { ref: f.ref } : {}),
-          ...(typeof f.name === "string" ? { name: f.name } : {}),
-          ...(typeof f.description === "string" ? { description: f.description } : {}),
-          instance: instanceFlags(f),
-        }),
-    },
-    {
-      name: "remove",
-      summary: "remove a content entry (leaves directories/clones on disk)",
-      args: [{ name: "<name>", description: "the entry's name" }, AGENT_ARG],
-      flags: [...CONTENT_FLAGS],
-      examples: [{ cmd: "fastagent content remove app" }],
-      run: async (args, f) =>
-        (await import("./commands/content.ts")).runContentRemove(
-          args[0] as string,
-          args[1] as string,
-          instanceFlags(f),
-        ),
-    },
-  ],
-};
-
 const schedules: CommandSpec = {
   name: "schedules",
   summary: "list schedules and wake-ups, run a schedule now, or cancel a wake-up",
@@ -321,7 +242,7 @@ const schedules: CommandSpec = {
       name: "run",
       summary: "fire one schedule now, as its clock would",
       args: [{ name: "<name>", description: "schedule name" }, AGENT_ARG],
-      flags: [MODEL, NO_INPUT, ...INSTANCE_FLAGS, ...LAYER_FLAGS, CONFIG_FLAG, ENV_FILE_FLAG],
+      flags: [MODEL, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [{ cmd: "fastagent schedules run daily-digest" }],
       run: async (args, f) =>
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {
@@ -502,7 +423,6 @@ const specs: readonly CommandSpec[] = [
   mcp,
   info,
   build,
-  content,
   invoke,
   schedules,
   dev,

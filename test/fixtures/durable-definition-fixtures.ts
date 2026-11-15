@@ -28,7 +28,7 @@ export const faux = fauxProvider({ provider: "fixture", models: [{ id: "m" }] })
 export const FILES: Record<string, string> = {
   "model.ts": MODEL_MODULE,
   "fastagent.config.ts": `import { faux } from "./model.ts";
-export default { defaults: { model: "fixture/m", thinkingLevel: "low" }, providers: [faux.provider] };
+export default { model: "fixture/m", thinkingLevel: "low", providers: [faux.provider] };
 `,
   "SYSTEM.md": "You are Support.\n",
   "AGENTS.md": "Be brief.\n",

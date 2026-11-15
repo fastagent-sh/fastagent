@@ -8,7 +8,7 @@
 import { resolve } from "node:path";
 import * as Effect from "effect/Effect";
 import { AgentError, hasEnded } from "../../agent-api.ts";
-import { buildDefinitionShape, loadDevProject, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
@@ -27,7 +27,7 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
  */
 export async function runSchedulesList(dirArg: string, json: boolean, instance?: InstanceFlags): Promise<void> {
   const target = agentDirOrExit(resolve(dirArg));
-  enterInstance(target, instance); // FASTAGENT_STATE_DIR may live in .env — read the SAME state root the scheduler wrote
+  enterInstance(target, instance); // FASTAGENT_ROOT may live in .env — read the SAME state root the scheduler wrote
   const stateRoot = resolveStateRoot(target);
   // Its shape only: listing what will fire needs none of the values the code reads.
   const { schedules } = await loadSourceDefinition(target)
@@ -98,14 +98,9 @@ export async function runScheduleNow(
     }
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
-  const { agent, models, schedules, stateRoot } = await loadDevProject(agentDir)
-    .then(({ definition, instance }) =>
-      openServing(definition, {
-        model: modelSpec,
-        ...instanceInputs(agentDir),
-        unfinished: "refuse",
-        ...(instance === undefined ? {} : { config: instance }),
-      }),
+  const { agent, models, schedules, stateRoot } = await loadSourceDefinition(agentDir)
+    .then((definition) =>
+      openServing(definition, { model: modelSpec, ...instanceInputs(agentDir), unfinished: "refuse" }),
     )
     .catch(failStartup);
   const schedule = schedules.find((s) => s.name === name);

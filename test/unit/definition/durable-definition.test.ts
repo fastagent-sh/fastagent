@@ -2,7 +2,6 @@
  * A definition assembled onto pi-durable: the definition as a value, its declared secrets, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
-import { resolveConfig } from "../../../src/harnesses/pi-durable/config.ts";
 import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -79,7 +78,6 @@ describe("an agent definition on pi-durable", () => {
         processEnv: {},
         models: modelsOver(new InMemoryCredentialStore(), code.providers),
         code,
-        config: resolveConfig(definition),
         ...options,
       });
       opened.push(agent);
@@ -190,7 +188,7 @@ describe("an agent whose configured default model the catalog does not have", ()
 
   async function agentWithDefault(model: string): Promise<string> {
     const dir = await mkdtemp(join(tmpdir(), "fa-unusable-default-"));
-    await writeFile(join(dir, "fastagent.config.ts"), `export default { defaults: { model: "${model}" } };\n`);
+    await writeFile(join(dir, "fastagent.config.ts"), `export default { model: "${model}" };\n`);
     return dir;
   }
 

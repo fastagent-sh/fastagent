@@ -7,7 +7,6 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { instanceConfigSchema } from "./config.ts";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
 import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../../paths.ts";
@@ -20,8 +19,6 @@ import { type ProjectCompiler, projectCompiler } from "./tsc.ts";
 
 const STAGING_DIR = join(".fastagent", "build");
 
-/** The JSON Schema of an instance's `fastagent.json` for this program: an editor's `$schema`, and the package's own. */
-const SCHEMA_FILE = "fastagent.schema.json";
 const FASTAGENT_PACKAGE = "@fastagent-sh/fastagent";
 /** A declaration file: types only, so the compiler emits nothing for it, wherever it is (a workspace package's). */
 const DECLARATION = /\.d\.[cm]?ts$/;
@@ -54,10 +51,6 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     requireShippedCommands(dir, staging, definition.config.mcpServers);
     await writeEntry(staging, definition);
     await writeFile(join(staging, "package.json"), await distPackageJson(dir, definition));
-    await writeFile(
-      join(staging, SCHEMA_FILE),
-      `${JSON.stringify(instanceConfigSchema(definition.config.settings), null, 2)}\n`,
-    );
     await writeFile(join(staging, BUILD_FILE), await buildRecord(dir, code));
     await rm(dist, { recursive: true, force: true });
     await rename(staging, dist);
@@ -122,13 +115,6 @@ async function compile(dir: string, outDir: string, definition: AgentDefinition,
   }
   const { code, output } = await compiler.emit(outDir, roots, check);
   if (code !== 0) throw new Error(`tsc refused the project (exit ${code}):\n${output.trim()}`);
-  // The configuration's declaration alone: it types the package's entry by the program's settings.
-  if (roots.includes(AGENT_CONFIG_FILE)) {
-    const declared = await compiler.declare(outDir, AGENT_CONFIG_FILE);
-    if (declared.code !== 0) {
-      throw new Error(`tsc could not write the declaration of ${AGENT_CONFIG_FILE}:\n${declared.output.trim()}`);
-    }
-  }
   return inside;
 }
 
@@ -167,14 +153,10 @@ ${kinds.map((kind) => `  ${kind}`).join("\n")}
 });
 `;
   await writeFile(join(dist, "index.js"), source);
-  const typed = await exists(join(dist, "fastagent.config.d.ts"));
-  const fastagent = JSON.stringify(FASTAGENT_PACKAGE);
   await writeFile(
     join(dist, "index.d.ts"),
-    typed
-      ? `import type { AgentDefinition, SettingsOf } from ${fastagent};\nimport type config from "./fastagent.config.js";\n` +
-          `declare const definition: AgentDefinition<SettingsOf<typeof config>>;\nexport default definition;\n`
-      : `import type { AgentDefinition } from ${fastagent};\ndeclare const definition: AgentDefinition;\nexport default definition;\n`,
+    `import type { AgentDefinition } from ${JSON.stringify(FASTAGENT_PACKAGE)};\n` +
+      `declare const definition: AgentDefinition;\nexport default definition;\n`,
   );
 }
 
@@ -201,10 +183,7 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
     ...(pkg.description === undefined ? {} : { description: pkg.description }),
     ...(pkg.license === undefined ? {} : { license: pkg.license }),
     type: "module",
-    exports: {
-      ".": { types: "./index.d.ts", default: "./index.js" },
-      [`./${SCHEMA_FILE}`]: `./${SCHEMA_FILE}`,
-    },
+    exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
     ...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
     ...(Object.keys(peerDependencies).length > 0 ? { peerDependencies } : {}),
   };

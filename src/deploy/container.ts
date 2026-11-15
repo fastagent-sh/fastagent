@@ -1,12 +1,5 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
-import {
-  CONTENT_DIRNAME,
-  DEPLOYED_ENV,
-  INSTANCE_CONFIG_FILE,
-  INSTANCES_DIRNAME,
-  SECRETS_DIRNAME,
-  STATE_DIRNAME,
-} from "../paths.ts";
+import { DEPLOYED_ENV, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
 import { RUNTIME_FLOOR } from "../runtime.ts";
 
@@ -45,7 +38,7 @@ export interface ContainerInput {
   hasLockfile: boolean;
   /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from packageManager `bun@x`), else `"1"`. */
   bunVersion?: string;
-  /** Debian packages the image installs (`git` for content and a shipped `.git`). */
+  /** Debian packages the image installs (`git` for a shipped `.git`). */
   apt?: string[];
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
   machineryPaths?: string[];
@@ -125,9 +118,7 @@ const dockerignore = (input: ContainerInput): string =>
   (input.machineryPaths ?? [])
     // Skip what the name-based rules above already cover: the default `.secrets` / `.state` and anything inside them.
     .filter((p) => [SECRETS_DIRNAME, STATE_DIRNAME].every((covered) => p !== covered && !p.startsWith(`${covered}/`)))
-    .map(
-      (p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH / FASTAGENT_STATE_DIR)\n/${p}\n`,
-    )
+    .map((p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH)\n/${p}\n`)
     .join("");
 
 const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).
@@ -135,9 +126,6 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 **/${SECRETS_DIRNAME}/**
 **/${STATE_DIRNAME}
 /${INSTANCES_DIRNAME}
-/${CONTENT_DIRNAME}
-# the project's own instance configuration: the development instance's, which an image does not carry
-/${INSTANCE_CONFIG_FILE}
 **/.cache
 **/.env
 **/.env.*
@@ -146,7 +134,7 @@ const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to
 !**/${SECRETS_DIRNAME}/.gitignore
 **/*.log
 # .git is deliberately shipped with the definition (the generated image installs git when the directory ships
-# a .git or clones github content). For a smaller image with no git needs, add a ".git" line here.
+# a .git). For a smaller image with no git needs, add a ".git" line here.
 `;
 
 /** The Dockerfile and its ignore file. */

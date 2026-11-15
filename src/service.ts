@@ -59,7 +59,7 @@ function closeWithin(
   });
 }
 
-/** The port a serve binds when neither a flag, `PORT` (start only) nor `http.port` names one. */
+/** The port a serve binds when neither a flag nor `PORT` (start only) names one. */
 export const DEFAULT_HTTP_PORT = 8787;
 
 /** What a serve answers: its channels' routes, and `GET /health` unless a channel serves it. */

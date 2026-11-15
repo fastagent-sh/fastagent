@@ -23,11 +23,10 @@ Use these shared seams instead of writing per-file mocks:
 | `doubles/git-double.ts` (`gitAnswersIn`) | `src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
 | `doubles/tsc-double.ts` | `src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
 | `doubles/storage-no-wait.ts` | `src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
-| `doubles/faux.ts`, `codex-model.ts`, `kept-catalog.ts` | Model providers and catalog refreshes | `doubles/faux.ts` over `@earendil-works/pi-ai` |
+| `doubles/codex-model.ts`, `kept-catalog.ts` | Model providers and catalog refreshes | pi-ai's `fauxProvider` |
 | `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for channel/scheduler specs | Conforms to `src/agent-api.ts` |
 | `harnesses/channel-harness.ts` | Channel suite setup, fetch settle, queue drain | Shared by `telegram`, `slack`, `feishu` suites |
 | `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable` and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts` |
-| `doubles/github-standin.ts` | Remote `https://github.com/*` clones (L2) | Local bare git repos via `insteadOf` |
 | `doubles/protocol/*` | Protocol servers for Bun smoke (`smoke/bun/`) | Local HTTP / WebSocket protocol checks |
 
 ## Quick Commands

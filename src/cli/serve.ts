@@ -2,18 +2,14 @@
 import { bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "../http/contract.ts";
-import type { EffectiveConfig } from "../harnesses/pi-durable/config.ts";
-import { API_KEY_VARIABLE, API_TURNED_OFF, apiKeysFrom, apiTurnedOff } from "../http/server.ts";
+import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
 import { failStartup } from "./fail.ts";
 
-/**
- * What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys, none
- * when the definition turns the API off, whatever key the environment holds (a host's from an earlier deploy).
- */
-export function cliMountOptions(config: EffectiveConfig): ServeOptions {
+/** What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys. */
+export function cliMountOptions(): ServeOptions {
   return {
-    apiKeys: apiTurnedOff(config) ? [] : apiKeysFrom(process.env[API_KEY_VARIABLE]),
+    apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]),
     closeTimeoutMs: SHUTDOWN_GRACE_MS,
     onChannelClosed: (name, error) =>
       failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
@@ -24,30 +20,19 @@ export function cliMountOptions(config: EffectiveConfig): ServeOptions {
  * Bind, report, warn about reach, and close in order on a signal — the tail dev's worker and start share once the
  * service is assembled.
  */
-export function serveService(
-  service: ServedAgent,
-  bind: { port: number; host?: string },
-  config: EffectiveConfig,
-): void {
-  serve(service, bind, (p) => reportServing(service, bind.host, p, config));
+export function serveService(service: ServedAgent, bind: { port: number; host?: string }): void {
+  serve(service, bind, (p) => reportServing(service, bind.host, p));
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
-function reportServing(
-  service: ServedAgent,
-  host: string | undefined,
-  boundPort: number,
-  config: EffectiveConfig,
-): void {
+function reportServing(service: ServedAgent, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready" });
   log.info(bindLine(host, boundPort));
   log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   log.info(
     service.api
       ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`
-      : `[fastagent] Agent API: not served — ${
-          apiTurnedOff(config) ? API_TURNED_OFF : `set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`
-        }`,
+      : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
   );
   if (service.channels.longConnections.length > 0) {
     log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);

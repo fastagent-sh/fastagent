@@ -22,7 +22,7 @@ const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
 const REPO_MODULES = new URL("../../node_modules", import.meta.url).pathname;
 
 /** What `init` gives a project that `fastagent build` (and so `deploy` and `start`) needs: an ES module package and TypeScript. */
-export async function buildable(dir: string): Promise<void> {
+async function buildable(dir: string): Promise<void> {
   await writeFile(join(dir, "package.json"), '{"type":"module"}\n');
   await mkdir(join(dir, "node_modules", "@fastagent-sh"), { recursive: true });
   await symlink(
@@ -61,6 +61,7 @@ export async function agentWorkspace(prefix: string, files: Record<string, strin
 /**
  * A path for `name` outside the agent directory `dir`, in a directory of that agent's alone. Never `join(dir, "..", name)`:
  * the parent of a temp agent is the machine's temp directory, which every test process and every run shares.
+ * @public
  */
 export function besideAgent(dir: string, name: string): string {
   const beside = `${dir}-beside`;
@@ -240,7 +241,7 @@ const reply = (context, _options, _state, model) => {
   return fauxAssistantMessage(model.id === "m1" ? "seen " + seen : "seen " + seen + " by " + model.id);
 };
 faux.setResponses(Array.from({ length: 50 }, () => reply));
-export default { defaults: { model: "gw/m1" }, providers: [faux.provider] };
+export default { model: "gw/m1", providers: [faux.provider] };
 `;
 
 /** The agent in `dir` given this repository's dependencies, for a config that imports them. */

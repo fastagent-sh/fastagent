@@ -1,7 +1,7 @@
 /**
  * The package's one entry, besides each first-party channel's: the Agent API, opening an agent
- * directory and serving it, what a host embedding agents needs beside them (creating one, model credentials and
- * sign-in), and what an author writes.
+ * directory and serving it, what a host embedding agents needs beside them (model credentials and sign-in), and what
+ * an author writes.
  */
 export type {
   Agent,
@@ -36,30 +36,11 @@ export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 export {
   openAgent,
-  type InstanceLocation,
   type LocalAgent,
   type OpenAgentOptions,
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-export {
-  ContentNameError,
-  addContent,
-  addMcpServer,
-  createAgent,
-  listContent,
-  removeContent,
-  removeMcpServer,
-  type ContentEdit,
-  type ContentInstance,
-  type CreatedAgent,
-  type McpEdit,
-  type McpServerInput,
-} from "./authoring.ts";
-export type { ContentAddition, SourceOptions } from "./content/source.ts";
-export { readContentSource } from "./content/source.ts";
-export type { ContentEntry } from "./content/declare.ts";
-export type { ResolvedContent } from "./content/resolve.ts";
 export {
   SignInCancelled,
   type Credential,
@@ -79,7 +60,6 @@ export {
   type McpErrorCode,
   type McpOptions,
   type McpInspectOptions,
-  type McpConfigInput,
   type McpAuthorization,
   type McpGrantRecord,
   type McpGrantSummary,
@@ -99,13 +79,10 @@ export {
   defineSchedule,
   needs,
   type AgentConfig,
-  type AgentDefaults,
-  type SettingsOf,
   type Needs,
   type SecretSpec,
   type SecretValues,
 } from "./harnesses/pi-durable/define.ts";
-export type { InstanceConfig } from "./harnesses/pi-durable/config.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
 export { defineDefinition, type AgentDefinition } from "./harnesses/pi-durable/definition.ts";

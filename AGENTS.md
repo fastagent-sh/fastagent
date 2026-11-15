@@ -94,7 +94,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 **How the suite stays fast and consistent:**
 - **Scoped local loop:** Iterate on the domain you touched (`npx vitest run test/unit/<domain>/` and `npm run test:guards`), then run the full local loop before pushing.
 - **Append before creating:** When adding fewer than ~8 tests in an existing domain, append to that domain's test file instead of opening a new `.test.ts` file (each file in `pool: "forks"` pays a cold-import cost).
-- **Canonical seams only:** Use `runInProcess` for CLI tests (never spy on `process.cwd`/`console.log`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, `faux.ts`, and `scripted-agent.ts`.
+- **Canonical seams only:** Use `runInProcess` for CLI tests (never spy on `process.cwd`/`console.log`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, and `scripted-agent.ts`.
 - **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, `FASTAGENT_OFFLINE=1`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
 - **Hygiene guards (`test/guards/suite-hygiene.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds, shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`), ghost file references, missing double parity, missing CLI command tests, and CLI seam bypasses are rejected.
 - **Process CLI tests (`run`):** Spawn the binary in `test/integration/` only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).

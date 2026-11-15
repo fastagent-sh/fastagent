@@ -16,14 +16,8 @@ import {
   type Credential,
   type CredentialStore,
   type SignInInteraction,
-  addContent,
-  addMcpServer,
-  createAgent,
   credentialFile,
-  inspectMcp,
-  listContent,
-  removeContent,
-  removeMcpServer,
+  openAgent,
   signIn,
   signInOptions,
 } from "../../../src/index.ts";
@@ -134,113 +128,6 @@ describe("a host's credentials", () => {
   });
 });
 
-describe("an agent's own content, from the package entry", () => {
-  const folders = async () => {
-    const base = await tmp("fa-host-content-");
-    const made = ["notes", "app", "handbook"].map((name) => join(base, name));
-    for (const dir of made) await mkdir(dir);
-    return { base, notes: made[0] as string, app: made[1] as string, handbook: made[2] as string };
-  };
-  const bind = (name: string, path: string) => ({ name, entry: { path } });
-
-  it("is created with any number of folders, edited and listed", async () => {
-    const { base, notes, app, handbook } = await folders();
-    const dir = join(base, "agent");
-    const created = await createAgent(dir, { content: [bind("app", app), bind("handbook", handbook)] });
-    expect(created.content.map(({ name }) => name)).toEqual(["app", "handbook"]);
-
-    const edit = await addContent(dir, bind("notes", notes));
-    expect(edit.content.map(({ name }) => name).sort()).toEqual(["app", "handbook", "notes"]);
-    expect((await listContent(dir)).content).toHaveLength(3);
-
-    const removed = await removeContent(dir, "NOTES");
-    expect(removed.name).toBe("notes");
-    expect((await listContent(dir)).content.map(({ name }) => name).sort()).toEqual(["app", "handbook"]);
-
-    // GitHub content added during createAgent lands in fastagent.config.ts (program), not context.json.
-    const ghAgent = join(base, "gh-agent");
-    const createdGh = await createAgent(ghAgent, { content: [{ name: "docs", entry: { github: "acme/docs" } }] });
-    expect(createdGh.content).toEqual([expect.objectContaining({ name: "docs", kind: "github", repo: "acme/docs" })]);
-    expect(await readFile(join(ghAgent, "fastagent.config.ts"), "utf8")).toContain('"acme/docs"');
-    expect(existsSync(join(ghAgent, "context.json"))).toBe(false);
-    await expect(removeContent(ghAgent, "docs")).rejects.toThrow(/declared by the program \(fastagent\.config\.ts\)/);
-  });
-});
-
-describe("an instance's MCP servers, from the package entry", () => {
-  const stdio = { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/project"] };
-  const http = { type: "http", url: "https://mcp.example.com/mcp" } as const;
-
-  async function agentDir(program?: object) {
-    const dir = join(await tmp("fa-host-mcp-"), "agent");
-    await createAgent(dir);
-    if (program !== undefined) {
-      await writeFile(join(dir, "fastagent.config.ts"), `export default ${JSON.stringify(program)};\n`);
-    }
-    return { dir, config: join(dir, "fastagent.json") };
-  }
-  const servers = async (dir: string, config: string) =>
-    (await inspectMcp(dir, { config })).map(({ name, transport }) => `${name}:${transport}`).sort();
-
-  it("adds and removes a server in the instance configuration, keeping its other keys", async () => {
-    const { dir, config } = await agentDir();
-    await writeFile(config, JSON.stringify({ model: "openai/gpt-5.5", mcpServers: { files: stdio } }));
-
-    expect(await addMcpServer(dir, "docs", http)).toEqual({ name: "docs", notes: [] });
-    expect(await servers(dir, config)).toEqual(["docs:http", "files:stdio"]);
-    expect(JSON.parse(await readFile(config, "utf8"))).toMatchObject({ model: "openai/gpt-5.5" });
-
-    await removeMcpServer(dir, "files");
-    await removeMcpServer(dir, "docs");
-    expect(await readFile(config, "utf8")).toBe(`${JSON.stringify({ model: "openai/gpt-5.5" }, null, 2)}\n`);
-  });
-
-  it("refuses with the open's own message, and writes nothing", async () => {
-    const { dir, config } = await agentDir({ content: {}, mcpServers: { program: stdio } });
-    await writeFile(config, JSON.stringify({ mcpServers: { files: stdio } }));
-    const before = await readFile(config, "utf8");
-
-    const refused: [string, unknown, string][] = [
-      ["extra", { ...stdio, cwd: "/" }, "unknown fields are refused"],
-      ["plain", { type: "http", url: "http://mcp.example.com/mcp" }, "MCP endpoints require HTTPS"],
-      ["bad__name", stdio, "server names must be"],
-      ["files", stdio, "already declared"],
-      ["program", stdio, "declared by the program"],
-    ];
-    for (const [name, server, why] of refused) {
-      await expect(addMcpServer(dir, name, server as never)).rejects.toThrow(why);
-    }
-    await expect(removeMcpServer(dir, "program")).rejects.toThrow("declared by the program");
-    await expect(removeMcpServer(dir, "nope")).rejects.toThrow('no MCP server named "nope"');
-    expect(await readFile(config, "utf8")).toBe(before);
-  });
-
-  it("edits the instance of a definition a host opens, and never the program's servers", async () => {
-    const program = { content: {}, mcpServers: { program: stdio } };
-    const { dir } = await agentDir(program);
-    const definition = await loadSourceDefinition(dir);
-    const config = join(await tmp("fa-host-mcp-instance-"), "fastagent.json");
-
-    await expect(addMcpServer(definition, "docs", http)).rejects.toThrow("pass instance.config");
-    await addMcpServer(definition, "docs", http, { config });
-    await expect(addMcpServer(definition, "program", stdio, { config })).rejects.toThrow("declared by the program");
-    await expect(removeMcpServer(definition, "program", { config })).rejects.toThrow("declared by the program");
-    expect(await servers(dir, config)).toEqual(["docs:http", "program:stdio"]);
-
-    await removeMcpServer(definition, "docs", { config });
-    expect(await servers(dir, config)).toEqual(["program:stdio"]);
-  });
-
-  it("says each literal credential the added entry carries", async () => {
-    const { dir } = await agentDir();
-    const edit = await addMcpServer(dir, "docs", {
-      ...http,
-      headers: { Authorization: "Bearer abc", "X-Team": `\${TEAM}` },
-    });
-    expect(edit.notes).toEqual([expect.stringContaining("mcpServers.docs.headers.Authorization is a literal value")]);
-  });
-});
-
 describe("a host's own instance of an agent", () => {
   it("opens beside the directory's own instance, on the host's store, offering each model's context window", async () => {
     for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
@@ -249,16 +136,18 @@ describe("a host's own instance of an agent", () => {
     const dir = join(base, "agent");
     await mkdir(dir);
     await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
-    const stateDir = join(homedir(), "host-state", "agent");
+    const root = join(homedir(), "host-instances", "agent");
+    const stateDir = join(root, ".state");
     const store = hostStore({ anthropic: { type: "api_key", key: "sk-host" } });
     // The model lists are the instance's too: a model only the host's kept list has is offered.
     const anthropic = modelsOver(new InMemoryCredentialStore()).getModels("anthropic")[0] as AnyModel;
     keepCatalog(join(stateDir, "models"), [{ ...anthropic, id: "claude-released" }]);
 
-    await expect(openSource(dir, { stateDir: "host-state" })).rejects.toThrow(
-      'stateDir must be an absolute path, and is "host-state"',
+    const definition = await loadSourceDefinition(dir);
+    await expect(openAgent(definition, { root: "host-instances" })).rejects.toThrow(
+      'root must be an absolute path, and is "host-instances"',
     );
-    const hosted = await openSource(dir, { credentials: store, stateDir });
+    const hosted = await openAgent(definition, { root, credentials: store, offline: true });
     // The directory's own instance (what `fastagent dev` opens) is not held by the host's.
     const own = await openSource(dir);
     try {

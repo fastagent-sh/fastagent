@@ -15,8 +15,7 @@ fastagent init my-agent
 cd my-agent
 ```
 
-You get `SYSTEM.md` (the prompt), an example skill, `fastagent.config.ts` and `package.json`. To have the agent work on
-a project, add `--content ~/code/app` (or later `fastagent content add ~/code/app`).
+You get `SYSTEM.md` (the prompt), an example skill, `fastagent.config.ts` and `package.json`.
 
 ## 2. Send it a message
 
