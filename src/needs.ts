@@ -3,7 +3,18 @@
  * declaration cannot drift from the read. A tool, an extension, a schedule, a provider or a channel may be one; the
  * assembly lists every declaration and refuses to open while a required one has no value.
  */
-import { isEnvName } from "./declared-secrets.ts";
+
+/**
+ * What an env-var name may look like, checked at the declaration: the names are written verbatim into env files and
+ * deploy artifacts, where a typo (`"X_API_KEY "`) or a newline breaks far from its cause. Case is not dictated
+ * (`http_proxy` is a real variable), only the shape a shell agrees on.
+ */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Whether `name` has the shape of an env-var name ({@link ENV_NAME}). */
+export function isEnvName(name: string): boolean {
+  return ENV_NAME.test(name);
+}
 
 /** One secret a piece of code reads: by name, or with what it is for and whether the code runs without it. */
 /** @public */

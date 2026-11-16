@@ -50,6 +50,7 @@ What it is handed:
 | `sessionFor(key, { forkFrom? })` | The session the conversation `key` talks in: the one recorded, or a new one, created and recorded before it is returned. `forkFrom` answers what a new one forks from (a thread's room, say), asked only when `key` has no session yet. Calls for one key are taken one at a time, so two first messages of a new conversation get one session |
 | `recordedSession(key)` | The session recorded for `key`, without making one: what a stop command asks of a place nothing was said in |
 | `turn(place, work)` | `work` run after the route has answered, one at a time per place (a chat, a thread) in the order they arrived, and counted as work in flight, which `dev`'s restart waits for. It keeps no record: a turn the process stops before it runs is lost unless the platform delivers its event again, which the platform's message id as `idempotencyKey` makes safe |
+| `beginWork()` | Count work the channel runs outside `turn` (a queue of its own, a reply still being written after its message ended) as work in flight, so `dev`'s restart waits for it; call the function it returns when the work ends |
 | `stateDir` | The channel's own directory, `<state root>/channels/<its name>`, made at the mount, for what it must keep (the first-party channels keep each turn there before they answer the platform, so none is lost) |
 
 A **long connection** is `{ connect(ctx, signal) }`, returning `{ ready, closed }`: `ready` settles once

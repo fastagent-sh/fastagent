@@ -74,13 +74,8 @@ interface ServingSurface {
 }
 
 /** Mount the channels and the health check: JSON, `{ status }`. */
-export function routesFor(
-  agent: Agent,
-  stateRoot: string,
-  channels: ReadonlyMap<string, Channel>,
-  resolveFrom: readonly string[] = [],
-): ServingSurface {
-  const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot, resolveFrom);
+export function routesFor(agent: Agent, stateRoot: string, channels: ReadonlyMap<string, Channel>): ServingSurface {
+  const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot);
   for (const key of Object.keys(routes)) {
     if (isApiPath(parseRouteKey(key).path)) {
       throw new Error(`route "${key}" is under ${API_PREFIX}, which the Agent API serves — move it`);
@@ -218,8 +213,7 @@ export interface ServableAgent {
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
   const { agent, agentDir, stateRoot, schedules } = opened;
   const closeTimeoutMs = options.closeTimeoutMs ?? CLOSE_DEADLINE_MS;
-  const resolveFrom = [...(opened.definition ? [opened.definition.dir] : []), agentDir];
-  const routed = routesFor(agent, stateRoot, opened.channels, resolveFrom);
+  const routed = routesFor(agent, stateRoot, opened.channels);
   // Composed BEFORE anything starts.
   const channels = router(routed.routes);
   const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;

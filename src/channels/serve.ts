@@ -9,7 +9,7 @@ import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
 import type { ChannelHandler } from "../channel.ts";
 import { log } from "../log.ts";
-import { text } from "./respond.ts";
+import { text } from "./kit/respond.ts";
 
 /** The totality boundary every serving path shares; `prepare` shapes the handler's response inside it. */
 export function totalFetch(

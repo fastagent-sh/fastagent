@@ -11,33 +11,23 @@ import * as Effect from "effect/Effect";
 import { originalError, joinPromise } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import { ensureStateHome } from "../state-file.ts";
-import { createTurnQueue } from "./turn-queue.ts";
+import { beginWork } from "./busy.ts";
+import { createTurnQueue } from "./kit/turn-queue.ts";
 
 /** The directory of the channel `name`'s own state under `stateRoot`: its context's `stateDir`. */
 function channelStateDir(stateRoot: string, name: string): string {
   return join(stateRoot, "channels", name);
 }
 
-const channelResolveDirs = new WeakMap<ChannelContext, readonly string[]>();
-
-/** Directories a channel's optional runtime dependencies may resolve from (program dir, agent dir). */
-export function resolveDirsFor(ctx: ChannelContext): readonly string[] {
-  return channelResolveDirs.get(ctx) ?? [];
-}
-
 /** The context of the channel `name` (its name in `fastagent.config.ts`), its state under `stateRoot`. */
-export function channelContext(
-  agent: Agent,
-  stateRoot: string,
-  name: string,
-  resolveFrom: readonly string[] = [],
-): ChannelContext {
+export function channelContext(agent: Agent, stateRoot: string, name: string): ChannelContext {
   if (!isAbsolute(stateRoot)) throw new Error(`a channel's state root must be absolute, got "${stateRoot}"`);
   const stateDir = channelStateDir(stateRoot, name);
   ensureStateHome(stateDir);
   const sessions = conversationSessions(join(stateDir, "sessions.json"));
   const turns = createTurnQueue<{ conversation: string; work: () => Promise<void> }>({
     label: `[${name}]`,
+    beginWork,
     // The channel's own failure surface: `turn` promises a failed one goes to the log, said as the author wrote it.
     run: ({ conversation, work }) =>
       joinPromise(work).pipe(
@@ -48,7 +38,7 @@ export function channelContext(
         ),
       ),
   });
-  const ctx: ChannelContext = {
+  return {
     agent,
     stateDir,
     sessionFor: (key, options) => {
@@ -61,7 +51,6 @@ export function channelContext(
     },
     recordedSession: (key) => sessions.get(key),
     turn: (place, work) => turns.accept({ conversation: place, work }),
+    beginWork,
   };
-  if (resolveFrom.length > 0) channelResolveDirs.set(ctx, [...new Set(resolveFrom)]);
-  return ctx;
 }

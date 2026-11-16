@@ -1,10 +1,10 @@
 /**
- * What a Feishu or Lark app's setup asks for (channels/setup.ts). The two share one engine: the app's credentials come
+ * What a Feishu or Lark app's setup asks for (kit/setup.ts). The two share one engine: the app's credentials come
  * first (Feishu creates the app by scan-to-create and keeps what it returns; Lark's person creates it in its console and
  * pastes them). What is left to the person is the permission work and the publish, which depend on what the platform
  * says about the app.
  */
-import type { ChannelSetup, HeldValues, SetupValue } from "../setup.ts";
+import type { ChannelSetup, HeldValues, SetupValue } from "../kit/setup.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { type FeishuApi, createFeishuApi } from "./feishu-api.ts";
 import { registerFeishuApp } from "./register-app.ts";

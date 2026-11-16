@@ -6,10 +6,9 @@
 import { join } from "node:path";
 import type { ChannelContext, ConnectionChannel, RouteChannel, Routes } from "../../channel.ts";
 import { type Needs, needs } from "../../needs.ts";
-import { resolveDirsFor } from "../context.ts";
 import { log } from "../../log.ts";
-import { text } from "../respond.ts";
-import { secretEquals } from "../secret.ts";
+import { text } from "../kit/respond.ts";
+import { secretEquals } from "../kit/secret.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
 import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
 import { attachmentsDir } from "../kit/text.ts";
@@ -218,7 +217,7 @@ function createFeishuRuntimeFactory(
   const { appId, appSecret, route, onError } = opts;
   const { kind } = profile;
   const label = `[${kind}]`;
-  return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
+  return ({ agent, sessionFor, recordedSession, beginWork, stateDir: stateHome }) => {
     // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
       throw new Error(`the ${kind} channel requires appId + appSecret (developer console → Credentials & Basic Info)`);
@@ -283,6 +282,7 @@ function createFeishuRuntimeFactory(
     };
 
     const runner = createTurnRunner<StoredFeishuTurn>({
+      beginWork,
       label,
       store,
       seen,
@@ -614,7 +614,6 @@ export function feishuWebSocket(
           appSecret: opts.appSecret,
           domain: opts.apiBaseUrl ?? profile.apiBase,
           onEvent: runtime.acceptEvent,
-          resolveFrom: resolveDirsFor(ctx),
         },
         signal,
       );

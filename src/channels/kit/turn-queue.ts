@@ -7,9 +7,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
-import { log } from "../log.ts";
-import { beginWork } from "./busy.ts";
-import { originalError } from "../promise-bridge.ts";
+import { log } from "../../log.ts";
+import { originalError } from "../../promise-bridge.ts";
 
 /** A turn's place in its conversation. */
 export interface TurnSlot {
@@ -41,10 +40,12 @@ interface Tail {
 
 export function createTurnQueue<T extends { conversation: string }>(opts: {
   label: string;
+  /** The process's count of work in flight (`ChannelContext.beginWork`). */
+  beginWork: () => () => void;
   /** The queue diagnoses escaped failures and closes this turn's resources before its successor runs. */
   run: (rec: T, slot: TurnSlot) => Effect.Effect<void, unknown, Scope.Scope>;
 }): TurnQueue<T> {
-  const { label, run } = opts;
+  const { label, run, beginWork } = opts;
   /**
    * Each conversation's turns that have not ended, oldest first. A turn can end without waiting for the ones before it (its
    * message was refused, or it was dropped), so what runs before a new turn is every one of these, not just the last.

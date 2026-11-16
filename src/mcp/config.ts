@@ -5,7 +5,8 @@
 import { isAbsolute, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
-import { type DeclaredSecret, isEnvName } from "../declared-secrets.ts";
+import type { DeclaredSecret } from "../declared-secrets.ts";
+import { isEnvName } from "../needs.ts";
 import { McpError } from "../mcp-api.ts";
 import { AGENT_CONFIG_FILE } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";

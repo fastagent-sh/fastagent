@@ -7,7 +7,7 @@ import { isCancel, log as clackLog, password, text } from "@clack/prompts";
 import { feishuSetup } from "../channels/feishu/setup.ts";
 import { larkSetup } from "../channels/feishu/lark-setup.ts";
 import { slackSetup } from "../channels/slack/setup.ts";
-import { type ChannelSetup, type PastedValues, SetupRefused } from "../channels/setup.ts";
+import { type ChannelSetup, type PastedValues, SetupRefused } from "../channels/kit/setup.ts";
 import { telegramSetup } from "../channels/telegram/setup.ts";
 import { openExternalUrl } from "../open-url.ts";
 import { loadEnvValues, trackedValueFileNote, unprotectedSecretsNote, writeValues } from "../value-file.ts";
