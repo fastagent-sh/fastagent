@@ -1,4 +1,4 @@
-/** The server a Fetch handler is served on (channels/serve.ts), whatever handler it serves. */
+/** The server a Fetch handler is served on (http/serve.ts), whatever handler it serves. */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serveHandler } from "../../../packages/fastagent/src/http/serve.ts";
 
@@ -45,7 +45,7 @@ describe("serving a Fetch handler", () => {
   });
 });
 
-describe("the server survives arbitrary channel code", () => {
+describe("the server survives arbitrary handler code", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("a throwing handler is logged, and says nothing else", async () => {
