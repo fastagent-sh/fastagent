@@ -10,16 +10,12 @@ import type { PromiseFailure } from "../../promise-bridge.ts";
 import {
   type ImageAttachment as ImageRef,
   attachedFilesManifest,
-  attributedFileName,
-  loadBackground,
-  missingAttachmentsNote,
   type SteeredTurn,
   turnStream,
   type TurnEvent,
   promptContent,
 } from "../kit/invoke.ts";
-import type { BufferedRef } from "./context-buffer.ts";
-import { type DownloadedFile, resolveFiles, resolveImages } from "./telegram-api.ts";
+import { resolveFiles, resolveImages } from "./telegram-api.ts";
 
 /** Appended to the prompt (not the system prompt): the channel owns Telegram-HTML formatting. */
 const HTML_INSTRUCTION =
@@ -33,64 +29,29 @@ export interface TurnTransport {
   filesDir: string;
 }
 
-/** A turn's attachment inputs: the summoning message's own file_ids (primary) and the ones folded in
- *  from the un-summoned discussion (buffered). */
+/** The summoning message's own attachments, and a replied-to message's. */
 export interface TurnAttachments {
-  primary: { imageFileIds?: string[]; fileIds?: string[] };
-  buffered: { files: BufferedRef[]; images: BufferedRef[]; skipped: number };
+  imageFileIds?: string[];
+  fileIds?: string[];
 }
 
-/** A turn's attachments, resolved to what agent.invoke consumes: vision images inline, plus a prompt
- *  suffix (the file manifest + a missing-attachment note) appended after the prompt, before the HTML hint. */
+/** A turn's attachments, resolved to what agent.invoke consumes: vision images inline, plus the downloaded files'
+ *  manifest appended after the prompt, before the HTML hint. */
 interface ResolvedAttachments {
   images: ImageRef[] | undefined;
   promptSuffix: string;
 }
 
 /**
- * Resolve a turn's attachments: images (vision) inline, files downloaded to disk with their absolute
- * paths listed in a manifest the agent reads with its tools. Two tiers, different failure policies.
- * PRIMARY (this turn's own message) THROWS on any load failure — the caller turns it into a `rejected`
- * event, so the agent never runs on inputs the user sent but we failed to load. BACKGROUND (`buffered`,
- * from the un-summoned discussion) degrades PER ATTACHMENT — a warn + a prompt note — rather than
- * failing the ask it merely accompanies: one expired earlier file must neither block the answer nor drag
- * down its still-valid siblings. Parallel (allSettled keeps input order + per-attachment isolation); the
- * note counts EVERY missing one (load failures + cap-skipped) so the model never holds a reference it
- * silently cannot open.
+ * Resolve a turn's attachments: images (vision) inline, files downloaded to disk with their absolute paths listed in a
+ * manifest the agent reads with its tools. Any load failure throws: the caller turns it into a `rejected` event, so the
+ * agent never runs on inputs the user sent but we failed to load.
  */
 async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachments): Promise<ResolvedAttachments> {
   const { api, botToken, chatId, filesDir } = t;
-  const { primary, buffered } = attachments;
-  const images = await resolveImages(api, botToken, primary.imageFileIds);
-  const files = await resolveFiles(api, botToken, primary.fileIds, chatId, filesDir);
-  const backgroundImages = await loadBackground(buffered.images, (ref) => resolveImages(api, botToken, [ref.id]), {
-    label: "[telegram]",
-    what: "photo",
-  });
-  const backgroundFiles = await loadBackground(
-    buffered.files,
-    (ref) => resolveFiles(api, botToken, [ref.id], chatId, filesDir),
-    { label: "[telegram]", what: "attachment" },
-  );
-  const bufferedImages: ImageRef[] = backgroundImages.loaded.flatMap(({ value }) => value ?? []);
-  const bufferedFiles: { file: DownloadedFile; ref: BufferedRef }[] = backgroundFiles.loaded.flatMap(({ ref, value }) =>
-    (value ?? []).map((file) => ({ file, ref })),
-  );
-  const missingNote = missingAttachmentsNote(backgroundImages.lost + backgroundFiles.lost + buffered.skipped);
-  // PRIMARY first, background after — consistent with "primary wins": what the user pointed at this
-  // turn leads. Buffered file entries are attributed like the fold's text lines ("the file Bob sent"
-  // resolves); buffered PHOTOS cannot be (ImageRef carries no label), so their attribution stops at
-  // the fold's attachment markers (the buffer appends `[photo]` even to captioned lines) — a
-  // documented limit.
-  const allFiles = [
-    ...(files ?? []),
-    ...bufferedFiles.map(({ file, ref }) => ({ ...file, name: attributedFileName(file.name, ref.from, ref.msg) })),
-  ];
-  const allImages = [...(images ?? []), ...bufferedImages];
-  return {
-    images: allImages.length ? allImages : undefined,
-    promptSuffix: `${missingNote}${attachedFilesManifest(allFiles)}`,
-  };
+  const images = await resolveImages(api, botToken, attachments.imageFileIds);
+  const files = await resolveFiles(api, botToken, attachments.fileIds, chatId, filesDir);
+  return { images: images?.length ? images : undefined, promptSuffix: attachedFilesManifest(files ?? []) };
 }
 
 /**
@@ -99,7 +60,14 @@ async function resolveTurnAttachments(t: TurnTransport, attachments: TurnAttachm
  */
 export function telegramTurnStream(
   agent: Agent,
-  turn: { session: () => Promise<string>; key: string; text: string; steer: SteeredTurn },
+  turn: {
+    session: () => Promise<string>;
+    /** While it runs, the place its `history` tool reads. */
+    enter: (sessionId: string) => () => void;
+    key: string;
+    text: string;
+    steer: SteeredTurn;
+  },
   transport: TurnTransport,
   attachments: TurnAttachments,
 ): Stream.Stream<TurnEvent, PromiseFailure> {
@@ -107,6 +75,7 @@ export function telegramTurnStream(
     agent,
     label: "[telegram]",
     session: turn.session,
+    enter: turn.enter,
     resolve: () => resolveTurnAttachments(transport, attachments),
     turn: (resolved) => ({
       idempotencyKey: turn.key,

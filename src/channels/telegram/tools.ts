@@ -1,6 +1,11 @@
-/** The tool a Telegram channel gives the agent: `send`, a text or a local file to a chat, over the channel's bot. */
+/**
+ * The tools a Telegram channel gives the agent: `send`, a text or a local file to a chat, over the channel's bot, and
+ * `history`, what the place a turn was asked in said, as the channel recorded it.
+ */
 import { basename } from "node:path";
 import type { ChannelTool } from "../../channel.ts";
+import { type SessionPlaces, historyTool } from "../kit/history.ts";
+import type { RecentMessages } from "./recent.ts";
 import type { TelegramTransport } from "./transport.ts";
 
 interface SendArgs {
@@ -12,7 +17,16 @@ interface SendArgs {
   messageThreadId?: number;
 }
 
-export function telegramTools(telegram: TelegramTransport): ChannelTool[] {
+/** A forum topic of the chat `place` is in. */
+function topicOf(place: string, topic: string): string {
+  if (!/^\d+$/.test(topic)) throw new Error(`"${topic}" is not a topic id: pass a forum topic's message_thread_id`);
+  return `${place.split(":")[0]}:${topic}`;
+}
+
+export function telegramTools(
+  telegram: TelegramTransport,
+  mounted: () => { places: SessionPlaces; recent: RecentMessages } | undefined,
+): ChannelTool[] {
   return [
     {
       name: "send",
@@ -23,8 +37,7 @@ export function telegramTools(telegram: TelegramTransport): ChannelTool[] {
         "or to reach a chat OTHER than the one you are answering. In a normal chat turn the channel " +
         "already delivers your reply, so do NOT call this to answer (it would send it twice). chatId comes " +
         "from the [telegram: chat …] context line in a chat turn; a scheduled or woken message has no context " +
-        "line, so name the destination in your instruction. What you send is shown to you in that chat's " +
-        "next turn.",
+        "line, so name the destination in your instruction. What you send shows in that chat's history.",
       parameters: {
         type: "object",
         properties: {
@@ -66,5 +79,15 @@ export function telegramTools(telegram: TelegramTransport): ChannelTool[] {
         return sent.notRecorded ? `${what}; not recorded: ${sent.notRecorded}` : what;
       },
     },
+    historyTool(
+      "telegram",
+      () => mounted()?.places,
+      async (place, { limit, threadId }) => {
+        const recent = mounted()?.recent;
+        if (recent === undefined) throw new Error("the telegram channel is not serving in this process");
+        return recent.read(threadId === undefined ? place : topicOf(place, threadId), limit);
+      },
+      "a forum topic's id (message_thread_id) in this chat, to read that topic; omit it to read where you are answering",
+    ),
   ];
 }

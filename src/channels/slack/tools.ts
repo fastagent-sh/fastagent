@@ -1,6 +1,9 @@
-/** The tools a Slack channel gives the agent: `send`, over the channel's own client, and `threads`. */
+/**
+ * The tools a Slack channel gives the agent: `send`, over the channel's own client, and `history`, the place a turn was
+ * asked in, read from Slack.
+ */
 import type { ChannelTool } from "../../channel.ts";
-import { type RoomThreads, threadsTool } from "../kit/history.ts";
+import { type PlaceRead, type SessionPlaces, historyTool } from "../kit/history.ts";
 import type { SlackApi } from "./slack-api.ts";
 
 interface SendArgs {
@@ -12,7 +15,15 @@ interface SendArgs {
   threadTs?: string;
 }
 
-export function slackTools(slack: SlackApi, rooms: () => RoomThreads | undefined): ChannelTool[] {
+export function slackTools(
+  slack: SlackApi,
+  mounted: () =>
+    | {
+        places: SessionPlaces;
+        history: (place: string, query: { limit: number; threadId?: string }) => Promise<PlaceRead>;
+      }
+    | undefined,
+): ChannelTool[] {
   return [
     {
       name: "send",
@@ -60,14 +71,15 @@ export function slackTools(slack: SlackApi, rooms: () => RoomThreads | undefined
         return `uploaded ${file.name} to Slack channel ${channelId} (file ${file.id})`;
       },
     },
-    threadsTool("slack", rooms, {
-      description:
-        "Read the threads of the Slack channel you are answering in. Without `threadId`, list its recent threads, " +
-        "most recently active first, each with its id; with a `threadId` from that list, read that thread. Use it " +
-        "when a question here concerns something discussed in another thread, such as whether a problem raised " +
-        "there was resolved: the answer is often what a person wrote in the thread. Only this channel's threads " +
-        "can be read, and only in a channel turn.",
-      threadId: "a thread id from the list (its first message's ts, like 1712345678.123456); omit it to list",
-    }),
+    historyTool(
+      "slack",
+      () => mounted()?.places,
+      async (place, query) => {
+        const history = mounted()?.history;
+        if (history === undefined) throw new Error("the slack channel is not serving in this process");
+        return history(place, query);
+      },
+      "a thread's id (its first message's ts, like 1712345678.123456) in this channel, to read that thread",
+    ),
   ];
 }

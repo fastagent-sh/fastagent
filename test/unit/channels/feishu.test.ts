@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelTool } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
@@ -8,7 +9,8 @@ import { feishuWebSocket } from "../../../src/channels/feishu/feishu.ts";
 import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../../../src/feishu.ts";
 import { eventSignature } from "../../../src/channels/feishu/crypto.ts";
 import { log } from "../../../src/log.ts";
-import { type ScriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
+import { type ScriptedAgent, promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
+import { ev } from "../../doubles/scripted-run.ts";
 import { createChannelSandbox, flushFetchMock, replyingAgent } from "../../harnesses/channel-harness.ts";
 
 const TOKEN = "verif-token";
@@ -465,46 +467,54 @@ describe("turn flow", () => {
     expect(settled.config.summary).toEqual({ content: "bold answer" });
   });
 
-  it("folds the chat's unanswered discussion into the next @mention, by name, once", async () => {
+  it("folds nothing into a turn; its history tool reads the chat it was asked in, by name, and no other chat's thread", async () => {
     feishuFetch();
-    const { handler, calls, idle } = buildChannel();
+    const prompts: string[] = [];
+    const read: string[] = [];
+    let history: ChannelTool | undefined;
+    let query: Record<string, unknown> = {};
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.message();
+      prompts.push(promptOf(request).text);
+      read.push(
+        await (history as ChannelTool)
+          .execute(query, { sessionId: request.sessionId })
+          .catch((error: unknown) => `refused: ${(error as Error).message}`),
+      );
+      yield ev.text("done");
+      yield ev.ended();
+    });
+    const channel = buildFeishuChannel({
+      appId: "app",
+      appSecret: "secret",
+      verificationToken: TOKEN,
+      apiBaseUrl: BASE,
+    });
+    history = channel.tools?.find((tool) => tool.name === "history");
+    const handler = channel.routes(channelContext(agent, sandbox.freshRoot(), "feishu"))["POST /feishu"];
+    if (!handler) throw new Error("expected POST /feishu");
+    const idle = sandbox.trackIdle(handler);
     await flush();
     const mention = [{ key: "@_user_1", name: "Bot", id: { open_id: "ou_bot" } }];
-    const context = messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" });
 
-    await handler(feishuRequest(context));
-    expect(calls).toHaveLength(0);
-
+    await handler(feishuRequest(messageEvent({ id: "om_context", chatType: "group", text: "deploy failed" })));
     await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_context_ask",
-          chatType: "group",
-          text: "@_user_1 summarize",
-          mentions: mention,
-        }),
-      ),
+      feishuRequest(messageEvent({ id: "om_ask", chatType: "group", text: "@_user_1 summarize", mentions: mention })),
     );
     await idle();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt.text).toContain("[recent discussion here:");
-    expect(calls[0]?.prompt.text).toContain("Alice (msg om_context): deploy failed");
-    // The ask is the turn's own text, not discussion.
-    expect(calls[0]?.prompt.text).not.toContain("(msg om_context_ask)");
+    expect(prompts[0]).not.toContain("deploy failed");
+    expect(read[0]).toMatch(
+      /oldest first:\nAlice \(msg om_context\): deploy failed\nAlice \(msg om_ask\): @Bot summarize\n/,
+    );
 
+    // A thread of another chat the bot is in cannot be read from this one.
+    messageEvent({ id: "om_elsewhere", chatId: "oc_2", chatType: "group", threadId: "omt_elsewhere", text: "secret" });
+    query = { threadId: "omt_elsewhere" };
     await handler(
-      feishuRequest(
-        messageEvent({
-          id: "om_context_again",
-          chatType: "group",
-          text: "@_user_1 again",
-          mentions: mention,
-        }),
-      ),
+      feishuRequest(messageEvent({ id: "om_peek", chatType: "group", text: "@_user_1 peek", mentions: mention })),
     );
     await idle();
-    // Read since the last answer: the first ask and its answer are already in the session.
-    expect(calls[1]?.prompt.text).not.toContain("recent discussion here");
+    expect(read[1]).toBe("refused: thread omt_elsewhere is not in this chat");
   });
 
   // ── The participant model's summon rule ────────────────────
@@ -560,9 +570,8 @@ describe("turn flow", () => {
       "feishu:oc_1:omt_two_party",
     ]);
     expect(calls[1]?.prompt.text).toContain("what about queues?");
-    // The rule asked nothing of the platform (both halves are what this channel heard): the only thread reads are
-    // each turn's history read.
-    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(calls.length);
+    // The rule asked nothing of the platform: both halves are what this channel heard.
+    expect(fx.calls("container_id_type=thread", "GET")).toHaveLength(0);
     const reply = fx.calls("/im/v1/messages/om_bare/reply", "POST")[0];
     expect(reply?.body?.msg_type).toBe("interactive");
     expect(reply?.body?.reply_in_thread).toBe(true);

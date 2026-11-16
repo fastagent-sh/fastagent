@@ -1,50 +1,22 @@
 /**
- * A Slack place's history, read when a turn runs: a channel's top level from
- * `conversations.history`, a thread from `conversations.replies`. What a place remembers between turns, and what a
- * read leaves out, is the kit's (`createPlaceHistory`). A message's `ts` is its id and its position at once: the
- * turn's ask is the read's exclusive `latest`. Each read lists the newest page before the ask and stops where its
- * session last read to, as Feishu's does: Slack has no reliable "after this point" (`SlackRange`).
+ * A Slack place's history, read when the `history` tool asks: a channel's top level from `conversations.history`, a
+ * thread from `conversations.replies`, its people named through `users.info`. Nothing is kept: Slack asks an app not to
+ * store what it reads.
  */
-import { capBufferedRefs } from "../kit/context-buffer.ts";
-import {
-  type PlaceHistory,
-  type PlaceListing,
-  type PlaceMessage,
-  type ThreadSummary,
-  createPlaceHistory,
-  threadList,
-} from "../kit/history.ts";
+import type { PlaceMessage, PlaceRead } from "../kit/history.ts";
 import { CONTEXT_READ } from "../kit/ingress.ts";
 import { slackMessageText } from "./parse.ts";
 import { log } from "../../log.ts";
 import { type SlackApi, SlackApiError, type SlackListedMessage } from "./slack-api.ts";
 
-/** How many of a place's newest messages one read keeps; a place busier than this since its last answer says so. */
-const PAGE_SIZE = 50;
-
-/** What a read reads back when its session has read nothing of the place yet. */
-const FIRST_READ = 20;
-
 /** Message subtypes that are someone saying something; every other subtype is the platform's (a join, a topic). */
 const SPOKEN_SUBTYPES = new Set(["file_share", "thread_broadcast", "bot_message", "me_message"]);
-
-export interface SlackPlaceHistory extends PlaceHistory<string> {
-  /** The channel's threads among its newest messages, for a tool (`kit/history.ts`); `room` is its place key. */
-  threads(room: string): Promise<string>;
-}
 
 /** How long a person's name is reused before it is looked up again. */
 const NAMES_TTL_MS = 10 * 60_000;
 
-/** How many of a channel's newest messages a thread list looks through. */
-const THREAD_SCAN = 100;
-
-/** A background file carried into a turn, with attribution for its prompt manifest. */
-export interface SlackBufferedFileRef {
-  id: string;
-  from: string;
-  messageId: string;
-}
+/** How many of a thread's replies one read lists: Slack lists a thread oldest first. */
+const THREAD_PAGE = 1000;
 
 /** A place: a channel's top level, or a thread in it. The turn record carries it as this key. */
 export function slackHistoryKey(teamId: string, place: { channelId: string; threadTs?: string }): string {
@@ -53,35 +25,9 @@ export function slackHistoryKey(teamId: string, place: { channelId: string; thre
 }
 
 /** The inverse of {@link slackHistoryKey}. Slack ids and timestamps never contain a colon. */
-export function slackPlaceOf(key: string): { teamId: string; channelId: string; threadTs?: string } {
+function slackPlaceOf(key: string): { teamId: string; channelId: string; threadTs?: string } {
   const [teamId = "", channelId = "", , threadTs] = key.split(":");
   return { teamId, channelId, ...(threadTs ? { threadTs } : {}) };
-}
-
-/**
- * Order two Slack timestamps (`seconds.micros`). A double tells microseconds apart until 2^33 seconds (the year 2242),
- * so plain numbers compare them exactly.
- */
-export const compareSlackTs = (a: string, b: string): number => Number(a) - Number(b);
-
-export const isSlackTs = (value: unknown): value is string => typeof value === "string";
-
-/** Select the most recent background files of the folded messages, excluding the turn's own. */
-export function collectFoldedFiles(
-  folded: readonly PlaceMessage[],
-  primaryIds: ReadonlySet<string>,
-): { files: SlackBufferedFileRef[]; skipped: number } {
-  const seen = new Set(primaryIds);
-  const files: SlackBufferedFileRef[] = [];
-  for (const message of folded) {
-    for (const file of message.files) {
-      if (seen.has(file.key)) continue;
-      seen.add(file.key);
-      files.push({ id: file.key, from: message.from.label, messageId: message.id });
-    }
-  }
-  const capped = capBufferedRefs(files);
-  return { files: capped.kept, skipped: capped.skipped };
 }
 
 /** A block's text, or undefined for a block this does not know how to read. */
@@ -178,7 +124,7 @@ const BLOCKS: Record<string, BlockReader> = {
 };
 
 /**
- * What a message says. A Markdown post (every answer and `slack-send` post) is stored as blocks, and its `text` is a
+ * What a message says. A Markdown post (every answer and `send` post) is stored as blocks, and its `text` is a
  * rendering that drops a table to ", with interactive elements" (measured), so the blocks are read when this knows them
  * all, and `text` otherwise. Legacy attachments follow: an integration often says everything there.
  */
@@ -193,16 +139,12 @@ function spokenText(message: SlackListedMessage): string {
   return [body, ...attached].filter((part) => part.trim() !== "").join("\n");
 }
 
-export function createSlackPlaceHistory(deps: {
+export function createSlackHistory(deps: {
   api: Pick<SlackApi, "channelHistory" | "threadReplies" | "userName">;
   /** THIS app's bot user and bot ids, once `auth.test` answered: a message from either is the agent's own. */
   self(): { userId?: string; botId?: string };
   label: string;
-  /** Where each place's outputs persist. */
-  path: string;
-  /** A `/stop`: a control action, not discussion. */
-  isControl(key: string, ts: string): boolean;
-}): SlackPlaceHistory {
+}): (place: string, query: { limit: number; threadId?: string }) => Promise<PlaceRead> {
   const { api } = deps;
 
   /**
@@ -220,7 +162,7 @@ export function createSlackPlaceHistory(deps: {
   /** The missing scope is said once per process: after that, each retry would only repeat it. */
   let scopeWarned = false;
 
-  /** Names for the people a fold shows; one not found is shown by user id. Never rejects: a name is a label. */
+  /** Names for the people a read shows; one not found is shown by user id. Never rejects: a name is a label. */
   const peopleNames = async (messages: readonly SlackListedMessage[]): Promise<ReadonlyMap<string, string>> => {
     if (Date.now() - names.at >= NAMES_TTL_MS) names = fresh();
     const { named, unnamed } = names;
@@ -280,87 +222,41 @@ export function createSlackPlaceHistory(deps: {
     return { kind: "human", label: name ?? `user ${message.user ?? "unknown"}` };
   };
 
-  const read = async (
-    key: string,
-    { after, drop }: { after?: string; drop(ts: string): boolean },
-    until?: string,
-  ): Promise<PlaceListing> => {
+  /** The place's newest `limit` messages, or those of a thread in its channel. */
+  return async (key, { limit, threadId }) => {
     const place = slackPlaceOf(key);
-    const range = { ...(until ? { latest: until } : {}), limit: after ? PAGE_SIZE : FIRST_READ };
+    if (threadId !== undefined && !/^\d+\.\d+$/.test(threadId)) {
+      throw new Error(`"${threadId}" is not a Slack thread id: pass a thread's id (like 1712345678.123456)`);
+    }
+    const thread = threadId ?? place.threadTs;
     const page =
-      place.threadTs === undefined
-        ? await api.channelHistory(place.channelId, range, CONTEXT_READ).then(({ messages, hasMore }) => ({
+      thread === undefined
+        ? await api.channelHistory(place.channelId, { limit }).then(({ messages, hasMore }) => ({
             messages: messages.reverse(),
             hasMore,
           }))
-        : await api
-            .threadReplies(place.channelId, place.threadTs, range, CONTEXT_READ)
-            .then(({ messages, hasMore }) => ({
-              // The root comes first whatever the range: it is this place's discussion only on a first read.
-              messages: messages.filter((message) => message.ts !== place.threadTs || after === undefined),
-              hasMore,
-            }));
-    const isAfter = (ts: string): boolean => after === undefined || compareSlackTs(ts, after) > 0;
-    const listed = page.messages.filter(
-      (message): message is SlackListedMessage & { ts: string } => message.ts !== undefined,
-    );
-    const fresh = listed.filter((message) => isAfter(message.ts));
-    const earlier = page.hasMore && fresh.length === listed.length;
-
-    const spoken = fresh.filter(
-      (message) =>
-        message.hidden !== true &&
-        (message.subtype === undefined || SPOKEN_SUBTYPES.has(message.subtype)) &&
-        !drop(message.ts),
-    );
-    const people = await peopleNames(spoken);
-    const messages = spoken
-      .map((message): PlaceMessage | undefined => {
-        const from = speaker(message, people);
-        const text = slackMessageText({ text: spokenText(message), files: message.files });
-        // No text, attachment or file to show: an empty line would only spend the fold's budget.
-        if (text.trim() === "") return undefined;
-        return {
-          id: message.ts,
-          at: Number(message.ts) * 1000,
-          from,
-          text,
-          images: [],
-          // Whether a file is an image is `files.info`'s answer, read when the turn loads it.
-          files: (message.files ?? []).flatMap((file) =>
-            file.id ? [{ key: file.id, ...(file.name ? { name: file.name } : {}) }] : [],
-          ),
-        };
-      })
-      .filter((message) => message !== undefined);
-    return { messages, earlier };
-  };
-
-  /** Threads are roots with replies; `conversations.history` gives their count and last reply. */
-  const threads = async (room: string): Promise<string> => {
-    const { channelId } = slackPlaceOf(room);
-    const { messages } = await api.channelHistory(channelId, { limit: THREAD_SCAN }, CONTEXT_READ);
-    const roots = messages.filter(
+        : await api.threadReplies(place.channelId, thread, { limit: THREAD_PAGE });
+    const spoken = page.messages.filter(
       (message): message is SlackListedMessage & { ts: string } =>
-        message.ts !== undefined && (message.reply_count ?? 0) > 0,
+        message.ts !== undefined &&
+        message.hidden !== true &&
+        (message.subtype === undefined || SPOKEN_SUBTYPES.has(message.subtype)),
     );
-    const people = await peopleNames(roots);
-    const summaries = roots.map(
-      (message): ThreadSummary => ({
-        id: message.ts,
-        time: { at: Number(message.latest_reply ?? message.ts) * 1000, is: "last active" },
-        replies: message.reply_count as number,
-        first: { label: speaker(message, people).label, text: spokenText(message) },
-      }),
-    );
-    return threadList(summaries, `this channel's newest ${THREAD_SCAN} messages`);
+    const newest = spoken.slice(-limit);
+    const people = await peopleNames(newest);
+    const messages = newest.flatMap((message): PlaceMessage[] => {
+      const text = slackMessageText({ text: spokenText(message), files: message.files });
+      if (text.trim() === "") return [];
+      const opened = thread === undefined && (message.reply_count ?? 0) > 0;
+      return [
+        {
+          id: message.ts,
+          from: speaker(message, people),
+          text,
+          ...(opened ? { thread: { id: message.ts, replies: message.reply_count as number } } : {}),
+        },
+      ];
+    });
+    return { messages, earlier: page.hasMore || spoken.length > newest.length };
   };
-
-  const history = createPlaceHistory({
-    label: deps.label,
-    path: deps.path,
-    isControl: deps.isControl,
-    read,
-  });
-  return { ...history, threads };
 }

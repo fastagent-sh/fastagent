@@ -8,7 +8,7 @@ import { type Needs, needs } from "../../needs.ts";
 import { log } from "../../log.ts";
 import { secretEquals } from "../secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
-import { type BufferEntry, collectAttachments, createContextBuffer, ownPostEntry } from "./context-buffer.ts";
+import { type RecentMessages, type RecordedMessage, createRecentMessages, ownMessage } from "./recent.ts";
 import {
   type TelegramMessage,
   type TelegramRoute,
@@ -19,8 +19,6 @@ import {
   extractImages,
   fromLabel,
   messageText,
-  ownFiles,
-  ownImages,
   pickMessage,
   telegramEnvelope,
   telegramPlaceKey,
@@ -32,14 +30,12 @@ import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, teleg
 import { attachmentsDir } from "../kit/text.ts";
 import { createJsonWebhookRoute } from "../kit/ingress.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
-import { createAskLog, readStart } from "../kit/history.ts";
-import { foldBudget } from "../kit/fold-budget.ts";
+import { type SessionPlaces, createSessionPlaces } from "../kit/history.ts";
 import { createMessageOwners, createSeenRing, isSenderConversation, senderConversation } from "../kit/state.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
 import { DROPPED_TURN_NOTICE, NO_ACK, SHARED_ANSWER_NOTICE, createTurnRunner, dispatchStop } from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { acknowledgeTelegramAsk } from "./reaction.ts";
-import { discussionBlock } from "../kit/context-buffer.ts";
 import { joinPromise } from "../../promise-bridge.ts";
 import { pollTelegramUpdates } from "./polling.ts";
 
@@ -110,6 +106,10 @@ interface TelegramRuntime {
   accept(update: TelegramUpdate): void;
   /** Resolves once the turns accepted so far have ended: the test/observability seam. */
   turnsIdle(): Promise<void>;
+  /** Where each session's turn runs, for the `history` tool. */
+  places: SessionPlaces;
+  /** What each place said, as the channel recorded it. */
+  recent: RecentMessages;
 }
 
 /** What a channel that polls is given: the webhook one's options without the secret that verifies a webhook. */
@@ -121,7 +121,7 @@ type TelegramRuntimeOptions = TelegramPollingChannelOptions & { apiBaseUrl: stri
 function createTelegramRuntime(
   { botToken, route, onError, botUsername, apiBaseUrl }: TelegramRuntimeOptions,
   { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
-): TelegramRuntime & { record(placeKey: string, entry: BufferEntry): void } {
+): TelegramRuntime {
   // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
   if (!botToken) {
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
@@ -129,7 +129,7 @@ function createTelegramRuntime(
   const formatError = onError ?? defaultErrorMessage;
   // One getMe at startup: the bot's @username (for the default route's group @mention summon and for recognising an
   // addressed `/stop`, only when not supplied) and the group-privacy flag — privacy mode off is required to receive
-  // the un-summoned group messages that feed the context buffer, so warn if it is on.
+  // the group messages nobody summons it with, which the `history` tool reads, so warn if it is on.
   let mentionName = botUsername;
   void callApi(apiBaseUrl, botToken, "getMe", {}).then(
     (me) => {
@@ -155,18 +155,11 @@ function createTelegramRuntime(
   const decide =
     route ?? ((update: TelegramUpdate) => defaultTelegramRoute(update, { botUsername: mentionName, botId }));
 
-  const buffer = createContextBuffer(join(stateHome, "buffers"));
+  const recent = createRecentMessages(join(stateHome, "recent"), "[telegram]");
+  const places = createSessionPlaces();
   // Whose a message is, so a reply to it reaches that conversation's session. A message id counts within its chat.
   const owners = createMessageOwners({ label: "[telegram]", path: join(stateHome, "owners.json") });
   const ownerKey = (chatId: number | string, messageId: number): string => `${chatId}:${messageId}`;
-  // Where each conversation's session read to: a turn folds the buffer from the ask its session was last sent.
-  const asks = createAskLog<number>({
-    label: "[telegram]",
-    path: join(stateHome, "asks.json"),
-    messages: agent.messages,
-    isPosition: (value): value is number => typeof value === "number",
-    compare: (a, b) => a - b,
-  });
   // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
   // replay on the next start.
   const store = createTurnStore<StoredTurn>(join(stateHome, "turns.json"), {
@@ -184,53 +177,30 @@ function createTelegramRuntime(
     );
   };
 
-  // A message id counts only within its chat, and a custom route can send several chats to one conversation: asks are
-  // kept per conversation and place, so a position is only ever compared with another of the same chat.
-  const askedBy = (rec: PendingTurn): string => `${rec.conversation}@${rec.placeKey}`;
-  /** The newest message id of each place the channel has taken (a summons, or discussion it buffered). */
-  const newestTaken = new Map<string, number>();
   /** Messages the agent posted for a sender's session, so a reply to one reaches it (a group's main timeline only). */
   const recordOwned = (rec: PendingTurn, messageIds: number[]): void => {
     if (!isSenderConversation(telegramPlaceKey(rec.chatId, rec.threadId), rec.conversation)) return;
     for (const id of messageIds) owners.record(ownerKey(rec.chatId, id), { conversation: rec.conversation });
   };
   /**
-   * An answer a sender's session holds, put where the chat's other senders' reads find it: Telegram never echoes a bot
-   * its own messages, so without this Bob's session would not know what Alice was told. Only in a group's main timeline
-   * (a topic and a private chat have one session, which holds it), and never at the cost of the answer: it is already
-   * in the chat, so a failed write is said and the turn goes on.
+   * An answer, recorded where it landed: Telegram never echoes a bot its own messages, so without this the place's
+   * history would not show what the agent said there. Never at the cost of the answer: it is already in the chat, so a
+   * failed write is said and the turn goes on.
    */
   const recordAnswer = (rec: PendingTurn, messageIds: number[], text: string): void => {
-    const place = telegramPlaceKey(rec.chatId, rec.threadId);
     const [messageId] = messageIds;
-    if (messageId === undefined || !isSenderConversation(place, rec.conversation)) return;
+    if (messageId === undefined) return;
     recordOwned(rec, messageIds);
-    // An answer is a preview that is edited into its text, so its message id is from when the answer began. Anyone
-    // asked in the chat since has not read it, and their read starts strictly after their own ask: it stands at the
-    // newest message of this chat the channel has taken, and sorts after it.
-    const at = Math.max(messageId, newestTaken.get(place) ?? 0);
+    const place = telegramPlaceKey(rec.chatId, rec.threadId);
     try {
-      buffer.push(place, ownPostEntry(text, messageId, rec.conversation, at));
+      recent.push(place, ownMessage(text, messageId));
     } catch (error) {
       log.warn(`[telegram] an answer was not recorded into place ${place}: ${String(error)}`);
     }
   };
-  const runner = createTurnRunner<StoredTurn, BufferEntry>({
+  const runner = createTurnRunner<StoredTurn>({
     label: "[telegram]",
     store,
-    discussion: async (rec) => {
-      const until = rec.askedIn?.messageId;
-      if (until === undefined) return { text: "", folded: [] };
-      const start = await readStart(asks, "[telegram]", askedBy(rec), recordedSession(rec.conversation), until);
-      const fold = buffer.fold(rec.placeKey, {
-        ...(start.after === undefined ? {} : { after: start.after }),
-        until,
-        budget: await foldBudget(agent, recordedSession(rec.conversation)),
-        // What this conversation's own turns answered is in its session; other senders' answers are discussion.
-        skip: (entry) => entry.conversation === rec.conversation,
-      });
-      return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
-    },
     delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),
     where: (rec) => `chat=${rec.chatId}${rec.threadId !== undefined ? ` thread=${rec.threadId}` : ""}`,
     notifyDropped,
@@ -245,24 +215,19 @@ function createTelegramRuntime(
       joinPromise(async () => {
         recordAnswer(rec, await deliverTelegramAnswer(apiBaseUrl, botToken, targetOf(rec), answer), answer);
       }),
-    execute: (rec, discussion, onAnswered, turn) =>
+    execute: (rec, onAnswered, turn) =>
       turn.reply(
         telegramTurnStream(
           agent,
           {
             session: () => sessionFor(rec.conversation),
+            enter: (sessionId) => places.enter(sessionId, rec.placeKey),
             key: rec.id,
-            text: `${discussionBlock(discussion.text)}${rec.baseText}`,
+            text: rec.baseText,
             steer: turn,
           },
           { api: apiBaseUrl, botToken, chatId: rec.chatId, filesDir: attachmentsDir(stateHome) },
-          {
-            primary: { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
-            buffered: collectAttachments(discussion.folded, {
-              files: new Set(rec.fileIds),
-              images: new Set(rec.imageFileIds),
-            }),
-          },
+          { imageFileIds: rec.imageFileIds, fileIds: rec.fileIds },
         ),
         (events) =>
           telegramReply(
@@ -286,33 +251,21 @@ function createTelegramRuntime(
     const m = pickMessage(update);
     if (!m) return;
     const placeKey = telegramPlaceKey(m.chat.id, m.message_thread_id);
-    newestTaken.set(placeKey, Math.max(newestTaken.get(placeKey) ?? 0, m.message_id));
-    const r = decide(update);
-    if (!r) {
-      // Not summoned: in a group, record the message so a later summon has the discussion (needs privacy off to be
-      // delivered here at all).
-      const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
-      const content = messageText(m);
-      if (isGroup && content) {
-        // OWN attachments only: each message is its own buffer entry, so a reply's referenced attachment is already
-        // (or will be) the other entry's.
-        const fileIds = ownFiles(m);
-        const imageIds = ownImages(m);
-        // A captioned attachment renders as its caption.
-        const summary = attachmentSummary(m);
-        const bodyLine = summary && content !== summary ? `${content} ${summary}` : content;
-        buffer.push(placeKey, {
-          sender: fromLabel(m.from) ?? "someone",
-          body: bodyLine,
-          messageId: m.message_id,
-          date: m.date === undefined ? Date.now() : m.date * 1000,
-          replyTo: m.reply_to_message?.message_id,
-          fileIds: fileIds.length ? fileIds : undefined,
-          imageIds: imageIds.length ? imageIds : undefined,
-        });
-      }
-      return;
+    // Every message is recorded for the place's history, before the update is acknowledged; in a group, one nobody
+    // summons the agent with arrives only with privacy mode off.
+    const content = messageText(m);
+    if (content) {
+      // A captioned attachment renders as its caption.
+      const summary = attachmentSummary(m);
+      recent.push(placeKey, {
+        id: m.message_id,
+        from: fromLabel(m.from) ?? "someone",
+        text: summary && content !== summary ? `${content} ${summary}` : content,
+        ...(m.reply_to_message === undefined ? {} : { replyTo: m.reply_to_message.message_id }),
+      });
     }
+    const r = decide(update);
+    if (!r) return;
     // A group's main timeline is one conversation per sender; a forum topic and a private chat are one per place.
     const isGroup = m.chat.type === "group" || m.chat.type === "supergroup";
     const mainTimeline = isGroup && m.message_thread_id === undefined;
@@ -344,7 +297,6 @@ function createTelegramRuntime(
     const imageFileIds = extractImages(m);
     const fileIds = extractFiles(m);
     if (baseText.trim() !== "" || imageFileIds.length > 0 || fileIds.length > 0) {
-      asks.record(`${conversation}@${placeKey}`, { key: `${update.update_id}`, at: m.message_id });
       if (isSenderConversation(placeKey, conversation))
         owners.record(ownerKey(m.chat.id, m.message_id), { conversation });
       // Everything the turn needs, as a plain record; persisted pre-ACK then run serially per session.
@@ -366,24 +318,28 @@ function createTelegramRuntime(
     }
     return;
   };
-  return { accept, turnsIdle: runner.idle, record: (placeKey, entry) => buffer.push(placeKey, entry) };
+  return { accept, turnsIdle: runner.idle, places, recent };
 }
 
 /**
- * A Telegram channel receiving the way `receive` says, and its send tool, which rides the same bot: what it sends lands
- * in the buffer of the runtime the channel mounts (transport.ts says why).
+ * A Telegram channel receiving the way `receive` says, and its tools over the runtime it mounts: what `send` sends is
+ * recorded into that runtime's places (transport.ts says why), and `history` reads them.
  */
 function withTools<C>(
   options: TelegramRuntimeOptions,
   receive: (runtime: (ctx: ChannelContext) => TelegramRuntime) => C,
 ): C & { tools: ReturnType<typeof telegramTools> } {
-  let record: ((placeKey: string, entry: BufferEntry) => void) | undefined;
+  let mounted: TelegramRuntime | undefined;
   const channel = receive((ctx) => {
-    const runtime = createTelegramRuntime(options, ctx);
-    record = runtime.record;
-    return runtime;
+    mounted = createTelegramRuntime(options, ctx);
+    return mounted;
   });
-  return { ...channel, tools: telegramTools(telegramTransport(options.apiBaseUrl, options.botToken, () => record)) };
+  const record = (): ((place: string, message: RecordedMessage) => void) | undefined =>
+    mounted === undefined ? undefined : (place, message) => mounted?.recent.push(place, message);
+  return {
+    ...channel,
+    tools: telegramTools(telegramTransport(options.apiBaseUrl, options.botToken, record), () => mounted),
+  };
 }
 
 /**

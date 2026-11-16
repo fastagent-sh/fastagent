@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelTool } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
 import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
 import {
@@ -248,6 +249,43 @@ describe("Slack sessions, context, and thread participation", () => {
     await settle();
     expect(calls).toHaveLength(2);
     expect(conversationOf(stateRoot, calls[1]?.sessionId)).toBe("T1:C1:10.0");
+  });
+
+  it("folds nothing into a turn; its history tool reads the channel it was asked in, and a thread there", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    platform.push({ channel: "C1", ts: "0.5", user: "U2", text: "the deploy failed", reply_count: 1 });
+    platform.push({ channel: "C1", ts: "0.6", thread_ts: "0.5", user: "U3", text: "it was the queue" });
+    const prompts: string[] = [];
+    const read: string[] = [];
+    let history: ChannelTool | undefined;
+    let query: Record<string, unknown> = {};
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.message();
+      prompts.push(promptOf(request).text);
+      read.push(await (history as ChannelTool).execute(query, { sessionId: request.sessionId }));
+      yield ev.text("done");
+      yield ev.ended();
+    });
+    const channel = slackChannel({ botToken: "xoxb-test", signingSecret: SECRET, apiBaseUrl: API });
+    history = channel.tools?.find((tool) => tool.name === "history");
+    const handler = channel.routes(channelContext(agent, root(), "slack"))["POST /slack"];
+    if (!handler) throw new Error("expected POST /slack");
+    sandbox.trackIdle(handler);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    await handler(signedRequest(message("1.0", { type: "app_mention", text: "<@UBOT> what happened?" })));
+    await settle();
+    expect(prompts[0]).not.toContain("the deploy failed");
+    expect(read[0]).toMatch(
+      /oldest first:\nuser U2 \(msg 0\.5, opened thread 0\.5 with 1 reply\): the deploy failed\nuser U1 \(msg 1\.0\)/,
+    );
+
+    query = { threadId: "0.5" };
+    await handler(signedRequest(message("2.0", { type: "app_mention", text: "<@UBOT> and the thread?" })));
+    await settle();
+    expect(read[1]).toMatch(
+      /in thread 0\.5, oldest first:\nuser U2 \(msg 0\.5\): the deploy failed\nuser U3 \(msg 0\.6\)/,
+    );
   });
 });
 

@@ -13,8 +13,8 @@ export const telegramSetup: ChannelSetup = () => {
       if (readsAllGroupMessages === true) return [];
       return [
         readsAllGroupMessages === false
-          ? `to use the bot in a group, ${PRIVACY_MODE_EFFECT}: ${PRIVACY_MODE_FIX}. It then reads the discussion as ` +
-            "context and still answers only when it is mentioned or replied to"
+          ? `to use the bot in a group, ${PRIVACY_MODE_EFFECT}: ${PRIVACY_MODE_FIX}. Its history tool then ` +
+            "reads the group's messages, and it still answers only when it is mentioned or replied to"
           : "Telegram did not say whether group privacy mode is on: in @BotFather send /setprivacy, choose this bot, " +
             "and choose Disable if the bot is to read a group's discussion",
       ];

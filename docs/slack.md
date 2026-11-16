@@ -1,6 +1,6 @@
 ---
 title: Slack channel
-description: "Run an agent as a Slack app: create the app, Socket Mode, when it answers, threads and history, files, rendering, and sending from schedules."
+description: "Run an agent as a Slack app: create the app, Socket Mode, when it answers, reading history, files, rendering, and sending from schedules."
 status: current
 ---
 
@@ -70,9 +70,9 @@ If Socket Mode connects but nothing answers, Socket Mode may be off in the app's
   it needs a mention again.
 - A message that mentions only other people is discussion, not a question.
 
-Before answering, it reads what was said in the place since its last answer (by name, newest first, bounded). Invite
-the app only to channels it may read. The `slack_threads` tool lets the agent list and read other threads of the
-channel it was asked in.
+The agent reads what was said in the channel, DM or thread it was asked in with `slack_history`, read from Slack when it
+asks, people by name. A message that opened a thread says so, and the tool reads that thread by its id. Invite the app
+only to channels it may read.
 
 A message that arrives while the agent works is passed to the running work; if both are answered together, one answer
 is sent. While a turn runs the asker's message shows 👀, then ✅.
@@ -113,7 +113,7 @@ export default defineSchedule({
 ```
 
 In a chat turn the reply is sent for you; calling the tool too posts twice. The tools are named after the channel: a
-channel declared as `support` gives `support_send` and `support_threads`.
+channel declared as `support` gives `support_send` and `support_history`.
 
 ## Options
 

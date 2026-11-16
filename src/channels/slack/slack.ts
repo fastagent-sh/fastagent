@@ -15,18 +15,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { joinPromise } from "../../promise-bridge.ts";
 import { attachmentsDir, codePointPrefix } from "../kit/text.ts";
-import { type PlaceMessage, type RoomThreads, createAskLog, createRoomThreads } from "../kit/history.ts";
-import { DROPPED_TURN_NOTICE, createTurnRunner, dispatchStop, isStopText, readPlaceDiscussion } from "../kit/turn.ts";
+import { type SessionPlaces, createSessionPlaces } from "../kit/history.ts";
+import { DROPPED_TURN_NOTICE, createTurnRunner, dispatchStop, isStopText } from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
-import { discussionBlock } from "../kit/context-buffer.ts";
-import {
-  collectFoldedFiles,
-  compareSlackTs,
-  createSlackPlaceHistory,
-  isSlackTs,
-  slackHistoryKey,
-  slackPlaceOf,
-} from "./history.ts";
+import { createSlackHistory, slackHistoryKey } from "./history.ts";
 import { slackTurnStream } from "./invoke-turn.ts";
 import { type OpenSlackSocket, connectSlackSocket } from "./socket.ts";
 import {
@@ -88,10 +80,8 @@ interface SlackSocketChannelOptions extends SlackPolicyOptions {
 interface StoredSlackTurn extends TurnRecordBase {
   seq: number;
   baseText: string;
-  /** The place whose history this turn reads (a channel's or DM's top level, or a thread); absent for a routed turn. */
-  historyKey?: string;
-  /** Asked in a channel, not a DM: the one kind of place whose threads its tool may read. */
-  group: boolean;
+  /** Where it was asked (a channel's or DM's top level, or a thread): the place its `history` tool reads. */
+  place: string;
   teamId: string;
   channelId: string;
   threadTs?: string;
@@ -107,8 +97,7 @@ function isStoredSlackTurn(value: unknown): value is StoredSlackTurn {
     typeof turn.seq === "number" &&
     typeof turn.conversation === "string" &&
     typeof turn.baseText === "string" &&
-    (turn.historyKey === undefined || typeof turn.historyKey === "string") &&
-    typeof turn.group === "boolean" &&
+    typeof turn.place === "string" &&
     typeof turn.teamId === "string" &&
     typeof turn.channelId === "string" &&
     (turn.threadTs === undefined || typeof turn.threadTs === "string") &&
@@ -277,8 +266,10 @@ interface SlackRuntime {
   ingest(envelope: SlackEventEnvelope): Promise<void>;
   /** Resolves once the turns and side tasks accepted so far have ended: the test/observability seam. */
   turnsIdle(): Promise<void>;
-  /** A group turn's room, for the `threads` tool: the channel it was asked in, and its threads. */
-  rooms: RoomThreads;
+  /** Where each session's turn runs, for the `history` tool. */
+  places: SessionPlaces;
+  /** Reads one of its places, for the `history` tool. */
+  history: ReturnType<typeof createSlackHistory>;
 }
 
 function createSlackRuntime(
@@ -294,8 +285,6 @@ function createSlackRuntime(
   const auth = createSlackAuthentication(api, label);
 
   const seen = createSeenRing(join(stateHome, "seen.json"), label);
-  // A `/stop` is taken as input but is no discussion: a read leaves it out, the asks themselves are kept.
-  const stops = createSeenRing(join(stateHome, "stops.json"), label);
   const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
   /**
    * A thread's participation is keyed by the CONVERSATION it describes — "the agent answered here" is a claim about
@@ -304,62 +293,18 @@ function createSlackRuntime(
   const threadKey = (teamId: string, channelId: string, threadTs: string): string =>
     `${teamId}:${channelId}:${threadTs}`;
   const welcomed = createWelcomedUsers(join(stateHome, "welcomed.json"), label);
-  // Where each conversation's session read to: a turn folds its place from the ask its session was last sent.
-  const asks = createAskLog<string>({
-    label,
-    path: join(stateHome, "asks.json"),
-    messages: agent.messages,
-    isPosition: isSlackTs,
-    compare: compareSlackTs,
-  });
-  const history = createSlackPlaceHistory({
+  const places = createSessionPlaces();
+  const history = createSlackHistory({
     api,
     self: () => ({ userId: auth.botUserId(), botId: auth.botId() }),
     label,
-    path: join(stateHome, "history.json"),
-    isControl: (key, ts) => {
-      const place = slackPlaceOf(key);
-      return stops.has(`${place.teamId}:${place.channelId}:${ts}`);
-    },
   });
-  const rooms = createRoomThreads({
-    list: (room) => history.threads(room),
-    read: async (room, threadTs) => {
-      if (!/^\d+\.\d+$/.test(threadTs)) {
-        throw new Error(
-          `"${threadTs}" is not a Slack thread id: pass a thread's id from the list (like 1712345678.123456)`,
-        );
-      }
-      const { teamId, channelId } = slackPlaceOf(room);
-      const key = slackHistoryKey(teamId, { channelId, threadTs });
-      return (await history.snapshot(key)).text || `(thread ${threadTs} shows no messages)`;
-    },
-  });
-  /**
-   * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the turn's session
-   * already, so the place it LANDS in records it for that conversation, and its next read leaves it out — an answer to
-   * a channel's top-level ask lands in the thread it opens. Another conversation's read keeps it. The send tool uses
-   * the plain client, so what the agent posts itself stays discussion. A routed turn has no place and reads no history.
-   */
-  const placeApi = (turn: { historyKey?: string; teamId: string; conversation: string }): SlackApi =>
-    turn.historyKey === undefined
-      ? api
-      : api.recordingSends((where, ts) =>
-          history.recordOutput(slackHistoryKey(turn.teamId, where), turn.conversation, ts),
-        );
   const store = createTurnStore<StoredSlackTurn>(join(stateHome, "turns.json"), {
     label,
     isRecord: isStoredSlackTurn,
     order: (a, b) => a.seq - b.seq,
   });
   const decide = route ?? defaultSlackRoute;
-  /** A channel turn under the default routing reads its channel's threads; a DM has none to read. */
-  const enterRoom = (turn: PendingSlackTurn): { enter?: (sessionId: string) => () => void } => {
-    if (!turn.group || turn.historyKey === undefined) return {};
-    const { teamId, channelId } = slackPlaceOf(turn.historyKey);
-    const room = slackHistoryKey(teamId, { channelId });
-    return { enter: (sessionId) => rooms.enter(sessionId, room) };
-  };
   const targetOf = (turn: PendingSlackTurn): SlackTarget => ({
     channelId: turn.channelId,
     threadTs: turn.threadTs,
@@ -368,28 +313,14 @@ function createSlackRuntime(
   });
 
   const notifyDropped = (turn: PendingSlackTurn): void => {
-    void settleSlackPreview(placeApi(turn), targetOf(turn), undefined, DROPPED_TURN_NOTICE).catch((error) =>
+    void settleSlackPreview(api, targetOf(turn), undefined, DROPPED_TURN_NOTICE).catch((error) =>
       log.warn(`${label} could not notify a dropped turn: ${String(error)}`),
     );
   };
 
-  const runner = createTurnRunner<StoredSlackTurn, PlaceMessage>({
+  const runner = createTurnRunner<StoredSlackTurn>({
     label,
     store,
-    // The read ends at the ask (`messageRefOf`: the ts of the message that asked) and starts after the ask its session
-    // was last sent.
-    discussion: (turn) =>
-      readPlaceDiscussion({
-        agent,
-        label,
-        asks,
-        history,
-        sessionId: recordedSession(turn.conversation),
-        historyKey: turn.historyKey,
-        conversation: turn.conversation,
-        turnId: turn.id,
-        until: messageRefOf(turn.id)?.ts,
-      }),
     seen,
     delivered: createSeenRing(join(stateHome, "delivered.json"), label),
     where: (turn) => `channel=${turn.channelId}`,
@@ -406,7 +337,7 @@ function createSlackRuntime(
     notifyDropped,
     deliverAnswer: (turn, answer) =>
       joinPromise(async () => {
-        await deliverSlackAnswer(placeApi(turn), targetOf(turn), answer);
+        await deliverSlackAnswer(api, targetOf(turn), answer);
         // The 👀 on the asker's message was added by the run that produced this answer, and `execute`'s
         // acquire/release — the only thing that turns it into ✅ — is not on this path.
         const messageRef = messageRefOf(turn.id);
@@ -420,7 +351,7 @@ function createSlackRuntime(
           });
         }
       }),
-    execute: (turn, discussion, onAnswered, hooks) => {
+    execute: (turn, onAnswered, hooks) => {
       const messageRef = messageRefOf(turn.id);
       return Effect.acquireUseRelease(
         joinPromise(async () =>
@@ -441,19 +372,16 @@ function createSlackRuntime(
                 agent,
                 {
                   session: () => sessionFor(turn.conversation),
-                  ...enterRoom(turn),
+                  enter: (sessionId) => places.enter(sessionId, turn.place),
                   key: turn.id,
-                  text: `${discussionBlock(discussion.text)}${turn.baseText}`,
+                  text: turn.baseText,
                   steer: hooks,
                 },
                 { api, channelId: turn.channelId, filesDir: attachmentsDir(stateHome), label },
-                {
-                  primaryFileIds: turn.fileIds,
-                  buffered: collectFoldedFiles(discussion.folded, new Set(turn.fileIds)),
-                },
+                turn.fileIds,
               ),
               (events) =>
-                slackReply(events, placeApi(turn), targetOf(turn), formatError, {
+                slackReply(events, api, targetOf(turn), formatError, {
                   rendering,
                   threadTitle: turn.threadTitle,
                   disclaimer: aiDisclaimer,
@@ -538,24 +466,14 @@ function createSlackRuntime(
     const threadTs =
       routed.threadTs === null ? undefined : (routed.threadTs ?? (sameChannel ? defaultThread : undefined));
     const defaultConversation = threadKey(teamId, event.channel, rootTs);
-    // Every place's discussion under the default routing, a DM's too (what a send tool posted there is in no session);
-    // a routed session's place is the router's to decide.
-    const historyKey =
-      route === undefined && (group || direct)
-        ? slackHistoryKey(teamId, { channelId: event.channel, threadTs: event.thread_ts })
-        : undefined;
+    const place = slackHistoryKey(teamId, { channelId: event.channel, threadTs: event.thread_ts });
     // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
     if (isStopText(stripSlackMentions(event.text ?? ""))) {
       seen.add(logicalId);
-      stops.add(logicalId);
       const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
       runner.track(
         dispatchStop(agent, recordedSession(routed.conversation ?? defaultConversation), label)
-          .then((feedback) =>
-            placeApi({ historyKey, teamId, conversation: routed.conversation ?? defaultConversation })
-              .postMessage(target, feedback)
-              .then(() => undefined),
-          )
+          .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
           .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
       );
       return;
@@ -569,15 +487,13 @@ function createSlackRuntime(
         : undefined;
 
     const conversation = routed.conversation ?? defaultConversation;
-    if (historyKey !== undefined) asks.record(conversation, { key: logicalId, at: event.ts });
     runner.submit(
       {
         id: logicalId,
         seq: ++seq,
         conversation,
         baseText,
-        ...(historyKey !== undefined ? { historyKey } : {}),
-        group,
+        place,
         teamId,
         channelId: targetChannel,
         threadTs,
@@ -648,26 +564,26 @@ function createSlackRuntime(
       acceptEvent(envelope);
     },
     turnsIdle: runner.idle,
-    rooms,
+    places,
+    history,
   };
 }
 
 /**
  * A Slack channel receiving the way `receive` says, and its tools, over one client: `send` posts through it, and
- * `threads` reads the rooms of the runtime the channel mounts.
+ * `history` reads the place each turn of the runtime the channel mounts runs in.
  */
 function withTools<C>(
   policy: ReturnType<typeof resolveSlackPolicy>,
   receive: (runtime: (ctx: ChannelContext) => SlackRuntime) => C,
 ): C & { tools: ReturnType<typeof slackTools> } {
   const api = createSlackApi({ botToken: policy.botToken, baseUrl: policy.apiBaseUrl });
-  let rooms: RoomThreads | undefined;
+  let mounted: SlackRuntime | undefined;
   const channel = receive((ctx) => {
-    const runtime = createSlackRuntime(policy, api, ctx);
-    rooms = runtime.rooms;
-    return runtime;
+    mounted = createSlackRuntime(policy, api, ctx);
+    return mounted;
   });
-  return { ...channel, tools: slackTools(api, () => rooms) };
+  return { ...channel, tools: slackTools(api, () => mounted) };
 }
 
 /**

@@ -1,55 +1,15 @@
 /**
- * A Feishu/Lark place's history, read from `im/v1/messages` when a turn runs. What a
- * place remembers between turns, and what a read leaves out, is the kit's (`createPlaceHistory`); this is the read:
- * newest first up to the turn's own ask (`end_time` in seconds, then `(create_time, message_id)`), back to where its
- * session last read to, with senders named from the chat's members.
+ * A Feishu or Lark place's history, read from `im/v1/messages` when the `history` tool asks: a chat's top level or a
+ * thread in it, newest first, with senders named from the chat's members. Nothing is kept between reads.
  */
 import { log } from "../../log.ts";
-import { capBufferedRefs } from "../kit/context-buffer.ts";
-import {
-  type PlaceHistory,
-  type PlaceListing,
-  type PlaceMessage,
-  type ThreadSummary,
-  createPlaceHistory,
-  threadList,
-} from "../kit/history.ts";
+import { HISTORY_MAX_LIMIT, type PlaceMessage, type PlaceRead } from "../kit/history.ts";
 import { CONTEXT_READ } from "../kit/ingress.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
 
-/** How many of a place's newest messages one read lists; a place busier than this since its last answer says so. */
-const PAGE_SIZE = 50;
-
-/** What a read reads back when its session has read nothing of the place yet. */
-const FIRST_READ = 20;
-
 /** How long a chat's member names are reused before they are read again. */
 const NAMES_TTL_MS = 10 * 60_000;
-
-/** A message's position: `create_time` alone is not unique, so the id breaks ties. */
-export interface FeishuPosition {
-  at: number;
-  id: string;
-}
-
-export const isFeishuPosition = (value: unknown): value is FeishuPosition =>
-  typeof (value as FeishuPosition)?.at === "number" && typeof (value as FeishuPosition).id === "string";
-
-export const compareFeishuPositions = (a: FeishuPosition, b: FeishuPosition): number => a.at - b.at;
-
-export interface FeishuPlaceHistory extends PlaceHistory<FeishuPosition> {
-  /** The chat's threads among its newest messages, for a tool (`kit/history.ts`). */
-  threads(chatId: string): Promise<string>;
-}
-
-/** A background resource carried into a turn, with attribution for its prompt manifest. */
-export interface FeishuBufferedRef {
-  messageId: string;
-  key: string;
-  name?: string;
-  from: string;
-}
 
 /** Someone said it: not deleted, and not the platform's own (a system message has no sender). */
 function isSpoken(item: FeishuListedMessage): boolean {
@@ -62,48 +22,17 @@ export function feishuHistoryKey(place: { chatId: string; threadId?: string }): 
 }
 
 /** The inverse of {@link feishuHistoryKey}. */
-export function feishuPlaceOf(key: string): { chatId: string; threadId?: string } {
+function feishuPlaceOf(key: string): { chatId: string; threadId?: string } {
   const at = key.indexOf(":thread:");
   return at === -1 ? { chatId: key } : { chatId: key.slice(0, at), threadId: key.slice(at + ":thread:".length) };
 }
 
-/** Select the most recent background resources of the folded messages, excluding the turn's own primary ones. */
-export function collectFoldedAttachments(
-  folded: readonly PlaceMessage[],
-  primary: { files: { messageId: string; key: string }[]; images: { messageId: string; key: string }[] },
-): { files: FeishuBufferedRef[]; images: FeishuBufferedRef[]; skipped: number } {
-  const identity = (ref: { messageId: string; key: string }): string => `${ref.messageId}\u0000${ref.key}`;
-  const refs = (
-    pick: (message: PlaceMessage) => { key: string; name?: string }[],
-    primaryRefs: { messageId: string; key: string }[],
-  ): FeishuBufferedRef[] => {
-    const seen = new Set(primaryRefs.map(identity));
-    const out: FeishuBufferedRef[] = [];
-    for (const message of folded) {
-      for (const resource of pick(message)) {
-        const ref = { messageId: message.id, ...resource, from: message.from.label };
-        if (seen.has(identity(ref))) continue;
-        seen.add(identity(ref));
-        out.push(ref);
-      }
-    }
-    return out;
-  };
-  const files = capBufferedRefs(refs((message) => message.files, primary.files));
-  const images = capBufferedRefs(refs((message) => message.images, primary.images));
-  return { files: files.kept, images: images.kept, skipped: files.skipped + images.skipped };
-}
-
-export function createFeishuPlaceHistory(deps: {
+export function createFeishuHistory(deps: {
   api: Pick<FeishuApi, "listMessages" | "chatMemberNames">;
   /** THIS app's id: a message whose sender is this app is the agent's own. */
   appId: string;
   label: string;
-  /** Where each place's outputs persist. */
-  path: string;
-  /** A `/stop`: a control action, not discussion. */
-  isControl(messageId: string): boolean;
-}): FeishuPlaceHistory {
+}): (place: string, query: { limit: number; threadId?: string }) => Promise<PlaceRead> {
   const { api, appId, label } = deps;
   /**
    * Per chat, the speakers already looked up: named, or known to have no name to find (not a member, past the page
@@ -112,7 +41,7 @@ export function createFeishuPlaceHistory(deps: {
    */
   const names = new Map<string, { named: Map<string, string>; unnamed: Set<string>; at: number }>();
 
-  /** Names for the speakers a fold shows; one not found is shown by open_id. Never rejects: a name is a label. */
+  /** Names for the speakers a read shows; one not found is shown by open_id. Never rejects: a name is a label. */
   const memberNames = async (chatId: string, speakers: ReadonlySet<string>): Promise<Map<string, string>> => {
     const cached = names.get(chatId);
     const entry =
@@ -140,12 +69,12 @@ export function createFeishuPlaceHistory(deps: {
     return entry.named;
   };
 
-  /** One listed message as a fold shows it; `people` names the humans among its speakers. */
+  /** One listed message as the tool shows it; `people` names the humans among its speakers. */
   const placeMessage = (
     item: FeishuListedMessage,
     id: string,
-    at: number,
     people: ReadonlyMap<string, string>,
+    inChat: boolean,
   ): PlaceMessage => {
     const decoded = decodeFeishuContent({
       message_type: item.msg_type ?? "unknown",
@@ -160,104 +89,43 @@ export function createFeishuPlaceHistory(deps: {
           ? { kind: "self", label: "you" }
           : { kind: "bot", label: `bot ${senderId}` }
         : { kind: "human", label: people.get(senderId) ?? `user ${senderId}` };
+    // In a chat's listing a thread's root carries the thread's id, and its replies their root's too.
+    const opened = inChat && item.thread_id !== undefined && item.root_id === undefined;
     return {
       id,
-      at,
       from,
       text: decoded.text,
       ...(item.parent_id ? { replyTo: item.parent_id } : {}),
-      images: decoded.resources.filter((r) => r.kind === "image").map((r) => ({ key: r.key })),
-      files: decoded.resources
-        .filter((r) => r.kind === "file" || r.kind === "audio" || r.kind === "video")
-        .map((r) => ({ key: r.key, ...(r.name ? { name: r.name } : {}) })),
+      ...(opened ? { thread: { id: item.thread_id as string } } : {}),
     };
   };
 
-  /** The place's messages after `after` (or its newest {@link FIRST_READ}), oldest first, minus the session's own. */
-  const read = async (
-    key: string,
-    { after, drop }: { after?: FeishuPosition; drop(messageId: string): boolean },
-    until?: FeishuPosition,
-  ): Promise<PlaceListing> => {
+  /** The place's newest `limit` messages, or those of a thread in its chat, oldest first. */
+  return async (key, { limit, threadId }) => {
     const place = feishuPlaceOf(key);
+    const thread = threadId ?? place.threadId;
     const listed = await api.listMessages(
-      place.threadId ? { type: "thread", id: place.threadId } : { type: "chat", id: place.chatId },
-      PAGE_SIZE,
-      // Seconds, inclusive: the same second's later messages still arrive, and are skipped below by time.
-      until ? Math.floor(until.at / 1000) : undefined,
-      CONTEXT_READ,
+      thread ? { type: "thread", id: thread } : { type: "chat", id: place.chatId },
+      HISTORY_MAX_LIMIT,
     );
-    // A thread id names a thread in ANY chat the bot is in: its key's chat is a claim this read checks.
-    const stranger = place.threadId ? listed.items.find((item) => item.chat_id !== place.chatId) : undefined;
-    if (stranger) throw new Error(`thread ${place.threadId} is not in chat ${place.chatId}`);
-    const fresh: { item: FeishuListedMessage; id: string; at: number }[] = [];
-    let reachedAfter = false;
-    for (const item of listed.items) {
-      const id = item.message_id;
-      const at = Number(item.create_time);
-      if (!id || !Number.isFinite(at)) continue;
-      if (until && (id === until.id || at > until.at)) continue;
-      if (after && (id === after.id || at < after.at)) {
-        reachedAfter = true;
-        break;
-      }
-      fresh.push({ item, id, at });
-      if (!after && fresh.length >= FIRST_READ) break;
-    }
-    const earlier = after
-      ? !reachedAfter && (listed.hasMore || listed.items.length >= PAGE_SIZE)
-      : fresh.length >= FIRST_READ && (listed.items.length > FIRST_READ || listed.hasMore);
-
-    const kept = fresh.reverse().filter(({ item, id }) => {
-      if (!isSpoken(item)) return false;
-      // A topic group lists every topic's replies with its chat; the room is its top-level messages.
-      if (!place.threadId && item.thread_id && item.root_id) return false;
-      return !drop(id);
-    });
+    // A thread id names a thread in ANY chat the bot is in: reading one of another chat would leak that chat here.
+    const stranger = thread ? listed.items.find((item) => item.chat_id !== place.chatId) : undefined;
+    if (stranger) throw new Error(`thread ${thread} is not in this chat`);
+    const spoken = listed.items.filter(
+      (item): item is FeishuListedMessage & { message_id: string } =>
+        Boolean(item.message_id) &&
+        isSpoken(item) &&
+        // A topic group lists every topic's replies with its chat; the chat's place is its top-level messages.
+        (thread !== undefined || !(item.thread_id && item.root_id)),
+    );
+    const newest = spoken.slice(0, limit).reverse();
     const speakers = new Set(
-      kept.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
+      newest.flatMap((item) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
     );
     const people = speakers.size > 0 ? await memberNames(place.chatId, speakers) : new Map<string, string>();
-    const messages = kept.map(({ item, id, at }) => placeMessage(item, id, at, people));
-    return { messages, earlier };
+    return {
+      messages: newest.map((item) => placeMessage(item, item.message_id, people, thread === undefined)),
+      earlier: listed.hasMore || spoken.length > newest.length,
+    };
   };
-
-  /**
-   * The chat's threads among its newest {@link PAGE_SIZE} messages. Feishu has no thread list: an ordinary group lists
-   * each thread's root (no reply count, no last activity), a topic group every message with its thread's id.
-   */
-  const threads = async (chatId: string): Promise<string> => {
-    const listed = await api.listMessages({ type: "chat", id: chatId }, PAGE_SIZE, undefined, CONTEXT_READ);
-    // Newest first, so a thread's first entry is its newest message seen and its last the earliest.
-    const byThread = new Map<string, { item: FeishuListedMessage; id: string; at: number }[]>();
-    for (const item of listed.items) {
-      const at = Number(item.create_time);
-      if (!item.thread_id || !item.message_id || !isSpoken(item) || !Number.isFinite(at)) continue;
-      byThread.set(item.thread_id, [...(byThread.get(item.thread_id) ?? []), { item, id: item.message_id, at }]);
-    }
-    const openers = [...byThread.values()].map((seen) => seen.at(-1) as (typeof seen)[number]);
-    const speakers = new Set(
-      openers.flatMap(({ item }) => (item.sender?.sender_type === "user" && item.sender.id ? [item.sender.id] : [])),
-    );
-    const people = speakers.size > 0 ? await memberNames(chatId, speakers) : new Map<string, string>();
-    const summaries = [...byThread].map(([id, seen]): ThreadSummary => {
-      const opener = seen.at(-1) as (typeof seen)[number];
-      const message = placeMessage(opener.item, opener.id, opener.at, people);
-      // A reply is the thread's last activity this read saw; a root alone may have replies the listing omits.
-      const newest = seen[0] as (typeof seen)[number];
-      const time = newest.item.root_id
-        ? { at: newest.at, is: "last active" as const }
-        : { at: opener.at, is: "started" as const };
-      return { id, time, first: { label: message.from.label, text: message.text } };
-    });
-    return threadList(summaries, `this chat's newest ${PAGE_SIZE} messages`);
-  };
-
-  const history = createPlaceHistory({
-    label,
-    path: deps.path,
-    isControl: (_key, id) => deps.isControl(id),
-    read,
-  });
-  return { ...history, threads };
 }

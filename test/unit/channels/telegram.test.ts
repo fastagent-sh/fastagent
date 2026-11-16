@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ChannelTool } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
 import {
   type TelegramChannelOptions,
@@ -79,15 +80,22 @@ const telegramChannel = (
   {
     stateDir,
     stopped,
+    onTools,
     ...opts
-  }: TelegramChannelOptions & { stateDir?: string; stopped?: (session: string) => { stopped: string[] } },
+  }: TelegramChannelOptions & {
+    stateDir?: string;
+    stopped?: (session: string) => { stopped: string[] };
+    onTools?: (tools: readonly ChannelTool[]) => void;
+  },
 ) => {
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  const handler = buildTelegramChannel(opts).routes(
-    channelContext(stopped ? withStop(agent, stopped) : agent, root, "telegram"),
-  )["POST /telegram"]!;
+  const channel = buildTelegramChannel(opts);
+  onTools?.(channel.tools ?? []);
+  const handler = channel.routes(channelContext(stopped ? withStop(agent, stopped) : agent, root, "telegram"))[
+    "POST /telegram"
+  ]!;
   // Register the turn-queue idle so drainAndClean() awaits this channel's fire-and-forget turns deterministically.
   sandbox.trackIdle(handler);
   return handler;
@@ -207,34 +215,46 @@ describe("telegram channel", () => {
     message: { message_id: n, text: t, chat: grp, from: { id: userId(user), username: user } },
   });
 
-  it("buffers un-summoned group messages and folds them into a sender's next summoned turn, once per sender", async () => {
-    const { agent, calls } = replyingAgent("ok");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), { status: 200 })),
+  it("records a group's messages and its own answers, which the history tool reads during a turn, folding nothing", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const prompts: string[] = [];
+    const read: string[] = [];
+    let history: ChannelTool | undefined;
+    const agent = scriptedAgent(async function* (request) {
+      yield ev.message();
+      prompts.push(promptOf(request).text);
+      read.push(await (history as ChannelTool).execute({}, { sessionId: request.sessionId }));
+      yield ev.text("ok");
+      yield ev.ended();
+    });
+    const ch = telegramChannel(agent, {
+      secretToken: SECRET,
+      botToken: "BOT",
+      apiBaseUrl: API,
+      route: onlyCommands,
+      onTools: (tools) => {
+        history = tools.find((tool) => tool.name === "history");
+      },
+    });
+
+    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // not summoned: recorded
+    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // delivered again: recorded once
+    await ch(tgRequest(groupMsg(2, "bob", "which service?")));
+    await ch(tgRequest(groupMsg(3, "alice", "/bot summarize")));
+    await groupSettle();
+    expect(prompts[0]).not.toMatch(/the deploy failed/);
+    expect(read[0]?.match(/the deploy failed/g)).toHaveLength(1);
+    expect(read[0]).toMatch(/@alice \(msg 1\): the deploy failed\n@bob \(msg 2\): which service\?\n@alice \(msg 3\)/);
+
+    // Bob's session is another sender's: the place shows him what the agent answered alice.
+    await ch(tgRequest(groupMsg(4, "bob", "/bot and me?")));
+    await groupSettle();
+    expect(read[1]).toMatch(/you \(msg \d+\): ok\n@bob \(msg 4\): \/bot and me\?$/);
+
+    // Outside a turn there is no place to read.
+    await expect((history as ChannelTool).execute({}, { sessionId: "elsewhere" })).rejects.toThrow(
+      "this is not a telegram chat turn: history is read only from the place a turn was asked in",
     );
-    const ch = telegramChannel(agent, { secretToken: SECRET, botToken: "BOT", apiBaseUrl: API, route: onlyCommands });
-
-    await ch(tgRequest(groupMsg(1, "alice", "the deploy failed"))); // un-summoned → buffered
-    await ch(tgRequest(groupMsg(2, "bob", "which service?"))); // un-summoned → buffered
-    await ch(tgRequest(groupMsg(3, "alice", "/bot summarize"))); // summoned → folds the buffer in
-    await groupSettle();
-    const p1 = calls[0]?.text ?? "";
-    expect(p1).toMatch(/recent discussion here/);
-    expect(p1).toMatch(/@alice \(msg \d+\): the deploy failed/);
-    expect(p1).toMatch(/@bob \(msg \d+\): which service\?/);
-
-    await ch(tgRequest(groupMsg(4, "alice", "/bot again"))); // alice's session holds the discussion already
-    await groupSettle();
-    expect(calls[1]?.text ?? "").not.toMatch(/recent discussion here/);
-
-    // Bob is another sender with a session of his own: he has read none of it, and is told what was said — the
-    // other people's lines and what the agent answered alice, attributed.
-    await ch(tgRequest(groupMsg(5, "bob", "/bot and me?")));
-    await groupSettle();
-    const p3 = calls[2]?.text ?? "";
-    expect(p3).toMatch(/@alice \(msg \d+\): the deploy failed/);
-    expect(p3).toMatch(/you \(sent by the agent\) \(msg \d+\): ok/);
   });
 });
 

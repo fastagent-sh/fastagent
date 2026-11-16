@@ -1,6 +1,6 @@
 ---
 title: Feishu and Lark channel
-description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, the WebSocket connection, scopes, when it answers, threads, cards, files, and sending from schedules."
+description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, the WebSocket connection, scopes, when it answers, reading history, cards, files, and sending from schedules."
 status: current
 ---
 
@@ -42,8 +42,8 @@ Setup checks the app's scopes and names any your tenant withheld, with a link to
 
 | Scope | Without it |
 |---|---|
-| `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in threads, no group discussion |
-| `im:message:readonly` | earlier discussion and quoted messages cannot be read |
+| `im:message.group_msg` (sensitive) | only @mentions arrive: no bare replies in threads |
+| `im:message:readonly` | `feishu_history` and quoted messages cannot read the chat |
 | `im:message.reactions:write_only` | no 👀 on a message waiting behind a running task |
 | `im:chat.members:read` | people show as open_ids instead of names |
 
@@ -79,8 +79,8 @@ Request URL: set it in the console yourself.
 | Thread in a group | a mention; then bare replies while only one person talks there | the thread |
 
 - A thread opened on one of the bot's answers starts from that conversation's history.
-- Before answering, it reads what was said in the place since its last answer (by name, bounded). A thread's first
-  turn also reads the room. The `feishu_threads` tool lets it read other threads of the group.
+- The agent reads what was said in the chat or thread with `feishu_history`, read from Feishu when it asks, people by
+  name. A message that opened a thread says so, and the tool reads that thread by its id; only this chat's threads.
 - A reply to one of its answers continues the session that answer came from.
 - A message that arrives while it works is passed to the running work and may share its answer. A waiting message
   shows a reaction until it is answered.
@@ -101,7 +101,7 @@ question and the image together, or reply to the image with a mention.
 
 A schedule or a wake-up has no chat to reply in: its prompt names the chat id, and the agent sends text or a Markdown
 card with `feishu_send`. It cannot target a thread yet. In a chat turn the reply is sent for you; calling the tool too
-posts twice. The tools are named after the channel: a channel declared as `lark` gives `lark_send` and `lark_threads`.
+posts twice. The tools are named after the channel: a channel declared as `lark` gives `lark_send` and `lark_history`.
 
 ## Options
 
@@ -122,5 +122,4 @@ to developers.
   is taken once.
 - Sessions are never deleted, so storage grows with the chats and threads the bot has joined.
 - Messages show the asker as `user <open_id>`: events carry no display name.
-- Reading a place's history adds about 300–400 ms before a group turn.
 - Feishu limits sends to one chat to 5 per second.
