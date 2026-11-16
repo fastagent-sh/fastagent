@@ -6,29 +6,33 @@ Agent API.
 
 ## The code is the only source of truth
 
-- What FastAgent does is what `src/` does. Nothing else describes the implementation. A file's header says what the
-  file owns and why it is that way, next to the code the reason is about. Read the code and its headers. Start from
-  `src/index.ts` (the package), `src/agent-api.ts` (the Agent API), `src/http/contract.ts` (the API over HTTP) and
-  `src/cli/program.ts` (the CLI).
+- What FastAgent does is what `packages/*/src/` does. Nothing else describes the implementation. A file's header says
+  what the file owns and why it is that way, next to the code the reason is about. Read the code and its headers. Start
+  from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
+  `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
+- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API and `connectAgent`;
+  it imports no runtime) and `@fastagent-sh/fastagent` (the runtime and the CLI). A package reaches another only by
+  name, and in the repository reads its source through the `@fastagent-sh/source` export condition;
+  `test/guards/package-boundary.test.ts` holds the lines.
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
   (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
   state file, call order or history.
 - When a doc and the code disagree, the code is right. Fix the doc or delete the passage. A change in what a user does
-  or sees updates its guide in the same PR. A CLI command's flags are its `--help`, generated from `src/cli/program.ts`.
+  or sees updates its guide in the same PR. A CLI command's flags are its `--help`, generated from `packages/fastagent/src/cli/program.ts`.
 - Do not commit design notes, plans, measurements or progress logs. They go in the PR description. Anything that
   stays true goes into the code: a name, a header, a test.
 - There is no specification document: one implementation and the client it ships need none. The Agent API is
-  `src/agent-api.ts` and `src/http/contract.ts`; what it promises is `docs/agent-api.md`, and
+  `packages/client/src/agent-api.ts` and `packages/client/src/http/contract.ts`; what it promises is `docs/agent-api.md`, and
   `test/harnesses/agent-api-conformance.ts` and `test/unit/agent-api/http-api.test.ts` test those promises. Changing them is an explicit
   decision. A second implementation is when a specification would earn its place.
 
 ## Decisions the code cannot show
 
 - **One harness, pi-durable.** A harness-neutral layer was tried and dropped: it cost more than it bought.
-  `@earendil-works/pi-*` is imported only under `src/harnesses/`. An author's tools and extensions are pi-durable code,
+  `@earendil-works/pi-*` is imported only under `packages/fastagent/src/harnesses/`. An author's tools and extensions are pi-durable code,
   by choice.
-- **The contracts import no harness.** `src/agent-api.ts` imports only `effect/Schema`. `src/channel.ts`
-  and `src/mcp-api.ts` import nothing. `src/index.ts` names every export and exports no assembly
+- **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; its `channel.ts` and
+  the runtime's `mcp-api.ts` import nothing. Each package's `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
 - **One process owns an instance's state.** That state is the instance's SQLite storage and each Caller's files under
   the state root. A deployment routes every session of one storage to one process. What a Caller reads back is
@@ -37,11 +41,11 @@ Agent API.
   `skills/` come from the bundle, never from the machine (no skill or prompt from `~/.pi/agent`). The box supplies
   only commands and variables, the way `bash` inherits `PATH`.
 - **A session id belongs to the Agent; a conversation id belongs to the Caller.** A Caller maps its conversations onto
-  sessions (`src/conversation-sessions.ts`). A tool that asks which session it runs in gets the id the Agent handed out
+  sessions (`packages/fastagent/src/conversation-sessions.ts`). A tool that asks which session it runs in gets the id the Agent handed out
   (`sessionIdOf`).
 - **The CLI serves a person and a coding agent alike.** Nothing waits on a terminal. A choice not given exits 2 and
   names what to pass. A step only a person can take returns at once (`need_user_action`, a check command), and a
-  process of the CLI's own finishes it (`src/cli/ticket.ts`). A secret is never typed into the agent's conversation.
+  process of the CLI's own finishes it. A secret is never typed into the agent's conversation.
   Results go to stdout, everything else to stderr. A command whose result is data has `--json`.
 
 ## Engineering rules
@@ -83,10 +87,10 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 
 | Change area | Required tests | Mandatory seam (do not invent a local mock) |
 | --- | --- | --- |
-| Agent API / HTTP (`src/agent-api.ts`, `src/http/`) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
-| CLI command or flag (`src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
-| Channel (`src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, its tools | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
-| Deploy (`src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts | No secrets in artifacts |
+| Agent API / HTTP (`packages/client/src/agent-api.ts`, `src/http/` in both packages) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
+| CLI command or flag (`packages/fastagent/src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
+| Channel (`packages/fastagent/src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, its tools | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
+| Deploy (`packages/fastagent/src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts | No secrets in artifacts |
 | Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
 | Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
 | Bugfix | Minimal regression test reproducing the bug | L1 preferred; use L2 only when process/lock/tool behavior is essential |

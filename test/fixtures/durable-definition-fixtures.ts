@@ -7,8 +7,8 @@ const ROOT = import.meta.dirname;
 
 export const made: string[] = [];
 
-const DEFINE = "../../../../../src/harnesses/pi-durable/define.ts";
-const NEEDS = "../../../../../src/needs.ts";
+const DEFINE = "../../../../../packages/fastagent/src/harnesses/pi-durable/define.ts";
+const NEEDS = "../../../../../packages/fastagent/src/needs.ts";
 
 /** An agent package with `files`, its directory under test/fixtures. */
 export function agentPackage(files: Record<string, string>): string {
@@ -76,7 +76,7 @@ export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 export const WITH_CHANNEL: Record<string, string> = {
   ...FILES,
   "fastagent.config.ts": `import { faux } from "./model.ts";
-import { needs } from "../../../src/needs.ts";
+import { needs } from "../../../packages/fastagent/src/needs.ts";
 export default {
   model: "fixture/m",
   providers: [faux.provider],

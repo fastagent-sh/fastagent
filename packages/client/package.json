@@ -1,0 +1,61 @@
+{
+  "name": "@fastagent-sh/client",
+  "version": "0.31.0",
+  "description": "The FastAgent Agent API and its HTTP client: talk to an agent FastAgent serves, from anywhere fetch runs.",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "agent-api",
+    "sse",
+    "fastagent"
+  ],
+  "license": "MIT",
+  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
+  "homepage": "https://fastagent.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fastagent-sh/fastagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fastagent-sh/fastagent/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@fastagent-sh/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./agent-api": {
+      "@fastagent-sh/source": "./src/agent-api.ts",
+      "types": "./dist/agent-api.d.ts",
+      "default": "./dist/agent-api.js"
+    },
+    "./http/contract": {
+      "@fastagent-sh/source": "./src/http/contract.ts",
+      "types": "./dist/http/contract.d.ts",
+      "default": "./dist/http/contract.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "node ../../scripts/prepack.mjs && npm run build"
+  },
+  "dependencies": {
+    "effect": "^4.0.7"
+  }
+}

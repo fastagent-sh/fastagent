@@ -1,9 +1,9 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildProject } from "../../../src/harnesses/pi-durable/build.ts";
-import { buildDefinition } from "../../../src/harnesses/pi-durable/open.ts";
-import { DEFINITION_FORMAT } from "../../../src/harnesses/pi-durable/definition.ts";
+import { buildProject } from "../../../packages/fastagent/src/harnesses/pi-durable/build.ts";
+import { buildDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
 import { made, project, FILES, listing } from "./build-fixtures.ts";
 
 afterAll(() => {

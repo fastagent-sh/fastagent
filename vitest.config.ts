@@ -5,23 +5,25 @@ import { defineConfig } from "vitest/config";
 // (test/setup.ts).
 //
 // `pool: "forks"` is explicit, not left to the default: it is the process isolation these process.env tests assume.
+const source = (name: string): string => new URL(`./packages/${name}/src`, import.meta.url).pathname;
+
 export default defineConfig({
-  // Scaffold templates import the PUBLISHED "@fastagent-sh/fastagent" (they are copied verbatim into user
-  // workspaces — data to tsc, excluded from the program). Tests that EXECUTE a template resolve that
-  // name to the current source instead: truer than dist/ (asserts the template against today's
-  // defineTool), and dist/ doesn't exist on CI anyway. A subpath must be listed BEFORE the bare name:
-  // a string alias also matches `<name>/...` and would rewrite the subpath onto index.ts.
+  // A package's source is what tests run, in process and in the Node processes they start (test/setup.ts names the
+  // `@fastagent-sh/source` export condition for those). Scaffold templates import the PUBLISHED
+  // "@fastagent-sh/fastagent"; tests that EXECUTE a template resolve it to the current source too. A subpath must be
+  // listed BEFORE the bare name: a string alias also matches `<name>/...` and would rewrite the subpath onto index.ts.
   resolve: {
-    alias: {
-      "@fastagent-sh/fastagent/slack": new URL("./src/slack.ts", import.meta.url).pathname,
-      "@fastagent-sh/fastagent/telegram": new URL("./src/telegram.ts", import.meta.url).pathname,
-      "@fastagent-sh/fastagent/feishu": new URL("./src/feishu.ts", import.meta.url).pathname,
-      "@fastagent-sh/fastagent/lark": new URL("./src/lark.ts", import.meta.url).pathname,
-      "@fastagent-sh/fastagent": new URL("./src/index.ts", import.meta.url).pathname,
-    },
+    alias: [
+      { find: /^@fastagent-sh\/client\/(.+)$/, replacement: `${source("client")}/$1.ts` },
+      { find: /^@fastagent-sh\/client$/, replacement: `${source("client")}/index.ts` },
+      { find: /^@fastagent-sh\/fastagent\/(telegram|slack|feishu)$/, replacement: `${source("fastagent")}/$1.ts` },
+      { find: /^@fastagent-sh\/fastagent$/, replacement: `${source("fastagent")}/index.ts` },
+    ],
   },
   test: {
     pool: "forks",
+    // A module a test imports natively (a built package's, outside Vite) reads the packages' source too.
+    execArgv: ["--conditions=@fastagent-sh/source"],
     projects: [
       {
         extends: true,

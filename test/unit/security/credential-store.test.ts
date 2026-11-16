@@ -11,12 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Credential, type CredentialStore, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GLOBAL_AUTH_PATH } from "../../../src/harnesses/models/credentials.ts";
-import { modelEnvironment } from "../../../src/harnesses/models/environment.ts";
-import { loginOver } from "../../../src/harnesses/models/login.ts";
-import { openServing } from "../../../src/harnesses/pi-durable/serve.ts";
-import { loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
-import { NOT_HOSTED } from "../../../src/serving-command.ts";
+import { GLOBAL_AUTH_PATH } from "../../../packages/fastagent/src/harnesses/models/credentials.ts";
+import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
+import { loginOver } from "../../../packages/fastagent/src/harnesses/models/login.ts";
+import { openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 
 /** pi's in-memory store, with every call recorded. */
 async function recordingStore(

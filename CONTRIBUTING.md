@@ -19,7 +19,7 @@ While iterating, run the guards and the test domain for the code you changed (`n
 ```bash
 npm install
 npm run lint           # Biome (format + lint) plus local Markdown link checks; `npm run format` to fix code
-npm run typecheck      # tsc --noEmit (covers src and test)
+npm run typecheck      # tsc --noEmit (covers packages/*/src and test)
 npm test               # the unit tier
 ```
 
@@ -84,7 +84,12 @@ Start from a clean, up-to-date `main` with an authenticated GitHub CLI, then cre
 npm run release:patch # or release:minor / release:major
 ```
 
-The script verifies the Git and npm state, updates `package.json` and `package-lock.json`, runs the full local checks plus an npm package dry run, and opens a `chore/release-X.Y.Z` PR. It never merges, tags, or publishes. After a maintainer squash-merges the PR, create and publish GitHub Release `vX.Y.Z`; the protected publish workflow then publishes to npm through Trusted Publishing.
+The script verifies the Git and npm state, gives every package under `packages/` the new version (and each package's dependency on another that exact version), updates `package-lock.json`, runs the full local checks plus an npm package dry run, and opens a `chore/release-X.Y.Z` PR. It never merges, tags, or publishes. After a maintainer squash-merges the PR, create and publish GitHub Release `vX.Y.Z`; the protected publish workflow then publishes to npm through Trusted Publishing.
+
+A package that is not on npm yet cannot be published by the workflow: Trusted Publishing is configured per existing
+package. Before the first release that includes one, a maintainer publishes a placeholder `0.0.0` of its name by hand,
+adds its trusted publisher (org `fastagent-sh`, repo `fastagent`, workflow `publish.yml`, environment `npm`), and
+releases within two days, before that configuration expires.
 
 ## Validation before merge
 
@@ -127,7 +132,7 @@ All changes still go through a PR. Force-pushing to `main` is forbidden. Long-li
 
 Dependabot opens weekly PRs for npm and GitHub Actions. The pi packages (`@earendil-works/pi-*`) share one monorepo and move together — update them as a group. Re-run `npm run lint && npm run typecheck && npm test` before merging any dependency bump.
 
-The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the `installProxyFetch` docstring in `src/proxy.ts` before changing it.
+The `undici` version is load-bearing for proxy/streaming behavior under Node 26; see the `installProxyFetch` docstring in `packages/fastagent/src/proxy.ts` before changing it.
 
 ## Issues
 

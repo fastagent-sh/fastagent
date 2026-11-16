@@ -1,17 +1,20 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
-import { loadBuiltDefinition, loadProjectBuild } from "../../../src/harnesses/pi-durable/built.ts";
+import { loadBuiltDefinition, loadProjectBuild } from "../../../packages/fastagent/src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "../../harnesses/probe-package.ts";
-import { openAgent } from "../../../src/harnesses/pi-durable/serve.ts";
-import { DEFINITION_FORMAT } from "../../../src/harnesses/pi-durable/definition.ts";
+import { openAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
-import type { LocalAgent } from "../../../src/harnesses/pi-durable/serve.ts";
+import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 
-vi.mock("../../../src/harnesses/pi-durable/storage.ts", () => import("../../doubles/storage-no-wait.ts"));
+vi.mock(
+  "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
+  () => import("../../doubles/storage-no-wait.ts"),
+);
 
 const made: string[] = [];
 
@@ -52,7 +55,7 @@ async function ask(agent: LocalAgent, name: string, args: Record<string, unknown
   return end;
 }
 
-vi.mock("../../../src/harnesses/pi-durable/tsc.ts", () => import("../../doubles/tsc-double.ts"));
+vi.mock("../../../packages/fastagent/src/harnesses/pi-durable/tsc.ts", () => import("../../doubles/tsc-double.ts"));
 
 let installed: string | undefined;
 

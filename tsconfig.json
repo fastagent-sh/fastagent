@@ -11,10 +11,16 @@
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    // One package reads another's source in the repository: here by path, and in Node through the export condition
+    // `@fastagent-sh/source` (test/setup.ts). A published package has no `src/`, and its consumers never name either.
+    "paths": {
+      "@fastagent-sh/client": ["./packages/client/src/index.ts"],
+      "@fastagent-sh/client/*": ["./packages/client/src/*.ts"]
+    }
   },
-  "include": ["src", "test"],
-  // Scaffold payload: real template files copied verbatim into a new workspace (src/scaffold/templates). They import
-  // the published @fastagent-sh/fastagent, not this source, so they are data here, not part of the build.
-  "exclude": ["src/scaffold/templates"]
+  "include": ["packages/*/src", "test"],
+  // Scaffold payload: real template files copied verbatim into a new workspace. They import the published
+  // @fastagent-sh/fastagent, not this source, so they are data here, not part of the build.
+  "exclude": ["packages/fastagent/src/scaffold/templates"]
 }

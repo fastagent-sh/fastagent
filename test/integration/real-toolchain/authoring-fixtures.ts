@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withGitIdentity } from "../../doubles/git-env.ts";
 
-const SRC = fileURLToPath(new URL("../../../src/", import.meta.url));
+const SRC = fileURLToPath(new URL("../../../packages/fastagent/src", import.meta.url));
 
 /**
  * Scaffold an agent and open it in a plain Node process. vitest aliases `@fastagent-sh/fastagent` to this checkout's

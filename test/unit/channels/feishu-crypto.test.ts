@@ -1,6 +1,10 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { decryptEvent, eventSignature, verifySignature } from "../../../src/channels/feishu/crypto.ts";
+import {
+  decryptEvent,
+  eventSignature,
+  verifySignature,
+} from "../../../packages/fastagent/src/channels/feishu/crypto.ts";
 
 /** The INVERSE of the channel's decryption, built independently here from the platform's documented
  *  construction (key = sha256(encryptKey), payload = base64(IV ‖ AES-256-CBC ciphertext)) — so the test

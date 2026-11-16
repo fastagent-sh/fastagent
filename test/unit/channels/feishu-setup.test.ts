@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FEISHU_AGENT_SCOPES } from "../../../src/channels/feishu/setup-mode.ts";
-import { registerFeishuApp } from "../../../src/channels/feishu/register-app.ts";
-import { type SetUpChannelInput, setUpChannel } from "../../../src/cli/channel-setup.ts";
+import { FEISHU_AGENT_SCOPES } from "../../../packages/fastagent/src/channels/feishu/setup-mode.ts";
+import { registerFeishuApp } from "../../../packages/fastagent/src/channels/feishu/register-app.ts";
+import { type SetUpChannelInput, setUpChannel } from "../../../packages/fastagent/src/cli/channel-setup.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 /** The real `fetch`, for reaching a setup's own page while the platform's API is a stand-in. */
 const realFetch = globalThis.fetch;
@@ -25,9 +25,9 @@ vi.mock("@clack/prompts", () => {
   };
 });
 const opened: string[] = [];
-vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
-vi.mock("../../../src/channels/feishu/register-app.ts", async (original) => {
-  const actual = await original<typeof import("../../../src/channels/feishu/register-app.ts")>();
+vi.mock("../../../packages/fastagent/src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
+vi.mock("../../../packages/fastagent/src/channels/feishu/register-app.ts", async (original) => {
+  const actual = await original<typeof import("../../../packages/fastagent/src/channels/feishu/register-app.ts")>();
   return { ...actual, registerFeishuApp: vi.fn(actual.registerFeishuApp) };
 });
 

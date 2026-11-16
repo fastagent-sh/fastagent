@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cronError, nextRun } from "../../../src/schedule/cron.ts";
+import { cronError, nextRun } from "../../../packages/fastagent/src/schedule/cron.ts";
 
 describe("schedule/cron", () => {
   it("nextRun is the next instant STRICTLY AFTER `from`, timezone-aware, UTC by default", () => {

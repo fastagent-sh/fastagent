@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { LocalAgent } from "../../../src/harnesses/pi-durable/serve.ts";
+import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 
 export const roots: string[] = [];

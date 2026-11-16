@@ -10,7 +10,7 @@ Every caller of an agent uses one API: an app that embeds it, a program elsewher
 and FastAgent's own channels, schedules and `fastagent invoke`. It is the same in process and over HTTP:
 
 ```ts
-import { connectAgent } from "@fastagent-sh/fastagent/client";
+import { connectAgent } from "@fastagent-sh/client";
 
 const agent = connectAgent("https://support.example.com", { apiKey: process.env.SUPPORT_AGENT_KEY! });
 // in your own process instead: const agent = await openAgent(support, { root: "/var/lib/myapp/support" });

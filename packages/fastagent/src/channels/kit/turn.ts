@@ -1,0 +1,368 @@
+/**
+ * Durable channel turn runner, steered-turn gate, side-task tracker, and `/stop` dispatch.
+ */
+import type * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import { type Agent, AgentError, type Message } from "@fastagent-sh/client/agent-api";
+import type { ChannelContext } from "../../channel.ts";
+import { type PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
+import { type TurnSlot, createTurnQueue, unqueuedSlot } from "./turn-queue.ts";
+import type { TurnEvent } from "./invoke.ts";
+import type { SeenRing } from "./state.ts";
+import type { TurnRecordBase, TurnStore } from "./turn-store.ts";
+
+export const SHARED_ANSWER_NOTICE = "↑ Answered together with an earlier message above.";
+export const DROPPED_TURN_NOTICE = "⚠️ I couldn’t complete an earlier request — please ask again.";
+
+export function isStopText(text: string): boolean {
+  return /^(stop|cancel)[.!]?$/i.test(text.trim());
+}
+
+const STOPPED_NOTICE = "⏹ Stopped.";
+const NOTHING_RUNNING_NOTICE = "Nothing is running.";
+const UNKNOWN_NOTICE = "⚠️ Could not tell whether it stopped — check again in a moment.";
+
+export async function dispatchStop(
+  agent: Pick<Agent, "sessions">,
+  sessionId: string | undefined,
+  label: string,
+): Promise<string> {
+  if (sessionId === undefined) return NOTHING_RUNNING_NOTICE;
+  try {
+    const { stopped } = await agent.sessions.cancel(sessionId);
+    return stopped.length > 0 ? STOPPED_NOTICE : NOTHING_RUNNING_NOTICE;
+  } catch (error) {
+    if (error instanceof AgentError && error.code === "not_found") return NOTHING_RUNNING_NOTICE;
+    const code = error instanceof AgentError ? error.code : undefined;
+    log.warn(
+      `${label} stop failed for ${sessionId}: ${code ?? "error"} — ${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (code === undefined || code === "unavailable") return UNKNOWN_NOTICE;
+    return `⚠️ Could not stop (${code}).`;
+  }
+}
+
+function createTaskTracker(
+  label: string,
+  beginWork: () => () => void,
+): {
+  track(task: Promise<unknown>): void;
+  size(): number;
+  drain(): Promise<void>;
+} {
+  const tasks = new Set<Fiber.Fiber<void>>();
+  return {
+    track(task) {
+      const workDone = beginWork();
+      const fiber = Effect.runFork(
+        joinPromise(() => task).pipe(
+          Effect.asVoid,
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.warn(`${label} side task rejected: ${String(originalError(cause))}`)),
+          ),
+          Effect.ensuring(Effect.sync(workDone)),
+        ),
+      );
+      tasks.add(fiber);
+      fiber.addObserver(() => tasks.delete(fiber));
+    },
+    size: () => tasks.size,
+    drain: () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          while (tasks.size > 0) yield* Fiber.awaitAll([...tasks]);
+        }),
+      ),
+  };
+}
+
+function gatedReply(opts: {
+  events: Stream.Stream<TurnEvent, PromiseFailure>;
+  held: boolean;
+  awaitEarlier: Effect.Effect<void>;
+  answerKey: () => string | undefined;
+  delivered: (answerKey: string) => boolean;
+  render: (events: Stream.Stream<TurnEvent, PromiseFailure>) => Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  skipped: (answerKey: string) => Effect.Effect<void>;
+}): Effect.Effect<void, PromiseFailure, Scope.Scope> {
+  if (!opts.held) return opts.render(opts.events);
+  return Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<TurnEvent, PromiseFailure | Cause.Done>();
+    const over = Deferred.makeUnsafe<void>();
+    yield* Effect.forkScoped(
+      Stream.runForEach(opts.events, (event) => Effect.sync(() => void Queue.offerUnsafe(queue, event))).pipe(
+        Effect.matchCauseEffect({
+          onSuccess: () => Queue.end(queue),
+          onFailure: (cause) => Queue.failCause(queue, cause as Cause.Cause<PromiseFailure>),
+        }),
+        Effect.ensuring(Effect.sync(() => void Deferred.doneUnsafe(over, Effect.void))),
+      ),
+    );
+    yield* Deferred.await(over);
+    yield* opts.awaitEarlier;
+    const key = opts.answerKey();
+    if (key !== undefined && opts.delivered(key)) {
+      yield* opts.skipped(key);
+      return;
+    }
+    yield* opts.render(Stream.fromQueue(queue));
+  });
+}
+
+type PendingBase<S extends TurnRecordBase> = Omit<S, "attempts"> &
+  Pick<TurnRecordBase, "id" | "conversation" | "answer" | "answerKey">;
+
+export interface TurnAck {
+  complete(): Promise<void>;
+  remove(): Promise<void>;
+}
+
+export const NO_ACK: TurnAck = { complete: async () => undefined, remove: async () => undefined };
+
+function answerKeyOf(message: Message | undefined): string | undefined {
+  return message?.answer === undefined ? undefined : `${message.sessionId}:${message.answer.entryId}`;
+}
+
+interface TurnHooks {
+  admitted(): void;
+  observe(message: Message): void;
+  reply(
+    events: Stream.Stream<TurnEvent, PromiseFailure>,
+    render: (events: Stream.Stream<TurnEvent, PromiseFailure>) => Effect.Effect<void, PromiseFailure, Scope.Scope>,
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  deliverOnce(
+    deliver: Effect.Effect<void, PromiseFailure, Scope.Scope>,
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+}
+
+export interface TurnRunnerOptions<S extends TurnRecordBase> {
+  label: string;
+  /** The context's count of work in flight: a turn counts from its admission, a side task while it runs. */
+  beginWork: ChannelContext["beginWork"];
+  store: TurnStore<S>;
+  seen?: { add(id: string): void };
+  delivered: SeenRing;
+  where(rec: PendingBase<S>): string;
+  beforeRun?(rec: PendingBase<S>): Promise<boolean>;
+  notifyDropped(rec: PendingBase<S>): void;
+  notifyShared?(rec: PendingBase<S>): Promise<void>;
+  acknowledgeHeld?(rec: PendingBase<S>): Promise<TurnAck>;
+  execute(
+    rec: PendingBase<S>,
+    onAnswered: (answer: string) => void,
+    turn: TurnHooks,
+  ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+  deliverAnswer(rec: PendingBase<S>, answer: string): Effect.Effect<void, PromiseFailure, Scope.Scope>;
+}
+
+export interface TurnRunner<S extends TurnRecordBase> {
+  submit(rec: PendingBase<S>, persist: boolean): void;
+  recover(): S[];
+  /** Track off-queue channel work (e.g. `/stop` feedback) so `idle()` drains it alongside queued turns. */
+  track(task: Promise<unknown>): void;
+  idle(): Promise<void>;
+}
+
+function runQueuedTurn<S extends TurnRecordBase>(
+  options: TurnRunnerOptions<S>,
+  rec: PendingBase<S>,
+  slot: TurnSlot = unqueuedSlot,
+  afterRestart = false,
+): Effect.Effect<void, PromiseFailure> {
+  return Effect.gen(function* () {
+    const { label, store, beforeRun } = options;
+    let ended: Message | undefined;
+    const answerKey = (): string | undefined => answerKeyOf(ended) ?? rec.answerKey;
+    const wasDelivered = (key: string): boolean => options.delivered.has(key);
+    const sharedAnswer = (key: string): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        log.info(`${label} turn ${rec.id}: its answer was delivered with an earlier input's (${key})`);
+        if (options.notifyShared === undefined) return;
+        const notify = options.notifyShared;
+        yield* joinPromise(() => notify(rec)).pipe(
+          Effect.catchTag("PromiseFailure", (error) =>
+            Effect.sync(() =>
+              log.warn(`${label} turn ${rec.id}: could not say where its shared answer is: ${String(error.cause)}`),
+            ),
+          ),
+        );
+      });
+    const acknowledged = (
+      ack: () => Promise<TurnAck>,
+      reply: Effect.Effect<void, PromiseFailure, Scope.Scope>,
+    ): Effect.Effect<void, PromiseFailure, Scope.Scope> =>
+      Effect.gen(function* () {
+        const started = yield* Effect.forkScoped(
+          joinPromise(ack).pipe(
+            Effect.catchTag("PromiseFailure", (error) =>
+              Effect.sync(() => {
+                log.warn(`${label} turn ${rec.id}: could not acknowledge its message: ${String(error.cause)}`);
+                return NO_ACK;
+              }),
+            ),
+          ),
+        );
+        yield* Effect.addFinalizer((exit) =>
+          Fiber.join(started).pipe(
+            Effect.flatMap((mark) => joinPromise(() => (exit._tag === "Success" ? mark.complete() : mark.remove()))),
+            Effect.catchCause((cause) =>
+              Effect.sync(() =>
+                log.warn(`${label} turn ${rec.id}: could not settle its acknowledgement: ${String(cause)}`),
+              ),
+            ),
+          ),
+        );
+        yield* reply;
+      });
+    const hooks: TurnHooks = {
+      admitted: slot.release,
+      observe: (message) => {
+        ended = message;
+      },
+      reply: (events, render) => {
+        const held = afterRestart || slot.earlierRunning();
+        const reply = gatedReply({
+          events,
+          held,
+          awaitEarlier: slot.awaitEarlier,
+          answerKey,
+          delivered: wasDelivered,
+          render,
+          skipped: sharedAnswer,
+        });
+        const acknowledge = options.acknowledgeHeld;
+        return held && acknowledge !== undefined ? acknowledged(() => acknowledge(rec), reply) : reply;
+      },
+      deliverOnce: (deliver) =>
+        Effect.gen(function* () {
+          yield* slot.awaitEarlier;
+          const key = answerKey();
+          if (key !== undefined && wasDelivered(key)) {
+            yield* sharedAnswer(key);
+            return;
+          }
+          yield* deliver;
+        }),
+    };
+    if (beforeRun && !(yield* joinPromise(() => beforeRun(rec)))) return;
+    const decision = store.startAttempt(rec.id);
+    if (decision === "exceeded") {
+      const stranded = rec.answer;
+      if (stranded === undefined) {
+        options.notifyDropped(rec);
+        return;
+      }
+      return yield* Effect.scoped(hooks.deliverOnce(options.deliverAnswer(rec, stranded))).pipe(
+        Effect.matchEffect({
+          onSuccess: () =>
+            Effect.sync(() =>
+              log.info(
+                `${label} turn ${rec.id} hit the execution ceiling, but the answer it had already recorded was ` +
+                  `delivered (conversation=${rec.conversation})`,
+              ),
+            ),
+          onFailure: (error) =>
+            Effect.sync(() => {
+              log.error(
+                `${label} turn ${rec.id} hit the execution ceiling and its recorded answer could not be delivered ` +
+                  `either (conversation=${rec.conversation}) — the answer is gone: ${String(error.cause)}`,
+              );
+              options.notifyDropped(rec);
+            }),
+        }),
+      );
+    }
+    if (decision === "defer") return;
+    const startedAt = Date.now();
+    const recovered = rec.answer;
+    let answered = recovered !== undefined;
+    if (recovered !== undefined) slot.release();
+    log.info(
+      `${label} turn start: turn=${rec.id} conversation=${rec.conversation} ${options.where(rec)}` +
+        `${recovered === undefined ? "" : " mode=re-delivery (answer recovered from a prior run)"}`,
+    );
+    const work =
+      recovered !== undefined
+        ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
+        : Effect.suspend(() =>
+            options.execute(
+              rec,
+              (answer) => {
+                answered = store.answered(rec.id, answer, answerKey());
+              },
+              hooks,
+            ),
+          );
+    const delivered = yield* Effect.scoped(work).pipe(
+      Effect.matchEffect({
+        onSuccess: () =>
+          Effect.sync(() => {
+            log.info(
+              `${label} turn done: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms)`,
+            );
+            return true;
+          }),
+        onFailure: (error) =>
+          Effect.sync(() => {
+            log.error(
+              `${label} turn failed: turn=${rec.id} conversation=${rec.conversation} (${Date.now() - startedAt}ms): ${String(error.cause)}`,
+            );
+            return false;
+          }),
+      }),
+    );
+    if (delivered || !answered) {
+      const key = answerKey();
+      if (delivered && key !== undefined) options.delivered.add(key);
+      store.remove(rec.id);
+      return;
+    }
+    log.warn(
+      `${label} turn ${rec.id} produced an answer that was not delivered (conversation=${rec.conversation}) — ` +
+        `keeping it to re-deliver on the next start`,
+    );
+  });
+}
+
+export function createTurnRunner<S extends TurnRecordBase>(options: TurnRunnerOptions<S>): TurnRunner<S> {
+  const { label, store, seen, beginWork } = options;
+  const sideTasks = createTaskTracker(label, beginWork);
+  const queue = createTurnQueue<PendingBase<S>>({
+    label,
+    beginWork,
+    run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id)),
+  });
+  const recoveredIds = new Set<string>();
+  const submit = (rec: PendingBase<S>, persist: boolean): void => {
+    if (persist) {
+      store.add({ ...rec, attempts: 0 } as unknown as S);
+      seen?.add(rec.id);
+    }
+    queue.accept(rec);
+  };
+  return {
+    submit,
+    recover() {
+      const recovered = store.recover();
+      if (recovered.length > 0) log.info(`${label} recovering ${recovered.length} unfinished turn(s) from a prior run`);
+      for (const stored of recovered) {
+        recoveredIds.add(stored.id);
+        const { attempts: _attempts, ...intent } = stored;
+        submit(intent as unknown as PendingBase<S>, false);
+      }
+      return recovered;
+    },
+    track: (task) => sideTasks.track(task),
+    idle: async () => {
+      do {
+        await Promise.all([queue.idle(), sideTasks.drain()]);
+      } while (sideTasks.size() > 0);
+    },
+  };
+}

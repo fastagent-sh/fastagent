@@ -1,6 +1,6 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
-import { containerArtifacts } from "../../../src/deploy/container.ts";
+import { containerArtifacts } from "../../../packages/fastagent/src/deploy/container.ts";
 
 const input = { name: "reviewer", runtime: "node", hasLockfile: true } as const;
 

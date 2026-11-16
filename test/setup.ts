@@ -21,6 +21,8 @@ process.env[CHILD_REFUSALS] = join(process.env.HOME, "refused-connections");
 process.env.NODE_OPTIONS = [
   process.env.NODE_OPTIONS,
   `--import=${new URL("./guards/child-network-guard.ts", import.meta.url).pathname}`,
+  // A package imports another of the workspace by name: in a test, its source (tsconfig.json, customConditions).
+  "--conditions=@fastagent-sh/source",
 ]
   .filter(Boolean)
   .join(" ");

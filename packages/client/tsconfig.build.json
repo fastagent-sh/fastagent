@@ -1,0 +1,19 @@
+{
+  // Publish build only. Emits .js + .d.ts to dist/, which is what the package ships: Node refuses to type-strip .ts
+  // under node_modules, so consumers receive compiled JavaScript. rewriteRelativeImportExtensions rewrites the source's
+  // explicit `./x.ts` specifiers to `./x.js`. Another package of the workspace is read from its build (`dist/`), as a
+  // consumer reads it, so the packages build in the order the root package.json lists them.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "paths": {},
+    // Only what `fetch` brings: the web's own globals (AbortSignal, crypto), no Node API.
+    "lib": ["ES2022", "ES2024.Promise", "DOM"],
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "exclude": ["src/scaffold/templates"]
+}

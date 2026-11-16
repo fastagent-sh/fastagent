@@ -1,16 +1,17 @@
 /**
- * The package as a user gets it, end to end (AGENTS.md, "Tests"): the packed tarball installed, an agent made
+ * The packages as a user gets them, end to end (AGENTS.md, "Tests"): the packed tarballs installed, an agent made
  * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, and the build opened by
  * an app through the package's own entry. The model is pi-ai's faux provider, so only npm's install leaves the machine.
- * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/smoke/e2e/packed.ts <tarball>`.
+ * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/smoke/e2e/packed.ts <tarball>...`, every
+ * package's, since one package depends on another's version before it is published.
  */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const tarball = resolve(process.argv[2] ?? "");
-if (process.argv[2] === undefined) throw new Error("usage: node test/smoke/e2e/packed.ts <the tarball npm pack wrote>");
+const tarballs = process.argv.slice(2).map((path) => resolve(path));
+if (tarballs.length === 0) throw new Error("usage: node test/smoke/e2e/packed.ts <each tarball npm pack wrote>...");
 
 const work = mkdtempSync(join(tmpdir(), "fa-e2e-"));
 // A machine of its own: no credentials, no model catalog fetched.
@@ -28,12 +29,12 @@ const expectEqual = (what: string, actual: unknown, expected: unknown) => {
 const tools = join(work, "tools");
 sh("mkdir", ["-p", tools], work);
 sh("npm", ["init", "-y"], tools);
-sh("npm", ["install", "--no-audit", "--no-fund", tarball], tools);
+sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], tools);
 
 const agent = join(work, "agent");
 sh(join(tools, "node_modules", ".bin", "fastagent"), ["init", agent, "--no-install"], work);
 // The agent's own dependencies as `init` declares them, but this build of fastagent instead of the registry's.
-sh("npm", ["install", "--no-audit", "--no-fund", tarball], agent);
+sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], agent);
 writeFileSync(
   join(agent, "fastagent.config.ts"),
   `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";

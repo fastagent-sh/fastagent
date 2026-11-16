@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { checkContainer } from "../../../src/deploy/preflight.ts";
+import { checkContainer } from "../../../packages/fastagent/src/deploy/preflight.ts";
 import { agent } from "./deploy-preflight-fixtures.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 const warnings = async (agentDir: string) => {
   const checked = await checkContainer({ agentDir, force: false });

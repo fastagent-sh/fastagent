@@ -19,12 +19,12 @@ Use these shared seams instead of writing per-file mocks:
 
 | Seam | Replaces | Parity / verification |
 | --- | --- | --- |
-| `doubles/cli-run.ts` (`runInProcess`, `fauxAgent`, `agentWorkspace`) | Spawning `src/cli.ts` for command logic | `integration/double-parity/cli-run-parity.integration.test.ts` |
-| `doubles/git-double.ts` (`gitAnswersIn`) | `src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
-| `doubles/tsc-double.ts` | `src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
-| `doubles/storage-no-wait.ts` | `src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
+| `doubles/cli-run.ts` (`runInProcess`, `fauxAgent`, `agentWorkspace`) | Spawning `packages/fastagent/src/cli.ts` for command logic | `integration/double-parity/cli-run-parity.integration.test.ts` |
+| `doubles/git-double.ts` (`gitAnswersIn`) | `packages/fastagent/src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
+| `doubles/tsc-double.ts` | `packages/fastagent/src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
+| `doubles/storage-no-wait.ts` | `packages/fastagent/src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
 | `doubles/codex-model.ts`, `kept-catalog.ts` | Model providers and catalog refreshes | pi-ai's `fauxProvider` |
-| `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for channel/scheduler specs | Conforms to `src/agent-api.ts` |
+| `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for channel/scheduler specs | Conforms to `packages/client/src/agent-api.ts` |
 | `harnesses/channel-harness.ts` | Channel suite setup, fetch settle, queue drain | Shared by `telegram`, `slack`, `feishu` suites |
 | `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable` and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts` |
 | `doubles/protocol/*` | Protocol servers (Slack's Socket Mode) | Local WebSocket protocol checks |

@@ -6,7 +6,7 @@ import { agentWorkspace, runInProcess, withRepoModules } from "../../doubles/cli
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
 
 // enterAgentEnv installs the proxy fetch, which swaps this process's fetch with no way back.
-vi.mock("../../../src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
+vi.mock("../../../packages/fastagent/src/proxy.ts", () => ({ installProxyFetch: vi.fn() }));
 
 afterEach(() => {
   vi.unstubAllGlobals();

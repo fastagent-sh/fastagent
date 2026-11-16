@@ -25,7 +25,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { type DurableAgent, openDurableAgent } from "../../src/harnesses/pi-durable/agent.ts";
+import { type DurableAgent, openDurableAgent } from "../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";

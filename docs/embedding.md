@@ -93,7 +93,7 @@ await agent.close(); // closes the service, then releases the storage
 
 - `service.fetch` answers the channels' routes and `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
-  `@fastagent-sh/fastagent/client`.
+  `@fastagent-sh/client`.
 
 ### Mounting `fetch`
 

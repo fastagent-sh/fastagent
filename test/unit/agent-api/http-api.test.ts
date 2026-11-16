@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentErrorData, ErrorCode } from "../../../src/agent-api.ts";
-import { connectAgent } from "../../../src/http/client.ts";
+import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
+import { connectAgent } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
-import { AgentHttpApi, statusOf } from "../../../src/http/contract.ts";
+import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { durableSubject } from "../../harnesses/durable-subject.ts";
 import { KEY, type Served, httpSubject, served } from "../../harnesses/http-subject.ts";

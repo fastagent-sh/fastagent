@@ -2,15 +2,15 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runChannelsSetup } from "../../../src/cli/commands/channels.ts";
-import { useValueFile } from "../../../src/value-file.ts";
+import { runChannelsSetup } from "../../../packages/fastagent/src/cli/commands/channels.ts";
+import { useValueFile } from "../../../packages/fastagent/src/value-file.ts";
 import { agentWorkspace } from "../../doubles/cli-run.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 // At a terminal, so `--json` alone says a coding agent runs this.
-vi.mock("../../../src/cli/shared.ts", async (original) => ({
-  ...(await original<typeof import("../../../src/cli/shared.ts")>()),
+vi.mock("../../../packages/fastagent/src/cli/shared.ts", async (original) => ({
+  ...(await original<typeof import("../../../packages/fastagent/src/cli/shared.ts")>()),
   isInteractive: () => true,
 }));
 
@@ -31,7 +31,7 @@ vi.mock("@clack/prompts", () => ({
 }));
 
 const opened: string[] = [];
-vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
+vi.mock("../../../packages/fastagent/src/open-url.ts", () => ({ openExternalUrl: (url: string) => opened.push(url) }));
 
 /** What `process.exit` does here: it ends the command, with a code a test can read, instead of the process. */
 class Exit extends Error {

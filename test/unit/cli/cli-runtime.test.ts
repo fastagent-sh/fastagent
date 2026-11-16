@@ -2,13 +2,16 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { resolveStateRoot } from "../../../src/paths.ts";
-import { unsupportedRuntime } from "../../../src/runtime.ts";
-import { addWakeup } from "../../../src/schedule/wakeups.ts";
+import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
+import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
+import { addWakeup } from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 
-vi.mock("../../../src/harnesses/pi-durable/storage.ts", () => import("../../doubles/storage-no-wait.ts"));
+vi.mock(
+  "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
+  () => import("../../doubles/storage-no-wait.ts"),
+);
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {

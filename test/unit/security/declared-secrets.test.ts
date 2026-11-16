@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeSecrets, missingSecrets } from "../../../src/declared-secrets.ts";
+import { describeSecrets, missingSecrets } from "../../../packages/fastagent/src/declared-secrets.ts";
 
 describe("declared secrets: the rule", () => {
   it("reports only names with no value, grouped by the file to open", () => {

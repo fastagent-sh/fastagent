@@ -3,11 +3,11 @@
  * the variables it reads, and delivering over that channel's own bot or app.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Channel, ChannelTool } from "../../../src/channel.ts";
-import { feishu } from "../../../src/feishu.ts";
-import type { Needs } from "../../../src/needs.ts";
-import { slack } from "../../../src/slack.ts";
-import { telegram } from "../../../src/telegram.ts";
+import type { Channel, ChannelTool } from "../../../packages/fastagent/src/channel.ts";
+import { feishu } from "../../../packages/fastagent/src/feishu.ts";
+import type { Needs } from "../../../packages/fastagent/src/needs.ts";
+import { slack } from "../../../packages/fastagent/src/slack.ts";
+import { telegram } from "../../../packages/fastagent/src/telegram.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 

@@ -160,7 +160,7 @@ instance ([security model](agent-api.md#security)): keep it on a server.
 FASTAGENT_API_KEY=$(openssl rand -hex 32)
 ```
 
-Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/client`, or check it with
+Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or check it with
 `fastagent invoke --url <url> "hello"`.
 
 ## Where things live

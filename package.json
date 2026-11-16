@@ -1,125 +1,36 @@
 {
-  "name": "@fastagent-sh/fastagent",
-  "version": "0.31.0",
-  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on Telegram, Slack, Feishu, or behind any channel.",
-  "keywords": [
-    "agent",
-    "ai-agent",
-    "llm",
-    "agents.md",
-    "agent-skills",
-    "agent-serving",
-    "telegram",
-    "slack",
-    "webhook",
-    "sse",
-    "pi",
-    "fastagent"
-  ],
-  "license": "MIT",
-  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
-  "homepage": "https://fastagent.sh",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/fastagent-sh/fastagent.git"
-  },
-  "bugs": {
-    "url": "https://github.com/fastagent-sh/fastagent/issues"
-  },
+  "name": "fastagent-workspace",
+  "private": true,
   "type": "module",
-  "sideEffects": false,
+  "workspaces": [
+    "packages/client",
+    "packages/fastagent"
+  ],
   "engines": {
     "node": ">=24.15.0"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./client": {
-      "types": "./dist/client.d.ts",
-      "default": "./dist/client.js"
-    },
-    "./telegram": {
-      "types": "./dist/telegram.d.ts",
-      "default": "./dist/telegram.js"
-    },
-    "./slack": {
-      "types": "./dist/slack.d.ts",
-      "default": "./dist/slack.js"
-    },
-    "./feishu": {
-      "types": "./dist/feishu.d.ts",
-      "default": "./dist/feishu.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "bin": {
-    "fastagent": "./dist/cli.js"
-  },
-  "files": [
-    "dist",
-    "LICENSE",
-    "README.md"
-  ],
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org",
-    "access": "public"
-  },
   "scripts": {
-    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "build": "npm run build --workspaces",
     "test": "vitest --run --project unit",
     "test:guards": "vitest --run --project unit test/guards",
     "test:integration": "vitest --run --project integration",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check src test && node scripts/check-doc-links.mjs && knip",
-    "format": "biome check --write src test",
-    "postbuild": "node scripts/copy-scaffold-assets.mjs",
+    "lint": "biome check packages test && node scripts/check-doc-links.mjs && knip",
+    "format": "biome check --write packages test",
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",
     "release:major": "node scripts/release.mjs major",
     "knip": "knip"
   },
-  "dependencies": {
-    "@clack/prompts": "^1.6.0",
-    "@earendil-works/chord": "1.5.2",
-    "@earendil-works/pi-ai": "1.5.2",
-    "@earendil-works/pi-durable": "1.5.2",
-    "@earendil-works/pi-schema": "1.5.2",
-    "@effect/platform-node": "^4.0.7",
-    "@modelcontextprotocol/client": "2.4.0",
-    "chokidar": "^6.0.0",
-    "commander": "^15.0.0",
-    "croner": "^11.0.0",
-    "effect": "^4.0.7",
-    "ignore": "^7.0.14",
-    "proper-lockfile": "^4.1.2",
-    "undici": "^8.6.0",
-    "yaml": "^2.9.1"
-  },
-  "peerDependencies": {
-    "@larksuiteoapi/node-sdk": "^1.76.0"
-  },
-  "peerDependenciesMeta": {
-    "@larksuiteoapi/node-sdk": {
-      "optional": true
-    }
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
     "@hono/node-server": "^2.1.5",
-    "@larksuiteoapi/node-sdk": "^1.76.0",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/express": "^5.0.6",
     "@types/proper-lockfile": "^4.1.4",
     "express": "^5.3.0",
     "fastify": "^5.12.7",
     "knip": "^6.44.0",
-    "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }
 }

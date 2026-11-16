@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
 
 const PACKAGE_NAME = "@fastagent-sh/fastagent";
+// Every package of the workspace, in the order they build and publish; all share one version.
+const WORKSPACES = ["packages/client", "packages/fastagent"];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -38,8 +40,20 @@ function capture(command, args) {
 	return run(command, args, { capture: true }).stdout.trim();
 }
 
-function readPackage() {
-	return JSON.parse(readFileSync("package.json", "utf8"));
+function readPackage(dir) {
+	return JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
+}
+
+/** Give every package `version`, and every dependency of one package on another exactly that version. */
+function setVersion(version) {
+	const names = new Set(WORKSPACES.map((dir) => readPackage(dir).name));
+	for (const dir of WORKSPACES) {
+		const pkg = readPackage(dir);
+		pkg.version = version;
+		for (const name of Object.keys(pkg.dependencies ?? {})) if (names.has(name)) pkg.dependencies[name] = version;
+		writeFileSync(`${dir}/package.json`, `${JSON.stringify(pkg, null, 2)}\n`);
+	}
+	run("npm", ["install", "--package-lock-only", "--no-audit", "--no-fund"]);
 }
 
 function compareVersions(a, b) {
@@ -68,12 +82,12 @@ function assertAvailable(command, args, message) {
 	if (result.status !== 0) throw new Error(message);
 }
 
-function assertNpmVersionIsUnpublished(version) {
-	const result = run("npm", ["view", `${PACKAGE_NAME}@${version}`, "version", "--json"], { allowFailure: true, capture: true });
-	if (result.status === 0 && result.stdout.trim()) throw new Error(`${PACKAGE_NAME}@${version} is already published.`);
+function assertNpmVersionIsUnpublished(name, version) {
+	const result = run("npm", ["view", `${name}@${version}`, "version", "--json"], { allowFailure: true, capture: true });
+	if (result.status === 0 && result.stdout.trim()) throw new Error(`${name}@${version} is already published.`);
 	const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
 	if (!output.includes("E404") && !output.includes("404 Not Found")) {
-		throw new Error(`Could not verify that ${PACKAGE_NAME}@${version} is unpublished.\n${output.trim()}`);
+		throw new Error(`Could not verify that ${name}@${version} is unpublished.\n${output.trim()}`);
 	}
 }
 
@@ -102,8 +116,12 @@ async function main() {
 		throw new Error("Expected one release target: major, minor, patch, or x.y.z.");
 	}
 
-	const pkg = readPackage();
+	const pkg = readPackage("packages/fastagent");
 	if (pkg.name !== PACKAGE_NAME) throw new Error(`Run this script from the ${PACKAGE_NAME} repository root.`);
+	for (const dir of WORKSPACES) {
+		const other = readPackage(dir);
+		if (other.version !== pkg.version) throw new Error(`${other.name} is at ${other.version}, not ${pkg.version}: every package shares one version.`);
+	}
 	if (!SEMVER_RE.test(pkg.version)) throw new Error(`Current package version is not a stable semantic version: ${pkg.version}`);
 	if (capture("git", ["branch", "--show-current"]) !== "main") throw new Error("Releases must start from the main branch.");
 	if (capture("git", ["status", "--porcelain"])) throw new Error("Working tree is not clean. Commit or stash changes first.");
@@ -122,7 +140,7 @@ async function main() {
 	if (capture("git", ["ls-remote", "--heads", "origin", branch])) throw new Error(`Remote branch already exists: ${branch}`);
 	const existingTag = run("git", ["show-ref", "--verify", "--quiet", `refs/tags/${tag}`], { allowFailure: true, capture: true });
 	if (existingTag.status === 0 || capture("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`])) throw new Error(`Tag already exists: ${tag}`);
-	assertNpmVersionIsUnpublished(version);
+	for (const dir of WORKSPACES) assertNpmVersionIsUnpublished(readPackage(dir).name, version);
 
 	console.log(`\nCurrent version: ${pkg.version}\nTarget version:  ${version}\nBranch:          ${branch}\n`);
 	if (!(await confirm(version))) {
@@ -131,17 +149,17 @@ async function main() {
 	}
 
 	run("git", ["checkout", "-b", branch]);
-	run("npm", ["version", version, "--no-git-tag-version"]);
+	setVersion(version);
 	run("npm", ["run", "lint"]);
 	run("npm", ["run", "typecheck"]);
 	run("npm", ["test"]);
 	run("npm", ["run", "test:integration"]);
-	run("npm", ["pack", "--dry-run", "--json"]);
+	run("npm", ["pack", "--dry-run", "--json", "--workspaces"]);
 
-	run("git", ["add", "package.json", "package-lock.json"]);
+	run("git", ["add", ...WORKSPACES.map((dir) => `${dir}/package.json`), "package-lock.json"]);
 	run("git", ["commit", "-m", `chore: release ${version}`]);
 	run("git", ["push", "-u", "origin", branch]);
-	const body = `## Release v${version}\n\nBump ${PACKAGE_NAME} from ${pkg.version} to ${version}.\n\n### Verification\n\n- \`npm run lint\`\n- \`npm run typecheck\`\n- \`npm test\`\n- \`npm run test:integration\`\n- \`npm pack --dry-run --json\`\n\n### After merge\n\nCreate and publish the GitHub Release \`${tag}\`. The protected publish workflow will verify and publish the package to npm via Trusted Publishing.`;
+	const body = `## Release v${version}\n\nBump every package (${WORKSPACES.join(", ")}) from ${pkg.version} to ${version}.\n\n### Verification\n\n- \`npm run lint\`\n- \`npm run typecheck\`\n- \`npm test\`\n- \`npm run test:integration\`\n- \`npm pack --dry-run --json --workspaces\`\n\n### After merge\n\nCreate and publish the GitHub Release \`${tag}\`. The protected publish workflow will verify and publish the packages to npm via Trusted Publishing.`;
 	const pr = capture("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", `chore: release ${version}`, "--body", body]);
 
 	console.log(`\nRelease PR created: ${pr}`);

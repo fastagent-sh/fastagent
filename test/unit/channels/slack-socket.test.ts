@@ -3,8 +3,8 @@ import {
   type OpenSlackSocket,
   type SlackSocketHandlers,
   connectSlackSocket,
-} from "../../../src/channels/slack/socket.ts";
-import type { SlackEventEnvelope } from "../../../src/channels/slack/parse.ts";
+} from "../../../packages/fastagent/src/channels/slack/socket.ts";
+import type { SlackEventEnvelope } from "../../../packages/fastagent/src/channels/slack/parse.ts";
 import { slackStandIn } from "../../doubles/protocol/slack-stand-in.ts";
 
 const API = "https://slack.test/api";

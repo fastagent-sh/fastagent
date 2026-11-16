@@ -14,9 +14,9 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeFileAtomic } from "../../../src/atomic-write.ts";
-import { openLockedStorage } from "../../../src/harnesses/pi-durable/storage.ts";
-import { withLockedFile } from "../../../src/locked-file.ts";
+import { writeFileAtomic } from "../../../packages/fastagent/src/atomic-write.ts";
+import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { withLockedFile } from "../../../packages/fastagent/src/locked-file.ts";
 
 const roots: string[] = [];
 const freshDir = (prefix: string): string => {
@@ -50,7 +50,9 @@ describe("withLockedFile and writeFileAtomic: cross-process serialization and fi
     const target = join(dir, "count.json");
     writeFileSync(target, JSON.stringify({ count: 0 }));
 
-    const moduleUrl = pathToFileURL(new URL("../../../src/locked-file.ts", import.meta.url).pathname).href;
+    const moduleUrl = pathToFileURL(
+      new URL("../../../packages/fastagent/src/locked-file.ts", import.meta.url).pathname,
+    ).href;
     const worker = `
       import { withLockedFile } from ${JSON.stringify(moduleUrl)};
       const file = process.argv[1];
@@ -117,7 +119,7 @@ describe("openLockedStorage: exclusive SQLite locking across processes", () => {
     const dir = freshDir("fa-sqlite-lock-");
     const db = join(dir, "agent.sqlite");
     const storageUrl = pathToFileURL(
-      new URL("../../../src/harnesses/pi-durable/storage.ts", import.meta.url).pathname,
+      new URL("../../../packages/fastagent/src/harnesses/pi-durable/storage.ts", import.meta.url).pathname,
     ).href;
 
     const holder = await openLockedStorage(db, "dev", 0);

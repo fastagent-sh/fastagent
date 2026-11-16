@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 describe("cli: deploy docker", () => {
   it("writes the container, prints how to build and run it, and never replaces a file the author owns", async () => {

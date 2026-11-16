@@ -1,6 +1,6 @@
 /** The server a Fetch handler is served on (channels/serve.ts), whatever handler it serves. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { serveHandler } from "../../../src/channels/serve.ts";
+import { serveHandler } from "../../../packages/fastagent/src/channels/serve.ts";
 
 type Handler = (req: Request) => Promise<Response>;
 interface Served {
