@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
   "version": "0.31.0",
-  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app, on Telegram, Slack, Feishu, or behind any channel.",
+  "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app or behind the Agent API, durable across restarts.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -9,9 +9,6 @@
     "agents.md",
     "agent-skills",
     "agent-serving",
-    "telegram",
-    "slack",
-    "webhook",
     "sse",
     "pi",
     "fastagent"
@@ -38,21 +35,6 @@
       "@fastagent-sh/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./telegram": {
-      "@fastagent-sh/source": "./src/telegram.ts",
-      "types": "./dist/telegram.d.ts",
-      "default": "./dist/telegram.js"
-    },
-    "./slack": {
-      "@fastagent-sh/source": "./src/slack.ts",
-      "types": "./dist/slack.d.ts",
-      "default": "./dist/slack.js"
-    },
-    "./feishu": {
-      "@fastagent-sh/source": "./src/feishu.ts",
-      "types": "./dist/feishu.d.ts",
-      "default": "./dist/feishu.js"
     },
     "./package.json": "./package.json"
   },
@@ -92,16 +74,7 @@
     "undici": "^8.6.0",
     "yaml": "^2.9.1"
   },
-  "peerDependencies": {
-    "@larksuiteoapi/node-sdk": "^1.76.0"
-  },
-  "peerDependenciesMeta": {
-    "@larksuiteoapi/node-sdk": {
-      "optional": true
-    }
-  },
   "devDependencies": {
-    "@larksuiteoapi/node-sdk": "^1.76.0",
     "typescript": "^7.0.2"
   }
 }

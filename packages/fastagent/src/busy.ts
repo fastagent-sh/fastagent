@@ -1,7 +1,7 @@
 /**
  * The process's work in flight: every message not yet settled (counted by the Agent, pi-durable/agent.ts), and the
- * channel and schedule work that has not reached an accepted message yet. Webhooks ACK before their turns finish, so
- * open requests cannot tell whether the process is idle; this can. Read by `dev`'s restart.
+ * schedule work that has not reached an accepted message yet. Open requests cannot tell whether the process is idle;
+ * this can. Read by `dev`'s restart.
  */
 let inFlight = 0;
 

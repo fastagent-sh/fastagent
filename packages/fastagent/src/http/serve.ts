@@ -7,13 +7,15 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
-import type { ChannelHandler } from "../channel.ts";
 import { log } from "../log.ts";
-import { text } from "./kit/respond.ts";
+import { text } from "./respond.ts";
+
+/** A Fetch handler: what a serve answers a request with. */
+export type Handler = (req: Request) => Response | Promise<Response>;
 
 /** The totality boundary every serving path shares; `prepare` shapes the handler's response inside it. */
 export function totalFetch(
-  handler: ChannelHandler,
+  handler: Handler,
   prepare: (response: Response) => Response = (response) => response,
 ): (req: Request) => Promise<Response> {
   return async (req) => {
@@ -85,7 +87,7 @@ function bindFailure(error: unknown): unknown {
 
 /** Serve `handler` on Node's `http.Server`. */
 export function serveHandler(
-  handler: ChannelHandler,
+  handler: Handler,
   options: { port: number; host?: string },
 ): { listening: Promise<number>; close: () => Promise<void> } {
   const scope = Scope.makeUnsafe();

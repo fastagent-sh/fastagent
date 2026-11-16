@@ -41,19 +41,14 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 }
 
 describe("serveAgent over an opened directory", () => {
-  it("mounts channel routes on a handler, with health beside them", async () => {
-    const dir = await agentDir(
-      {},
-      `{ model: "${CODEX_MODEL}", channels: { hook: { routes: () => ({ "POST /hook": () => new Response("from-channel") }) } } }`,
-    );
-    const service = await createAgentService(dir);
+  it("answers GET /health and nothing else outside the Agent API, which it serves only with a key", async () => {
+    const service = await createAgentService(await agentDir());
     try {
-      expect(await (await service.fetch(new Request("http://h/hook", { method: "POST" }))).text()).toBe("from-channel");
       const health = await service.fetch(new Request("http://h/health"));
       expect([health.status, await health.json()]).toEqual([200, { status: "ok" }]);
-      expect(service.channels.routes).toEqual(["hook"]);
-      // Only routes that verify their caller are served: the agent has no network binding of its own.
-      expect(Object.keys(service.routes).sort()).toEqual(["GET /health", "POST /hook"]);
+      expect((await service.fetch(new Request("http://h/health", { method: "POST" }))).status).toBe(405);
+      expect((await service.fetch(new Request("http://h/v1/info"))).status).toBe(404);
+      expect(service.api).toBe(false);
     } finally {
       await service.close();
     }
@@ -74,7 +69,7 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
 });
 
 describe("openAgent: an agent directory opened in an app", () => {
-  it("serves the Agent API under /v1 beside its routes only with a key, and keeps /v1 from a channel", async () => {
+  it("serves the Agent API under /v1 only with a key", async () => {
     const dir = await agentDir();
     const unkeyed = await openSource(dir);
     const plain = await unkeyed.serve();
@@ -117,11 +112,5 @@ describe("openAgent: an agent directory opened in an app", () => {
       "the Agent API needs at least one key, and no key may be empty",
     );
     await unset.close();
-
-    const claiming = await openSource(
-      await agentDir({}, `{ channels: { claims: { routes: () => ({ "POST /v1/hook": () => new Response("ok") }) } } }`),
-    );
-    await expect(claiming.serve()).rejects.toThrow('route "POST /v1/hook" is under /v1, which the Agent API serves');
-    await claiming.close();
   });
 });

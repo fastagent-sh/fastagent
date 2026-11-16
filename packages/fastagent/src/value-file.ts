@@ -1,7 +1,7 @@
 /**
  * The selected environment's value file (`.secrets/.env`, or `.secrets/production/.env` for `start`), read and
  * written; entering it into `process.env` is env.ts's. Read as data: what it declares, and what it adds to an agent's
- * environment. Written: what a command generates (a channel's secret, the Agent API's key) goes in as an active
+ * environment. Written: what a command generates (the Agent API's key) goes in as an active
  * `NAME=value` line, a value already set stays, and the secrets directory fastagent made carries its own `.gitignore`.
  */
 import { readFileSync } from "node:fs";
@@ -53,7 +53,7 @@ let defaultValueFile = true;
 
 /**
  * Use `path` as the agent's value file from here on, or the default again. `defaultFile: false` is for a command that
- * talks to a deployment or a production app (`invoke --url`, `channels setup` outside dev): it has no default file,
+ * talks to a deployment or a production app (`invoke --url`): it has no default file,
  * only the one `--env-file` names, and otherwise the environment it runs in (what a CI job or `op run` injects).
  */
 export function useValueFile(path: string | undefined, options: { defaultFile?: boolean } = {}): void {

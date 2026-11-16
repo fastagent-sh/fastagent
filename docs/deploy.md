@@ -25,9 +25,9 @@ refused.
 
 1. **Try the production build here:** `fastagent build && fastagent start --root $(mktemp -d) --env-file prod.env`.
 2. **Set a model** in `fastagent.config.ts` (`model`), or `FASTAGENT_MODEL` on the container.
-3. **Give it its values** as environment variables: the model's API key, the channels' credentials, what your tools
+3. **Give it its values** as environment variables: the model's API key, what your tools
    declare with `needs`, and `FASTAGENT_API_KEY` for the [Agent API](#the-agent-api). The image holds none of them.
-4. **Make something reach it**: a channel, a schedule, or the Agent API.
+4. **Make something reach it**: a schedule, or the Agent API.
 
 `deploy docker` stops when the agent would not start in the container (no `package.json`, a definition that does not
 load), and warns about the rest: no model, no lockfile, an ignore file of yours that would ship a secret.
@@ -53,16 +53,8 @@ With `FASTAGENT_API_KEY` set on the container, it serves the [Agent API](agent-a
 fastagent invoke --url https://<your-host> "hello"
 ```
 
-Rotate a key with `FASTAGENT_API_KEY=new,old`, move the callers, then drop `old`. `http: { api: false }` turns the API
-off.
-
-## Chat channels
-
-A channel holds its own connection to the platform (Telegram polling, Slack Socket Mode, Feishu and Lark WebSocket),
-so the container needs no public URL for it, only a process that keeps running.
-
-Use a separate production app for the container: two processes on one bot split its messages. Make it with
-`fastagent channels setup <platform> --env-file prod.env` and give the container that file's values.
+Rotate a key with `FASTAGENT_API_KEY=new,old`, move the callers, then drop `old`. Without a key the API is not
+served.
 
 ## What ships
 
@@ -72,7 +64,7 @@ environment variables.
 
 ```text
 /data/
-├── .state/           # sessions, channel and schedule state
+├── .state/           # sessions and schedule state
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 

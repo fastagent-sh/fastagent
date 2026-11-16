@@ -61,7 +61,7 @@ import {
   agentError,
   hasEnded as messageHasEnded,
 } from "@fastagent-sh/client/agent-api";
-import { beginWork } from "../../channels/busy.ts";
+import { beginWork } from "../../busy.ts";
 import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";

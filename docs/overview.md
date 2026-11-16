@@ -6,14 +6,14 @@ status: current
 
 # Overview
 
-FastAgent turns an agent directory into a live service: inside your app, as a chat bot, on a schedule, or behind your
-own channel. You keep writing the agent as files. FastAgent runs it.
+FastAgent turns an agent directory into a live service: inside your app, over HTTP through its Agent API, or on a
+schedule. You keep writing the agent as files. FastAgent runs it.
 
 ## An agent is a directory
 
 ```txt
 reviewer/
-├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ model, providers, channels })
+├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ model, providers, mcpServers })
 ├── SYSTEM.md             # the system prompt
 ├── AGENTS.md             # optional: how this agent is built and changed
 ├── skills/  prompts/     # optional: skills, and prompt templates run as /<name>
@@ -32,10 +32,9 @@ its next message.
 | **Message** | What you send into a session. Once accepted, it is answered, even after a restart. |
 | **Tool** | A typed action the model can call. Its arguments are checked before it runs. |
 | **Skill** | Markdown know-how the agent loads when it needs it. |
-| **Channel** | Turns a platform's events into messages, after checking they really come from that platform. |
 | **Instance** | One running copy of the agent, with its own storage and secrets. |
 
-Everything (a channel, a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
+Everything (a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
 interface, the [Agent API](agent-api.md).
 
 ## What FastAgent leaves to you

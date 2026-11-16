@@ -1,6 +1,6 @@
 /**
  * The Agent API served over HTTP: the contract's routes answered by an in-process Agent, behind the
- * instance's keys. A Fetch handler, so it mounts beside the channels' routes on whatever server serves them.
+ * instance's keys. A Fetch handler, so it mounts on whatever server serves it.
  */
 import * as ByteSize from "effect/ByteSize";
 import * as Cause from "effect/Cause";
@@ -20,8 +20,8 @@ import {
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
-import type { ChannelHandler } from "../channel.ts";
-import { secretEquals } from "../channels/kit/secret.ts";
+import type { Handler } from "./serve.ts";
+import { secretEquals } from "./secret.ts";
 import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import {
@@ -52,7 +52,7 @@ const STREAMS_END_MS = 100;
 const RETRY_AFTER_SECONDS = "1";
 
 export interface ApiHandler {
-  fetch: ChannelHandler;
+  fetch: Handler;
   /**
    * Ends every open event stream with a `stream_error`, and answers once they have ended, so that the server's close
    * does not wait on a Caller still watching: at most {@link STREAMS_END_MS}, past which one whose Caller stopped reading
@@ -302,7 +302,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
   };
 }
 
-/** Whether `path` is the Agent API's, which a channel's route may not take. */
+/** Whether `path` is the Agent API's. */
 export function isApiPath(path: string): boolean {
   return path === API_PREFIX || path.startsWith(`${API_PREFIX}/`);
 }

@@ -97,8 +97,8 @@ export async function runDeploy(dirArg: string, opts: DeployOptions): Promise<vo
   const context = displayPath(process.cwd(), agentDir) ?? ".";
   console.log(
     [
-      `# Build the image, then run it with a volume at ${STORAGE_DIR} and the agent's values (its model key, its`,
-      `# channels' credentials, FASTAGENT_API_KEY for the Agent API) from a file of your own.`,
+      `# Build the image, then run it with a volume at ${STORAGE_DIR} and the agent's values (its model key,`,
+      `# FASTAGENT_API_KEY for the Agent API) from a file of your own.`,
       `docker build --pull -t ${image} ${shellArg(context)}`,
       `docker run -d --name ${name} --restart unless-stopped -v ${name}-data:${STORAGE_DIR} --env-file <file> ` +
         `-p ${checked.port}:${checked.port} ${image}`,

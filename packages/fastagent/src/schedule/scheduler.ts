@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { type Agent, AgentError, type Message, type SendRequest } from "@fastagent-sh/client/agent-api";
 import { conversationSessions } from "../conversation-sessions.ts";
 import { PromiseFailure } from "../promise-bridge.ts";
-import { beginWork } from "../channels/busy.ts";
+import { beginWork } from "../busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";

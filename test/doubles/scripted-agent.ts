@@ -1,10 +1,10 @@
 /**
  * An Agent whose messages a test scripts: `messages.send` answers with what the script yields first (the message as
  * recorded, or why there is none), and the rest reaches the session's readers after the message's own `user` entry, as
- * `messages.stream` delivers a message. The rest of the Agent is what a channel asks of it, kept just faithful enough
+ * `messages.stream` delivers a message. The rest of the Agent is what a Caller asks of it, kept just faithful enough
  * to observe:
  *   - each message is recorded under its session, with its key and answer, so `entries` and `messages.get` answer for
- *     it (a thread forks the session holding the message it was opened on, at that ask);
+ *     it;
  *   - any session id a message is sent to names a session, so a test need not create each; `sessions.create` records
  *     what it is asked for (`forks`);
  *   - `sessions.cancel` records the session (`canceled`) and answers what `stopped` says, nothing running by default.
@@ -23,7 +23,7 @@ import {
   agentError,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
-import type { TurnEvent } from "../../packages/fastagent/src/channels/kit/invoke.ts";
+import type { TurnEvent } from "./scripted-run.ts";
 
 export type Script = (request: SendRequest) => AsyncIterable<TurnEvent> | Iterable<TurnEvent>;
 
@@ -334,29 +334,7 @@ export function scriptedAgent(
   return agent;
 }
 
-/** What a stop answers when it stopped work in progress. */
-export const stoppedRun = { stopped: ["message"] };
-
-/** `agent` with its `sessions.cancel` answering `stopped`, each session it is called for recorded in `canceled`. */
-export function withStop<A extends Agent>(
-  agent: A,
-  stopped: (sessionId: string) => { stopped: string[] },
-): A & { canceled: string[] } {
-  const canceled: string[] = [];
-  return {
-    ...agent,
-    sessions: {
-      ...agent.sessions,
-      cancel: async (sessionId: string) => {
-        canceled.push(sessionId);
-        return stopped(sessionId);
-      },
-    },
-    canceled,
-  };
-}
-
-/** What a message asks, read back as text and images: the shape a channel builds its content from. */
+/** What a message asks, read back as text and images: the shape a Caller builds its content from. */
 export interface Prompt {
   text: string;
   images?: { mimeType: string; data: string }[];
@@ -369,8 +347,3 @@ export function promptOf(request: Pick<SendRequest, "content">): Prompt {
   const images = parts.flatMap((part) => (part.type === "image" ? [{ mimeType: part.mimeType, data: part.data }] : []));
   return images.length > 0 ? { text, images } : { text };
 }
-
-/** A message as a test records it: the request, and what it asks read back ({@link promptOf}). */
-export type Asked = SendRequest & { prompt: Prompt };
-
-export const asked = (request: SendRequest): Asked => ({ ...request, prompt: promptOf(request) });

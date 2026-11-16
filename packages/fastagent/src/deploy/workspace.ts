@@ -105,8 +105,8 @@ async function leaseDeployment(metadata: string, waitSeconds = 35): Promise<() =
  * Take the deployment's storage at `root`: it must be a mount, one process holds it (the lease), and it is the
  * storage of `agent`.
  *
- * The lease is NOT returned: it stays held for the process lifetime, because channel activation can
- * start background writers that `close()` does not drain. The kernel drops it when the process exits.
+ * The lease is NOT returned: it stays held for the process lifetime, because background writers may outlive
+ * `close()`. The kernel drops it when the process exits.
  */
 export async function prepareDeployment(root: string, agent: string): Promise<void> {
   await assertStorageMounted(root);

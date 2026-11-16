@@ -1,4 +1,4 @@
-// fastagent.config.ts — the agent's settings and the channels it is reached on, the same wherever it runs. Its prompt
+// fastagent.config.ts — the agent's settings, the same wherever it runs. Its prompt
 // lives in SYSTEM.md, its capabilities in skills/ and src/ (tools, extensions, schedules) — never here. Its name and
 // description are package.json's.
 //
@@ -17,5 +17,4 @@ export default {
   // model: "openai/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
   // starters: ["What can you do?"], // example first messages a client may offer
-  // channels: { telegram: telegram() }, // with `import { telegram } from "@fastagent-sh/fastagent/telegram"`
 } satisfies AgentConfig;

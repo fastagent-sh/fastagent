@@ -1,7 +1,6 @@
 /** `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent. */
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
-import { channelIngress } from "../../channels/discover.ts";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
@@ -55,10 +54,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))
       ? undefined
       : `no provider "${modelSpec.slice(0, Math.max(slash, 0))}" offers "${modelSpec.slice(slash + 1)}"`;
-  const channels = [...(code?.channels ?? new Map())].map(([name, module]) => ({
-    name,
-    ingress: channelIngress(module),
-  }));
   const schedules = (code?.schedules ?? []).map((s) => ({
     name: s.name,
     cron: s.cron,
@@ -88,7 +83,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
-          channels: code === undefined ? null : channels,
           schedules: code === undefined ? null : schedules,
           commands,
           secrets: definition.inputs.secrets,
@@ -120,7 +114,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");
-  line("channels", code ? channels.map((c) => `${c.name} (${c.ingress})`).join(", ") || "(none)" : unbuilt);
   line(
     "schedules",
     code ? schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)" : unbuilt,

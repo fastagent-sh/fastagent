@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, channels, sessions, schedules, and deployment."
+description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, sessions, schedules, and deployment."
 status: current
 ---
 
@@ -73,40 +73,6 @@ The session's queue is full, or the request said `whenBusy: "reject"`. Use separ
 
 Set `HTTPS_PROXY` (in the shell or `.secrets/.env`). Loopback is never proxied; add a LAN address you bind to
 `NO_PROXY` yourself.
-
-## Channels
-
-### Telegram
-
-- **Polling ends with "another process polls this bot":** another process polls or a deployment receives for this
-  bot. Stop it, or use a separate dev bot.
-- **No reply:** check the token, that the bot may post in the chat, that the message summons it (private, mention or
-  reply), and the log.
-- **Group messages ignored:** turn privacy mode off and re-add the bot ([Telegram](telegram.md#set-it-up)).
-
-### Slack
-
-- **No events:** reinstall after scope changes, invite the app to the channel, and check its event subscriptions.
-
-### Slack Socket Mode is connected but nothing answers
-
-Slack accepts a connection even when Socket Mode is off for the app, and then sends nothing. Open the app named in the
-log (`Socket Mode connected to app A…`) → **Socket Mode** → **Enable**. A warning about other open connections means
-another process uses the same app and takes some messages: give each instance its own app.
-
-### Feishu / Lark
-
-- **No events:** in Events & Callbacks the app must use long connection and subscribe to `im.message.receive_v1`, and
-  the version that does must be published.
-- **Group messages ignored:** the app lacks `im:message.group_msg`. Run `fastagent channels setup feishu` to see
-  missing scopes, approve them, and publish a new version.
-
-### Files and images
-
-- **Images ignored:** the model must support vision.
-- **A file is not found:** downloads live under `<state root>/channels/<name>/files/` and are never deleted, so the
-  state root moved or its volume is not mounted.
-- **Slack files fail:** the app needs `files:read`; Slack Connect, deleted files and files over 20 MB cannot be read.
 
 ## Deployment
 

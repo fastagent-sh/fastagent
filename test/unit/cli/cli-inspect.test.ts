@@ -19,8 +19,6 @@ describe("cli: info", () => {
       "skills/bad/SKILL.md": "---\nname: bad\n---\nno description.\n", // malformed: skipped
       "src/tools/lookup.mjs":
         'export default { name: "lookup", description: "Lookup", parameters: { type: "object" }, async execute() { return {}; } };\n',
-      "fastagent.config.ts":
-        'export default { channels: { github: { routes: () => ({ "POST /x": () => new Response("ok") }) } } };\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
     const { code, stdout } = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
@@ -32,7 +30,6 @@ describe("cli: info", () => {
       agent: { name: expect.any(String), description: null },
     });
     expect(info.tools).toEqual(["lookup"]);
-    expect(info.channels).toEqual([{ name: "github", ingress: "webhook" }]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toMatchObject({ code: "ENOENT" }); // read-only: never creates the state root
   });

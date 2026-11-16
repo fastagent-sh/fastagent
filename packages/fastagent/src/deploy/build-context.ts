@@ -160,12 +160,12 @@ export async function checkKeptIgnoreFiles(
     }
     if (stateShips && !excluded(`${stateShips}/sessions`)) {
       report.warn(
-        `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions/channel state would ship in the image. ${remedy([`/${stateShips}`])}`,
+        `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${stateShips}`])}`,
       );
     }
     if (instancesShip && !excluded(`${instancesShip}/dev/.state/x`)) {
       report.warn(
-        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions and channel state would ship in the image. ${remedy([`/${instancesShip}`])}`,
+        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${instancesShip}`])}`,
       );
     }
     const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));

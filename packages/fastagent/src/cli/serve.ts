@@ -6,14 +6,9 @@ import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
 import { failStartup } from "./fail.ts";
 
-/** What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys. */
+/** What the CLI adds to the assembly: the API's keys. */
 export function cliMountOptions(): ServeOptions {
-  return {
-    apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]),
-    closeTimeoutMs: SHUTDOWN_GRACE_MS,
-    onChannelClosed: (name, error) =>
-      failStartup(new Error(`${name} ${error === undefined ? "closed unexpectedly" : `failed: ${String(error)}`}`)),
-  };
+  return { apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]) };
 }
 
 /**
@@ -24,19 +19,15 @@ export function serveService(service: ServedAgent, bind: { port: number; host?: 
   serve(service, bind, (p) => reportServing(service, bind.host, p));
 }
 
-/** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the addresses, and what mounted. */
+/** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the address, and the Agent API. */
 function reportServing(service: ServedAgent, host: string | undefined, boundPort: number): void {
   process.send?.({ type: "ready" });
   log.info(bindLine(host, boundPort));
-  log.info(`[fastagent] routes: ${Object.keys(service.routes).join(", ") || "(none)"}`);
   log.info(
     service.api
       ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`
       : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
   );
-  if (service.channels.longConnections.length > 0) {
-    log.info(`[fastagent] long connections: ${service.channels.longConnections.join(", ")}`);
-  }
 }
 
 /** The line that names WHERE the serve is: every posture reports it. */
@@ -44,14 +35,10 @@ function bindLine(host: string | undefined, boundPort: number): string {
   return `[fastagent] http host on ${classifyBind(host) === "wildcard" ? `:${boundPort} (all interfaces)` : bindLabel(host, boundPort)}`;
 }
 
-/**
- * What the CLI gives a long connection to stop in, and the hard exit that follows the whole close: the server's own
- * grace for requests in flight (500 ms, channels/serve.ts), then the channels'.
- */
-const SHUTDOWN_GRACE_MS = 800;
+/** The hard exit that follows the whole close, beyond the server's own grace for requests in flight (http/serve.ts). */
 const FORCED_EXIT_MS = 1_500;
 
-/** Listen, and report ready — but only once the SERVICE is, which is not the same moment — until a signal closes it. */
+/** Listen, and report ready once bound, until a signal closes it. */
 function serve(
   service: Service,
   bind: { port: number; host?: string },
@@ -62,7 +49,7 @@ function serve(
   const stop = (exitCode: number): void => {
     if (stopping) return;
     stopping = true;
-    // Bounded: shutdown must not hang on a channel that will not close, so the deadline fires regardless.
+    // Bounded: shutdown must not hang on a step that will not finish, so the deadline fires regardless.
     const deadline = setTimeout(() => {
       log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
       process.exit(1);
@@ -83,17 +70,8 @@ function serve(
   process.once("SIGINT", () => stop(0));
   process.once("SIGTERM", () => stop(0));
   service.listen(port, host).then(
-    async (boundPort) => {
-      try {
-        // A bound socket is NOT a serving agent: a declared socket-mode channel still has to come up, and reporting
-        // ready before it does tells the supervisor (and the operator) that a surface is live while a
-        // channel is dead.
-        await service.ready;
-        if (stopping) return;
-        onListening?.(boundPort);
-      } catch (error) {
-        failStartup(error);
-      }
+    (boundPort) => {
+      if (!stopping) onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {
       if (error.code === "EADDRINUSE") {
@@ -107,7 +85,7 @@ function serve(
         );
       }
       // Through `bindLabel`, like every other message about a bind.
-      failStartup(new Error(`cannot bind http channel on ${bindLabel(host, port)}: ${error.message}`));
+      failStartup(new Error(`cannot bind on ${bindLabel(host, port)}: ${error.message}`));
     },
   );
 }

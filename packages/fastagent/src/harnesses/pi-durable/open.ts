@@ -15,8 +15,6 @@ import {
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import type { Channel, ChannelTool } from "../../channel.ts";
-import { channelProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { loadRawProgramConfig } from "../../program-config.ts";
 import { readPackageJson } from "../../runtime.ts";
@@ -32,8 +30,7 @@ import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts
 import { type Needs, isNeeds } from "../../needs.ts";
 import type { AgentConfig, DefinedSchedule } from "./define.ts";
 import { agentPresentation, checkProgramConfig } from "./config.ts";
-import { type AgentDefinition, DEFINITION_FORMAT, channelSource, codeSecrets, defineDefinition } from "./definition.ts";
-import { sessionIdOf } from "./ids.ts";
+import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
@@ -115,8 +112,6 @@ export interface BuiltDefinition {
   tools: ToolRegistration[];
   extensions: Extension[];
   providers: Provider[];
-  /** By the name `fastagent.config.ts` gives each: what a serve mounts or connects. */
-  channels: Map<string, Channel>;
   /** What the scheduler fires, each named by its file. */
   schedules: Schedule[];
 }
@@ -143,15 +138,6 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
       ...named(built<Extension>(file, value, values(value), extensionProblem)),
     })),
   ];
-  const channels = Object.entries(config.channels ?? {}).map(([name, value]) => ({
-    name,
-    value: built<Channel>(channelSource(name), value, values(value), channelProblem),
-  }));
-  tools.push(
-    ...channels.flatMap(({ name, value }) =>
-      (value.tools ?? []).map((tool) => ({ source: channelSource(name), ...named(channelTool(name, tool)) })),
-    ),
-  );
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
@@ -175,13 +161,12 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     providers: (config.providers ?? []).map((value, i) =>
       built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
-    channels: new Map(channels.map(({ name, value }) => [name, value])),
     schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
   };
 }
 
 /**
- * The definition's code built only to read its shape (which channels, which schedules, which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
+ * The definition's code built only to read its shape (which schedules, which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
 export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
@@ -203,20 +188,6 @@ export async function definitionProviders(agentDir: string, env: NodeJS.ProcessE
 }
 
 const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
-
-/** A channel's tool as the agent is offered it: named after the channel, run with the session it is called in. */
-function channelTool(channel: string, tool: ChannelTool): ToolRegistration {
-  return {
-    name: `${channel}_${tool.name}`,
-    description: tool.description,
-    parameters: tool.parameters,
-    execute: async (args, api, context) => {
-      const sessionId = await sessionIdOf(api, context);
-      const text = await tool.execute(args as Record<string, unknown>, sessionId === undefined ? {} : { sessionId });
-      return { output: [{ type: "text", text }] };
-    },
-  };
-}
 
 /** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */
 function refuseTwins(kind: string, entries: readonly { source: string; name: string }[]): void {

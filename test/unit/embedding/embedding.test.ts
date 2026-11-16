@@ -16,18 +16,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { getRequestListener } from "@hono/node-server";
-import type { ChannelHandler } from "../../../packages/fastagent/src/channel.ts";
-import { router } from "../../../packages/fastagent/src/channels/router.ts";
+import type { Handler } from "../../../packages/fastagent/src/http/serve.ts";
 import { serviceOver } from "../../../packages/fastagent/src/service.ts";
 
 /** The handler shape every snippet bridges: reads the RAW body, answers with what it saw. */
 const echoRaw = async (req: Request) => new Response(`raw=[${await req.text()}]`);
 
+/** Two paths and a 404 under them, as a served agent answers its own. */
+const routes: Handler = (req) => {
+  const path = new URL(req.url).pathname;
+  if (path === "/telegram" && req.method === "POST") return echoRaw(req);
+  if (path === "/health") return new Response("ok");
+  return new Response("not found\n", { status: 404 });
+};
+
 /** A service's `fetch` over `handler`, as `serve()` answers it. */
-const fetchOf = (handler: ChannelHandler) => serviceOver(handler, Promise.resolve(), async () => {}).fetch;
+const fetchOf = (handler: Handler) => serviceOver(handler, async () => {}).fetch;
 
 /** The listener docs/embedding.md mounts on a server that takes no Fetch handler. */
-const listenerOf = (handler: ChannelHandler) => getRequestListener(fetchOf(handler), { overrideGlobalObjects: false });
+const listenerOf = (handler: Handler) => getRequestListener(fetchOf(handler), { overrideGlobalObjects: false });
 
 const started: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -65,7 +72,7 @@ describe("embedding: Express", () => {
     app.get("/mine", (_req, res) => {
       res.send("the app's own route");
     });
-    app.use("/agent", listenerOf(router({ "POST /telegram": echoRaw, "GET /health": async () => new Response("ok") })));
+    app.use("/agent", listenerOf(routes));
 
     const base = await listen(app);
     expect(await (await fetch(`${base}/mine`)).text()).toBe("the app's own route");
@@ -115,7 +122,7 @@ describe("embedding: Fastify", () => {
         listener(req.raw, reply.raw);
       });
     });
-    const listener = listenerOf(router({ "POST /telegram": echoRaw, "GET /health": async () => new Response("ok") }));
+    const listener = listenerOf(routes);
     await app.listen({ port: 0, host: "127.0.0.1" });
     started.push(() => app.close());
     const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;

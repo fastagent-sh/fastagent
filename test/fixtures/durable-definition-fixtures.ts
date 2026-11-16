@@ -9,6 +9,7 @@ export const made: string[] = [];
 
 const DEFINE = "../../../../../packages/fastagent/src/harnesses/pi-durable/define.ts";
 const NEEDS = "../../../../../packages/fastagent/src/needs.ts";
+const IDS = "../../../../../packages/fastagent/src/harnesses/pi-durable/ids.ts";
 
 /** An agent package with `files`, its directory under test/fixtures. */
 export function agentPackage(files: Record<string, string>): string {
@@ -72,28 +73,20 @@ export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: 
 
 export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 
-/** The configuration with a channel `ops` declared: it reads `OPS_TOKEN`, and its tool says what it was called with. */
-export const WITH_CHANNEL: Record<string, string> = {
+/** A tool that asks which session it runs in (`sessionIdOf`), beside the rest. */
+export const WITH_SESSION_TOOL: Record<string, string> = {
   ...FILES,
-  "fastagent.config.ts": `import { faux } from "./model.ts";
-import { needs } from "../../../packages/fastagent/src/needs.ts";
-export default {
-  model: "fixture/m",
-  providers: [faux.provider],
-  channels: {
-    ops: needs(["OPS_TOKEN"], ({ OPS_TOKEN }) => ({
-      connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }),
-      tools: [
-        {
-          name: "whoami",
-          description: "Say where the call runs",
-          parameters: { type: "object", properties: {} },
-          execute: async (_args, call) => \`token \${OPS_TOKEN}, session \${call.sessionId}\`,
-        },
-      ],
-    })),
-  },
-};
+  "src/tools/whoami.ts": `import { obj } from "@earendil-works/pi-schema";
+import { defineTool } from "@earendil-works/pi-durable";
+import { sessionIdOf } from "${IDS}";
+export default defineTool({
+  name: "whoami",
+  description: "Say where the call runs",
+  parameters: obj({}),
+  execute: async (_args, api, context) => ({
+    output: [{ type: "text", text: \`session \${await sessionIdOf(api, context)}\` }],
+  }),
+});
 `,
 };
 

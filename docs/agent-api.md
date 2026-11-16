@@ -7,7 +7,7 @@ status: current
 # Agent API
 
 Every caller of an agent uses one API: an app that embeds it, a program elsewhere, a client that shows conversations,
-and FastAgent's own channels, schedules and `fastagent invoke`. It is the same in process and over HTTP:
+and FastAgent's own schedules and `fastagent invoke`. It is the same in process and over HTTP:
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -194,7 +194,6 @@ curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorizat
 - **One instance per customer.** People who must not read each other's conversations get an instance each.
 - **A key belongs on a server**, sent only over HTTPS. Rotate it by adding the new one, moving callers, removing the
   old.
-- **A channel lets in everyone who can message its bot.** A platform's signature proves the platform, not the person.
 - **A session id is a name, not a credential.**
 
 ## Not provided

@@ -30,7 +30,7 @@ it("answers what a test scripts as real git answers it in a checkout", async () 
   const dir = await mkdtemp(join(tmpdir(), "fa-git-checkout-"));
   await writeFile(join(dir, ".gitignore"), ".env\n");
   execFileSync("git", ["init", "-q"], { cwd: dir });
-  // What channels-setup.test.ts scripts for a value file git would track, and for one it ignores.
+  // What a test scripts for a value file git would track, and for one it ignores.
   const answers = {
     "rev-parse --is-inside-work-tree": "true",
     "check-ignore -q prod.env": undefined,

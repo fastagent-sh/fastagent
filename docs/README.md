@@ -1,6 +1,6 @@
 ---
 title: Documentation
-description: "FastAgent documentation: build an agent, run it, connect it to Telegram, Slack or Feishu, embed it in an app, and deploy it."
+description: "FastAgent documentation: build an agent, run it, embed it in an app, call it over HTTP, and deploy it."
 status: current
 ---
 
@@ -14,8 +14,6 @@ FastAgent serves an agent directory as a live service. Pick what you want to do.
 | Try it in five minutes | [Quickstart](quickstart.md) |
 | Know what FastAgent is and is not | [Overview](overview.md) |
 | Set the model, keys, tools, schedules | [Configuration](configuration.md) |
-| Put it in Telegram, Slack or Feishu | [Channels](channels.md): [Telegram](telegram.md), [Slack](slack.md), [Feishu / Lark](feishu.md) |
-| Write my own channel | [Channel development](channel-development.md) |
 | Give it MCP tools | [MCP servers](mcp.md) |
 | Call it from my app | [Embedding](embedding.md) |
 | Run it on a server | [Deploy](deploy.md) |
