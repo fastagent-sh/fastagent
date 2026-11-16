@@ -58,6 +58,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       ? undefined
       : `no provider "${modelSpec.slice(0, Math.max(slash, 0))}" offers "${modelSpec.slice(slash + 1)}"`;
   const stateRoot = resolveStateRoot(agentDir);
+  const entered = enteredInstanceName();
+  const storagePlace = { stateRoot, env: process.env, ...(entered === undefined ? {} : { name: entered }) };
   // What the instance's clock wrote, read as it is: a serve that owns the instance writes it whole, and nothing is
   // created here.
   const schedules = (code?.schedules ?? []).map((s) => {
@@ -112,7 +114,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           workdir,
           stateRoot,
-          storage: describeInstanceStorage({ stateRoot, name, env: process.env }),
+          storage: describeInstanceStorage(storagePlace),
           authPath: auth?.path ?? null,
           fallbackAuthPath: auth?.fallback ?? null,
         },
@@ -154,6 +156,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   line("workdir", workdir);
   line("state", stateRoot);
-  line("storage", describeInstanceStorage({ stateRoot, name, env: process.env }));
+  line("storage", describeInstanceStorage(storagePlace));
   if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
 }

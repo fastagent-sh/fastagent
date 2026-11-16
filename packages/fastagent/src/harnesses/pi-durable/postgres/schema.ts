@@ -11,7 +11,7 @@ const VERSION = 1;
 
 const TABLES = [
   `CREATE TABLE IF NOT EXISTS durable_metadata (
-    instance text PRIMARY KEY, next_id bigint NOT NULL, next_seq bigint NOT NULL, owner text)`,
+    instance text PRIMARY KEY, next_id bigint NOT NULL, next_seq bigint NOT NULL, owner text, agent text)`,
   `CREATE TABLE IF NOT EXISTS durable_leases (instance text PRIMARY KEY, owner text, lease_until timestamptz)`,
   `CREATE TABLE IF NOT EXISTS durable_record_ids (
     instance text NOT NULL, id bigint NOT NULL, record_type text NOT NULL, PRIMARY KEY (instance, id))`,

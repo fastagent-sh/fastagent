@@ -68,7 +68,7 @@ type Order = "ascending" | "descending";
 /** How long a holder that stops renewing keeps the instance: a crashed process's successor waits at most this. */
 const LEASE_MS = 30_000;
 
-export interface LeaseOptions {
+interface LeaseOptions {
   /** How long a holder that stops renewing keeps the instance. */
   leaseMs: number;
   /** How long an opener waits for a held instance before it refuses. */
@@ -130,6 +130,15 @@ const records = <T>(rows: readonly { record: string }[]): T[] => rows.map((row) 
 /** The refusal of an opener of an instance another process holds. */
 export class InstanceHeld extends Error {}
 
+export interface OpenOptions {
+  /** What else opens the instance, for the refusal of a second opener. */
+  holders?: string;
+  /** The agent that opens it (its package's name): an instance belongs to the agent that made it. */
+  agent?: string;
+  lease?: LeaseOptions;
+  onLost?: (error: Error) => void;
+}
+
 export class PostgresStorage implements Storage {
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -158,13 +167,9 @@ export class PostgresStorage implements Storage {
    * Open `instance` in `db`, whose tables `migrate` made, holding its lease; the storage owns `db` and closes it. A held
    * instance is waited for (`lease.waitMs`), then refused with `InstanceHeld`, naming `holders`, what else opens it.
    * `onLost` is told once when this process stops holding the instance while open: another took it over, or the
-   * database was out of reach for most of the lease.
+   * database was out of reach for most of the lease. An instance another `agent` made is refused.
    */
-  static async open(
-    db: PgDatabase,
-    instance: string,
-    options: { holders?: string; lease?: LeaseOptions; onLost?: (error: Error) => void } = {},
-  ): Promise<PostgresStorage> {
+  static async open(db: PgDatabase, instance: string, options: OpenOptions = {}): Promise<PostgresStorage> {
     const lease = options.lease ?? DEFAULT_LEASE;
     const owner = crypto.randomUUID();
     await db.query(
@@ -175,7 +180,7 @@ export class PostgresStorage implements Storage {
     const deadline = Date.now() + lease.waitMs;
     let waiting = false;
     while (true) {
-      const taken = await PostgresStorage.take(db, instance, owner, lease.leaseMs);
+      const taken = await PostgresStorage.take(db, instance, owner, lease.leaseMs, options.agent);
       if (taken !== undefined) {
         const storage = new PostgresStorage(db, instance, taken, owner);
         storage.onLost = options.onLost;
@@ -201,8 +206,11 @@ export class PostgresStorage implements Storage {
     }
   }
 
-  /** Take the lease when no one holds it, or its holder let it lapse: the next id, or `undefined` while held. */
-  private static async take(db: PgDatabase, instance: string, owner: string, leaseMs: number) {
+  /**
+   * Take the lease when no one holds it, or its holder let it lapse: the next id, or `undefined` while held. The first
+   * agent to take an instance makes it its own; another agent's take is refused and changes nothing.
+   */
+  private static async take(db: PgDatabase, instance: string, owner: string, leaseMs: number, agent?: string) {
     return db
       .transaction(async (tx) => {
         const [leased] = await tx.query(
@@ -211,10 +219,16 @@ export class PostgresStorage implements Storage {
           [instance, owner, leaseMs],
         );
         if (leased === undefined) return undefined;
-        const [metadata] = await tx.query<{ next_id: number }>(
-          "UPDATE durable_metadata SET owner = $2 WHERE instance = $1 RETURNING next_id",
-          [instance, owner],
+        const [metadata] = await tx.query<{ next_id: number; agent: string | null }>(
+          "UPDATE durable_metadata SET owner = $2, agent = COALESCE(agent, $3) WHERE instance = $1 RETURNING next_id, agent",
+          [instance, owner, agent ?? null],
         );
+        if (agent !== undefined && metadata?.agent !== agent) {
+          throw new Error(
+            `the instance "${instance}" belongs to the agent "${metadata?.agent}", not "${agent}": ` +
+              "give this one another name (FASTAGENT_NAME)",
+          );
+        }
         return metadata?.next_id;
       })
       .catch((error: unknown) => {
@@ -785,7 +799,7 @@ export class PostgresStorage implements Storage {
 export async function openPostgresStorage(
   connectionString: string,
   instance: string,
-  options: { holders?: string; onLost?: (error: Error) => void } = {},
+  options: Omit<OpenOptions, "lease"> = {},
 ): Promise<PostgresStorage> {
   const db = openPgDatabase(connectionString);
   try {

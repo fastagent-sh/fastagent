@@ -41,15 +41,14 @@ async function newConversation(storage: Storage): Promise<number> {
 }
 
 /** The instance opened with a lease of its own, as a test can stall it. */
-async function leased(instance: string, lease: { leaseMs: number; waitMs: number }, holders?: string) {
+async function leased(instance: string, lease: { leaseMs: number; waitMs: number }, holders?: string, agent?: string) {
   const db = openPgDatabase(postgres.url);
   await migrate(db);
-  return PostgresStorage.open(db, instance, { lease, ...(holders === undefined ? {} : { holders }) }).catch(
-    async (error: unknown) => {
-      await db.close();
-      throw error;
-    },
-  );
+  const named = { ...(holders === undefined ? {} : { holders }), ...(agent === undefined ? {} : { agent }) };
+  return PostgresStorage.open(db, instance, { lease, ...named }).catch(async (error: unknown) => {
+    await db.close();
+    throw error;
+  });
 }
 
 describe("an instance in a shared database", () => {
@@ -73,6 +72,31 @@ describe("an instance in a shared database", () => {
     expect(await b.conversation(id as never, BACKGROUND_CONTEXT)).toBeUndefined();
     expect((await b.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items).toEqual([]);
     await Promise.all([a.close(BACKGROUND_CONTEXT), b.close(BACKGROUND_CONTEXT)]);
+  });
+});
+
+describe("an instance belongs to the agent that made it", () => {
+  it("refuses another agent that opens it by the same name, naming both, and changes nothing", async () => {
+    const instance = freshInstance();
+    const made = await openPostgresStorage(postgres.url, instance, { agent: "@acme/support" });
+    const id = await newConversation(made);
+    await made.close(BACKGROUND_CONTEXT);
+    await expect(openPostgresStorage(postgres.url, instance, { agent: "@acme/sales" })).rejects.toThrow(
+      `the instance "${instance}" belongs to the agent "@acme/support", not "@acme/sales": give this one another name (FASTAGENT_NAME)`,
+    );
+    // The refused open took no lease: the owner opens it again at once, as it left it.
+    const again = await leased(instance, { leaseMs: 60_000, waitMs: 0 }, undefined, "@acme/support");
+    expect(await again.conversation(id as never, BACKGROUND_CONTEXT)).toEqual({ id });
+    await again.close(BACKGROUND_CONTEXT);
+  });
+
+  it("is opened only by the name it is given: an app that names none is refused", async () => {
+    const dir = await fauxAgent("fa-postgres-unnamed-");
+    await expect(
+      openSource(dir, { secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url } }),
+    ).rejects.toThrow(
+      "FASTAGENT_DATABASE_URL: an instance in a database is opened by its name, and none was given: set FASTAGENT_NAME (an app: openAgent's name)",
+    );
   });
 });
 

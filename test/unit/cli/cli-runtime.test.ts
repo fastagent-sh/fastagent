@@ -92,6 +92,17 @@ describe("cli: invoke", () => {
 });
 
 describe("cli: an instance in PostgreSQL", () => {
+  it("is not opened without the name it is given: exit 2, naming what to set", async () => {
+    const dir = await agent("fa-invoke-postgres-unnamed-");
+    const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_DATABASE_URL: "postgres://agent@127.0.0.1:1/agents" };
+    delete env.FASTAGENT_NAME;
+    const run = await runInProcess(["invoke", "hello", dir], undefined, env);
+    expect([run.code, run.stdout]).toEqual([2, ""]);
+    expect(run.stderr).toContain(
+      "FASTAGENT_DATABASE_URL keeps the sessions in a database that instances share by name: name this one with --name <name> or FASTAGENT_NAME",
+    );
+  });
+
   it("keeps its sessions in the database FASTAGENT_DATABASE_URL names, by its name, whatever its state root", async () => {
     const postgres = await servedPostgres();
     try {

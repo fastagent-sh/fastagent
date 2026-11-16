@@ -187,11 +187,16 @@ Set `FASTAGENT_DATABASE_URL` and an instance keeps its sessions and runs in that
 `<root>/.state/agent.sqlite`. A new machine, container or root with the same name continues them.
 
 ```bash
-FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=require' fastagent start
+FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=require' FASTAGENT_NAME=support fastagent start
 ```
 
-- **Name each instance.** Instances in one database are told apart by their name (`FASTAGENT_NAME`, default the
-  package's name). `dev` and `start` of one project are one instance unless you give them different names.
+- **Name each instance.** Instances in one database are told apart by the name you give them (`--name` or
+  `FASTAGENT_NAME`; an app: `openAgent`'s `name`). There is no default: a command that opens an instance without one
+  exits 2.
+- **An instance belongs to its agent.** The first agent (package) to open a name owns it; another agent with the same
+  name is refused: `the instance "support" belongs to the agent "@acme/support", not "@acme/sales"`.
+- **One database per environment.** Point `dev` at a development database, never at production's: with the same
+  name, it would continue production's sessions whenever production is not running.
 - **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
   saying who holds it. A process that dies frees its instance within 30 seconds.
 - **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
