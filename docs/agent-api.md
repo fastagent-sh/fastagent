@@ -141,7 +141,7 @@ Every operation answers or rejects with an `AgentError`: `code`, `message`, `ret
 
 | Code | When | Retryable | HTTP |
 |---|---|---|---|
-| `invalid_request` | A malformed request, or a limit exceeded (`details.reason: "too_large"` for a body too large) | no | 400, 413 |
+| `invalid_request` | A malformed request, or a limit exceeded (`details.reason: "too_large"` for a body too large, or a message larger than the agent's storage takes) | no | 400, 413 |
 | `unauthorized` | No key, or a wrong one (HTTP only) | no | 401 |
 | `not_found` | An unknown session, message, fork source or cursor | no | 404 |
 | `busy` | `running`: refused by a busy session; `queue_full`: the session's queue is full; `capacity`: the process holds all it can | yes | 409; 429 and 503 with `Retry-After` |
@@ -151,8 +151,9 @@ Every operation answers or rejects with an `AgentError`: `code`, `message`, `ret
 | `unavailable` | The agent cannot answer now, and the same request is safe to send again | yes | 503 with `Retry-After` |
 | `internal` | Anything else | no | 500 |
 
-The limits behind `busy` and `invalid_request` (queued messages per session, messages per process, page sizes) are
-FastAgent's, and may change: handle the refusal, do not depend on the number.
+The limits behind `busy` and `invalid_request` (queued messages per session, messages per process, page sizes, and
+the size of a message where the agent's storage caps a write) are FastAgent's, and may change: handle the refusal, do
+not depend on the number.
 
 New event types, entry kinds, statuses and error codes may be added. Ignore an event or entry you do not know, treat an
 unknown session status as busy, act on `retryable` for an unknown code, and treat any message status other than the

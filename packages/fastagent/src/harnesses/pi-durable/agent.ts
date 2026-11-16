@@ -108,6 +108,8 @@ export interface DurableAgentOptions {
   clock?: ClockState;
   /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
   telemetry?: TelemetryContext;
+  /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
+  maxMessageBytes?: number;
 }
 
 /**
@@ -376,6 +378,14 @@ function durableAgent(
         const requestId = requestIdFor(request.idempotencyKey);
         // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
         const { content, sent } = expandCommand(request.content, commands());
+        const bytes = options.maxMessageBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(content));
+        if (options.maxMessageBytes !== undefined && bytes > options.maxMessageBytes) {
+          return yield* agentError(
+            "invalid_request",
+            `The message is ${bytes} bytes, over the ${options.maxMessageBytes} this agent's storage takes`,
+            { reason: "too_large" },
+          );
+        }
         const conversation = yield* conversationOf(request.sessionId);
         // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
         // seen answers with its message whatever the process holds.
