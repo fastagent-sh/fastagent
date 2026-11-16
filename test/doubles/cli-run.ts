@@ -258,11 +258,16 @@ export async function fauxAgent(prefix: string, files: Record<string, string> = 
 }
 
 /** Serve the instance of `dir` as `dev` does, owning it (owner.ts), for the length of `during`. */
-export async function whileServed<T>(dir: string, during: () => Promise<T>): Promise<T> {
+export async function whileServed<T>(
+  dir: string,
+  during: (url: string) => Promise<T>,
+  options: { model?: string } = {},
+): Promise<T> {
   const opened = await openAgent(await loadSourceDefinition(dir), {
     root: resolveWorkdir(dir),
     secrets: process.env,
     offline: true,
+    ...options,
   });
   try {
     const key = ownerKey();
@@ -270,7 +275,7 @@ export async function whileServed<T>(dir: string, during: () => Promise<T>): Pro
     const port = await service.listen(0, "127.0.0.1");
     const unannounce = announceOwner(resolveStateRoot(dir), "127.0.0.1", port, key);
     try {
-      return await during();
+      return await during(`http://127.0.0.1:${port}`);
     } finally {
       unannounce();
     }

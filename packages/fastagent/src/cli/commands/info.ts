@@ -60,7 +60,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   // What the instance's clock wrote, read as it is: a serve that owns the instance writes it whole, and nothing is
   // created here.
   const schedules = (code?.schedules ?? []).map((s) => {
-    const last = latestFire(stateRoot, s.name);
+    let last: ReturnType<typeof latestFire>;
+    try {
+      last = latestFire(stateRoot, s.name);
+    } catch (error) {
+      failStartup(new Error(`the last run of "${s.name}" is unreadable (state: ${stateRoot}): ${String(error)}`));
+    }
     return {
       name: s.name,
       cron: s.cron,

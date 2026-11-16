@@ -44,7 +44,11 @@ export async function reachOwner(stateRoot: string): Promise<Owner | undefined> 
   if (typeof owner.url !== "string" || typeof owner.key !== "string") {
     throw new Error(`${join(stateRoot, OWNER_FILE)} is not an owner's: remove it, then run the command again`);
   }
-  const answered = await fetch(new URL("/health", owner.url), { signal: AbortSignal.timeout(2_000) }).then(
+  // Asked with its key: another serve on the port a killed owner left (dev's default is one port) answers /health too.
+  const answered = await fetch(new URL("/v1/agent", owner.url), {
+    headers: { authorization: `Bearer ${owner.key}` },
+    signal: AbortSignal.timeout(2_000),
+  }).then(
     (response) => response.ok,
     () => false,
   );

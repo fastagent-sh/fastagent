@@ -124,22 +124,28 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     import("../../harnesses/pi-durable/open.ts"),
     import("../shared.ts"),
   ]);
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
-  const stateRoot = resolveStateRoot(agentDir);
-  // A running serve of this instance owns its storage: the message goes through it (owner.ts).
-  const owner = await reachOwner(stateRoot).catch(failStartup);
-  if (owner !== undefined) {
-    const settings = opts.model === undefined ? undefined : { model: modelRefOf(modelSpec, "the model") };
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
+    // A running serve of this instance owns its storage and answers with its own model: the message goes through it
+    // (owner.ts), before any model is asked for here.
+    const owner = await reachOwner(resolveStateRoot(target)).catch(failStartup);
+    if (owner === undefined) return;
+    let settings: SessionSettings | undefined;
+    try {
+      settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
+    } catch (error) {
+      failUsage(error instanceof Error ? error.message : String(error));
+    }
     const agent = connectAgent(owner.url, { apiKey: owner.key });
     await invokeThrough(
       agent,
-      `${agentDir}, through its serve at ${owner.url}`,
+      `${target}, through its serve at ${owner.url}`,
       message,
       opts,
       settings,
       LOCAL_AUTH_HINT,
     );
-  }
+  });
+  const stateRoot = resolveStateRoot(agentDir);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { agent, models, config } = await openServing(definition, {
     model: modelSpec,

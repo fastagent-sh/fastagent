@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -45,6 +45,34 @@ describe("cli: invoke", () => {
       const sessionId = sessionOf(first);
       const second = await runInProcess(["invoke", "--session", sessionId, "again", dir]);
       expect([second.code, second.stdout.trim(), sessionOf(second)], second.stderr).toEqual([0, "seen 2", sessionId]);
+    });
+  });
+
+  it("goes through a running serve before asking for a model of its own: the serve answers with its own", async () => {
+    const dir = await agent("fa-invoke-owner-model-");
+    const config = join(dir, "fastagent.config.ts");
+    await writeFile(config, (await readFile(config, "utf8")).replace('model: "gw/m1", ', ""));
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    await whileServed(
+      dir,
+      async () => {
+        const sent = await runInProcess(["invoke", "hello", dir, "--no-input"], undefined, env);
+        expect([sent.code, sent.stdout.trim()], sent.stderr).toEqual([0, "seen 1"]);
+      },
+      { model: "gw/m1" },
+    );
+  });
+
+  it("opens the instance itself when the owner it finds answers with another key: a stale claim, another serve", async () => {
+    const dir = await agent("fa-invoke-stale-owner-");
+    const other = await agent("fa-invoke-other-serve-");
+    await whileServed(other, async (url) => {
+      await mkdir(resolveStateRoot(dir), { recursive: true });
+      await writeFile(join(resolveStateRoot(dir), "owner.json"), JSON.stringify({ url, key: "a killed owner's key" }));
+      const sent = await runInProcess(["invoke", "hello", dir]);
+      expect([sent.code, sent.stdout.trim()], sent.stderr).toEqual([0, "seen 1"]);
+      expect(sent.stderr).not.toContain("through its serve");
     });
   });
 
@@ -148,6 +176,21 @@ describe("cli: the agent's clock", () => {
     const text = await runInProcess(["info", dir]);
     expect(text.stdout).toMatch(/daily \(next \S+, last failed\)/);
     expect(text.stdout).toContain(`${added.id} at ${added.fireAt}: check the deploy`);
+  });
+
+  it.skipIf(process.getuid?.() === 0)("info says which schedule's last run it cannot read, in one line", async () => {
+    const dir = await agentWorkspace("fa-clock-unreadable-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
+    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
+    await mkdir(claims, { recursive: true });
+    const claim = join(claims, "2026-01-01T09-00-00-000Z");
+    await writeFile(claim, JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "completed" }));
+    await chmod(claim, 0o000);
+    try {
+      const info = await runInProcess(["info", dir]);
+      expect([info.code, info.stderr]).toEqual([1, expect.stringContaining('the last run of "daily" is unreadable')]);
+    } finally {
+      await chmod(claim, 0o600);
+    }
   });
 
   it("schedules run continues its session and records interrupted and completed claims", async () => {
