@@ -5,7 +5,7 @@
 import { fastagentVersion } from "../version.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { unsupportedRuntime } from "../runtime.ts";
-import { failStartup } from "./fail.ts";
+import { failStartup, failUsage } from "./fail.ts";
 import { ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 
 const AGENT_ARG = {
@@ -225,26 +225,41 @@ const schedules: CommandSpec = {
 
 const login: CommandSpec = {
   name: "login",
-  summary: "sign in to a model provider (account OAuth or API key)",
+  summary: "sign in to a model provider (account OAuth or API key), or check that one is ready",
   description:
-    "Prompt interactively in a terminal, or return `need_choice`/`need_user_action` (exit 2) when non-interactive.",
-  args: [{ name: "[provider]", description: "provider id or name" }],
+    "Prompt interactively in a terminal, or return `need_choice`/`need_user_action` (exit 2) when non-interactive. " +
+    "With --check, report whether the provider is ready instead: exit 0 ready, 1 not_ready, 2 invalid.",
+  args: [{ name: "[provider]", description: "provider id or name; with --check a provider id or provider/modelId" }],
   flags: [
     GLOBAL_AUTH,
+    { flags: "--check", description: "report readiness (ready, not_ready, invalid) without signing in" },
     { flags: "--method <how>", description: "account or api-key" },
     JSON_FLAG,
     { flags: "--timeout <seconds>", description: "interactive sign-in timeout" },
     NO_INPUT,
   ],
-  examples: [{ cmd: "fastagent login" }, { cmd: "fastagent login openai", note: "ChatGPT or API key" }],
-  run: async (args, f) =>
-    (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
+  examples: [
+    { cmd: "fastagent login" },
+    { cmd: "fastagent login openai", note: "ChatGPT or API key" },
+    { cmd: "fastagent login openai/gpt-5.5 --check --json", note: "is the model's provider ready?" },
+  ],
+  run: async (args, f) => {
+    if (f.check === true) {
+      if (f.method !== undefined || f.timeout !== undefined)
+        failUsage("--check signs nothing in: drop --method and --timeout");
+      return (await import("./commands/login-check.ts")).runLoginCheck(args[0] as string | undefined, {
+        global: f.global === true,
+        json: f.json === true,
+      });
+    }
+    return (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
       global: f.global === true,
       input: f.input !== false,
       json: f.json === true,
       ...(f.method !== undefined ? { method: f.method as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
-    }),
+    });
+  },
 };
 
 const logout: CommandSpec = {
@@ -260,48 +275,7 @@ const logout: CommandSpec = {
     }),
 };
 
-const auth: CommandSpec = {
-  name: "auth",
-  summary: "check a model provider's credential",
-  subcommands: [
-    {
-      name: "check",
-      summary: "report whether a provider is ready (exit 0 ready, 1 not_ready, 2 invalid)",
-      flags: [
-        { flags: "--provider <id>", description: "provider id" },
-        { flags: "--model <provider/modelId>", description: "resolve provider from model" },
-        GLOBAL_AUTH,
-        JSON_FLAG,
-      ],
-      examples: [
-        { cmd: "fastagent auth check --provider openai" },
-        { cmd: "fastagent auth check --model openai/gpt-5.5 --json" },
-      ],
-      run: async (_args, f) =>
-        (await import("./commands/auth.ts")).runAuthCheck({
-          ...(f.provider !== undefined ? { provider: f.provider as string } : {}),
-          ...(f.model !== undefined ? { model: f.model as string } : {}),
-          global: f.global === true,
-          json: f.json === true,
-        }),
-    },
-  ],
-};
-
-const specs: readonly CommandSpec[] = [
-  init,
-  models,
-  info,
-  build,
-  invoke,
-  schedules,
-  dev,
-  start,
-  deploy,
-  login,
-  logout,
-  auth,
-];
+const specs: readonly CommandSpec[] = [init, models, info, build, invoke, schedules, dev, start, deploy, login, logout];
 
 /** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {

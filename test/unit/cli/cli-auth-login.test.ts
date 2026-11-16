@@ -100,7 +100,13 @@ describe("cli: login and models", () => {
       provider: "openai-codex",
       method: "account",
       terminal_command: "fastagent login openai-codex --method account",
+      check_command: "fastagent login openai-codex --check --json",
     });
+    // The command it names answers: the sign-in is still to be done.
+    const [command, ...args] = (JSON.parse(oauthNeeded.stdout).check_command as string).split(" ");
+    expect(command).toBe("fastagent");
+    const checked = await runInProcess(args, cwd);
+    expect([checked.code, JSON.parse(checked.stdout).status]).toEqual([1, "not_ready"]);
   });
 });
 
@@ -114,7 +120,7 @@ async function agentHolding(stored: Record<string, unknown>): Promise<string> {
   return agent;
 }
 
-describe("auth check: a provider's readiness, as pi's `auth check` answers a script", () => {
+describe("login --check: a provider's readiness, as pi's `auth check` answers a script", () => {
   it("ready, not_ready and invalid, exiting 0, 1 and 2", async () => {
     const agent = await agentHolding({
       "openai-codex": { ...OAUTH, refresh: "revoked", expires: 1 },
@@ -123,14 +129,17 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
     const env = { ...process.env, ANTHROPIC_API_KEY: "sk-env", OPENAI_API_KEY: "" };
     const path = join(agent, ".secrets", "auth.json");
 
-    const missingTarget = await runInProcess(["auth", "check"], agent, env);
+    const missingTarget = await runInProcess(["login", "--check"], agent, env);
     expect(missingTarget.code).toBe(2);
-    expect(missingTarget.stderr).toContain("auth check needs --provider <id> or --model <provider/modelId>");
+    expect(missingTarget.stderr).toContain("login --check needs a provider id, or a provider/modelId");
+    const signsIn = await runInProcess(["login", "anthropic", "--check", "--method", "api-key"], agent, env);
+    expect(signsIn.code).toBe(2);
+    expect(signsIn.stderr).toContain("--check signs nothing in: drop --method and --timeout");
 
-    const ready = await runInProcess(["auth", "check", "--provider", "anthropic"], agent, env);
+    const ready = await runInProcess(["login", "anthropic", "--check"], agent, env);
     expect([ready.code, ready.stdout.trim()]).toEqual([0, "ready"]);
 
-    const readyJson = await runInProcess(["auth", "check", "--provider", "anthropic", "--json"], agent, env);
+    const readyJson = await runInProcess(["login", "anthropic", "--check", "--json"], agent, env);
     expect(readyJson.code).toBe(0);
     expect(JSON.parse(readyJson.stdout)).toEqual({
       status: "ready",
@@ -140,11 +149,11 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
       path,
     });
 
-    const oauth = await runInProcess(["auth", "check", "--provider", "github-copilot", "--json"], agent, env);
+    const oauth = await runInProcess(["login", "github-copilot", "--check", "--json"], agent, env);
     expect(oauth.code).toBe(0);
     expect(JSON.parse(oauth.stdout)).toMatchObject({ status: "ready", authType: "oauth", source: "OAuth" });
 
-    const missing = await runInProcess(["auth", "check", "--provider", "openai", "--json"], agent, env);
+    const missing = await runInProcess(["login", "openai", "--check", "--json"], agent, env);
     expect(missing.code).toBe(1);
     expect(JSON.parse(missing.stdout)).toEqual({
       status: "not_ready",
@@ -153,7 +162,7 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
       path,
     });
 
-    const unknown = await runInProcess(["auth", "check", "--provider", "nope", "--json"], agent, env);
+    const unknown = await runInProcess(["login", "nope", "--check", "--json"], agent, env);
     expect(unknown.code).toBe(1);
     expect(JSON.parse(unknown.stdout)).toEqual({
       status: "not_ready",
@@ -165,7 +174,7 @@ describe("auth check: a provider's readiness, as pi's `auth check` answers a scr
       "fetch",
       vi.fn(async () => new Response('{"error":"invalid_grant"}', { status: 401 })),
     );
-    const refused = await runInProcess(["auth", "check", "--model", CODEX_MODEL, "--json"], agent, env);
+    const refused = await runInProcess(["login", CODEX_MODEL, "--check", "--json"], agent, env);
     expect(refused.code).toBe(2);
     expect(JSON.parse(refused.stdout)).toMatchObject({
       status: "invalid",

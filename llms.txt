@@ -7,7 +7,7 @@ Key facts:
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 24.15.
 - An agent is a directory of its own, marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md` (its prompt), `AGENTS.md`, `skills/`, `prompts/`, code under `src/tools/`, `src/extensions/`, `src/schedules/`. `fastagent build` compiles it into `dist/` for `start`, embedding and deploy.
 - The contract is the [Agent API](https://fastagent.sh/docs/agent-api/), in process (`openAgent`) and over HTTP (`connectAgent` from `@fastagent-sh/client`): sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve answers `GET /health`, and the API under `/v1` only when `FASTAGENT_API_KEY` holds a key.
-- Core CLI: `fastagent init | info | dev | invoke | build | start | models | login | logout | auth | schedules | deploy`. A coding agent checks an agent with `fastagent info --json`, `fastagent auth check --provider <id>`, `fastagent invoke` (`--json` for its events, `--session` to continue a conversation) and `fastagent schedules run`; `fastagent login <provider> --method account --json` prints the address the owner signs in at.
+- Core CLI: `fastagent init | info | dev | invoke | build | start | models | login | logout | schedules | deploy`. A coding agent checks an agent with `fastagent info --json`, `fastagent login <provider/model-id> --check`, `fastagent invoke` (`--json` for its events, `--session` to continue a conversation) and `fastagent schedules run`; `fastagent login <provider> --method account --json` names the command the owner runs in a terminal of their own to sign in.
 
 ## Start here
 

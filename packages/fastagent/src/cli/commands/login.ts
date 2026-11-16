@@ -186,7 +186,7 @@ async function requestLogin(
   }
   if (choice.method === "api_key") return keyNeeded(choice, opts, target);
   const terminal = `fastagent login ${choice.provider} --method account${global}`;
-  const check = `fastagent auth check --provider ${choice.provider}${opts.global ? " -g" : ""}`;
+  const check = `fastagent login ${choice.provider} --check${opts.global ? " -g" : ""}`;
   printReport(
     opts.json,
     {
@@ -219,7 +219,7 @@ async function keyNeeded(
     ]);
     process.exit(0);
   }
-  const check = `fastagent auth check --provider ${choice.provider}${target.valueFile === undefined ? " -g" : ""}`;
+  const check = `fastagent login ${choice.provider} --check${target.valueFile === undefined ? " -g" : ""}`;
   if (target.valueFile === undefined) {
     const terminal = `fastagent login ${choice.provider} --method api-key -g`;
     printReport(
