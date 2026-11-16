@@ -21,9 +21,6 @@
   },
   "type": "module",
   "sideEffects": false,
-  "engines": {
-    "node": ">=24.15.0"
-  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

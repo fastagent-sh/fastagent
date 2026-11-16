@@ -86,6 +86,11 @@ npm run release:patch # or release:minor / release:major
 
 The script verifies the Git and npm state, gives every package under `packages/` the new version (and each package's dependency on another that exact version), updates `package-lock.json`, runs the full local checks plus an npm package dry run, and opens a `chore/release-X.Y.Z` PR. It never merges, tags, or publishes. After a maintainer squash-merges the PR, create and publish GitHub Release `vX.Y.Z`; the protected publish workflow then publishes to npm through Trusted Publishing.
 
+A package that is not on npm yet cannot be published by the workflow: Trusted Publishing is configured per existing
+package. Before the first release that includes one, a maintainer publishes a placeholder `0.0.0` of its name by hand,
+adds its trusted publisher (org `fastagent-sh`, repo `fastagent`, workflow `publish.yml`, environment `npm`), and
+releases within two days, before that configuration expires.
+
 ## Validation before merge
 
 A PR is mergeable only when:
