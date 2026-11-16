@@ -51,14 +51,14 @@ describe("the runs' spans, recorded as pi's telemetry contract asks", () => {
 
 /** A collector on loopback: what it was sent, and with which headers. `held` keeps it from answering until released. */
 async function collector({ held = false } = {}) {
-  const received: { headers: Record<string, string | string[] | undefined>; body: any }[] = [];
+  const received: { path?: string; headers: Record<string, string | string[] | undefined>; body: any }[] = [];
   const waiting: (() => void)[] = [];
   let answering = !held;
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
-      received.push({ headers: req.headers, body: JSON.parse(body) });
+      received.push({ path: req.url, headers: req.headers, body: JSON.parse(body) });
       const answer = () => res.writeHead(200, { "content-type": "application/json" }).end("{}");
       if (answering) answer();
       else waiting.push(answer);
@@ -173,7 +173,7 @@ describe("run traces over OTLP", () => {
     }
   });
 
-  it("takes service.name from OTEL_RESOURCE_ATTRIBUTES, and OTEL_SERVICE_NAME over it", async () => {
+  it("reads service.name and the traces path the way the OpenTelemetry variables write them", async () => {
     const otlp = await collector();
     try {
       const nameSent = async (env: Record<string, string>) => {
@@ -189,6 +189,8 @@ describe("run traces over OTLP", () => {
         )?.value.stringValue;
       };
       expect(await nameSent({})).toBe("instance");
+      await nameSent({ OTEL_EXPORTER_OTLP_ENDPOINT: `${otlp.url}//` });
+      expect(otlp.received[0]?.path).toBe("/v1/traces");
       expect(await nameSent({ OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes" })).toBe("from-attributes");
       expect(
         await nameSent({ OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes", OTEL_SERVICE_NAME: "named" }),

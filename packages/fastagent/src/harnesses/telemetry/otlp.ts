@@ -114,8 +114,9 @@ export function otlpTraces(
 function tracesEndpoint(env: Readonly<Record<string, string | undefined>>): string | undefined {
   const own = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?.trim();
   if (own) return own;
-  const base = env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
-  return base ? `${base.replace(/\/+$/, "")}/v1/traces` : undefined;
+  let base = env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim();
+  while (base?.endsWith("/")) base = base.slice(0, -1);
+  return base ? `${base}/v1/traces` : undefined;
 }
 
 /** `key=value,key=value`, values percent-decoded, as the OpenTelemetry variables write them. */
