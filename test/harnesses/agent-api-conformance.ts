@@ -151,6 +151,14 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           { sessionId, content: "keyed", idempotencyKey: "" },
           { sessionId, content: "keyed", idempotencyKey: "k".repeat(257) },
           { sessionId, content: "hi", whenBusy: "later" },
+          {
+            sessionId,
+            content: "hi",
+            metadata: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${i}`, ""])),
+          },
+          { sessionId, content: "hi", metadata: { ["k".repeat(65)]: "v" } },
+          { sessionId, content: "hi", metadata: { k: "v".repeat(513) } },
+          { sessionId, content: "hi", metadata: { k: 1 } },
           { content: "no session" },
         ]) {
           await expect(send(request as SendRequest)).rejects.toMatchObject({
@@ -341,6 +349,27 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
     });
 
     describe("Messages", () => {
+      it("keeps a message's metadata with it, through its end and a restart, and never shows it to the model", async () => {
+        const sessionId = await newSession(agent);
+        const metadata = { replyTo: "C1/1.0", channel: "slack" };
+        await send({ sessionId, content: "hold" });
+        await holding();
+        const queued = await send({ sessionId, content: "hi", idempotencyKey: "meta", metadata });
+        expect(queued).toMatchObject({ status: "queued", metadata });
+        expect(await agent.messages.get({ sessionId, idempotencyKey: "meta" })).toMatchObject({ metadata });
+        subject.release();
+        expect(await ended(agent, queued)).toMatchObject({
+          status: "completed",
+          metadata,
+          answer: { text: "answer: hi" },
+        });
+        agent = await subject.restart();
+        expect(await agent.messages.get({ sessionId, messageId: queued.id })).toMatchObject({ metadata });
+        expect(JSON.stringify(await history(agent, sessionId))).not.toContain("C1/1.0");
+        const plain = await ended(agent, await send({ sessionId, content: "hi" }));
+        expect(plain).not.toHaveProperty("metadata");
+      });
+
       it("follows a message through queued, running and its end, by its id and by its key", async () => {
         const sessionId = await newSession(agent);
         const running = await send({ sessionId, content: "hold" });

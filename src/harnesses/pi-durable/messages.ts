@@ -5,10 +5,11 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
-import type { AgentState, EntryRecord, SubmissionRecord } from "@earendil-works/pi-durable";
+import { type AgentState, type EntryRecord, type SubmissionRecord, defineDocFamily } from "@earendil-works/pi-durable";
 import {
   type AgentErrorData,
   type Message,
+  type Metadata,
   type Session,
   type Tokens,
   type Usage,
@@ -27,6 +28,19 @@ const KEY = "key:";
  * only that text, and the outcome is read from what was recorded, so it does not change once a credential is added.
  */
 const NOT_CONFIGURED = "Provider is not configured: ";
+
+/**
+ * A message's metadata, keyed by its submission's id: written in the commit that admits the message, never changed.
+ * Session-scoped, since a submission id is unique in the storage and a fork takes none of its source's messages.
+ */
+export const MetadataDoc = defineDocFamily<{ metadata: Metadata }, null>({
+  kind: "fastagent.message-metadata",
+  version: 1,
+  scope: "session",
+  family: true,
+  initial: () => ({ metadata: {} }),
+  checkpointWhen: () => false,
+});
 
 /** Every message is submitted with a request id, so its entry can name it: the Caller's key, or one of our own. */
 export function requestIdFor(idempotencyKey: string | undefined): string {
@@ -66,12 +80,13 @@ export function queuedInputs(inbox: InboxView | undefined): number[] {
 }
 
 /** A message as the API has it. An ended one needs its answer entry: the entry pi-durable settled it with. */
-export function messageOf(record: InputRecord, ids: Ids, answer?: EntryRecord): Message {
+export function messageOf(record: InputRecord, ids: Ids, metadata?: Metadata, answer?: EntryRecord): Message {
   const key = idempotencyKeyOf(record.requestId);
   const identity = {
     id: ids.encode(record.id),
     sessionId: ids.encode(record.conversationId),
     ...(key === undefined ? {} : { idempotencyKey: key }),
+    ...(metadata === undefined ? {} : { metadata }),
   };
   switch (record.status) {
     case "queued":
