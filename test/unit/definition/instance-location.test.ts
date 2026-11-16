@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 const scratch = () => mkdtemp(join(tmpdir(), "fa-instance-"));
 

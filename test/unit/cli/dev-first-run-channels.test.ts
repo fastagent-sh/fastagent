@@ -2,14 +2,14 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setUpMissingChannels } from "../../../src/cli/first-run-channels.ts";
+import { setUpMissingChannels } from "../../../packages/fastagent/src/cli/first-run-channels.ts";
 import { agentWorkspace } from "../../doubles/cli-run.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 let interactive = true;
-vi.mock("../../../src/cli/shared.ts", async (original) => ({
-  ...(await original<typeof import("../../../src/cli/shared.ts")>()),
+vi.mock("../../../packages/fastagent/src/cli/shared.ts", async (original) => ({
+  ...(await original<typeof import("../../../packages/fastagent/src/cli/shared.ts")>()),
   isInteractive: () => interactive,
 }));
 
@@ -22,7 +22,7 @@ vi.mock("@clack/prompts", () => ({
   },
   log: { info: () => {}, error: () => {} },
 }));
-vi.mock("../../../src/open-url.ts", () => ({ openExternalUrl: () => {} }));
+vi.mock("../../../packages/fastagent/src/open-url.ts", () => ({ openExternalUrl: () => {} }));
 
 class Exit extends Error {
   constructor(readonly code: number | undefined) {

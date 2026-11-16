@@ -2,9 +2,9 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Channel, Routes } from "../../../src/channel.ts";
-import { router } from "../../../src/channels/router.ts";
-import { routesFor } from "../../../src/service.ts";
+import type { Channel, Routes } from "../../../packages/client/src/channel.ts";
+import { router } from "../../../packages/fastagent/src/channels/router.ts";
+import { routesFor } from "../../../packages/fastagent/src/service.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 import { scriptedRun } from "../../doubles/scripted-run.ts";
 

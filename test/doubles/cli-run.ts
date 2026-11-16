@@ -3,7 +3,7 @@
 // runs a process of its own (a host CLI's sign-in, a box's shell), a signal, a kill. `runInProcess` calls the same entry
 // in this process, for everything that is about what a COMMAND decides: ~0.5-1s of CPU cheaper per call, and the unit
 // tier's way to run a command.
-import { useValueFile } from "../../src/value-file.ts";
+import { useValueFile } from "../../packages/fastagent/src/value-file.ts";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -12,12 +12,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { buildProject } from "../../src/harnesses/pi-durable/build.ts";
-import { openLockedStorage } from "../../src/harnesses/pi-durable/storage.ts";
-import { resolveStateRoot } from "../../src/paths.ts";
+import { buildProject } from "../../packages/fastagent/src/harnesses/pi-durable/build.ts";
+import { openLockedStorage } from "../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { resolveStateRoot } from "../../packages/fastagent/src/paths.ts";
 import { CHILD_REFUSALS } from "../guards/network-guard.ts";
 
-const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
+const CLI = fileURLToPath(new URL("../../packages/fastagent/src/cli.ts", import.meta.url));
 
 const REPO_MODULES = new URL("../../node_modules", import.meta.url).pathname;
 
@@ -134,10 +134,10 @@ export function runInProcess(
 }
 
 async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.ProcessEnv) {
-  const { runCli } = await import("../../src/cli/program.ts");
+  const { runCli } = await import("../../packages/fastagent/src/cli/program.ts");
   // A real command is a process of its own, so what one chose of the value file (`--env-file`, no default file for a
   // deployment) is not left for the next: reset what a process starts with.
-  (await import("../../src/value-file.ts")).useValueFile(undefined);
+  (await import("../../packages/fastagent/src/value-file.ts")).useValueFile(undefined);
   const saved = {
     cwd: process.cwd(),
     env: { ...process.env },

@@ -3,8 +3,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolRegistration } from "@earendil-works/pi-durable";
-import { listWakeups } from "../../../src/schedule/wakeups.ts";
-import { wakeExtension } from "../../../src/harnesses/pi-durable/wake.ts";
+import { listWakeups } from "../../../packages/fastagent/src/schedule/wakeups.ts";
+import { wakeExtension } from "../../../packages/fastagent/src/harnesses/pi-durable/wake.ts";
 
 const root = (): Promise<string> => mkdtemp(join(tmpdir(), "fa-wake-"));
 const NOW = new Date("2026-07-07T12:00:00Z");

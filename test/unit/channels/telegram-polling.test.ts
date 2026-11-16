@@ -2,9 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { channelContext } from "../../../src/channels/context.ts";
-import { telegramPolling } from "../../../src/channels/telegram/telegram.ts";
-import type { TelegramUpdate } from "../../../src/telegram.ts";
+import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
+import { telegramPolling } from "../../../packages/fastagent/src/channels/telegram/telegram.ts";
+import type { TelegramUpdate } from "../../../packages/fastagent/src/telegram.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import { type Prompt, promptOf, scriptedAgent } from "../../doubles/scripted-agent.ts";
 

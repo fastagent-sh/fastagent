@@ -1,0 +1,654 @@
+/**
+ * The Feishu bot channel, for Feishu (open.feishu.cn) and Lark (open.larksuite.com) alike (`domain`): the official
+ * SDK's WebSocket (`feishu()`) or a verified webhook (`feishuChannel`) → dedup → route → persist → enqueue → stream a
+ * live card.
+ */
+import { join } from "node:path";
+import type { ChannelContext, ConnectionChannel, RouteChannel, Routes } from "@fastagent-sh/client/channel";
+import { type Needs, needs } from "@fastagent-sh/client/needs";
+import { log } from "@fastagent-sh/client/log";
+import { text } from "@fastagent-sh/client/kit/respond";
+import { secretEquals } from "@fastagent-sh/client/kit/secret";
+import { loadStateFile, saveStateFile } from "@fastagent-sh/client/state-file";
+import { createJsonWebhookRoute, signatureIsFresh } from "@fastagent-sh/client/kit/ingress";
+import { attachmentsDir } from "@fastagent-sh/client/kit/text";
+import {
+  createMessageOwners,
+  createSeenRing,
+  createThreadParticipants,
+  senderConversation,
+} from "@fastagent-sh/client/kit/state";
+import type { ForkSource } from "@fastagent-sh/client/channel";
+import { type SessionPlaces, createSessionPlaces, threadForkSource } from "@fastagent-sh/client/kit/history";
+import {
+  DROPPED_TURN_NOTICE,
+  SHARED_ANSWER_NOTICE,
+  createTurnRunner,
+  dispatchStop,
+  isStopText,
+} from "@fastagent-sh/client/kit/turn";
+import { acknowledgeFeishuAsk } from "./reaction.ts";
+import { joinPromise } from "@fastagent-sh/client/promise-bridge";
+import { type TurnRecordBase, createTurnStore } from "@fastagent-sh/client/kit/turn-store";
+import { type FeishuCloudKind, type FeishuCloudProfile, cloudFor } from "./cloud.ts";
+import { createFeishuHistory, feishuHistoryKey } from "./history.ts";
+import { decryptEvent, verifySignature } from "./crypto.ts";
+import { feishuTurnStream } from "./invoke-turn.ts";
+import { type FeishuApi, type FeishuTarget, createFeishuApi } from "./feishu-api.ts";
+import type { FeishuEventHeader } from "./model.ts";
+import { normalizeFeishuMessage } from "./normalize.ts";
+import { FEISHU_AGENT_SCOPES, scopeSatisfied } from "./setup-mode.ts";
+import {
+  type FeishuMessage,
+  type FeishuMessageEvent,
+  type FeishuRoute,
+  cloudEnvelope,
+  defaultFeishuRoute,
+  feishuEnvelope,
+  placeKey,
+  senderId,
+} from "./parse.ts";
+import { type FeishuFailure, defaultErrorMessage, settleFeishuPreview, feishuReply } from "./preview.ts";
+import { connectFeishuWs } from "./ws-ingress.ts";
+import { feishuTools } from "./tools.ts";
+
+export { defaultFeishuRoute, feishuEnvelope };
+export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuRoute };
+
+/** Event body cap — events are small JSON; 1 MiB is generous and guards a public endpoint. */
+const MAX_EVENT_BYTES = 1 << 20;
+
+/**
+ * Replay window for a SIGNED event, sized by the OPEN PLATFORM'S REDELIVERY SCHEDULE, not by Slack's 5 minutes: a
+ * failed push is retried at 15s / 5min / 1h / 6h.
+ */
+const MAX_SIGNATURE_AGE_S = 7 * 60 * 60;
+
+/** The persisted turn intent (what the runner needs to re-execute it). */
+interface StoredFeishuTurn extends TurnRecordBase {
+  // `id` is the message_id (the platform delivery identity); `seq` carries arrival order.
+  seq: number;
+  baseText: string;
+  /** Where it was asked (the chat, or the thread in it): the place its `history` tool reads. */
+  place: string;
+  chatId: string;
+  replyTo?: string;
+  /** Source message to quote when queue feedback mounts. */
+  replyInThread?: boolean;
+  parentId?: string;
+  /** The exchange a new thread was opened on: its session forks the one that holds it, at that ask. */
+  forkOf?: { conversation: string; ask: string };
+  images: { msg: string; key: string }[];
+  files: { msg: string; key: string; name?: string }[];
+}
+
+/** State files are an IO boundary: valid JSON of the WRONG SHAPE must degrade like a corrupt file. */
+function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
+  const r = t as StoredFeishuTurn;
+  const refs = (v: unknown): boolean =>
+    Array.isArray(v) &&
+    v.every(
+      (x) => typeof (x as { msg?: unknown }).msg === "string" && typeof (x as { key?: unknown }).key === "string",
+    );
+  return (
+    typeof r?.id === "string" &&
+    typeof r.seq === "number" &&
+    typeof r.conversation === "string" &&
+    typeof r.baseText === "string" &&
+    typeof r.place === "string" &&
+    typeof r.chatId === "string" &&
+    (r.replyTo === undefined || typeof r.replyTo === "string") &&
+    (r.replyInThread === undefined || typeof r.replyInThread === "boolean") &&
+    (r.parentId === undefined || typeof r.parentId === "string") &&
+    (r.forkOf === undefined || (typeof r.forkOf.conversation === "string" && typeof r.forkOf.ask === "string")) &&
+    refs(r.images) &&
+    refs(r.files) &&
+    typeof r.attempts === "number"
+  );
+}
+
+/** One accepted turn: the persisted intent. */
+type PendingFeishuTurn = Omit<StoredFeishuTurn, "attempts">;
+
+/** The policy of a Feishu channel, whichever way it receives. */
+export interface FeishuOptions {
+  /** `lark` for a Lark-international tenant (open.larksuite.com). Default `feishu`. */
+  domain?: FeishuCloudKind;
+  /** Policy: whether/where to answer an event (return null to ignore). */
+  route?: (event: FeishuMessageEvent) => FeishuRoute | null;
+  /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator log). */
+  onError?: (failed: FeishuFailure) => string | undefined;
+  /** API origin override (tests / self-hosted gateways). */
+  apiBaseUrl?: string;
+}
+
+interface FeishuChannelBaseOptions extends FeishuOptions {
+  /** App ID (developer console → Credentials & Basic Info). */
+  appId: string;
+  /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
+  appSecret: string;
+}
+
+export interface FeishuChannelOptions extends FeishuChannelBaseOptions {
+  /** Verification Token for Request-URL authentication. */
+  verificationToken: string;
+  encryptKey?: string;
+}
+
+export type FeishuWebSocketChannelOptions = FeishuChannelBaseOptions & {
+  verificationToken?: never;
+  encryptKey?: never;
+};
+
+/** The test seam: the WebSocket ingress a connection opens. */
+interface FeishuWebSocketChannelDeps {
+  connectWs?: typeof connectFeishuWs;
+}
+
+interface FeishuRuntime {
+  /**
+   * Routes + persists the event before the transport ACKs it; a throw must fail the delivery so the platform
+   * re-pushes.
+   */
+  acceptEvent(event: FeishuMessageEvent): void;
+  turnsIdle(): Promise<void>;
+  /** Where each session's turn runs, for the `history` tool. */
+  places: SessionPlaces;
+  /** Reads one of its places, for the `history` tool. */
+  history: ReturnType<typeof createFeishuHistory>;
+}
+
+/**
+ * The bot's own open_id — the identity the default route matches group @mentions against. Seeded synchronously from
+ * a per-app cache file so a cold start can summon before the network answers, then refreshed once per process by
+ * `bot/v3/info`. The two failure directions differ: a FAILED call is transport weather and keeps the cached identity,
+ * while a SUCCESSFUL call reporting no open_id is an affirmative "there is no bot here" and clears it (fail-closed).
+ */
+function createBotIdentity(deps: {
+  api: FeishuApi;
+  appId: string;
+  label: string;
+  botFile: string;
+}): () => string | undefined {
+  const { api, appId, label, botFile } = deps;
+  const stored = loadStateFile(botFile) as { appId?: unknown; openId?: unknown } | undefined;
+  if (stored !== undefined && typeof stored.appId !== "string") {
+    log.warn(`${label} unexpected shape in ${botFile} — ignoring the cached bot identity`);
+  }
+  let cached = stored?.appId === appId && typeof stored.openId === "string" ? (stored.openId as string) : undefined;
+  let current = cached;
+  // `{ appId }` with no openId reads as "no cache" at the loader — the atomic write is reused instead of
+  // introducing a deletion path.
+  const persist = (openId: string | undefined, failure: string): void => {
+    if (openId === cached) return;
+    cached = openId;
+    try {
+      saveStateFile(botFile, openId === undefined ? { appId } : { appId, openId });
+    } catch (e) {
+      log.warn(`${label} ${failure}: ${String(e)}`);
+    }
+  };
+  void api.botInfo().then(
+    (me) => {
+      if (me.openId) {
+        if (current !== undefined && current !== me.openId) {
+          log.info(`${label} bot open_id changed (${current} → ${me.openId}) — updating the cached identity`);
+        }
+        current = me.openId;
+        persist(
+          me.openId,
+          `could not persist the bot identity to ${botFile} — the next cold start races bot/v3/info again`,
+        );
+        return;
+      }
+      log.warn(
+        current === undefined
+          ? `${label} bot/v3/info returned no open_id — group @mention summon stays off`
+          : `${label} bot/v3/info returned no open_id — cached identity cleared; group @mention summon stays off`,
+      );
+      current = undefined;
+      persist(undefined, `could not clear the cached bot identity ${botFile}`);
+    },
+    (e) =>
+      log.warn(
+        current === undefined
+          ? `${label} bot/v3/info failed; group @mention summon stays off until restart: ${String(e)}`
+          : `${label} bot/v3/info failed; running on the cached identity (bot.json): ${String(e)}`,
+      ),
+  );
+  return () => current;
+}
+
+function createFeishuRuntimeFactory(
+  profile: FeishuCloudProfile,
+  opts: FeishuChannelBaseOptions,
+  /** Shared with the send tool. A turn's own posts go through `placeApi`. */
+  api: FeishuApi,
+): (ctx: ChannelContext) => FeishuRuntime {
+  const { appId, appSecret, route, onError } = opts;
+  const { kind } = profile;
+  const label = `[${kind}]`;
+  return ({ agent, sessionFor, recordedSession, beginWork, stateDir: stateHome }) => {
+    // Credential checks run when serving starts, not while the authored module is imported.
+    if (!appId || !appSecret) {
+      throw new Error(`the ${kind} channel requires appId + appSecret (developer console → Credentials & Basic Info)`);
+    }
+    const formatError = onError ?? defaultErrorMessage;
+
+    void api.listAppScopes().then(
+      (scopes) => {
+        const granted = (name: string): boolean =>
+          scopes.some(
+            (scope) =>
+              scope.name === name && scope.grantStatus === 1 && (scope.type === undefined || scope.type === "tenant"),
+          );
+        const missing = FEISHU_AGENT_SCOPES.filter((entry) => !scopeSatisfied(entry, granted));
+        if (missing.length === 0) {
+          log.info(`${label} permissions: every agent scope granted — the agent hears its group chats`);
+        }
+        for (const entry of missing) log.warn(`${label} ${entry.request} is not granted — ${entry.withoutIt}`);
+      },
+      (error) => log.warn(`${label} could not inspect the app's permissions: ${String(error)}`),
+    );
+    const botOpenId = createBotIdentity({ api, appId, label, botFile: join(stateHome, "bot.json") });
+    const decide = route ?? ((event: FeishuMessageEvent) => defaultFeishuRoute(event, { botOpenId: botOpenId() }));
+    const threadParticipants = createThreadParticipants(join(stateHome, "thread-participants.json"), label);
+    /** This channel's place key for a thread (the shared store is key-agnostic). */
+    // The SAME identity the session uses (`placeKey`) — a thread's place.
+    const threadKey = (chatId: string, threadId: string): string =>
+      placeKey(kind, { chat_id: chatId, thread_id: threadId });
+    const store = createTurnStore<StoredFeishuTurn>(join(stateHome, "turns.json"), {
+      label,
+      isRecord: isStoredFeishuTurn,
+      order: (a, b) => a.seq - b.seq,
+    });
+    // Every message this channel took as input (a turn, a /stop): the dedup ring.
+    const seen = createSeenRing(join(stateHome, "seen.json"), label);
+    // Whose a message is, so a reply to it reaches that conversation's session.
+    const owners = createMessageOwners({ label, path: join(stateHome, "owners.json") });
+    const history = createFeishuHistory({ api, appId, label });
+    const places = createSessionPlaces();
+    /**
+     * The client a turn posts through: under the default routing what it posts is recorded as its conversation's, so a
+     * reply to it reaches that conversation; a routed session's places are the router's to decide.
+     */
+    const placeApi = (turn: { conversation: string; id?: string }): FeishuApi =>
+      route !== undefined
+        ? api
+        : api.recordingSends((id) =>
+            owners.record(id, { conversation: turn.conversation, ...(turn.id === undefined ? {} : { ask: turn.id }) }),
+          );
+    const targetOf = (r: PendingFeishuTurn): FeishuTarget => ({
+      chatId: r.chatId,
+      replyTo: r.replyTo,
+      replyInThread: r.replyInThread,
+    });
+
+    // Tell the asker when a turn is dropped at the execution ceiling: the chain's end needs a signal, not just an
+    // operator log line.
+    const notifyDropped = (r: PendingFeishuTurn): void => {
+      void settleFeishuPreview(placeApi(r), targetOf(r), undefined, DROPPED_TURN_NOTICE).catch((e) =>
+        log.warn(`${label} could not notify a dropped turn (conversation=${r.conversation}): ${String(e)}`),
+      );
+    };
+
+    const runner = createTurnRunner<StoredFeishuTurn>({
+      beginWork,
+      label,
+      store,
+      seen,
+      delivered: createSeenRing(join(stateHome, "delivered.json"), label),
+      where: (rec) => `chat=${rec.chatId}`,
+      notifyDropped,
+      acknowledgeHeld: (rec) => acknowledgeFeishuAsk(placeApi(rec), rec.id, label),
+      // A group's answer quotes the first asker's message, so a later asker is told where theirs is.
+      notifyShared: (rec) =>
+        rec.replyTo === undefined
+          ? Promise.resolve()
+          : settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, SHARED_ANSWER_NOTICE),
+      deliverAnswer: (rec, answer) =>
+        joinPromise(() => settleFeishuPreview(placeApi(rec), targetOf(rec), undefined, answer)),
+      execute: (rec, onAnswered, hooks) => {
+        // Where a new thread forks from, asked once.
+        let forkSource: Promise<ForkSource> | undefined;
+        const fork = (): Promise<ForkSource> =>
+          (forkSource ??=
+            rec.forkOf === undefined
+              ? Promise.resolve(undefined)
+              : threadForkSource(agent, recordedSession(rec.forkOf.conversation), rec.forkOf.ask));
+        const turnApi = placeApi(rec);
+        return hooks.reply(
+          feishuTurnStream(
+            agent,
+            {
+              session: () => sessionFor(rec.conversation, { forkFrom: fork }),
+              enter: (sessionId) => places.enter(sessionId, rec.place),
+              key: rec.id,
+              text: rec.baseText,
+              steer: hooks,
+            },
+            { api: turnApi, chatId: rec.chatId, filesDir: attachmentsDir(stateHome), label, appId },
+            { images: rec.images, files: rec.files, parentId: rec.parentId },
+          ),
+          (events) => feishuReply(events, turnApi, targetOf(rec), formatError, label, onAnswered),
+        );
+      },
+    });
+    let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
+
+    // Who the agent has heard in a thread decides whether a bare message addresses it (the participant model), and it
+    // comes from what this channel observed.
+
+    let warnedUnidentified = false;
+
+    /** What this delivery contributes to thread participation, or undefined when it contributes nothing. */
+    const heardIn = (
+      m: FeishuMessage,
+      sender: FeishuMessageEvent["sender"],
+    ): { key: string; speaker: string } | undefined => {
+      if (m.chat_type !== "group" || m.thread_id === undefined || sender?.sender_type !== "user") return undefined;
+      const speakerId = senderId(sender);
+      if (speakerId === undefined && !warnedUnidentified) {
+        // Once per MOUNT — the flag lives in this channel's closure on purpose.
+        warnedUnidentified = true;
+        log.warn(
+          `${label} human senders arrive with no usable id (first seen in thread ${m.thread_id}) — each counts as a distinct speaker, so affected threads permanently require an @mention until thread-participants.json is deleted`,
+        );
+      }
+      // A human whose id no tenant flavour carries still SPOKE, and no human may speak unrecorded.
+      return { key: threadKey(m.chat_id, m.thread_id), speaker: speakerId ?? `unidentified:${m.message_id}` };
+    };
+
+    // Transport-neutral acceptance boundary: normalize, route, persist intent/context, enqueue.
+    const acceptEvent = (event: FeishuMessageEvent): void => {
+      const m = event.message;
+      if (!m?.message_id || !m.chat_id) return;
+      if (seen.has(m.message_id)) {
+        log.debug(`${label} duplicate push for message ${m.message_id} — already persisted, skipping`);
+        return;
+      }
+      let r = decide(event);
+      const normalized = normalizeFeishuMessage(event);
+      if (!normalized) return;
+      const isHumanGroup = event.sender?.sender_type === "user" && m.chat_type === "group";
+      // Listening is not speaking: every message the channel can see refines who takes part in its thread, whether or
+      // not it is answered.
+      const heard = heardIn(m, event.sender);
+      if (heard) threadParticipants.merge(heard.key, { humans: [heard.speaker] });
+
+      if (
+        !r &&
+        route === undefined &&
+        isHumanGroup &&
+        m.thread_id !== undefined &&
+        !normalized.content.hasMentions &&
+        threadParticipants.admitsBareMessage(threadKey(m.chat_id, m.thread_id))
+      ) {
+        r = {};
+      }
+      if (!r) {
+        // Not lost: the turn that is summoned here reads it from the place's history.
+        log.debug(`${label} not summoned — message ${m.message_id} (chat ${m.chat_id}, ${m.chat_type})`);
+        return;
+      }
+
+      // A group's main timeline is one conversation per sender; a thread, a topic and a DM are one per place.
+      const routed = r.conversation;
+      const mainTimeline = m.chat_type === "group" && m.thread_id === undefined;
+      const sender = senderId(event.sender);
+      const own = mainTimeline ? senderConversation(placeKey(kind, m), sender) : placeKey(kind, m);
+      // A reply to a message the table gives to a session belongs to that session, whoever replies.
+      const named = mainTimeline && m.parent_id !== undefined ? owners.ownerOf(m.parent_id)?.conversation : undefined;
+      const conversation = routed ?? named ?? own;
+      // A new thread, under the default routing, starts from the exchange of the message it was opened on. Read BEFORE
+      // this turn records its own participation below, or it is always false.
+      const newThread =
+        routed === undefined && m.thread_id !== undefined && !threadParticipants.agentSpokeIn(conversation);
+      const opened = newThread && m.parent_id !== undefined ? owners.ownerOf(m.parent_id) : undefined;
+      const forkOf =
+        opened?.ask === undefined || opened.conversation === conversation
+          ? undefined
+          : { conversation: opened.conversation, ask: opened.ask };
+      const place = feishuHistoryKey(normalized.conversation);
+      const chatId = r.chatId ?? m.chat_id;
+      const sameTarget = chatId === m.chat_id;
+      // Answer where asked: quote in a group so the ask is identifiable among many speakers, stay plain in an
+      // ordinary direct message, and stay inside a thread whenever the question came from one — a direct message's
+      // thread is a place too, and relocating out of it is the silent move the model refuses.
+      const replyTo = sameTarget && (m.chat_type === "group" || m.thread_id !== undefined) ? m.message_id : undefined;
+      const replyInThread = replyTo !== undefined && m.thread_id !== undefined ? true : undefined;
+      // Explicit user stop: a control action, never a turn — it must not queue behind the run it stops.
+      if (isStopText(normalized.content.text.replace(/@\S+/g, " "))) {
+        seen.add(m.message_id);
+        runner.track(
+          dispatchStop(agent, recordedSession(routed ?? own), label)
+            .then((feedback) =>
+              placeApi({ conversation: routed ?? own })
+                .sendText({ chatId, replyTo, replyInThread }, feedback)
+                .then(() => undefined),
+            )
+            .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
+        );
+        return;
+      }
+      const resources = normalized.content.resources;
+      const images = resources
+        .filter((resource) => resource.kind === "image")
+        .map((resource) => ({ msg: resource.messageId, key: resource.key }));
+      const files = resources
+        .filter((resource) => resource.kind === "file" || resource.kind === "audio" || resource.kind === "video")
+        .map((resource) => ({ msg: resource.messageId, key: resource.key, name: resource.name }));
+      const baseText = r.text ?? cloudEnvelope(event, kind);
+      if (baseText.trim() === "" && images.length === 0 && files.length === 0) return;
+
+      if (route === undefined) owners.record(m.message_id, { conversation, ask: m.message_id });
+      runner.submit(
+        {
+          id: m.message_id,
+          seq: ++seqCounter, // arrival order; the turn store replays by it
+          conversation,
+          baseText,
+          place,
+          chatId,
+          replyTo,
+          replyInThread,
+          // A quote is the user explicitly pointing at something that may predate this session, so it is
+          // always loaded.
+          parentId: m.parent_id,
+          ...(forkOf !== undefined ? { forkOf } : {}),
+          images,
+          files,
+        },
+        true,
+      );
+
+      // Answering inside a thread makes the agent a participant of it, which is what lets the NEXT bare message
+      // address it without a mention.
+      if (heard && replyInThread === true && sameTarget && r.conversation === undefined) {
+        // Both halves in ONE merge, like Slack's: a record that needed an earlier merge to survive could otherwise
+        // say "answered here, heard nobody".
+        threadParticipants.merge(heard.key, { agentSpoke: true, humans: [heard.speaker] });
+      }
+    };
+
+    return { acceptEvent, turnsIdle: runner.idle, places, history };
+  };
+}
+
+function createFeishuWebhookRoutes(
+  profile: FeishuCloudProfile,
+  opts: FeishuChannelOptions,
+  runtime: FeishuRuntime,
+): Routes {
+  const { verificationToken, encryptKey } = opts;
+  const { kind, envPrefix } = profile;
+  const label = `[${kind}]`;
+  if (!encryptKey) {
+    // Said once at wiring, not per request: without an encrypt key events arrive in plaintext and carry no signature,
+    // so the freshness window below never runs and a captured body replays for as long as the verification token
+    // lives.
+    log.warn(
+      `${label} no ${envPrefix}_ENCRYPT_KEY: events are accepted unsigned, with no replay window — set one in the console to enable it`,
+    );
+  }
+  const handler = createJsonWebhookRoute<Record<string, unknown>>({
+    maxBytes: MAX_EVENT_BYTES,
+    turnsIdle: runtime.turnsIdle,
+    handle: (req, rawBody, outer) => {
+      if (typeof outer !== "object" || outer === null) return text("invalid json\n", 400);
+
+      let envelope: Record<string, unknown>;
+      if (typeof outer.encrypt === "string") {
+        if (!encryptKey) {
+          log.error(
+            `${label} received an ENCRYPTED event but no encryptKey is configured — set ${envPrefix}_ENCRYPT_KEY`,
+          );
+          return text("encrypt key not configured\n", 400);
+        }
+        const sig = {
+          timestamp: req.headers.get("x-lark-request-timestamp") ?? "",
+          nonce: req.headers.get("x-lark-request-nonce") ?? "",
+          signature: req.headers.get("x-lark-signature") ?? "",
+        };
+        if (sig.signature) {
+          // Freshness BEFORE the signature: the signature covers the timestamp but proves nothing about it, so without
+          // a window a captured body + its three x-lark-* headers replays forever.
+          if (!signatureIsFresh(sig.timestamp, MAX_SIGNATURE_AGE_S)) {
+            log.warn(
+              `${label} rejected an event: X-Lark-Request-Timestamp outside the ±${MAX_SIGNATURE_AGE_S / 3600} h replay window`,
+            );
+            return text("stale signature\n", 401);
+          }
+          if (!verifySignature(encryptKey, sig, rawBody)) {
+            log.warn(`${label} rejected an event: invalid X-Lark-Signature (encrypt key mismatch, or a forgery)`);
+            return text("invalid signature\n", 401);
+          }
+        }
+        try {
+          envelope = JSON.parse(decryptEvent(encryptKey, outer.encrypt)) as Record<string, unknown>;
+        } catch {
+          if (!sig.signature) {
+            log.warn(`${label} rejected an unsigned encrypted request that could not be decrypted`);
+            return text("invalid encrypted payload\n", 401);
+          }
+          return text("invalid encrypted payload\n", 400);
+        }
+        if (!sig.signature && envelope.type !== "url_verification") {
+          log.warn(`${label} rejected an encrypted event: missing X-Lark-Signature`);
+          return text("invalid signature\n", 401);
+        }
+      } else {
+        if (encryptKey) {
+          log.warn(`${label} rejected a plaintext event while encryptKey is set (console mismatch, or a forgery)`);
+          return text("plaintext events not accepted\n", 401);
+        }
+        envelope = outer;
+      }
+      const token =
+        (typeof envelope.token === "string" ? envelope.token : undefined) ??
+        (typeof (envelope.header as Record<string, unknown> | undefined)?.token === "string"
+          ? ((envelope.header as Record<string, unknown>).token as string)
+          : undefined);
+      if (!secretEquals(token, verificationToken)) {
+        log.warn(
+          `${label} rejected an event: verification token mismatch (check ${envPrefix}_VERIFICATION_TOKEN against the console)`,
+        );
+        return text("invalid token\n", 401);
+      }
+      if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+        log.info(`${label} answered the console's url_verification challenge`);
+        return Response.json({ challenge: envelope.challenge });
+      }
+      const header = envelope.header as FeishuEventHeader | undefined;
+      if (header?.event_type !== "im.message.receive_v1") {
+        log.debug(`${label} ignoring event type ${header?.event_type ?? "(none)"}`);
+        return new Response(null, { status: 200 });
+      }
+      runtime.acceptEvent((envelope.event ?? {}) as FeishuMessageEvent);
+      return new Response(null, { status: 200 });
+    },
+  });
+  return { [`POST /${kind}`]: handler };
+}
+
+/**
+ * A Feishu channel receiving the way `receive` says, and its tools, over one client: `send` posts through it, and
+ * `history` reads the place each turn of the runtime the channel mounts runs in.
+ */
+function withTools<C>(
+  opts: FeishuChannelBaseOptions,
+  receive: (profile: FeishuCloudProfile, runtime: (ctx: ChannelContext) => FeishuRuntime) => C,
+): C & { tools: ReturnType<typeof feishuTools> } {
+  const profile = cloudFor(opts.domain ?? "feishu");
+  const { appId, appSecret } = opts;
+  const api = createFeishuApi({ kind: profile.kind, baseUrl: opts.apiBaseUrl ?? profile.apiBase, appId, appSecret });
+  const createRuntime = createFeishuRuntimeFactory(profile, opts, api);
+  let mounted: FeishuRuntime | undefined;
+  const channel = receive(profile, (ctx) => {
+    mounted = createRuntime(ctx);
+    return mounted;
+  });
+  return { ...channel, tools: feishuTools(profile.kind, api, () => mounted) };
+}
+
+/**
+ * Build a Feishu channel that receives by its Request-URL webhook at `POST /feishu` (`POST /lark` for Lark). Whoever
+ * hosts it sets the Request URL on the app: FastAgent registers no URL.
+ */
+export function feishuChannel(opts: FeishuChannelOptions): RouteChannel {
+  return withTools(opts, (profile, runtimeFor) => ({
+    routes(ctx) {
+      if (!opts.verificationToken) {
+        throw new Error(
+          `feishuChannel receives by webhook and needs a non-empty verificationToken: copy ` +
+            `${profile.envPrefix}_VERIFICATION_TOKEN from the console (Events & Callbacks), or receive by WebSocket ` +
+            "with feishu() instead",
+        );
+      }
+      return createFeishuWebhookRoutes(profile, opts, runtimeFor(ctx));
+    },
+  }));
+}
+
+/** A Feishu channel that receives over the official SDK's WebSocket, given its app's credentials. */
+export function feishuWebSocket(
+  opts: FeishuWebSocketChannelOptions,
+  deps: FeishuWebSocketChannelDeps = {},
+): ConnectionChannel {
+  return withTools(opts, (profile, runtimeFor) => ({
+    connect(ctx, signal) {
+      const runtime = runtimeFor(ctx);
+      return (deps.connectWs ?? connectFeishuWs)(
+        {
+          kind: profile.kind,
+          appId: opts.appId,
+          appSecret: opts.appSecret,
+          domain: opts.apiBaseUrl ?? profile.apiBase,
+          onEvent: runtime.acceptEvent,
+        },
+        signal,
+      );
+    },
+  }));
+}
+
+/**
+ * The Feishu channel `fastagent.config.ts` declares: the app `FEISHU_APP_ID` and `FEISHU_APP_SECRET` name
+ * (`LARK_APP_ID` and `LARK_APP_SECRET` with `domain: "lark"`), over a WebSocket this process opens, and its `send` and
+ * `history` tools.
+ */
+export function feishu(options: FeishuOptions = {}): Needs<ConnectionChannel> {
+  const prefix = cloudFor(options.domain ?? "feishu").envPrefix;
+  const id = `${prefix}_APP_ID`;
+  const secret = `${prefix}_APP_SECRET`;
+  return needs(
+    [
+      { name: id, description: "The app's App ID (Credentials & Basic Info)" },
+      { name: secret, description: "The app's App Secret (Credentials & Basic Info)" },
+    ],
+    (values) => {
+      const read = values as Record<string, string>;
+      return feishuWebSocket({ ...options, appId: read[id] as string, appSecret: read[secret] as string });
+    },
+  );
+}

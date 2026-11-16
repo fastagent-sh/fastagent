@@ -1,21 +1,28 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
-  // `entry` MIRRORS package.json "exports" (plus the CLI bin) — knip can't read them itself
-  // because they point at dist/. Adding a subpath export? Add its src entry here too; `npm run
-  // lint` runs knip, so a forgotten entry surfaces as its whole tree reported dead.
-  "entry": [
-    "src/cli.ts",
-    "src/index.ts",
-    "src/client.ts",
-    "src/telegram.ts",
-    "src/slack.ts",
-    "src/feishu.ts",
-    "test/**/*.test.ts",
-    // Run by CI's packed-package job, which vitest is not.
-    "test/smoke/e2e/*.ts"
-  ],
-  "project": ["src/**/*.ts", "test/**/*.ts"],
-  // Scaffold templates are copied as files at scaffold time, never imported.
-  "ignore": ["src/scaffold/templates/**"],
-  "ignoreBinaries": ["fastagent", "flock"]
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // A package's entries are its package.json "exports", read through their `@fastagent-sh/source` condition, and its
+  // bin's source.
+  "workspaces": {
+    ".": {
+      "entry": ["test/**/*.test.ts", "test/smoke/e2e/*.ts", "scripts/*.mjs"],
+      "project": ["test/**/*.ts", "scripts/*.mjs"],
+      // The tests exercise the packages through these, the packages' own dependencies, installed at the root.
+      "ignoreDependencies": ["@earendil-works/.+", "effect", "ignore"]
+    },
+    "packages/client": {
+      "project": ["src/**/*.ts"],
+      // Every module is an entry through the "./*" export, which only FastAgent's own packages import: an export no
+      // package uses is dead, not public.
+      "includeEntryExports": true
+    },
+    "packages/fastagent": {
+      "entry": ["src/cli.ts"],
+      "project": ["src/**/*.ts"],
+      // Scaffold templates are copied as files at scaffold time, never imported.
+      "ignore": ["src/scaffold/templates/**"]
+    }
+  },
+  // `tsc` is the fastagent package's devDependency, the TypeScript `fastagent build` gives an agent, installed at the
+  // root for every package's build and the typecheck.
+  "ignoreBinaries": ["fastagent", "flock", "tsc"]
 }

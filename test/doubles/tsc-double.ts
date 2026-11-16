@@ -2,14 +2,14 @@
  * The build's compiler (src/harnesses/pi-durable/tsc.ts) for a unit test whose subject is what the build decides, not
  * what TypeScript does: the program is found by following relative imports, and each file is emitted with Node's type
  * stripping. It checks no types and resolves no package, so a test of a type error or a workspace package stays with the
- * real compiler. Installed with `vi.mock("../../src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"))`;
+ * real compiler. Installed with `vi.mock("../../packages/fastagent/src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"))`;
  * tsc-double.integration.test.ts checks that a build through it writes what a build through `tsc` writes.
  */
 import { existsSync, statSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
-import type { CompilerResult, ProjectCompiler } from "../../src/harnesses/pi-durable/tsc.ts";
+import type { CompilerResult, ProjectCompiler } from "../../packages/fastagent/src/harnesses/pi-durable/tsc.ts";
 
 const SPECIFIER = /\bfrom\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
 const SCRIPT = /\.(?:[cm]?ts|[cm]?js|json)$/;

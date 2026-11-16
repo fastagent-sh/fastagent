@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCliProgram } from "../../../src/cli/program.ts";
+import { buildCliProgram } from "../../../packages/fastagent/src/cli/program.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the

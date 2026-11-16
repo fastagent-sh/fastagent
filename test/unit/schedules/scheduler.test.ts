@@ -3,21 +3,21 @@ import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SendRequest } from "../../../src/agent-api.ts";
+import type { SendRequest } from "../../../packages/client/src/agent-api.ts";
 import { type RunScript, refused, scriptedRun } from "../../doubles/scripted-run.ts";
 import { promptOf, scriptedAgent } from "../../doubles/scripted-agent.ts";
-import type { Schedule } from "../../../src/schedule/schedule.ts";
+import type { Schedule } from "../../../packages/fastagent/src/schedule/schedule.ts";
 import * as Effect from "effect/Effect";
 import {
   createScheduler as scheduler,
   fireScheduleNow as fire,
   scheduleSessions,
-} from "../../../src/schedule/scheduler.ts";
+} from "../../../packages/fastagent/src/schedule/scheduler.ts";
 
 const createScheduler = (options: Parameters<typeof scheduler>[0]) => Effect.runSync(scheduler(options));
 const fireScheduleNow = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
-import { addWakeup, listWakeups } from "../../../src/schedule/wakeups.ts";
-import { readFires } from "../../../src/schedule/state.ts";
+import { addWakeup, listWakeups } from "../../../packages/fastagent/src/schedule/wakeups.ts";
+import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
 function recordingAgent(script: RunScript = {}) {

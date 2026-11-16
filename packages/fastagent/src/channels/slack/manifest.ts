@@ -1,0 +1,117 @@
+import { stripEdges } from "@fastagent-sh/client/strip-edges";
+
+// One posture, as on Feishu: the agent hears the channels it is in, so the history scopes
+// and their message events are part of every app. `users:read` names the people in the history a turn reads.
+const SLACK_BOT_SCOPES = [
+  "app_mentions:read",
+  "assistant:write",
+  "chat:write",
+  "files:read",
+  "files:write",
+  "im:history",
+  "reactions:write",
+  "channels:history",
+  "groups:history",
+  "mpim:history",
+  "users:read",
+] as const;
+const SLACK_BOT_EVENTS = [
+  // Slack shows a working agent session's stop button only to an app that hears it.
+  "agent_session_stopped",
+  "app_context_changed",
+  "app_home_opened",
+  "app_mention",
+  "message.im",
+  "message.channels",
+  "message.groups",
+  "message.mpim",
+] as const;
+
+export interface SlackAppManifest {
+  display_information: {
+    name: string;
+    description: string;
+    background_color: string;
+  };
+  features: {
+    app_home: {
+      home_tab_enabled: boolean;
+      messages_tab_enabled: boolean;
+      messages_tab_read_only_enabled: boolean;
+    };
+    agent_view: {
+      agent_description: string;
+      suggested_prompts: Array<{ title: string; message: string }>;
+    };
+    bot_user: { display_name: string; always_online: boolean };
+  };
+  oauth_config: {
+    scopes: { bot: string[] };
+  };
+  settings: {
+    event_subscriptions: { bot_events: string[] };
+    org_deploy_enabled: boolean;
+    socket_mode_enabled: boolean;
+    token_rotation_enabled: boolean;
+  };
+}
+
+function slackBotScopes(): string[] {
+  return [...SLACK_BOT_SCOPES].sort();
+}
+
+function slackBotEvents(): string[] {
+  return [...SLACK_BOT_EVENTS].sort();
+}
+
+/** Slack's bot display name is more restrictive than the app name. */
+function slackBotDisplayName(name: string): string {
+  const normalized = stripEdges(
+    name.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"),
+    (char) => !/[a-z0-9]/.test(char),
+  ).slice(0, 80);
+  return normalized || "fastagent";
+}
+
+/** The app FastAgent creates: it receives over a Socket Mode connection, so it has no Request URL. */
+export function buildSlackManifest(input: { name: string }): SlackAppManifest {
+  const name = input.name.trim().slice(0, 35) || "FastAgent";
+  return {
+    display_information: {
+      name,
+      description: "A FastAgent-powered internal workspace agent.",
+      background_color: "#111827",
+    },
+    features: {
+      app_home: {
+        home_tab_enabled: false,
+        messages_tab_enabled: true,
+        messages_tab_read_only_enabled: false,
+      },
+      agent_view: {
+        agent_description: "A workspace agent powered by the files, skills, and tools in its FastAgent definition.",
+        suggested_prompts: [
+          { title: "What can you do?", message: "What can you help me with?" },
+          { title: "Summarize context", message: "Summarize the relevant context and propose next steps." },
+        ],
+      },
+      bot_user: { display_name: slackBotDisplayName(name), always_online: false },
+    },
+    oauth_config: {
+      scopes: { bot: slackBotScopes() },
+    },
+    settings: {
+      event_subscriptions: { bot_events: slackBotEvents() },
+      org_deploy_enabled: false,
+      socket_mode_enabled: true,
+      // Off, and Slack makes the alternative permanent: an app with rotation on can never turn it off
+      // (`cannot_disable_once_enabled`, verified against the API).
+      token_rotation_enabled: false,
+    },
+  };
+}
+
+/** The page that creates an app from `manifest`, filled in: the person picks a workspace and clicks Create. */
+export function slackManifestLink(manifest: SlackAppManifest): string {
+  return `https://api.slack.com/apps?new_app=1&manifest_json=${encodeURIComponent(JSON.stringify(manifest))}`;
+}

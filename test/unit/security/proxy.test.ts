@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
-import { installProxyFetch } from "../../../src/proxy.ts";
+import { installProxyFetch } from "../../../packages/fastagent/src/proxy.ts";
 
 /**
  * The egress POLICY itself, in-process: which destinations the installed dispatcher sends through the proxy.

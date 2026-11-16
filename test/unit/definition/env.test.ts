@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyEnvValues } from "../../../src/env.ts";
-import { dotEnvPath, loadEnvValues } from "../../../src/value-file.ts";
+import { applyEnvValues } from "../../../packages/fastagent/src/env.ts";
+import { dotEnvPath, loadEnvValues } from "../../../packages/fastagent/src/value-file.ts";
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("is <root>/.secrets/.env, and <root>/.secrets/production/.env for production", () => {

@@ -2,14 +2,14 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { DurableAgent } from "../../../src/harnesses/pi-durable/agent.ts";
-import { openServing } from "../../../src/harnesses/pi-durable/serve.ts";
+import type { DurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
+import { openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 import { openSource } from "../../harnesses/open-source.ts";
-import { loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
-import { connectAgent } from "../../../src/http/client.ts";
-import { type ServeOptions, serveAgent } from "../../../src/service.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { connectAgent } from "../../../packages/client/src/http/client.ts";
+import { type ServeOptions, serveAgent } from "../../../packages/fastagent/src/service.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
-import { NOT_HOSTED } from "../../../src/serving-command.ts";
+import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 
 const opened: DurableAgent[] = [];
 afterAll(async () => {

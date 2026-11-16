@@ -23,7 +23,7 @@ import {
   type SendRequest,
   type SessionEvent,
   hasEnded,
-} from "../../src/agent-api.ts";
+} from "../../packages/client/src/agent-api.ts";
 
 export interface AgentApiSubject {
   /** A fresh agent over fresh storage. `signedOut` leaves its model provider without a credential. */

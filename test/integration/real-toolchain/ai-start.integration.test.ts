@@ -25,9 +25,9 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
   // Per-process, so a hung step fails naming its own command instead of the whole test.
   const env = withGitIdentity; // `init` commits
   const node = (args: string[], cwd = agentDir) => exec(process.execPath, args, { cwd, env, timeout: 60_000 });
-  const cli = (args: string[]) => node([join(root, "src/cli.ts"), ...args]);
+  const cli = (args: string[]) => node([join(root, "packages/fastagent/src/cli.ts"), ...args]);
   try {
-    await node([join(root, "src/cli.ts"), "init", "my-agent", "--no-install"], parent);
+    await node([join(root, "packages/fastagent/src/cli.ts"), "init", "my-agent", "--no-install"], parent);
     const config = await readFile(join(agentDir, "fastagent.config.ts"), "utf8");
     for (const file of [
       "tsconfig.json",
@@ -50,7 +50,7 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       join(alias, "package.json"),
       JSON.stringify({ type: "module", exports: { types: "./index.d.ts", default: "./index.js" } }),
     );
-    const reexport = `export * from ${JSON.stringify(join(root, "src/index.ts"))};\n`;
+    const reexport = `export * from ${JSON.stringify(join(root, "packages/fastagent/src/index.ts"))};\n`;
     await writeFile(join(alias, "index.js"), reexport);
     await writeFile(join(alias, "index.d.ts"), reexport);
     // The packages an agent's code is written against, which its own install would bring.
@@ -59,7 +59,8 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
     }
 
     const tsc = join(root, "node_modules/typescript/bin/tsc");
-    await node([tsc, "--noEmit"], agentDir);
+    // The source re-exported above reads @fastagent-sh/client by name, as its source too.
+    await node([tsc, "--noEmit", "--customConditions", "@fastagent-sh/source"], agentDir);
     await node(["--test", "test/batches.test.ts"], agentDir);
     const info = JSON.parse((await cli(["info", "--json"])).stdout);
     expect(info).toMatchObject({

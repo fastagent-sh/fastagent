@@ -4,176 +4,162 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Guards the embed/CLI dependency boundary so a future package split stays a packaging change, not a
- * refactor: the public embed entry (index.ts) must never statically pull a CLI-only dependency.
- *
- * "Statically" = what gets eval-loaded when you `import "@fastagent-sh/fastagent"`. We walk the relative
- * import graph from an entry and collect the bare package specifiers reachable through STATIC
- * `import`/`export … from`. Lazy `await import("pkg")` is intentionally excluded (e.g. giget stays
- * lazy in init.ts) — that is the whole point of keeping it lazy.
+ * The workspace's package lines. A package reaches another only by its name, and only one it depends on; the client
+ * side (`@fastagent-sh/client`) imports no runtime, so it loads where only `fetch` is (its root entry), and a channel
+ * reaches the runtime only through the client.
  */
-const srcDir = resolve(dirname(fileURLToPath(import.meta.url)), "../../src");
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const PACKAGES = ["client", "fastagent"] as const;
+const srcOf = (name: string) => resolve(repo, "packages", name, "src");
+const manifestOf = (name: string) =>
+  JSON.parse(readFileSync(resolve(repo, "packages", name, "package.json"), "utf8")) as {
+    name: string;
+    exports: Record<string, unknown>;
+    dependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+  };
 
-function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
+const specifiers = [
+  /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*(?:\s+as\s+\w+)?|\w+(?:\s*,\s*\{[^}]*\})?)\s*from\s*["']([^"']+)["']/gm,
+  /^\s*import\s*["']([^"']+)["']/gm,
+  /\bimport\(\s*["']([^"']+)["']\s*\)/g,
+];
+/** A bare specifier's package: `@scope/name` or `name`. */
+const packageOf = (spec: string) =>
+  spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : (spec.split("/")[0] ?? spec);
+/** Every import of the file at `path`, static, dynamic or a type's: relative ones as absolute paths, the rest by spec. */
+function importsOf(path: string): { relatives: string[]; bare: string[] } {
+  const text = readFileSync(path, "utf8");
+  const relatives: string[] = [];
+  const bare: string[] = [];
+  for (const [, spec] of specifiers.flatMap((re) => [...text.matchAll(re)])) {
+    if (!spec) continue;
+    if (spec.startsWith(".")) relatives.push(resolve(dirname(path), spec));
+    else bare.push(spec);
+  }
+  return { relatives, bare };
+}
+const filesUnder = (dir: string): string[] =>
+  readdirSync(dir, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".ts") && !name.startsWith("scaffold/templates/"))
+    .map((name) => resolve(dir, name));
+
+/**
+ * The packages reachable from `entry` through STATIC value imports (`import type` and lazy `await import()` excluded:
+ * what loads when the entry is imported), following relative imports; with `builtins`, the `node:` modules instead.
+ */
+function staticPackageGraph(entry: string, builtins = false): Set<string> {
   const visited = new Set<string>();
   const packages = new Set<string>();
   const fromRe = /^\s*(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s*["']([^"']+)["']/gm;
   const bareRe = /^\s*import\s+["']([^"']+)["']/gm;
-
-  const visit = (fileAbs: string): void => {
-    if (visited.has(fileAbs)) return;
-    visited.add(fileAbs);
-    const src = readFileSync(fileAbs, "utf8");
+  const visit = (file: string): void => {
+    if (visited.has(file)) return;
+    visited.add(file);
+    const text = readFileSync(file, "utf8");
     for (const re of [fromRe, bareRe]) {
-      for (const m of src.matchAll(re)) {
-        const spec = m[1];
+      for (const [, spec] of text.matchAll(re)) {
         if (!spec) continue;
-        if (spec.startsWith("./") || spec.startsWith("../")) visit(resolve(dirname(fileAbs), spec));
+        if (spec.startsWith(".")) visit(resolve(dirname(file), spec));
         else if (builtins === spec.startsWith("node:")) packages.add(spec);
       }
     }
   };
-  visit(resolve(srcDir, entryRel));
+  visit(entry);
   return packages;
 }
 
-const PUBLIC_ENTRIES = ["index.ts", "client.ts", "telegram.ts", "slack.ts", "feishu.ts"];
+describe("package lines", () => {
+  it("a relative import stays inside its own package's src/", () => {
+    const offenders = PACKAGES.flatMap((name) =>
+      filesUnder(srcOf(name)).flatMap((file) =>
+        importsOf(file)
+          .relatives.filter((target) => !target.startsWith(`${srcOf(name)}/`))
+          .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
+      ),
+    );
+    expect(offenders).toEqual([]);
+  });
 
-describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
-  it("the ./client subpath runs wherever fetch does: no Node API, no harness, no server", () => {
-    const reached = [...staticPackageGraph("client.ts"), ...staticPackageGraph("client.ts", true)];
-    expect(reached.filter((p) => p !== "effect" && !p.startsWith("effect/"))).toEqual([]);
+  it("a package imports only what its package.json depends on, and Node's own modules", () => {
+    const offenders = PACKAGES.flatMap((name) => {
+      const manifest = manifestOf(name);
+      const declared = new Set([
+        manifest.name,
+        ...Object.keys(manifest.dependencies ?? {}),
+        ...Object.keys(manifest.peerDependencies ?? {}),
+      ]);
+      return filesUnder(srcOf(name)).flatMap((file) =>
+        importsOf(file)
+          .bare.filter((spec) => !spec.startsWith("node:") && !declared.has(packageOf(spec)))
+          .map((spec) => `${relative(repo, file)} → ${spec}`),
+      );
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
+    const entry = resolve(srcOf("client"), "index.ts");
+    const reached = [...staticPackageGraph(entry), ...staticPackageGraph(entry, true)];
+    expect(reached.filter((spec) => packageOf(spec) !== "effect")).toEqual([]);
+  });
+
+  it("a channel imports only its own directory, @fastagent-sh/client, and its platform's SDK", () => {
+    const offenders = ["telegram", "slack", "feishu"].flatMap((platform) => {
+      const home = resolve(srcOf("fastagent"), "channels", platform);
+      const sdk = platform === "feishu" ? ["@larksuiteoapi/node-sdk"] : [];
+      return filesUnder(home).flatMap((file) => {
+        const { relatives, bare } = importsOf(file);
+        return [
+          ...relatives.filter((target) => !target.startsWith(`${home}/`)).map((target) => relative(repo, target)),
+          ...bare.filter(
+            (spec) =>
+              !spec.startsWith("node:") &&
+              !["effect", "undici", "@fastagent-sh/client", ...sdk].includes(packageOf(spec)),
+          ),
+        ].map((target) => `${relative(repo, file)} → ${target}`);
+      });
+    });
+    expect(offenders).toEqual([]);
   });
 });
 
-describe("harness neutrality: the contracts and the channel spine import no harness package", () => {
+describe("harness neutrality: the channel spine imports no harness package", () => {
   const neutral = [
-    "agent-api.ts",
     "channels/router.ts",
+    "channels/serve.ts",
     "cli/invoke-stream.ts",
-    "channels/kit/body.ts",
-    "channels/kit/respond.ts",
     "channels/telegram/telegram.ts",
     "channels/slack/slack.ts",
     "channels/feishu/feishu.ts",
-    "channel.ts",
-    "channels/serve.ts",
   ];
   it("none of them pulls an @earendil-works/* package", () => {
     const offenders = neutral.flatMap((entry) =>
-      [...staticPackageGraph(entry)].filter((p) => p.startsWith("@earendil-works/")).map((p) => `${entry} → ${p}`),
+      [...staticPackageGraph(resolve(srcOf("fastagent"), entry))]
+        .filter((spec) => spec.startsWith("@earendil-works/"))
+        .map((spec) => `${entry} → ${spec}`),
     );
     expect(offenders).toEqual([]);
   });
 });
 
-describe("knip's entry list mirrors the package's subpath exports", () => {
-  it("every exported subpath has a knip entry", () => {
-    const pkg = JSON.parse(readFileSync(resolve(srcDir, "../package.json"), "utf8")) as {
-      exports: Record<string, unknown>;
-    };
-    const knip = readFileSync(resolve(srcDir, "../knip.jsonc"), "utf8");
-    const { entry } = JSON.parse(
-      knip
-        .split("\n")
-        .filter((line) => !line.trim().startsWith("//"))
-        .join("\n"),
-    ) as { entry: string[] };
-    const missing = Object.keys(pkg.exports)
-      .filter((key) => key !== "./package.json")
-      .map((key) => (key === "." ? "src/index.ts" : `src/${key.slice(2)}.ts`))
-      .filter((subpath) => !entry.includes(subpath));
-    expect(missing).toEqual([]);
-  });
-});
+describe("public entries", () => {
+  const entriesOf = (name: string) =>
+    Object.keys(manifestOf(name).exports)
+      .filter((key) => key !== "./package.json" && !key.includes("*"))
+      .map((key) => `packages/${name}/src/${key === "." ? "index" : key.slice(2)}.ts`);
 
-describe("public entries name every export", () => {
   it("no public entry uses export * or export type *", () => {
-    for (const entry of PUBLIC_ENTRIES) {
-      expect(readFileSync(resolve(srcDir, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
+    for (const entry of PACKAGES.flatMap(entriesOf)) {
+      expect(readFileSync(resolve(repo, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
     }
   });
 });
 
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
-    expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
-    expect([...staticPackageGraph("channel.ts")]).toEqual([]);
-    expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
-  });
-});
-
-/**
- * The split ahead (#1051 step 7): `@fastagent-sh/client` holds the contracts, the HTTP client and the channel kit, and
- * each first-party channel becomes a package of its own that imports only the client. Every import, a type's included,
- * must already resolve inside those lines, so the split moves files and changes no code.
- */
-describe("the client side and the channels stay inside their future packages", () => {
-  const CLIENT = [
-    "agent-api.ts",
-    "answer-text.ts",
-    "atomic-write.ts",
-    "channel.ts",
-    "channels/kit/",
-    "client.ts",
-    "http/client.ts",
-    "http/contract.ts",
-    "log.ts",
-    "needs.ts",
-    "promise-bridge.ts",
-    "runtime-websocket.ts",
-    "state-file.ts",
-    "strip-edges.ts",
-  ];
-  const CHANNELS = ["channels/telegram/", "channels/slack/", "channels/feishu/"];
-  const inside = (file: string, homes: readonly string[]) =>
-    homes.some((home) => (home.endsWith("/") ? file.startsWith(home) : file === home));
-  const filesUnder = (dir: string): string[] =>
-    readdirSync(resolve(srcDir, dir), { recursive: true, encoding: "utf8" })
-      .filter((name) => name.endsWith(".ts"))
-      .map((name) => `${dir}${name}`);
-  const specifiers = [
-    /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*(?:\s+as\s+\w+)?|\w+(?:\s*,\s*\{[^}]*\})?)\s*from\s*["']([^"']+)["']/gm,
-    /^\s*import\s*["']([^"']+)["']/gm,
-    /\bimport\(\s*["']([^"']+)["']\s*\)/g,
-  ];
-  /** Every import of `file`, static, dynamic or a type's: relative ones as paths under src/, packages by name. */
-  const importsOf = (file: string) => {
-    const relatives: string[] = [];
-    const packages: string[] = [];
-    const text = readFileSync(resolve(srcDir, file), "utf8");
-    for (const [, spec] of specifiers.flatMap((re) => [...text.matchAll(re)])) {
-      if (!spec) continue;
-      if (spec.startsWith(".")) relatives.push(relative(srcDir, resolve(srcDir, dirname(file), spec)));
-      else packages.push(spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : (spec.split("/")[0] ?? spec));
-    }
-    return { relatives, packages };
-  };
-  const clientFiles = CLIENT.flatMap((home) => (home.endsWith("/") ? filesUnder(home) : [home]));
-  const clientPackage = (name: string) => name === "effect" || name === "undici" || name.startsWith("node:");
-
-  it("the client side imports nothing outside it, and no package but effect and undici", () => {
-    const offenders = clientFiles.flatMap((file) => {
-      const { relatives, packages } = importsOf(file);
-      return [
-        ...relatives.filter((target) => !inside(target, CLIENT)),
-        ...packages.filter((name) => !clientPackage(name)),
-      ].map((target) => `${file} → ${target}`);
-    });
-    expect(offenders).toEqual([]);
-  });
-
-  it("a channel imports only its own directory, the client side, and its platform's SDK", () => {
-    const offenders = CHANNELS.flatMap((home) =>
-      filesUnder(home).flatMap((file) => {
-        const { relatives, packages } = importsOf(file);
-        const sdk = home === "channels/feishu/" ? ["@larksuiteoapi/node-sdk"] : [];
-        return [
-          ...relatives.filter((target) => !target.startsWith(home) && !inside(target, CLIENT)),
-          ...packages.filter((name) => !clientPackage(name) && !sdk.includes(name)),
-        ].map((target) => `${file} → ${target}`);
-      }),
-    );
-    expect(offenders).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "channel.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
   });
 });

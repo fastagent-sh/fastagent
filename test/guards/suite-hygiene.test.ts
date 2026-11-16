@@ -79,8 +79,8 @@ it("no comment or test references a deleted *.test.ts file", () => {
   expect(ghosts).toEqual([]);
 });
 
-it("every top-level CLI command in src/cli/program.ts has at least one CLI test", () => {
-  const program = readFileSync(join(REPO_ROOT, "src/cli/program.ts"), "utf8");
+it("every top-level CLI command in packages/fastagent/src/cli/program.ts has at least one CLI test", () => {
+  const program = readFileSync(join(REPO_ROOT, "packages/fastagent/src/cli/program.ts"), "utf8");
   const list = /const specs: readonly CommandSpec\[] = \[([\s\S]*?)];/.exec(program)?.[1] ?? "";
   const commands = list
     .split(",")

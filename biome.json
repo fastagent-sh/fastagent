@@ -2,9 +2,9 @@
   "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
   "files": {
     "includes": [
-      "src/**/*.ts",
+      "packages/*/src/**/*.ts",
       "test/**/*.ts",
-      "!src/scaffold/templates/**",
+      "!packages/fastagent/src/scaffold/templates/**",
       "!test/fixtures/.tmp-*"
     ]
   },

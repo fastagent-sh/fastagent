@@ -2,10 +2,10 @@
  * A conformance subject over HTTP: another subject's Agent served by the Agent API's HTTP server on a port of its own,
  * and called through `connectAgent`, so the suite checks both bindings against one agent.
  */
-import type { Agent } from "../../src/agent-api.ts";
-import { serveHandler } from "../../src/channels/serve.ts";
-import { connectAgent } from "../../src/http/client.ts";
-import { type ApiHandler, type ApiOptions, apiHandler } from "../../src/http/server.ts";
+import type { Agent } from "../../packages/client/src/agent-api.ts";
+import { serveHandler } from "../../packages/fastagent/src/channels/serve.ts";
+import { connectAgent } from "../../packages/client/src/http/client.ts";
+import { type ApiHandler, type ApiOptions, apiHandler } from "../../packages/fastagent/src/http/server.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 export const KEY = "conformance-key";

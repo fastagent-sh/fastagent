@@ -1,11 +1,11 @@
 import { readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { buildProject } from "../../../src/harnesses/pi-durable/build.ts";
+import { buildProject } from "../../../packages/fastagent/src/harnesses/pi-durable/build.ts";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 import { made, project, FILES, listing } from "../../integration/real-toolchain/build-fixtures.ts";
 
-vi.mock("../../../src/harnesses/pi-durable/tsc.ts", () => import("../../doubles/tsc-double.ts"));
+vi.mock("../../../packages/fastagent/src/harnesses/pi-durable/tsc.ts", () => import("../../doubles/tsc-double.ts"));
 
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });

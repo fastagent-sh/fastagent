@@ -2,17 +2,17 @@ import { createHmac } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelTool } from "../../../src/channel.ts";
-import { channelContext } from "../../../src/channels/context.ts";
-import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
+import type { ChannelTool } from "../../../packages/client/src/channel.ts";
+import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
+import { type Agent, type ErrorCode, agentError } from "../../../packages/client/src/agent-api.ts";
 import {
   type SlackChannelOptions,
   type SlackEventEnvelope,
   slackChannel,
   verifySlackSignature,
-} from "../../../src/slack.ts";
-import { slackSocket } from "../../../src/channels/slack/slack.ts";
-import type { OpenSlackSocket, SlackSocketHandlers } from "../../../src/channels/slack/socket.ts";
+} from "../../../packages/fastagent/src/slack.ts";
+import { slackSocket } from "../../../packages/fastagent/src/channels/slack/slack.ts";
+import type { OpenSlackSocket, SlackSocketHandlers } from "../../../packages/fastagent/src/channels/slack/socket.ts";
 import { promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import { createChannelSandbox, replyingAgent } from "../../harnesses/channel-harness.ts";

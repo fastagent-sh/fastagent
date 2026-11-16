@@ -107,20 +107,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Every package packed, installed together (a package's dependency on another is a version not yet published),
+      # and imported by its entries.
       - name: Pack, install, and import the published surface
         run: |
-          tarball=$(npm pack --silent --pack-destination "$RUNNER_TEMP")
-          echo "TARBALL=$RUNNER_TEMP/$tarball" >> "$GITHUB_ENV"
-          mkdir "$RUNNER_TEMP/package-smoke"
+          mkdir "$RUNNER_TEMP/tarballs" "$RUNNER_TEMP/package-smoke"
+          npm pack --workspaces --silent --pack-destination "$RUNNER_TEMP/tarballs"
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
-          npm install "$RUNNER_TEMP/$tarball" --ignore-scripts
-          node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/client"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu")'
+          npm install "$RUNNER_TEMP"/tarballs/*.tgz --ignore-scripts
+          node --input-type=module -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu")'
           ./node_modules/.bin/fastagent --version
 
-      # An agent made by `init` from the packed package answers through `invoke`, builds, and its build answers in an app.
-      - name: End to end on the packed package
-        run: node test/smoke/e2e/packed.ts "$TARBALL"
+      # An agent made by `init` from the packed packages answers through `invoke`, builds, and its build answers in an app.
+      - name: End to end on the packed packages
+        run: node test/smoke/e2e/packed.ts "$RUNNER_TEMP"/tarballs/*.tgz
 
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node

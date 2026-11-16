@@ -7,7 +7,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { modelsOver } from "../../../src/harnesses/models/models.ts";
+import { modelsOver } from "../../../packages/fastagent/src/harnesses/models/models.ts";
 import {
   InMemoryCredentialStore,
   type TranscriptContext,
@@ -17,15 +17,15 @@ import {
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import type { DurableAgent } from "../../../src/harnesses/pi-durable/agent.ts";
+import type { DurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import {
   type AssembleAgentOptions,
   buildDefinition,
   assembleAgent,
   loadSourceDefinition,
-} from "../../../src/harnesses/pi-durable/open.ts";
-import type { LocalAgent } from "../../../src/harnesses/pi-durable/serve.ts";
-import { NOT_HOSTED } from "../../../src/serving-command.ts";
+} from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import {
   made,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { runInvokeStream } from "../../../src/cli/invoke-stream.ts";
-import type { AgentErrorData, MessageStreamEvent } from "../../../src/agent-api.ts";
+import { runInvokeStream } from "../../../packages/fastagent/src/cli/invoke-stream.ts";
+import type { AgentErrorData, MessageStreamEvent } from "../../../packages/client/src/agent-api.ts";
 
 type InvokeEvent = MessageStreamEvent;
 type Ending = { status: "completed" | "incomplete" | "canceled" } | { status: "failed"; error: AgentErrorData };

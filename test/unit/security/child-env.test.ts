@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { processEnvironment } from "../../../src/child-env.ts";
+import { processEnvironment } from "../../../packages/fastagent/src/child-env.ts";
 
 describe("processEnvironment", () => {
   const inputs = {

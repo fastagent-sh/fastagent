@@ -1,15 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ChannelTool } from "../../../src/channel.ts";
-import { channelContext } from "../../../src/channels/context.ts";
+import type { ChannelTool } from "../../../packages/client/src/channel.ts";
+import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
 import {
   type TelegramChannelOptions,
   type TelegramUpdate,
   defaultTelegramRoute,
   telegramChannel as buildTelegramChannel,
-} from "../../../src/telegram.ts";
-import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
+} from "../../../packages/fastagent/src/telegram.ts";
+import { type Agent, type ErrorCode, agentError } from "../../../packages/client/src/agent-api.ts";
 import { promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import {

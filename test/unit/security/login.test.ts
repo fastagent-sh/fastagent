@@ -20,7 +20,7 @@ import {
   loginFlow,
   loginOptionsOver,
   loginOver,
-} from "../../../src/harnesses/models/login.ts";
+} from "../../../packages/fastagent/src/harnesses/models/login.ts";
 
 // The store is the REAL fastagentCredentialStore over a temp file — the same writer the runtime uses,
 // so these tests exercise the actual persist/corruption semantics. Only the providers' login flow

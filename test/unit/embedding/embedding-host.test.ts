@@ -8,13 +8,13 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AnyModel, InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { modelsOver } from "../../../src/harnesses/models/models.ts";
-import { openAgent } from "../../../src/index.ts";
-import { loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
+import { modelsOver } from "../../../packages/fastagent/src/harnesses/models/models.ts";
+import { openAgent } from "../../../packages/fastagent/src/index.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { keepCatalog } from "../../doubles/kept-catalog.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 afterEach(() => {
   vi.unstubAllEnvs();

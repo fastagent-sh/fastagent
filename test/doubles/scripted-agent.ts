@@ -22,8 +22,8 @@ import {
   type SessionEvent,
   agentError,
   hasEnded,
-} from "../../src/agent-api.ts";
-import type { TurnEvent } from "../../src/channels/kit/invoke.ts";
+} from "../../packages/client/src/agent-api.ts";
+import type { TurnEvent } from "../../packages/client/src/kit/invoke.ts";
 
 export type Script = (request: SendRequest) => AsyncIterable<TurnEvent> | Iterable<TurnEvent>;
 

@@ -4,9 +4,9 @@ import { ev } from "../../doubles/scripted-run.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { channelContext } from "../../../src/channels/context.ts";
-import { feishuWebSocket } from "../../../src/channels/feishu/feishu.ts";
-import type { FeishuMessageEvent } from "../../../src/channels/feishu/parse.ts";
+import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
+import { feishuWebSocket } from "../../../packages/fastagent/src/channels/feishu/feishu.ts";
+import type { FeishuMessageEvent } from "../../../packages/fastagent/src/channels/feishu/parse.ts";
 
 const event = {
   sender: { sender_type: "user", sender_id: { open_id: "ou_user" } },

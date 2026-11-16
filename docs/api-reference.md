@@ -6,16 +6,16 @@ status: current
 
 # API reference
 
-A compact reference for `@fastagent-sh/fastagent`. The package has one entry per kind of user:
+A compact reference for `@fastagent-sh/fastagent` and `@fastagent-sh/client`, one entry per kind of user:
 
 | Import | Holds |
 |---|---|
 | `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `McpError`, and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
-| `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
+| `@fastagent-sh/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers). It does not install the runtime |
 | `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu` | Each first-party channel: `telegram()`, `slack()`, `feishu()` for `fastagent.config.ts`, and its webhook factory |
 
 Each export's signature and its documentation are its declaration: the package ships them (`dist/*.d.ts`), and an
-editor shows them. They come from `src/index.ts`, `src/client.ts` and each channel's entry, which name every export.
+editor shows them. Each entry names every export.
 How to use them:
 
 | To | Read |

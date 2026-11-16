@@ -3,7 +3,7 @@ import { stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 /** What `info` runs with: no model from this machine's shell. */
 const withoutModel = (): NodeJS.ProcessEnv => {

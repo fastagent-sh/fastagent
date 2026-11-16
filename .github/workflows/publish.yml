@@ -1,9 +1,8 @@
 name: Publish
 
-# Publish @fastagent-sh/fastagent to npm from a GitHub Release via Trusted Publishing (OIDC), with
-# provenance and no NPM_TOKEN. Publishing requires the public fastagent-sh/fastagent repository; the
-# npm trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml, environment
-# npm. The protected environment is the manual gate; this job also verifies the tag and commit.
+# Publish every package of the workspace (packages/*) to npm from a GitHub Release via Trusted Publishing (OIDC), with
+# provenance and no NPM_TOKEN. Publishing requires the public fastagent-sh/fastagent repository; each package's npm
+# trusted publisher must name org fastagent-sh, repo fastagent, workflow publish.yml, environment npm. The protected environment is the manual gate; this job also verifies the tag and commit.
 on:
   release:
     types: [published]
@@ -54,8 +53,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify release tag matches package version
-        run: node -e 'const expected = "v" + require("./package.json").version; if (process.env.GITHUB_REF_NAME !== expected) { console.error("release tag " + process.env.GITHUB_REF_NAME + " does not match " + expected); process.exit(1) }'
+      - name: Verify release tag matches every package's version
+        run: |
+          for manifest in packages/*/package.json; do
+            node -e 'const pkg = require("./" + process.argv[1]); if (process.env.GITHUB_REF_NAME !== "v" + pkg.version) { console.error(pkg.name + " is at " + pkg.version + ", not the release tag " + process.env.GITHUB_REF_NAME); process.exit(1) }' "$manifest"
+          done
 
       - name: Lint
         run: npm run lint
@@ -70,4 +72,4 @@ jobs:
         run: npm run test:integration
 
       - name: Publish with provenance
-        run: npm publish --provenance --access public
+        run: npm publish --workspaces --provenance --access public

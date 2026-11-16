@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import * as real from "../../../src/git.ts";
+import * as real from "../../../packages/fastagent/src/git.ts";
 import * as double from "../../doubles/git-double.ts";
 
 const failure = (call: () => unknown) => {

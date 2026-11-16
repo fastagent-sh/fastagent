@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserCommand } from "../../../src/open-url.ts";
+import { browserCommand } from "../../../packages/fastagent/src/open-url.ts";
 
 describe("browserCommand: only a web page reaches the platform's opener", () => {
   const oauth = "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app&state=s";

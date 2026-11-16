@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { type McpClients, openMcpClients } from "../../../src/mcp/client.ts";
+import { type McpClients, openMcpClients } from "../../../packages/fastagent/src/mcp/client.ts";
 import { MCP_FIXTURE_TOKEN, mcpFixture } from "./mcp-fixture.ts";
 
 const clients: McpClients[] = [];

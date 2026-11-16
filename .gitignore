@@ -10,3 +10,6 @@ dist
 
 test/fixtures/.tmp-*
 test-reports/
+
+packages/*/LICENSE
+packages/fastagent/README.md

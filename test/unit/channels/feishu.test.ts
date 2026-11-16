@@ -1,14 +1,17 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelTool } from "../../../src/channel.ts";
-import { channelContext } from "../../../src/channels/context.ts";
+import type { ChannelTool } from "../../../packages/client/src/channel.ts";
+import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
-import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
-import { feishuWebSocket } from "../../../src/channels/feishu/feishu.ts";
-import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../../../src/feishu.ts";
-import { eventSignature } from "../../../src/channels/feishu/crypto.ts";
-import { log } from "../../../src/log.ts";
+import { type Agent, type ErrorCode, agentError } from "../../../packages/client/src/agent-api.ts";
+import { feishuWebSocket } from "../../../packages/fastagent/src/channels/feishu/feishu.ts";
+import {
+  type FeishuChannelOptions,
+  feishuChannel as buildFeishuChannel,
+} from "../../../packages/fastagent/src/feishu.ts";
+import { eventSignature } from "../../../packages/fastagent/src/channels/feishu/crypto.ts";
+import { log } from "../../../packages/client/src/log.ts";
 import { type ScriptedAgent, promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import { createChannelSandbox, flushFetchMock, replyingAgent } from "../../harnesses/channel-harness.ts";
@@ -287,7 +290,9 @@ describe("WebSocket ingress optional SDK resolution", () => {
     );
     await expect(connection.closed).rejects.toThrow("@larksuiteoapi/node-sdk");
   });
+});
 
+describe("ingress verification", () => {
   it("plaintext mode: echoes the url_verification challenge only with the right token", async () => {
     feishuFetch();
     const { handler } = buildChannel();

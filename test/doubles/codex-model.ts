@@ -3,6 +3,6 @@
  * moves with pi's catalog: a literal id goes missing the day pi retires it (`login.test.ts` checks the table against
  * pi's own).
  */
-import { PI_DEFAULT_MODELS } from "../../src/harnesses/models/login.ts";
+import { PI_DEFAULT_MODELS } from "../../packages/fastagent/src/harnesses/models/login.ts";
 
 export const CODEX_MODEL = `openai-codex/${PI_DEFAULT_MODELS["openai-codex"]}`;

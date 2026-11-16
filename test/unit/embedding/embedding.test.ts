@@ -16,9 +16,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { getRequestListener } from "@hono/node-server";
-import type { ChannelHandler } from "../../../src/channel.ts";
-import { router } from "../../../src/channels/router.ts";
-import { serviceOver } from "../../../src/service.ts";
+import type { ChannelHandler } from "../../../packages/client/src/channel.ts";
+import { router } from "../../../packages/fastagent/src/channels/router.ts";
+import { serviceOver } from "../../../packages/fastagent/src/service.ts";
 
 /** The handler shape every snippet bridges: reads the RAW body, answers with what it saw. */
 const echoRaw = async (req: Request) => new Response(`raw=[${await req.text()}]`);

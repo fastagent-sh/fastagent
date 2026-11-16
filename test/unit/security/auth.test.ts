@@ -3,8 +3,11 @@ import { chmod, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GLOBAL_AUTH_PATH, fastagentCredentialStore } from "../../../src/harnesses/models/credentials.ts";
-import { modelEnvironment } from "../../../src/harnesses/models/environment.ts";
+import {
+  GLOBAL_AUTH_PATH,
+  fastagentCredentialStore,
+} from "../../../packages/fastagent/src/harnesses/models/credentials.ts";
+import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
 
 // Under this file's own empty HOME (test/setup.ts), never the machine's.
 const GLOBAL = GLOBAL_AUTH_PATH;

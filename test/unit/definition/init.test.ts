@@ -3,12 +3,12 @@ import ignore from "ignore";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildDefinition, loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
-import { readSkills } from "../../../src/harnesses/pi-durable/text.ts";
-import { scaffoldAgent } from "../../../src/scaffold/init.ts";
+import { buildDefinition, loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { readSkills } from "../../../packages/fastagent/src/harnesses/pi-durable/text.ts";
+import { scaffoldAgent } from "../../../packages/fastagent/src/scaffold/init.ts";
 import { freshDir, exists } from "../../fixtures/init-fixtures.ts";
 
-vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
+vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 describe("init: scaffoldAgent", () => {
   it("scaffolds a COMPLETE agent INTO the directory it names", async () => {
@@ -72,7 +72,7 @@ describe("init: scaffoldAgent", () => {
     // agent installs a version that has the API/exports it was scaffolded against. Oracle is the
     // package's real version read DIRECTLY (not fastagentVersion's output) so a corrupt read is caught.
     const real = JSON.parse(
-      await readFile(fileURLToPath(new URL("../../../package.json", import.meta.url)), "utf8"),
+      await readFile(fileURLToPath(new URL("../../../packages/fastagent/package.json", import.meta.url)), "utf8"),
     ) as {
       version: string;
       dependencies: Record<string, string>;

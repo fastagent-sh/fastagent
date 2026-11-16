@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { declareMcp, loadMcp, mcpSecrets, resolveMcpServers } from "../../../src/mcp/config.ts";
+import { declareMcp, loadMcp, mcpSecrets, resolveMcpServers } from "../../../packages/fastagent/src/mcp/config.ts";
 
 let dir: string;
 beforeEach(async () => {
