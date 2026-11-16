@@ -18,6 +18,7 @@ export type {
   MessageKey,
   MessageStatus,
   MessageStreamEvent,
+  Metadata,
   ModelRef,
   Page,
   SendRequest,

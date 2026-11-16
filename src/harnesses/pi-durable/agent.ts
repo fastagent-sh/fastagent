@@ -68,7 +68,7 @@ import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
-import { type InputRecord, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
+import { type InputRecord, MetadataDoc, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
@@ -405,6 +405,9 @@ function durableAgent(
               whenBusy: request.whenBusy === "steer" ? "steer" : request.whenBusy === "reject" ? "reject" : "followUp",
               entry: { kind: USER_ENTRY, data },
             });
+            if (request.metadata !== undefined) {
+              (await tx.doc(MetadataDoc, String(id), null)).metadata = { ...request.metadata };
+            }
             return { kind: "admitted", id } as const;
           }, context),
         ).pipe(

@@ -22,7 +22,7 @@ import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import type { Sessions } from "./sessions.ts";
-import { type InputRecord, isInput, messageOf, sessionOf } from "./messages.ts";
+import { type InputRecord, MetadataDoc, isInput, messageOf, sessionOf } from "./messages.ts";
 
 const SCAN_PAGE = 100;
 
@@ -104,9 +104,10 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
   /** The message `record` is; an answered one reads its answer entry, from `known` when it is there. */
   const message = (record: InputRecord, known: readonly EntryRecord[] = []): Effect.Effect<Message, PromiseFailure> =>
     Effect.gen(function* () {
-      if (record.status !== "done") return messageOf(record, ids);
+      const metadata = (yield* fromPromise(() => harness.snapshot(MetadataDoc, String(record.id), context)))?.metadata;
+      if (record.status !== "done") return messageOf(record, ids, metadata);
       const answer = known.find((entry) => entry.id === record.answer) ?? (yield* entryById(record.answer));
-      return messageOf(record, ids, answer);
+      return messageOf(record, ids, metadata, answer);
     });
 
   const submission = (messageId: string) => {

@@ -138,6 +138,21 @@ export class Session extends Schema.Opaque<Session>()(
 ) {}
 
 /** A message's statuses: `queued` and `running` until it ends, then one of the four ends, which are all its ends. */
+/**
+ * The Caller's own data on a message, such as where its answer goes: kept with the message, returned with it, never
+ * shown to the model. At most 16 keys of 1 to 64 characters, each value a string of at most 512.
+ */
+export const Metadata = Schema.Record(Schema.String, Schema.String.check(Schema.isMaxLength(512))).check(
+  Schema.isMaxProperties(16),
+  // A Record's key schema is not checked on decode, so the key bounds are a filter of their own.
+  Schema.makeFilter((metadata) =>
+    Object.keys(metadata)
+      .filter((key) => key.length < 1 || key.length > 64)
+      .map((key) => ({ path: [key], issue: "a metadata key is 1 to 64 characters" })),
+  ),
+);
+export type Metadata = typeof Metadata.Type;
+
 export const MessageStatus = Schema.Literals(["queued", "running", "completed", "incomplete", "failed", "canceled"]);
 export type MessageStatus = typeof MessageStatus.Type;
 
@@ -146,6 +161,7 @@ export class Message extends Schema.Opaque<Message>()(
     id: Schema.String,
     sessionId: Schema.String,
     idempotencyKey: Schema.optionalKey(Schema.String),
+    metadata: Schema.optionalKey(Metadata),
     status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
     entryId: Schema.optionalKey(Schema.String),
@@ -253,6 +269,7 @@ export const SendRequest = Schema.Struct({
   ]),
   /** The Caller's key for this message, unique within the session. */
   idempotencyKey: Schema.optional(IdempotencyKey),
+  metadata: Schema.optional(Metadata),
   /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
 });

@@ -82,6 +82,11 @@ has seen returns that message and records nothing. A send that may have been rec
 rejects `unconfirmed`: send it again with the same key to find out. `connectAgent` gives a send without a key one of
 its own.
 
+**Metadata.** A send's `metadata` is your own data on the message, such as where its answer goes: up to 16 keys of 1
+to 64 characters, each value a string of up to 512. It is kept with the message and returned with it by `send`, `get`
+and its `done` event, and the model never sees it. A send with a key the session has seen returns the metadata the
+message was first sent with.
+
 **A busy session.** `whenBusy` decides what a message that arrives while the agent works is:
 
 | `whenBusy` | Then |
@@ -171,7 +176,7 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
 
-A send's body is `{ content, whenBusy?, wait?, stream? }`, and its key the `Idempotency-Key` header, percent-encoded.
+A send's body is `{ content, whenBusy?, metadata?, wait?, stream? }`, and its key the `Idempotency-Key` header, percent-encoded.
 An event stream sends each event as `event: <type>` with its JSON as `data`, and a comment at least every 15 seconds so
 proxies keep it open. A refusal answers the status above with `{ "error": AgentError }`.
 
