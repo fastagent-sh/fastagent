@@ -39,6 +39,10 @@ fastagent dev                 # serve locally, reloading on edits
 fastagent invoke "hello"      # send it one message
 ```
 
+The agent depends on its own version of FastAgent, and a `fastagent` installed globally runs that version inside it.
+Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
+`npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
+
 Then run it in a container (`fastagent deploy docker`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
 ## Embed it in your app

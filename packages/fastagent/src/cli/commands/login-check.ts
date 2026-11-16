@@ -1,6 +1,7 @@
 /**
- * `fastagent auth check`: whether a provider is ready for the agent here, as pi's `auth check` answers it, for a script
- * or a coding agent: `ready`, `not_ready` or `invalid` on stdout, exit 0, 1 or 2. The answer is the one the agent's
+ * `fastagent login <provider> --check`: whether a provider (or a model's, `provider/modelId`) is ready for the agent
+ * here, as pi's `auth check` answers it, for a script or a coding agent: `ready`, `not_ready` or `invalid` on stdout,
+ * exit 0, 1 or 2. The answer is the one the agent's
  * messages would get (`ModelEnvironment.authStatus`, a due refresh included).
  */
 import { definedValues } from "../../declared-secrets.ts";
@@ -24,10 +25,8 @@ type AuthCheck =
 
 const EXIT_CODES = { ready: 0, not_ready: 1, invalid: 2 } as const;
 
-export async function runAuthCheck(opts: { provider?: string; model?: string; global?: boolean; json?: boolean }) {
-  if (opts.provider === undefined && opts.model === undefined) {
-    failUsage("auth check needs --provider <id> or --model <provider/modelId>");
-  }
+export async function runLoginCheck(target: string | undefined, opts: { global?: boolean; json?: boolean }) {
+  if (target === undefined) failUsage("login --check needs a provider id, or a provider/modelId");
   const agentDir = opts.global ? undefined : optionalAgentDirOrExit(process.cwd());
   let providers: Provider[] = [];
   if (agentDir) {
@@ -37,18 +36,16 @@ export async function runAuthCheck(opts: { provider?: string; model?: string; gl
     installProxyFetch();
   }
   const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
-  let provider = opts.provider;
+  let provider = target;
   let modelId: string | undefined;
-  if (opts.model !== undefined) {
-    const ofModel = providerOf(opts.model);
-    modelId = opts.model.slice(ofModel.length + 1);
-    if (modelId === "" || environment.models.getModel(ofModel, modelId) === undefined) {
-      failUsage(`unknown model "${opts.model}": \`fastagent models\` lists the ones there are`);
+  if (target.includes("/")) {
+    provider = providerOf(target);
+    modelId = target.slice(provider.length + 1);
+    if (modelId === "" || environment.models.getModel(provider, modelId) === undefined) {
+      failUsage(`unknown model "${target}": \`fastagent models\` lists the ones there are`);
     }
-    if (provider !== undefined && provider !== ofModel) failUsage(`${opts.model} is not a model of ${provider}`);
-    provider = ofModel;
   }
-  const result = await check(environment, provider as string, modelId);
+  const result = await check(environment, provider, modelId);
   console.log(opts.json ? JSON.stringify(result) : result.status);
   process.exitCode = EXIT_CODES[result.status];
 }

@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, models, login, logout, auth, dev, invoke, start, schedules, add, and deploy, with their flags."
+description: "The fastagent CLI reference: init, info, models, login, logout, dev, invoke, build, start, schedules and deploy, with their flags."
 status: current
 ---
 
@@ -10,6 +10,10 @@ status: current
 fastagent <command> [args] [options]
 fastagent <command> --help     # every argument, flag and example, generated from the code
 ```
+
+The agent depends on its own version of FastAgent, and a `fastagent` installed globally runs that version inside it.
+Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
+`npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
 
 `[agent]` is the agent directory (the one with `fastagent.config.ts`), by default the current one. Nothing is searched
 for: from a subdirectory, a command names the agent's root and stops.
@@ -25,7 +29,8 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `build` | compile the agent into `dist/` |
 | `start` | serve the build |
 | `models [search]` | list model specs |
-| `login [provider]`, `logout`, `auth check` | manage model credentials |
+| `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
+| `logout [provider]` | remove a credential `login` stored |
 | `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
 | `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
 
@@ -39,7 +44,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `schedules list`, `login`, `auth check`, `add` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `schedules list`, `login` | Machine-readable output. |
 
 ## Exit codes
 

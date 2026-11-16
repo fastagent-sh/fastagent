@@ -42,7 +42,9 @@ cd my-agent
 ```
 
 The agent lives in its own directory, beside the project it works on. `init` installs dependencies (run `npm install`
-if that failed) and makes the first git commit. Stay in `my-agent/` for the rest of this guide.
+if that failed) and makes the first git commit. Stay in `my-agent/` for the rest of this guide: there the global
+`fastagent` runs the agent's own installed version. Without a global install, run `npx @fastagent-sh/fastagent
+<command>`, never `npx fastagent`, which is another package on npm.
 
 ## 3. Set up TypeScript
 
@@ -170,10 +172,11 @@ fail. Then restore it.
 
 ## 5. Send one real message
 
-Pick the provider and model with the owner. `fastagent auth check --provider <id>` exits 0 when it is ready. If not:
+Pick the provider and model with the owner. `fastagent login <provider/model-id> --check` exits 0 when its provider is
+ready. If not:
 
-- **An account** (ChatGPT, a Claude subscription): `fastagent login <provider> --method account --json` returns a
-  `url` for the owner and a `check_command` to run once they have signed in.
+- **An account** (ChatGPT, a Claude subscription): `fastagent login <provider> --method account --json` returns the
+  `terminal_command` the owner runs in a terminal of their own to sign in, and a `check_command` to run once they have.
 - **An API key**: `fastagent login <provider> --method api-key --json` names the variable and file; the owner writes
   it there.
 

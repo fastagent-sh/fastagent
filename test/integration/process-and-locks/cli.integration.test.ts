@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, run } from "../../doubles/cli-run.ts";
@@ -10,6 +10,30 @@ describe("cli: process contracts", () => {
     expect(v.code).toBe(0);
     expect(v.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     expect((await run(["-v"])).stdout.trim()).toBe(v.stdout.trim());
+  });
+
+  it("hands the command to the project's own CLI when it is another installation, args and exit code intact", async () => {
+    const project = await mkdtemp(join(tmpdir(), "fa-project-cli-"));
+    const installed = join(project, "node_modules", "@fastagent-sh", "fastagent");
+    await mkdir(installed, { recursive: true });
+    await writeFile(
+      join(installed, "package.json"),
+      JSON.stringify({
+        name: "@fastagent-sh/fastagent",
+        version: "9.9.9",
+        type: "module",
+        bin: { fastagent: "cli.js" },
+        exports: { "./package.json": "./package.json" },
+      }),
+    );
+    await writeFile(
+      join(installed, "cli.js"),
+      'console.log(`project ${process.argv.slice(2).join(" ")}`); process.exitCode = 3;\n',
+    );
+    const handed = await run(["info", "--json"], project);
+    expect([handed.code, handed.stdout.trim()]).toEqual([3, "project info --json"]);
+    const elsewhere = await run(["--version"], await mkdtemp(join(tmpdir(), "fa-no-project-")));
+    expect(elsewhere.stdout.trim()).not.toBe("project --version");
   });
 
   // One command is enough through the real binary: that a missing required argument is exit 2 on
