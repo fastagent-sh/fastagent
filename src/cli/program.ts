@@ -232,7 +232,7 @@ const channels: CommandSpec = {
       summary: "set up a channel's platform app and store its credentials",
       description:
         "Guide setup in a terminal, or validate values statelessly under --json/--no-input (exit 2 when missing).",
-      args: [{ name: "<name>", description: "telegram, slack, feishu, or lark" }, AGENT_ARG],
+      args: [{ name: "<platform>", description: "telegram, slack, feishu, or lark" }, AGENT_ARG],
       flags: [
         {
           flags: "--env-file <file>",

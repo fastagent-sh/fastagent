@@ -62,7 +62,7 @@ A channel holds its own connection to the platform (Telegram polling, Slack Sock
 so the container needs no public URL for it, only a process that keeps running.
 
 Use a separate production app for the container: two processes on one bot split its messages. Make it with
-`fastagent channels setup <name> --env-file prod.env` and give the container that file's values.
+`fastagent channels setup <platform> --env-file prod.env` and give the container that file's values.
 
 ## What ships
 

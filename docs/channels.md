@@ -26,8 +26,9 @@ export default defineAgent({
 | Lark (international) | `feishu({ domain: "lark" })` | `LARK_APP_ID`, `LARK_APP_SECRET` | [Feishu / Lark](feishu.md) |
 | Anything else | your own channel | what it declares | [Channel development](channel-development.md) |
 
-The first `fastagent dev` asks for the credentials a declared channel lacks, or run `fastagent channels setup <name>`
-yourself. A channel whose variables are unset stops `dev` and `start`, naming them.
+The first `fastagent dev` asks for the credentials a declared channel lacks, or run
+`fastagent channels setup <platform>` yourself (`telegram`, `slack`, `feishu` or `lark`; the platform, not the channel's
+name). A channel whose variables are unset stops `dev` and `start`, naming them.
 
 The name you give a channel (`telegram` above) names its tools and keeps its state apart: lowercase letters, digits
 and `_`. Each first-party channel gives the agent a `<name>_send` tool, for a message no chat turn carries (a
