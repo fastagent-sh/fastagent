@@ -3,7 +3,7 @@
  * machinery paths that follow from it.
  */
 import { type Stats, statSync } from "node:fs";
-import { access, readFile, realpath } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -194,24 +194,6 @@ export function isDeployedWorkspace(env: NodeJS.ProcessEnv = process.env): boole
  * placed by hand. Appending to a file fastagent did not create (`.env`) cannot and does not do that.
  */
 export const SECRET_FILE_MODE = 0o600;
-
-/** Guard that `<agentDir>/<name>` resolves INSIDE the agent dir. */
-export async function assertInsideAgentDir(agentDir: string, name: string): Promise<void> {
-  const target = join(agentDir, name);
-  const real = await realpath(target).catch((e: NodeJS.ErrnoException) => {
-    if (e.code === "ENOENT" || e.code === "not_found") return undefined;
-    throw e;
-  });
-  if (real === undefined) return;
-  const root = await realpath(agentDir).catch(() => resolve(agentDir));
-  const rel = relative(root, real);
-  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) {
-    throw new Error(
-      `${target} resolves outside the agent dir (${real}) — it must live inside the definition directory; ` +
-        `use a real directory or a symlink that stays within it`,
-    );
-  }
-}
 
 /** Whether `targetPath` lives inside `baseDir` (same path counts). */
 export function isUnderDir(targetPath: string, baseDir: string): boolean {

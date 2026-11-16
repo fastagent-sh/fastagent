@@ -1,15 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import ignore from "ignore";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDefinition, loadSourceDefinition } from "../../../src/harnesses/pi-durable/open.ts";
 import { readSkills } from "../../../src/harnesses/pi-durable/text.ts";
 import { scaffoldAgent } from "../../../src/scaffold/init.ts";
-
-import { vendorSkill } from "../../../src/scaffold/vendor-skill.ts";
-import { freshDir, exists, cliInit } from "../../fixtures/init-fixtures.ts";
+import { freshDir, exists } from "../../fixtures/init-fixtures.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
 
@@ -120,54 +117,5 @@ describe("init: scaffoldAgent", () => {
     const deep = join(await freshDir(), "some", "agent");
     await scaffoldAgent(deep);
     expect(await exists(join(deep, "SYSTEM.md"))).toBe(true);
-  });
-});
-
-describe("add: fastagent add <channel>", () => {
-  it("routes into the agent it names: channel + companion tool + secrets all land in that directory", async () => {
-    const dir = await freshDir();
-    const root = join(dir, "fastagent");
-    await mkdir(join(root, ".secrets"), { recursive: true });
-    await writeFile(join(root, "fastagent.config.ts"), "export default {};\n");
-    await writeFile(join(root, ".secrets", ".env.example"), "# env\n");
-    await writeFile(
-      join(root, "package.json"),
-      `${JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "^0.4.0" } }, null, 2)}\n`,
-    );
-
-    const out = await cliInit(["add", "telegram", "fastagent"], dir);
-    expect(out).toContain(join("fastagent", "src", "channels", "telegram.ts")); // reported relative to where it ran
-    expect(await exists(join(root, "src", "channels", "telegram.ts"))).toBe(true); // in the agent dir…
-    expect(await exists(join(root, "src", "tools", "telegram-send.ts"))).toBe(true); // …with its companion tool
-    expect(await exists(join(dir, "src"))).toBe(false); // NOT where the command ran
-    expect(await readFile(join(root, ".secrets", ".env.example"), "utf8")).toContain("TELEGRAM_BOT_TOKEN");
-    // The program only: no value is written, whatever the app will need.
-    expect(await exists(join(root, ".secrets", ".env"))).toBe(false);
-  });
-});
-
-describe("add: fastagent add skill (vendor)", () => {
-  it("vendors a local Agent Skills skill into skills/<name>/ (copy, validated, scripts flagged, refuse-overwrite)", async () => {
-    const srcRoot = await mkdtemp(join(tmpdir(), "fa-src-"));
-    await mkdir(join(srcRoot, "greeter", "scripts"), { recursive: true });
-    await writeFile(
-      join(srcRoot, "greeter", "SKILL.md"),
-      "---\nname: greeter\ndescription: Greet the user warmly and by name.\n---\nSay hello.\n",
-    );
-    await writeFile(join(srcRoot, "greeter", "scripts", "hi.sh"), "echo hi\n");
-
-    const ws = await mkdtemp(join(tmpdir(), "fa-ws-"));
-    await writeFile(join(ws, "AGENTS.md"), "# Bot\n");
-
-    const r = await vendorSkill(ws, join(srcRoot, "greeter"));
-    expect(r.name).toBe("greeter"); // from SKILL.md frontmatter
-    expect(r.description).toContain("Greet");
-    expect(r.dest).toBe("skills/greeter");
-    expect(r.hasScripts).toBe(true); // scripts/ → trust-warning path
-    expect(await exists(join(ws, "skills", "greeter", "SKILL.md"))).toBe(true);
-    expect(await exists(join(ws, "skills", "greeter", "scripts", "hi.sh"))).toBe(true);
-    expect(readSkills(ws).map((s) => s.name)).toContain("greeter"); // really read by the agent's loader
-
-    await expect(vendorSkill(ws, join(srcRoot, "greeter"))).rejects.toThrow(/already exists/); // refuse overwrite
   });
 });

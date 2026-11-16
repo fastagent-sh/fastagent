@@ -37,7 +37,7 @@ function staticPackageGraph(entryRel: string, builtins = false): Set<string> {
   return packages;
 }
 
-const PUBLIC_ENTRIES = ["index.ts", "client.ts", "telegram.ts", "slack.ts", "feishu.ts", "lark.ts"];
+const PUBLIC_ENTRIES = ["index.ts", "client.ts", "telegram.ts", "slack.ts", "feishu.ts"];
 
 describe("package boundary: embed entry stays free of CLI-only dependencies", () => {
   it("the ./client subpath runs wherever fetch does: no Node API, no harness, no server", () => {
@@ -54,8 +54,8 @@ describe("harness neutrality: the contracts and the channel spine import no harn
     "channels/body.ts",
     "channels/respond.ts",
     "channels/telegram/telegram.ts",
+    "channels/slack/slack.ts",
     "channels/feishu/feishu.ts",
-    "channels/lark/lark.ts",
     "channel.ts",
     "channels/serve.ts",
   ];

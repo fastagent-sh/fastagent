@@ -6,7 +6,8 @@ import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import type { Agent } from "./agent-api.ts";
 import type { ChannelHandler, LongConnection, Routes } from "./channel.ts";
-import { type AnyChannelModule, type LoadedLongConnectionChannel, mountChannels } from "./channels/discover.ts";
+import type { Channel } from "./channel.ts";
+import { type LoadedLongConnectionChannel, mountChannels } from "./channels/discover.ts";
 import { parseRouteKey, router } from "./channels/router.ts";
 import { serveHandler, totalFetch } from "./channels/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
@@ -76,7 +77,7 @@ interface ServingSurface {
 export function routesFor(
   agent: Agent,
   stateRoot: string,
-  channels: ReadonlyMap<string, AnyChannelModule>,
+  channels: ReadonlyMap<string, Channel>,
   resolveFrom: readonly string[] = [],
 ): ServingSurface {
   const { routes, longConnections, routeChannels } = mountChannels(channels, agent, stateRoot, resolveFrom);
@@ -209,7 +210,7 @@ export interface ServableAgent {
   definition?: { dir: string };
   /** Where durable state lives (channel state, schedule fires, wake-ups). */
   stateRoot: string;
-  channels: ReadonlyMap<string, AnyChannelModule>;
+  channels: ReadonlyMap<string, Channel>;
   schedules: readonly Schedule[];
 }
 

@@ -26,9 +26,7 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `start` | serve the build |
 | `models [search]` | list model specs |
 | `login [provider]`, `logout`, `auth check` | manage model credentials |
-| `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
-| `add skill <source>` | copy an Agent Skills skill into `skills/` |
-| `channels setup <name>` | create or connect the platform app and keep its credentials |
+| `channels setup <platform>` | create or connect a platform's app (`telegram`, `slack`, `feishu`, `lark`) and keep its credentials |
 | `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
 | `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
 
@@ -60,7 +58,7 @@ turns: it runs a command, reads what it printed once it ends, then talks to its 
 - **Nothing waits on a terminal.** A choice a terminal would ask for has a flag or an argument. Without a terminal,
   or with `--no-input` or `--json`, a choice not given ends the command, exit 2, naming what to pass (`login --json`
   answers `need_choice` with a command for each).
-- **A step only a person can take returns at once (`exit 2`)**: `channels setup <name> --json` and `login --json`
+- **A step only a person can take returns at once (`exit 2`)**: `channels setup <platform> --json` and `login --json`
   never block or spawn background daemons without a terminal; when user input or browser
   sign-in is required they exit 2 (`need_user_action` / `need_choice`) naming the missing env vars, terminal command,
   and verification command, then exit 0 once satisfied.

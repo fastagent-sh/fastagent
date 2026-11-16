@@ -1,20 +1,14 @@
-/** `@fastagent-sh/fastagent/telegram` — the Telegram bot channel subpath export, kept off the root surface. */
+/** `@fastagent-sh/fastagent/telegram` — the Telegram bot channel, kept off the root surface. */
 export {
+  telegram,
   telegramChannel,
-  telegramPollingChannel,
   defaultTelegramRoute,
   telegramEnvelope,
   telegramStop,
+  type TelegramOptions,
   type TelegramChannelOptions,
-  type TelegramPollingChannelOptions,
   type TelegramUpdate,
   type TelegramMessage,
   type TelegramRoute,
   type TelegramFailure,
 } from "./channels/telegram/telegram.ts";
-export {
-  telegramTransport,
-  type TelegramSendTarget,
-  type TelegramSent,
-  type TelegramTransport,
-} from "./channels/telegram/shared-api.ts";

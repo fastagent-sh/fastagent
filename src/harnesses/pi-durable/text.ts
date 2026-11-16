@@ -12,7 +12,7 @@ import { log } from "../../log.ts";
 import type { RunsAs } from "../../serving-command.ts";
 import type { AgentCommand } from "./agent.ts";
 
-export interface Skill {
+interface Skill {
   name: string;
   description: string;
   /** Absolute: what the model's `read` opens. */

@@ -8,9 +8,9 @@ import {
   type SlackChannelOptions,
   type SlackEventEnvelope,
   slackChannel,
-  slackSocketChannel,
   verifySlackSignature,
 } from "../../../src/slack.ts";
+import { slackSocket } from "../../../src/channels/slack/slack.ts";
 import type { OpenSlackSocket, SlackSocketHandlers } from "../../../src/channels/slack/socket.ts";
 import { promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
 import { ev } from "../../doubles/scripted-run.ts";
@@ -161,7 +161,7 @@ function mount(
     signingSecret: SECRET,
     apiBaseUrl: API,
     ...options,
-  })(channelContext(stopped ? withStop(agent, stopped) : agent, stateRoot, "slack"))["POST /slack"]!;
+  }).routes(channelContext(stopped ? withStop(agent, stopped) : agent, stateRoot, "slack"))["POST /slack"]!;
   const turnsIdle = sandbox.trackIdle(handler);
   return { handler, stateRoot, turnsIdle };
 }
@@ -308,7 +308,7 @@ describe("Slack Socket Mode channel", () => {
     };
     const abort = new AbortController();
     const stateRoot = options.stateRoot ?? root();
-    const channel = slackSocketChannel(
+    const channel = slackSocket(
       { botToken: "xoxb-test", appToken: "xapp-1-A1-1-abc", apiBaseUrl: API },
       { openSocket },
     );
@@ -340,7 +340,6 @@ describe("Slack Socket Mode channel", () => {
   it("answers an event it received over the socket the way the webhook channel answers a signed one", async () => {
     const { agent, calls } = replyingAgent("hello back");
     const slack = socketMode(agent);
-    expect(slack.channel.name).toBe("slack socket mode");
     await slack.say({ type: "hello" });
     await slack.connection.ready;
     await slack.say(delivery("E1", message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));

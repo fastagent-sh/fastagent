@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { channelContext } from "../../../src/channels/context.ts";
-import { FEISHU_CLOUD, LARK_COMPAT_CLOUD } from "../../../src/channels/feishu/cloud.ts";
-import { buildFeishuWebSocketChannel } from "../../../src/channels/feishu/feishu.ts";
+import { feishuWebSocket } from "../../../src/channels/feishu/feishu.ts";
 import type { FeishuMessageEvent } from "../../../src/channels/feishu/parse.ts";
 
 const event = {
@@ -21,7 +20,7 @@ const event = {
 } as FeishuMessageEvent;
 
 describe("Feishu/Lark WebSocket ingress", () => {
-  it("exposes a long-connection module for both cloud profiles", async () => {
+  it("takes an event over the WebSocket, on either domain", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: string | URL | Request) => {
@@ -41,13 +40,11 @@ describe("Feishu/Lark WebSocket ingress", () => {
         return Response.json({ code: 0, msg: "ok", data: {} });
       }),
     );
-    for (const profile of [FEISHU_CLOUD, LARK_COMPAT_CLOUD]) {
-      const root = await mkdtemp(join(tmpdir(), `fastagent-${profile.kind}-ws-`));
+    for (const domain of ["feishu", "lark"] as const) {
+      const root = await mkdtemp(join(tmpdir(), `fastagent-${domain}-ws-`));
       let accepted: ((event: FeishuMessageEvent) => void | Promise<void>) | undefined;
-      const module = buildFeishuWebSocketChannel(
-        profile,
-        { appId: "cli_0123456789abcdef", appSecret: "secret" },
-        `${profile.kind}Channel`,
+      const channel = feishuWebSocket(
+        { domain, appId: "cli_0123456789abcdef", appSecret: "secret" },
         {
           connectWs(options) {
             accepted = options.onEvent;
@@ -59,11 +56,11 @@ describe("Feishu/Lark WebSocket ingress", () => {
         yield ev.message();
         yield ev.ended();
       });
-      const run = module.connect(channelContext(agent, root, profile.kind), new AbortController().signal);
+      const run = channel.connect(channelContext(agent, root, domain), new AbortController().signal);
       await run.ready;
       expect(accepted).toBeTypeOf("function");
       await accepted?.(event);
-      expect(await readFile(join(root, "channels", profile.kind, "seen.json"), "utf8")).toContain("om_ws");
+      expect(await readFile(join(root, "channels", domain, "seen.json"), "utf8")).toContain("om_ws");
     }
   });
 });

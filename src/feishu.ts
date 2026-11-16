@@ -1,14 +1,13 @@
-/** `@fastagent-sh/fastagent/feishu` — the canonical Feishu (open.feishu.cn) bot-channel surface. */
+/** `@fastagent-sh/fastagent/feishu` — the Feishu and Lark bot channel, kept off the root surface. */
 export {
+  feishu,
   feishuChannel,
-  feishuWebSocketChannel,
   defaultFeishuRoute,
   feishuEnvelope,
+  type FeishuOptions,
   type FeishuChannelOptions,
-  type FeishuWebSocketChannelOptions,
   type FeishuMessageEvent,
   type FeishuMessage,
   type FeishuRoute,
   type FeishuFailure,
 } from "./channels/feishu/feishu.ts";
-export { feishuThreads, feishuTransport, type FeishuTransport } from "./channels/feishu/shared-api.ts";

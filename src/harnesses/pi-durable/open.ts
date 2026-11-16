@@ -15,8 +15,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import type { ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
-import { channelModuleProblem } from "../../channels/discover.ts";
+import type { Channel, ChannelTool } from "../../channel.ts";
+import { channelProblem } from "../../channels/discover.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { loadRawProgramConfig } from "../../program-config.ts";
 import { readPackageJson } from "../../runtime.ts";
@@ -29,9 +29,11 @@ import { log } from "../../log.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
-import { type AgentConfig, type DefinedSchedule, type Needs, isNeeds } from "./define.ts";
+import { type Needs, isNeeds } from "../../needs.ts";
+import type { AgentConfig, DefinedSchedule } from "./define.ts";
 import { agentPresentation, checkProgramConfig } from "./config.ts";
-import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
+import { type AgentDefinition, DEFINITION_FORMAT, channelSource, codeSecrets, defineDefinition } from "./definition.ts";
+import { sessionIdOf } from "./ids.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
 import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
@@ -103,7 +105,6 @@ const extensionProblem = (value: unknown): string | undefined =>
     : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
 const providerProblem = (value: unknown): string | undefined =>
   typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
-const channelProblem = channelModuleProblem;
 const scheduleProblem = (value: unknown): string | undefined =>
   (value as Partial<DefinedSchedule> | null)?.kind !== "fastagent.schedule"
     ? "must default-export defineSchedule({ ... }), or needs(...) around one"
@@ -114,8 +115,8 @@ export interface BuiltDefinition {
   tools: ToolRegistration[];
   extensions: Extension[];
   providers: Provider[];
-  /** By name, the file's: what a serve mounts or connects. */
-  channels: Map<string, ChannelModule | LongConnectionChannelModule>;
+  /** By the name `fastagent.config.ts` gives each: what a serve mounts or connects. */
+  channels: Map<string, Channel>;
   /** What the scheduler fires, each named by its file. */
   schedules: Schedule[];
 }
@@ -142,11 +143,15 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
       ...named(built<Extension>(file, value, values(value), extensionProblem)),
     })),
   ];
-  const channels = registry.channels.map(({ file, name, value }) => ({
-    source: file,
+  const channels = Object.entries(config.channels ?? {}).map(([name, value]) => ({
     name,
-    value: built<ChannelModule | LongConnectionChannelModule>(file, value, values(value), channelProblem),
+    value: built<Channel>(channelSource(name), value, values(value), channelProblem),
   }));
+  tools.push(
+    ...channels.flatMap(({ name, value }) =>
+      (value.tools ?? []).map((tool) => ({ source: channelSource(name), ...named(channelTool(name, tool)) })),
+    ),
+  );
   const schedules = registry.schedules.map(({ file, name, value }) => ({
     source: file,
     name,
@@ -160,7 +165,6 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     { source: "FastAgent's wake tools", name: WAKE_EXTENSION },
     ...extensions,
   ]);
-  refuseTwins("channel", channels);
   refuseTwins("schedule", schedules);
   if (schedules.length > MAX_SCHEDULES) {
     throw new Error(`${schedules.length} schedules in src/schedules/: an agent runs at most ${MAX_SCHEDULES}`);
@@ -199,6 +203,20 @@ export async function definitionProviders(agentDir: string, env: NodeJS.ProcessE
 }
 
 const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
+
+/** A channel's tool as the agent is offered it: named after the channel, run with the session it is called in. */
+function channelTool(channel: string, tool: ChannelTool): ToolRegistration {
+  return {
+    name: `${channel}_${tool.name}`,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: async (args, api, context) => {
+      const sessionId = await sessionIdOf(api, context);
+      const text = await tool.execute(args as Record<string, unknown>, sessionId === undefined ? {} : { sessionId });
+      return { output: [{ type: "text", text }] };
+    },
+  };
+}
 
 /** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */
 function refuseTwins(kind: string, entries: readonly { source: string; name: string }[]): void {

@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelContext } from "../../../src/channels/context.ts";
-import { type TelegramUpdate, telegramPollingChannel } from "../../../src/telegram.ts";
+import { telegramPolling } from "../../../src/channels/telegram/telegram.ts";
+import type { TelegramUpdate } from "../../../src/telegram.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import { type Prompt, promptOf, scriptedAgent } from "../../doubles/scripted-agent.ts";
 
@@ -60,7 +61,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("telegramPollingChannel", () => {
+describe("telegram, by long polling", () => {
   const roots: string[] = [];
   afterEach(() => {
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -84,8 +85,7 @@ describe("telegramPollingChannel", () => {
     roots.push(root);
     const abort = new AbortController();
     connections.push(abort);
-    const channel = telegramPollingChannel({ botToken: TOKEN, apiBaseUrl: API });
-    expect(channel.name).toBe("telegram long polling");
+    const channel = telegramPolling({ botToken: TOKEN, apiBaseUrl: API });
     const connection = channel.connect(channelContext(agent, root, "telegram"), abort.signal);
     await connection.ready;
     await vi.waitFor(() => expect(prompts).toHaveLength(1));

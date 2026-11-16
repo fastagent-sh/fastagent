@@ -1,5 +1,5 @@
 /**
- * `fastagent channels setup <name>`: set up one channel's platform app for one instance: ask a
+ * `fastagent channels setup <platform>`: set up one channel's platform app for one instance: ask a
  * person for the values only they have, check them with the platform, and keep them in the instance's value file.
  */
 import { resolve } from "node:path";

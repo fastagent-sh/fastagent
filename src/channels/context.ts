@@ -1,7 +1,7 @@
 /**
  * What a channel is handed when it is mounted (channel.ts): the Agent, a directory of its own, the sessions its
- * conversations talk in, and its turns. Every mount builds a channel's context here, so a channel file, a first-party
- * channel and a test mount the same way.
+ * conversations talk in, and its turns. Every mount builds a channel's context here, so an author's channel, a
+ * first-party channel and a test mount the same way.
  */
 import { isAbsolute, join } from "node:path";
 import type { Agent } from "../agent-api.ts";
@@ -25,7 +25,7 @@ export function resolveDirsFor(ctx: ChannelContext): readonly string[] {
   return channelResolveDirs.get(ctx) ?? [];
 }
 
-/** The context of the channel `name` (its file's name under `src/channels/`), its state under `stateRoot`. */
+/** The context of the channel `name` (its name in `fastagent.config.ts`), its state under `stateRoot`. */
 export function channelContext(
   agent: Agent,
   stateRoot: string,

@@ -1,6 +1,8 @@
 /**
- * The Channel contract: how a channel is mounted beside the Agent it talks to (agent-api.ts), and
- * `defineChannel`, which types a channel file's export. Importing a host, a framework, or a harness here is forbidden.
+ * The Channel contract: how a channel receives (HTTP routes, or a connection it holds), what it is handed when it is
+ * mounted beside the Agent it talks to (agent-api.ts), and the tools it gives that agent. A channel is declared under
+ * `channels` in `fastagent.config.ts`, by a name its tools and its state carry. Importing a host, a framework, or a
+ * harness here is forbidden.
  */
 import type { Agent, CreateSessionOptions } from "./agent-api.ts";
 
@@ -32,25 +34,43 @@ export interface ChannelContext {
    * process stops before it runs is lost unless the platform delivers its event again. A failure goes to the log.
    */
   turn(place: string, work: () => Promise<void>): void;
-  /** The channel's own directory, `<state root>/channels/<the channel file's name>`, for the records it must keep. */
+  /** The channel's own directory, `<state root>/channels/<its name>`, for the records it must keep. */
   stateDir: string;
 }
-
-/** A `channels/<name>.ts` route channel: receives its context and returns its HTTP routes. */
-export type ChannelModule = (ctx: ChannelContext) => Routes;
 
 export interface LongConnection {
   ready: Promise<void>;
   closed: Promise<void>;
 }
 
-/** A long-connection channel is an explicit module object rather than an HTTP-route factory. */
-export interface LongConnectionChannelModule {
+/** A tool a channel gives the agent, offered as `<channel name>_<name>`. */
+export interface ChannelTool {
+  /** Lowercase letters, digits and `_`, starting with a letter. */
   name: string;
+  description: string;
+  /** A JSON Schema object; a call's arguments are checked against it before `execute`. */
+  parameters: Record<string, unknown>;
+  /** Run one call. `sessionId` is the session it runs in, absent in a subagent. Answers what the model reads. */
+  execute(args: Record<string, unknown>, call: { sessionId?: string }): Promise<string>;
+}
+
+interface ChannelTools {
+  tools?: readonly ChannelTool[];
+}
+
+/** A channel that receives at the HTTP routes it returns: a webhook. */
+export interface RouteChannel extends ChannelTools {
+  routes(ctx: ChannelContext): Routes;
+}
+
+/** A channel that receives over a connection it opens and holds. */
+export interface ConnectionChannel extends ChannelTools {
   connect(ctx: ChannelContext, signal: AbortSignal): LongConnection;
 }
 
-/** What a channel file default-exports, typed: its routes for a context, or a long connection. */
-export function defineChannel<T extends ChannelModule | LongConnectionChannelModule>(channel: T): T {
+export type Channel = RouteChannel | ConnectionChannel;
+
+/** Types a channel: how it receives, and the tools it gives the agent. */
+export function defineChannel<T extends Channel>(channel: T): T {
   return channel;
 }

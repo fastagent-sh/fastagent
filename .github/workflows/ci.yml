@@ -115,7 +115,7 @@ jobs:
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP/$tarball" --ignore-scripts
-          node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/client"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu"); await import("@fastagent-sh/fastagent/lark")'
+          node --input-type=module -e 'await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/client"); await import("@fastagent-sh/fastagent/telegram"); await import("@fastagent-sh/fastagent/slack"); await import("@fastagent-sh/fastagent/feishu")'
           ./node_modules/.bin/fastagent --version
 
       # An agent made by `init` from the packed package answers through `invoke`, builds, and its build answers in an app.

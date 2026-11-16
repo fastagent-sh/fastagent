@@ -39,7 +39,7 @@ fastagent dev                 # serve locally, reloading on edits
 fastagent invoke "hello"      # send it one message
 ```
 
-Then add a channel (`fastagent add telegram && fastagent channels setup telegram`) or run it in a container
+Then declare a channel in `fastagent.config.ts` (`channels: { telegram: telegram() }`) or run it in a container
 (`fastagent deploy docker`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
 ## Embed it in your app

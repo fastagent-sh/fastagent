@@ -1,10 +1,11 @@
 /**
- * First-party Slack channel: durable turns/context, files, and edited previews, over one runtime, with two ways in: the
- * Events API's signed HTTP Request URL, and Socket Mode (socket.ts).
+ * First-party Slack channel: durable turns/context, files, and edited previews, over one runtime, with two ways in:
+ * Socket Mode (`slack()`, socket.ts), and the Events API's signed HTTP Request URL (`slackChannel`).
  */
 import { createHmac } from "node:crypto";
 import { join } from "node:path";
-import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
+import type { ChannelContext, ConnectionChannel, RouteChannel } from "../../channel.ts";
+import { type Needs, needs } from "../../needs.ts";
 import { log } from "../../log.ts";
 import { text } from "../respond.ts";
 import { secretEquals } from "../secret.ts";
@@ -14,7 +15,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import { joinPromise } from "../../promise-bridge.ts";
 import { attachmentsDir, codePointPrefix } from "../kit/text.ts";
-import { type PlaceMessage, createAskLog, createRoomThreads, registerRoomThreads } from "../kit/history.ts";
+import { type PlaceMessage, type RoomThreads, createAskLog, createRoomThreads } from "../kit/history.ts";
 import { DROPPED_TURN_NOTICE, createTurnRunner, dispatchStop, isStopText, readPlaceDiscussion } from "../kit/turn.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
@@ -54,7 +55,7 @@ import {
   slackReply,
 } from "./preview.ts";
 import { completeSlackReaction, resolveReactionEmojis, startSlackReaction } from "./reaction.ts";
-import { registerSlackApi } from "./shared-api.ts";
+import { slackTools } from "./tools.ts";
 import { type SlackApi, type SlackTarget, createSlackApi } from "./slack-api.ts";
 import { createWelcomedUsers } from "./welcomed.ts";
 
@@ -77,7 +78,7 @@ const MAX_EVENT_BYTES = 1 << 20;
 const MAX_SIGNATURE_AGE_S = 5 * 60;
 const DEFAULT_WELCOME = "👋 Hi! I'm an AI agent here to help. Ask a question or describe a task and I'll get to work.";
 
-/** What `slackSocketChannel` is given: the policy of `slackChannel`, and the app-level token in place of its secret. */
+/** What `slackSocket` is given: the policy of `slackChannel`, and the app-level token in place of its secret. */
 interface SlackSocketChannelOptions extends SlackPolicyOptions {
   /** The app-level token (`xapp-…`, scope `connections:write`): opens the socket. */
   appToken: string;
@@ -276,19 +277,20 @@ interface SlackRuntime {
   ingest(envelope: SlackEventEnvelope): Promise<void>;
   /** Resolves once the turns and side tasks accepted so far have ended: the test/observability seam. */
   turnsIdle(): Promise<void>;
+  /** A group turn's room, for the `threads` tool: the channel it was asked in, and its threads. */
+  rooms: RoomThreads;
 }
 
 function createSlackRuntime(
   policy: ReturnType<typeof resolveSlackPolicy>,
+  api: SlackApi,
   { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
 ): SlackRuntime {
-  const { botToken, rendering, welcome, reactionEmojis, aiDisclaimer, route, onError, apiBaseUrl } = policy;
+  const { botToken, rendering, welcome, reactionEmojis, aiDisclaimer, route, onError } = policy;
   if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
 
   const label = "[slack]";
   const formatError = onError ?? defaultErrorMessage;
-  const api = createSlackApi({ botToken, baseUrl: apiBaseUrl });
-  registerSlackApi(botToken, api); // the send tool delivers through this one (shared-api.ts)
   const auth = createSlackAuthentication(api, label);
 
   const seen = createSeenRing(join(stateHome, "seen.json"), label);
@@ -320,7 +322,6 @@ function createSlackRuntime(
       return stops.has(`${place.teamId}:${place.channelId}:${ts}`);
     },
   });
-  // A group turn's room, for the thread-reading tool (`slackThreads`): the channel it was asked in, and its threads.
   const rooms = createRoomThreads({
     list: (room) => history.threads(room),
     read: async (room, threadTs) => {
@@ -334,7 +335,6 @@ function createSlackRuntime(
       return (await history.snapshot(key)).text || `(thread ${threadTs} shows no messages)`;
     },
   });
-  registerRoomThreads("slack", stateHome, rooms);
   /**
    * The client a turn posts through: what it posts (answer, queue notice, stop feedback) is in the turn's session
    * already, so the place it LANDS in records it for that conversation, and its next read leaves it out — an answer to
@@ -648,73 +648,92 @@ function createSlackRuntime(
       acceptEvent(envelope);
     },
     turnsIdle: runner.idle,
+    rooms,
   };
+}
+
+/**
+ * A Slack channel receiving the way `receive` says, and its tools, over one client: `send` posts through it, and
+ * `threads` reads the rooms of the runtime the channel mounts.
+ */
+function withTools<C>(
+  policy: ReturnType<typeof resolveSlackPolicy>,
+  receive: (runtime: (ctx: ChannelContext) => SlackRuntime) => C,
+): C & { tools: ReturnType<typeof slackTools> } {
+  const api = createSlackApi({ botToken: policy.botToken, baseUrl: policy.apiBaseUrl });
+  let rooms: RoomThreads | undefined;
+  const channel = receive((ctx) => {
+    const runtime = createSlackRuntime(policy, api, ctx);
+    rooms = runtime.rooms;
+    return runtime;
+  });
+  return { ...channel, tools: slackTools(api, () => rooms) };
 }
 
 /**
  * Build a Slack channel that receives by the Events API's HTTP Request URL at `POST /slack`: signed requests in,
  * durable turns out. Whoever hosts it sets that Request URL on the app: FastAgent registers no URL.
  */
-export function slackChannel(options: SlackChannelOptions): ChannelModule {
+export function slackChannel(options: SlackChannelOptions): RouteChannel {
   const { signingSecret } = options;
-  const policy = resolveSlackPolicy(options);
-  return (ctx) => {
-    if (!signingSecret)
-      throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
-    const runtime = createSlackRuntime(policy, ctx);
-    const handler = createJsonWebhookRoute<SlackEventEnvelope>({
-      maxBytes: MAX_EVENT_BYTES,
-      turnsIdle: runtime.turnsIdle,
-      verifyRaw: (request, rawBody) => {
-        const timestamp = request.headers.get("x-slack-request-timestamp") ?? "";
-        const signature = request.headers.get("x-slack-signature") ?? "";
-        if (!verifySlackSignature(signingSecret, timestamp, signature, rawBody)) {
-          log.warn("[slack] rejected an event with an invalid/stale X-Slack-Signature");
-          return text("invalid signature\n", 401);
-        }
-        return undefined;
-      },
-      handle: async (_request, _raw, envelope) => {
-        if (typeof envelope !== "object" || envelope === null) return text("invalid json\n", 400);
-        if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
-          return Response.json({ challenge: envelope.challenge });
-        }
-        if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
-        try {
-          await runtime.ingest(envelope);
-        } catch (error) {
-          log.error(`[slack] refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
-          return text("slack authentication unavailable\n", 503);
-        }
-        return new Response(null, { status: 200 });
-      },
-    });
-    return { "POST /slack": handler };
-  };
+  return withTools(resolveSlackPolicy(options), (runtimeFor) => ({
+    routes(ctx) {
+      if (!signingSecret)
+        throw new Error("slackChannel requires a non-empty signingSecret (Basic Information → App Credentials)");
+      const runtime = runtimeFor(ctx);
+      const handler = createJsonWebhookRoute<SlackEventEnvelope>({
+        maxBytes: MAX_EVENT_BYTES,
+        turnsIdle: runtime.turnsIdle,
+        verifyRaw: (request, rawBody) => {
+          const timestamp = request.headers.get("x-slack-request-timestamp") ?? "";
+          const signature = request.headers.get("x-slack-signature") ?? "";
+          if (!verifySlackSignature(signingSecret, timestamp, signature, rawBody)) {
+            log.warn("[slack] rejected an event with an invalid/stale X-Slack-Signature");
+            return text("invalid signature\n", 401);
+          }
+          return undefined;
+        },
+        handle: async (_request, _raw, envelope) => {
+          if (typeof envelope !== "object" || envelope === null) return text("invalid json\n", 400);
+          if (envelope.type === "url_verification" && typeof envelope.challenge === "string") {
+            return Response.json({ challenge: envelope.challenge });
+          }
+          if (envelope.type !== "event_callback") return new Response(null, { status: 200 });
+          try {
+            await runtime.ingest(envelope);
+          } catch (error) {
+            log.error(`[slack] refusing to ACK an event because Slack authentication is unavailable: ${String(error)}`);
+            return text("slack authentication unavailable\n", 503);
+          }
+          return new Response(null, { status: 200 });
+        },
+      });
+      return { "POST /slack": handler };
+    },
+  }));
 }
 
 /**
- * Build a Slack channel that receives by Socket Mode: the process opens a WebSocket to Slack with the app-level token
- * and takes its events there, so no public URL and no signing secret are involved. An app in Socket Mode receives over
- * the socket alone: it has no Request URL to point anywhere else.
+ * A Slack channel that receives by Socket Mode, given its tokens: the process opens a WebSocket to Slack with the
+ * app-level token and takes its events there, so no public URL and no signing secret are involved. An app in Socket
+ * Mode receives over the socket alone: it has no Request URL to point anywhere else.
  */
-export function slackSocketChannel(
+export function slackSocket(
   options: SlackSocketChannelOptions,
   /** Internal seam for deterministic tests: the socket the connection opens. */
   deps: { openSocket?: OpenSlackSocket } = {},
-): LongConnectionChannelModule {
+): ConnectionChannel {
   const policy = resolveSlackPolicy(options);
   const { appToken } = options;
-  return {
-    name: "slack socket mode",
+  return withTools(policy, (runtimeFor) => ({
     connect(ctx, signal) {
       if (!/^xapp-/.test(appToken)) {
         throw new Error(
-          "slackSocketChannel requires an app-level token (xapp-…, scope connections:write: Basic Information → " +
-            "App-Level Tokens), not a bot token",
+          "the Slack channel needs an app-level token (xapp-…, scope connections:write: Basic Information → " +
+            "App-Level Tokens) in SLACK_APP_TOKEN, not a bot token",
         );
       }
-      const runtime = createSlackRuntime(policy, ctx);
+      const runtime = runtimeFor(ctx);
       return connectSlackSocket(
         {
           apiBaseUrl: policy.apiBaseUrl,
@@ -725,5 +744,23 @@ export function slackSocketChannel(
         signal,
       );
     },
-  };
+  }));
+}
+
+/** What `slack()` is given: the policy, the tokens being `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`. */
+export type SlackOptions = Omit<SlackSocketChannelOptions, "botToken" | "appToken">;
+
+/**
+ * The Slack channel `fastagent.config.ts` declares: the app `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` name, over Socket
+ * Mode, and its `send` and `threads` tools.
+ */
+export function slack(options: SlackOptions = {}): Needs<ConnectionChannel> {
+  return needs(
+    [
+      { name: "SLACK_BOT_TOKEN", description: "The Bot User OAuth Token (xoxb-…)" },
+      { name: "SLACK_APP_TOKEN", description: "An app-level token (xapp-…) with connections:write, for Socket Mode" },
+    ],
+    ({ SLACK_BOT_TOKEN, SLACK_APP_TOKEN }) =>
+      slackSocket({ ...options, botToken: SLACK_BOT_TOKEN, appToken: SLACK_APP_TOKEN }),
+  );
 }
