@@ -113,7 +113,7 @@ another process uses the same app and takes some messages: give each instance it
 ### Sessions disappear after a redeploy
 
 The state root is not on persistent storage. The generated container keeps it at `/data`: mount a volume there
-(`-v my-agent-data:/data`). On your own server set `FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets`.
+(`-v my-agent-data:/data`). On your own server set `FASTAGENT_ROOT=/data`.
 
 ### A deploy stopped and the message does not say why
 

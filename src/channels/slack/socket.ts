@@ -37,12 +37,12 @@ const TERMINAL_OPEN_ERRORS = new Set([
   "no_permission",
 ]);
 
-/** The socket as this module uses it, so a test can stand in a fake and a runtime without pings still serves. */
+/** The socket as this module uses it, so a test can stand in a fake. */
 interface SlackSocket {
   send(data: string): void;
   close(): void;
-  /** Sends a ping frame, when the runtime can; its pong arrives as `handlers.pong`. */
-  ping?(): void;
+  /** Sends a ping frame; its pong arrives as `handlers.pong`. */
+  ping(): void;
 }
 
 export interface SlackSocketHandlers {
@@ -71,7 +71,7 @@ export interface SlackSocketOptions {
   };
 }
 
-/** The runtime's own WebSocket, with the pings it can send; a runtime that offers none serves without them. */
+/** undici's WebSocket, with its pings. */
 const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   const socket = new RuntimeWebSocket(url);
   const stopPongs = watchPongs(socket, () => handlers.pong());
@@ -91,7 +91,7 @@ const openRuntimeSocket: OpenSlackSocket = (url, handlers) => {
   return {
     send: (data) => socket.send(data),
     close: () => socket.close(),
-    ...(ping ? { ping } : {}),
+    ping,
   };
 };
 
@@ -222,9 +222,8 @@ export function connectSlackSocket(options: SlackSocketOptions, signal: AbortSig
         fail(new Error("cancelled"));
       });
       const ping = (): void => {
-        if (socket.ping === undefined) return;
         pingTimer = setTimeout(() => {
-          socket.ping?.();
+          socket.ping();
           pongTimer = setTimeout(() => {
             log.warn(`[slack] Socket Mode connection stopped answering pings; reconnecting`);
             fail(new Error("no pong"));

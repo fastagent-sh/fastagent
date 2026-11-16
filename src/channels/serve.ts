@@ -8,7 +8,6 @@ import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
 import type { ChannelHandler } from "../channel.ts";
-import { LIMITS } from "../agent-api.ts";
 import { log } from "../log.ts";
 import { text } from "./respond.ts";
 
@@ -60,34 +59,17 @@ function watchedBody(response: Response, left: () => void): Response {
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
-const isBun = typeof process.versions.bun === "string";
-
 /**
- * How long `close()` gives the requests in flight before it ends them, on either runtime: a webhook is answered in
+ * How long `close()` gives the requests in flight before it ends them: a webhook is answered in
  * milliseconds, and a close must fit the CLI's shutdown deadline (`FORCED_EXIT_MS` in `src/cli/serve.ts`).
  */
 const GRACEFUL_SHUTDOWN = "500 millis";
 
-/**
- * How long Bun lets a response say nothing before it ends it (10 s by default): longer than an Agent API request waits
- * for a message, and than an event stream's keep-alive interval. Node sets no such limit.
- */
-const BUN_IDLE_TIMEOUT_SECONDS = LIMITS.httpWaitSeconds + 15;
-
-/** The server this runtime serves on: Node's `http.Server`, or `Bun.serve`. */
+/** The server a serve listens on: Node's `http.Server`. */
 async function serverLayer(options: {
   port: number;
   host?: string;
 }): Promise<Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError>> {
-  if (isBun) {
-    const { layer } = await import("@effect/platform-bun/BunHttpServer");
-    return layer({
-      port: options.port,
-      ...(options.host === undefined ? {} : { hostname: options.host }),
-      gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,
-      idleTimeout: BUN_IDLE_TIMEOUT_SECONDS,
-    });
-  }
   const { layer } = await import("@effect/platform-node/NodeHttpServer");
   return layer(() => createServer(), {
     port: options.port,
@@ -101,7 +83,7 @@ function bindFailure(error: unknown): unknown {
   return error instanceof HttpServerError.ServeError ? error.cause : error;
 }
 
-/** Serve `handler` on this runtime's own server: Node's `http.Server`, or `Bun.serve`. */
+/** Serve `handler` on Node's `http.Server`. */
 export function serveHandler(
   handler: ChannelHandler,
   options: { port: number; host?: string },

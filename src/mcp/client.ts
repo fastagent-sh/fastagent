@@ -1,16 +1,22 @@
-/** Instance-owned MCP clients. The scope also joins refreshes after a caller abandons its wait. */
-import { Client, StreamableHTTPClientTransport, type Tool, type CallToolResult } from "@modelcontextprotocol/client";
+/** Instance-owned MCP clients: stdio servers, and Streamable HTTP servers with the headers their declaration names. */
+import { getSystemErrorMap } from "node:util";
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  type Tool,
+  type CallToolResult,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
+} from "@modelcontextprotocol/client";
 import { DEFAULT_INHERITED_ENV_VARS, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import { abortThenJoin, joinPromise, originalError } from "../promise-bridge.ts";
-import { McpError, type McpAuthorization, type McpOptions } from "../mcp-api.ts";
+import { McpError } from "../mcp-api.ts";
 import type { McpServer } from "./config.ts";
-import { checkGrantTarget, discoverMcp, grantToken, mcpFailure } from "./auth.ts";
-import { mcpFetch, openMcpNetwork } from "./network.ts";
-import { checkedGrant } from "./grants.ts";
 import { log } from "../log.ts";
 
 export interface McpTool {
@@ -36,10 +42,22 @@ function ownEnvironment(env: Record<string, string>): Record<string, string> {
   return { ...withheld, ...env } as Record<string, string>;
 }
 
+/** One HTTP request to a server: bounded in time, and never redirected (its headers are for the URL declared). */
+function requestFetch(fetchImpl: typeof globalThis.fetch, timeoutMs: number): typeof globalThis.fetch {
+  return (input, init) => {
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    return fetchImpl(input, {
+      ...init,
+      redirect: "error",
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
+    });
+  };
+}
+
 export async function openMcpClients(
   servers: readonly McpServer[],
-  auth: McpAuthorization,
-  options: Pick<McpOptions, "fetch"> = {},
+  /** The transport HTTP servers are reached with; a test's stand-in. Default: the global `fetch`. */
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<McpClients> {
   const lifetime = Scope.makeUnsafe();
   const cleanupErrors: unknown[] = [];
@@ -82,11 +100,8 @@ export async function openMcpClients(
       client.onclose = () => {
         disconnected = true;
       };
-      const grantId = Object.hasOwn(auth.bindings, server.name) ? auth.bindings[server.name] : undefined;
       let transport: StdioClientTransport | StreamableHTTPClientTransport;
       if (server.type === "stdio") {
-        if (grantId !== undefined)
-          throw new McpError("configuration", "A stdio MCP server cannot have an OAuth grant binding", server.name);
         transport = new StdioClientTransport({
           command: server.command,
           args: server.args,
@@ -97,81 +112,9 @@ export async function openMcpClients(
         // Draining prevents a noisy child from blocking. Raw stderr can contain its supplied secrets.
         transport.stderr?.on("data", () => {});
       } else {
-        const network = await openMcpNetwork(server.url, options.fetch);
-        await Effect.runPromise(
-          Scope.addFinalizer(
-            lifetime,
-            joinPromise(() => network.close()).pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() => {
-                  cleanupErrors.push(mcpFailure(originalError(cause), "MCP network cleanup", server.name));
-                }),
-              ),
-            ),
-          ),
-        );
-        const fetchImpl = mcpFetch(server.url, network.fetch);
-        const requestFetch = mcpFetch(server.url, network.fetch, 60_000);
-        if (grantId !== undefined && new Headers(server.headers).has("authorization"))
-          throw new McpError("configuration", "Static Authorization and OAuth cannot be combined", server.name);
-        if (grantId !== undefined) {
-          const held = await auth.store.read(grantId);
-          if (!held)
-            throw new McpError(
-              "authorization_required",
-              "No grant found for this MCP binding; sign in again",
-              server.name,
-            );
-          checkGrantTarget(checkedGrant(held), server.url, await discoverMcp(server.url, fetchImpl));
-        }
-        const request: typeof fetch = (input, init) =>
-          run(
-            joinPromise(async () => {
-              if (grantId === undefined) return requestFetch(input, init);
-              const url = input instanceof Request ? input.url : String(input);
-              if (url !== server.url)
-                throw new McpError(
-                  "authorization_mismatch",
-                  "Refusing to send an MCP token to another URL",
-                  server.name,
-                );
-              const token = await grantToken({ store: auth.store, id: grantId, url: server.url, fetch: fetchImpl });
-              init?.signal?.throwIfAborted();
-              const headers = new Headers(init?.headers);
-              headers.set("Authorization", `Bearer ${token.token}`);
-              const response = await requestFetch(input, { ...init, headers });
-              if (response.status !== 401) return response;
-              await response.body?.cancel();
-              const refreshed = await grantToken({
-                store: auth.store,
-                id: grantId,
-                url: server.url,
-                fetch: fetchImpl,
-                rejectedGeneration: token.generation,
-              });
-              init?.signal?.throwIfAborted();
-              headers.set("Authorization", `Bearer ${refreshed.token}`);
-              const retry = await requestFetch(input, { ...init, headers });
-              if (retry.status === 401) {
-                await retry.body?.cancel();
-                await auth.store.withGrant(grantId, async (access) => {
-                  const current = access.read();
-                  if (current?.generation === refreshed.generation)
-                    await access.write({ ...current, status: "reauthorization_required" });
-                });
-                throw new McpError(
-                  "authorization_required",
-                  "MCP server refused the refreshed grant; sign in again",
-                  server.name,
-                );
-              }
-              return retry;
-            }),
-          );
         transport = new StreamableHTTPClientTransport(new URL(server.url), {
-          fetch: request,
+          fetch: requestFetch(fetchImpl, 60_000),
           requestInit: { headers: server.headers },
-          onInsufficientScope: "throw",
         });
       }
       // Register the transport separately: SDK discovery can fail before Client takes ownership of it.
@@ -249,4 +192,87 @@ export async function openMcpClients(
     }
     throw mcpFailure(error, "MCP open", openingServer);
   }
+}
+
+const safeReasons = new Map<string, string>([
+  ...getSystemErrorMap().values(),
+  ["ENOTFOUND", "DNS name not found"],
+  ["ERR_SSL_WRONG_VERSION_NUMBER", "TLS peer did not speak the expected protocol"],
+  ["UND_ERR_CONNECT_TIMEOUT", "connection timed out"],
+  ["UND_ERR_HEADERS_TIMEOUT", "response headers timed out"],
+  ["UND_ERR_BODY_TIMEOUT", "response body timed out"],
+  ["UND_ERR_SOCKET", "socket closed or failed"],
+  ["UND_ERR_CLOSED", "HTTP client closed"],
+  ["UND_ERR_DESTROYED", "HTTP client destroyed"],
+  ["ERR_TLS_CERT_ALTNAME_INVALID", "TLS certificate hostname mismatch"],
+  ["CERT_HAS_EXPIRED", "TLS certificate expired"],
+  ["DEPTH_ZERO_SELF_SIGNED_CERT", "untrusted self-signed TLS certificate"],
+  ["SELF_SIGNED_CERT_IN_CHAIN", "untrusted TLS certificate chain"],
+  ["UNABLE_TO_VERIFY_LEAF_SIGNATURE", "TLS certificate could not be verified"],
+  ["UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "TLS certificate issuer is not trusted"],
+]);
+const sdkCodes = new Set<string>(Object.values(SdkErrorCode));
+const errorNames = new Set([
+  "Error",
+  "TypeError",
+  "SyntaxError",
+  "RangeError",
+  "ReferenceError",
+  "URIError",
+  "EvalError",
+  "AbortError",
+  "TimeoutError",
+  "AggregateError",
+  "SdkError",
+]);
+
+function safeFailureReason(error: unknown): string {
+  const pending = [error];
+  const seen = new Set<Error>();
+  const reasons = new Set<string>();
+  while (pending.length) {
+    const current = pending.pop();
+    if (!(current instanceof Error) || seen.has(current)) continue;
+    seen.add(current);
+    const code = "code" in current && typeof current.code === "string" ? current.code : undefined;
+    if (code !== undefined) {
+      const reason = safeReasons.get(code);
+      if (reason !== undefined) reasons.add(`${code}: ${reason}`);
+      else if (sdkCodes.has(code)) reasons.add(code);
+    }
+    // SDK 2.4's pinned stdio probe omits structured close data; recognize only its fixed diagnostic prefix.
+    if (
+      current.message === "Connection closed during the version negotiation probe" ||
+      (current instanceof SdkError &&
+        current.code === SdkErrorCode.EraNegotiationFailed &&
+        current.message.startsWith(
+          "Version negotiation failed: the connection closed during the server/discover probe before the server offered pinned protocol version ",
+        ))
+    )
+      reasons.add("CONNECTION_CLOSED: server closed during protocol discovery");
+    if (
+      current instanceof SdkHttpError &&
+      Number.isInteger(current.status) &&
+      current.status >= 100 &&
+      current.status <= 599
+    )
+      reasons.add(`HTTP ${current.status}`);
+    pending.push(current.cause);
+    if (current instanceof AggregateError && Array.isArray(current.errors)) pending.push(...current.errors);
+  }
+  if (reasons.size) return [...reasons].join("; ");
+  return error instanceof Error ? (errorNames.has(error.name) ? error.name : "Error") : "unknown error";
+}
+
+/** A failure said as an `McpError`. Messages, paths, args, stderr and raw causes can carry credentials: only allowlisted facts escape. */
+function mcpFailure(error: unknown, operation: string, server?: string): McpError {
+  if (error instanceof McpError)
+    return error.server || !server ? error : new McpError(error.code, error.message, server);
+  if (error instanceof SdkHttpError && (error.status === 401 || error.status === 403))
+    return new McpError(
+      "authorization_required",
+      `${operation}: the MCP server refused the request (HTTP ${error.status}): check the credentials its headers carry`,
+      server,
+    );
+  return new McpError("connection", `${operation} failed (${safeFailureReason(error)})`, server);
 }

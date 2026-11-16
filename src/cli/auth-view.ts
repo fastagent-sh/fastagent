@@ -13,12 +13,11 @@ export function formatAuthReport(status: {
   stored?: string;
   shadowed?: string;
   deployed?: boolean;
-  local?: { authPath: string; valueFile: string };
+  local?: { valueFile: string };
 }): { line: string; warn?: string } {
   const { provider, path, source, error, stored, shadowed, deployed, local } = status;
   const because = error === undefined ? "" : ` (${error})`;
-  const authOverride = local ? `FASTAGENT_AUTH_PATH='${local.authPath.replaceAll("'", "'\\''")}' ` : "";
-  const login = (name: string) => `\`${authOverride}${name}\``;
+  const login = (name: string) => `\`${name}\``;
   if (source !== undefined) {
     const line = `auth:   ${source} (${provider}) — ${path}`;
     if (shadowed === undefined) return { line };

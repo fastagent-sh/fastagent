@@ -27,8 +27,8 @@ Agent API.
 - **One harness, pi-durable.** A harness-neutral layer was tried and dropped: it cost more than it bought.
   `@earendil-works/pi-*` is imported only under `src/harnesses/`. An author's tools and extensions are pi-durable code,
   by choice.
-- **The contracts import no harness.** `src/agent-api.ts` imports only `effect/Schema`. `src/channel.ts`,
-  `src/sign-in-api.ts` and `src/mcp-api.ts` import nothing. `src/index.ts` names every export and exports no assembly
+- **The contracts import no harness.** `src/agent-api.ts` imports only `effect/Schema`. `src/channel.ts`
+  and `src/mcp-api.ts` import nothing. `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
 - **One process owns an instance's state.** That state is the instance's SQLite storage and each Caller's files under
   the state root. A deployment routes every session of one storage to one process. What a Caller reads back is
@@ -77,7 +77,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 | Guards (L0) | `test/guards/*.test.ts`, `npm run test:guards` | Static export/dependency boundaries, double parity, command coverage, and hygiene rules | 20 s |
 | Unit (L1) | `test/unit/<domain>/*.test.ts`, `npm test` | Pure invariants (no I/O) and contract specs via standard doubles, temp dirs, SQLite, loopback sockets, fake timers. No child processes. | 20 s |
 | Integration (L2) | `test/integration/**/*.integration.test.ts`, `npm run test:integration` | Double parity checks, cross-process locks/signals/pipes, real `build`/`tsc`/`git`/MCP subprocesses, `npm pack` | 30 s |
-| Artifact smoke (L3) | CI only: `test/smoke/e2e/packed.ts`, `test/smoke/bun/` | Installed tarball without `src/` aliases and Bun 1.4 runtime differences | the job |
+| Artifact smoke (L3) | CI only: `test/smoke/e2e/packed.ts` | Installed tarball without `src/` aliases | the job |
 
 **Change-to-Test Matrix:**
 

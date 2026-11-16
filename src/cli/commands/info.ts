@@ -10,7 +10,7 @@ import { agentPresentation } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
-import { inspectMcp } from "../../mcp/host.ts";
+import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
@@ -68,7 +68,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const stateRoot = resolveStateRoot(agentDir);
   const auth = models.auth;
-  const mcp = await inspectMcp(agentDir).catch(failStartup);
+  const mcp = declareMcp(config.mcpServers, definition.dir).map(({ name, server }) => ({
+    name,
+    transport: server.type ?? "stdio",
+    ...(server.type === "http" ? { url: server.url } : {}),
+  }));
 
   if (opts.json) {
     console.log(
@@ -115,10 +119,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const unbuilt = "(not built: a required secret has no value)";
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
-  line(
-    "mcp",
-    mcp.map((server) => `${server.name} (${server.transport}, ${server.authorization})`).join(", ") || "(none)",
-  );
+  line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");
   line("channels", code ? channels.map((c) => `${c.name} (${c.ingress})`).join(", ") || "(none)" : unbuilt);
   line(
     "schedules",

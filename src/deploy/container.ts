@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral. */
 import { DEPLOYED_ENV, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
-import { RUNTIME_FLOOR } from "../runtime.ts";
+import { NODE_FLOOR } from "../runtime.ts";
 
 export interface Artifact {
   path: string;
@@ -32,12 +32,8 @@ export function isGeneratedDockerignore(content: string): boolean {
 export interface ContainerInput {
   /** The agent the image runs, set as `FASTAGENT_NAME`: the agent its storage belongs to. */
   name: string;
-  /** The package manager the generated image targets. */
-  runtime: "node" | "bun";
-  /** Whether the runtime's lockfile exists (package-lock.json for npm, bun.lock/bun.lockb for bun). */
+  /** Whether `package-lock.json` exists: the image installs from it with `npm ci`. */
   hasLockfile: boolean;
-  /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from packageManager `bun@x`), else `"1"`. */
-  bunVersion?: string;
   /** Debian packages the image installs (`git` for a shipped `.git`). */
   apt?: string[];
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
@@ -55,10 +51,10 @@ function aptLayer(packages?: string[]): string {
 }
 
 /**
- * The Node image an npm-based agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
+ * The Node image an agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
  * (`docker build --pull`): a copy cached before the floor's release would start a Node the CLI refuses.
  */
-const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
+const NODE_IMAGE = `node:${NODE_FLOOR.split(".")[0]}-slim`;
 
 /** Why the image builds `dist/` itself: a build context that follows `.gitignore` drops it, and `start` needs it. */
 const BUILD_STEP_NOTE =
@@ -73,15 +69,11 @@ function dockerfile(input: ContainerInput): string {
   // slim image lacks.
   const apt = aptLayer(input.apt);
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
-  const deployment = `ENV ${DEPLOYED_ENV}=1\nENV ${INSTANCE_NAME_ENV}=${input.name}\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\nENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n`;
-  const isBun = input.runtime === "bun";
-  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
-  const note = isBun
-    ? "# Bun-based (packageManager: bun / a bun lockfile detected). fastagent runs under Bun (bun run)."
-    : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
+  const deployment = `ENV ${DEPLOYED_ENV}=1\nENV ${INSTANCE_NAME_ENV}=${input.name}\nENV FASTAGENT_ROOT=${STORAGE_DIR}\nENV npm_config_cache=/tmp/fastagent/npm\n`;
+  const note = "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
   const head = `${GENERATED_DOCKERFILE_MARKER}. ${layoutNote}
 ${note}
-FROM ${base}
+FROM ${NODE_IMAGE}
 ${apt}WORKDIR ${dir}
 ${deployment}`;
   // Install ALL deps (no --omit=dev / --production): an agent's tools may need its full toolchain.
@@ -89,17 +81,6 @@ ${deployment}`;
   // `*.tgz` RIDES ALONG with the manifest, because the install layer runs BEFORE `COPY . .` and a
   // `"dep": "file:./something.tgz"` resolves against the directory it is installing in. Without this the file is
   // not there yet and the build fails on a dependency the author can see sitting in the agent directory.
-  if (isBun) {
-    // `--frozen-lockfile` needs bun.lock and hard-fails without it.
-    const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
-    return `${head}COPY package.json bun.lock* *.tgz ./
-RUN ${install}
-COPY . .
-${BUILD_STEP_NOTE}
-RUN bun run fastagent build
-CMD ["bun", "run", "fastagent", "start", "${dir}"]
-`;
-  }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent); fall back to `npm
   // install` when there is none so the build never breaks.
   const install = input.hasLockfile ? "npm ci" : "npm install";
@@ -118,7 +99,7 @@ const dockerignore = (input: ContainerInput): string =>
   (input.machineryPaths ?? [])
     // Skip what the name-based rules above already cover: the default `.secrets` / `.state` and anything inside them.
     .filter((p) => [SECRETS_DIRNAME, STATE_DIRNAME].every((covered) => p !== covered && !p.startsWith(`${covered}/`)))
-    .map((p) => `# resolved machinery path (FASTAGENT_SECRETS_DIR / FASTAGENT_AUTH_PATH)\n/${p}\n`)
+    .map((p) => `# resolved machinery path\n/${p}\n`)
     .join("");
 
 const DOCKERIGNORE_BASE = `${GENERATED_DOCKERIGNORE_MARKER}. Delete this line to take ownership (deploy then keeps your file).

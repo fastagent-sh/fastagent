@@ -132,17 +132,17 @@ export interface ValueWriteResult {
   written: string[];
   /** Vars already present with a non-empty active value; left untouched and omitted from next steps. */
   alreadySet: string[];
-  /** Set when the secrets dir is an operator-chosen one (`FASTAGENT_SECRETS_DIR`) carrying no `.gitignore`. */
+  /** Set when the value file is in a directory fastagent does not own (`--env-file`) carrying no `.gitignore`. */
   unprotectedSecretsDir?: string;
   /** Set when the file itself is in the agent directory and git would track it (`trackedValueFile`). */
   trackedFile?: string;
 }
 
 /**
- * What a command says when it wrote a secret into a secrets directory fastagent does not own and git may track; `chosenBy`
- * is what put the secrets there (the operator's `FASTAGENT_SECRETS_DIR`, unless the caller knows better).
+ * What a command says when it wrote a secret into a directory fastagent does not own and git may track; `chosenBy`
+ * is what put the secrets there.
  */
-export function unprotectedSecretsNote(dir: string, chosenBy = "FASTAGENT_SECRETS_DIR"): string {
+export function unprotectedSecretsNote(dir: string, chosenBy: string): string {
   return (
     `${dir} (${chosenBy}) now holds a secret and has no .gitignore — that directory is yours, so ` +
     "fastagent will not write one into it. Make sure git does not track what is in there."

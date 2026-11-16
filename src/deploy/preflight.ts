@@ -11,7 +11,7 @@ import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
-import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, readPackageJson } from "../runtime.ts";
+import { hasLockfile as lockfileIn, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
 import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
@@ -84,39 +84,22 @@ async function gatherFacts(
   checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, report);
 
   const pkg = await readPackageJson(agentDir);
-  const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
+  const hasLockfile = lockfileIn(agentDir);
   const kept = await keptDockerfile(agentDir);
-  // Only the generated image runs the pinned Bun: a hand-written Dockerfile names its own base.
-  if (
-    kept === undefined &&
-    runtime === "bun" &&
-    bunVersion !== undefined &&
-    belowFloor(bunVersion, RUNTIME_FLOOR.bun)
-  ) {
-    report.warn(
-      `package.json pins bun@${bunVersion}, which the image runs (oven/bun:${bunVersion}), and the agent's storage is ` +
-        `node:sqlite, which Bun ships from ${RUNTIME_FLOOR.bun}: the container would fail at start. Pin ` +
-        `bun@${RUNTIME_FLOOR.bun} or later`,
-    );
-  }
-  const install = runtime === "bun" ? "bun install" : "npm install";
   if (!hasLockfile) {
-    const otherLock =
-      runtime === "node" &&
-      ((await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock"))));
-    const lock = runtime === "bun" ? "bun.lock" : "package-lock.json";
+    const otherLock = (await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock")));
     report.warn(
       otherLock
         ? `the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
             `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
-        : `no ${lock} — the image build resolves deps at build time (not reproducible). ` +
-            `Run \`${install}\` and commit the lockfile.`,
+        : `no package-lock.json — the image build resolves deps at build time (not reproducible). ` +
+            "Run `npm install` and commit the lockfile.",
     );
   }
   if (!listsFastagent(pkg)) {
     report.warn(
       `package.json does not list @fastagent-sh/fastagent — the image has no local fastagent to run, so the ` +
-        `container fails at start. Add it to dependencies and re-run \`${install}\`.`,
+        "container fails at start. Add it to dependencies and re-run `npm install`.",
     );
   }
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
@@ -128,8 +111,6 @@ async function gatherFacts(
   if (kept !== undefined) checkKeptDockerfile(kept, name, report);
   const container: ContainerInput = {
     name,
-    runtime,
-    ...(bunVersion === undefined ? {} : { bunVersion }),
     hasLockfile,
     apt: needsGit ? ["git"] : [],
     machineryPaths: paths.machineryPaths,

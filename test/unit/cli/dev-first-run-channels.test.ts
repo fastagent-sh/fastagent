@@ -39,7 +39,6 @@ beforeEach(() => {
   prompts.answers.length = 0;
   prompts.asked.length = 0;
   said = [];
-  vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
   vi.stubEnv("TELEGRAM_BOT_TOKEN", undefined);
   vi.stubEnv("TELEGRAM_SECRET_TOKEN", undefined);
   vi.spyOn(console, "error").mockImplementation((line) => void said.push(String(line)));

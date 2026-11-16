@@ -9,12 +9,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
-import { piCredentials } from "../models/host.ts";
-import type { CredentialStore } from "../../sign-in-api.ts";
-import type { McpOptions } from "../../mcp-api.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
-import { mcpAuthorization, mcpAuthorizationInState } from "../../mcp/host.ts";
 import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
 import { processEnvironment } from "../../child-env.ts";
@@ -31,7 +27,6 @@ import { openLockedStorage } from "./storage.ts";
 import { instanceName } from "../../instance-name.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
-  mcp?: McpOptions;
   /** The instance's name. Default: the definition's, as one segment. */
   name?: string;
   /**
@@ -73,16 +68,16 @@ export interface OpenServingOptions extends CredentialSourceOptions {
    */
   workdir?: string;
   /**
-   * The directory whose `.secrets/` (values, model credentials, MCP grants) and default state
+   * The directory whose `.secrets/` (values, model credentials) and default state
    * root the instance reads. Default: the working directory.
    */
   projectDir?: string;
   /** The instance's state root. Default: the project directory's own (`resolveStateRoot`). */
   stateRoot?: string;
   /**
-   * Where the instance keeps its model credentials and MCP grants when it is given no store: `"secrets"`, the project's
-   * `.secrets/` over the machine's own credentials and as `FASTAGENT_AUTH_PATH` and `FASTAGENT_SECRETS_DIR` place them
-   * (the CLI's), or `"state"`, `auth.json` and `mcp-auth.json` in the state root and nothing else (an app's).
+   * Where the instance keeps its model credentials when it is given no store: `"secrets"`, the project's `.secrets/`
+   * over the machine's own credentials (the CLI's), or `"state"`, `auth.json` in the state root and nothing else (an
+   * app's).
    * Default `"secrets"`.
    */
   keeps?: "secrets" | "state";
@@ -181,14 +176,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   let mcp: McpClients | undefined;
   let agent: DurableAgent;
   try {
-    const mcpEnvironment = { ...secrets, ...options.mcp?.variables };
-    mcp = await openMcpClients(
-      resolveMcpServers(mcpServers, mcpEnvironment, undefined, workdir, processEnv),
-      options.keeps === "state"
-        ? mcpAuthorizationInState(stateRoot, options.mcp)
-        : mcpAuthorization(projectDir, env, stateRoot, options.mcp),
-      options.mcp,
-    );
+    mcp = await openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv));
     agent = await assembleAgent(definition, {
       name,
       mcpTools: mcpTools(mcp.tools),
@@ -276,12 +264,8 @@ export interface OpenAgentOptions {
    * `PATH`, and the secrets the definition declares are added; nothing else of the host's reaches them.
    */
   env?: Readonly<Record<string, string>>;
-  /** Per-instance MCP grants and interpolation values; no global credential discovery. */
-  mcp?: McpOptions;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
-  /** Where provider credentials are kept, instead of the state directory's `auth.json`. */
-  credentials?: CredentialStore;
   /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
   offline?: boolean;
 }
@@ -314,9 +298,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(options.name === undefined ? {} : { name: options.name }),
     wakeTicking: () => ticking,
     keeps: "state",
-    ...(options.mcp === undefined ? {} : { mcp: options.mcp }),
     ...(options.model === undefined ? {} : { model: options.model }),
-    ...(options.credentials === undefined ? {} : { credentialStore: piCredentials(options.credentials) }),
   });
   const { agent } = opened;
   let served: Promise<Service> | undefined;

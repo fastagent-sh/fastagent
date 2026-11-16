@@ -69,16 +69,7 @@ const agentDir = () => mkdtempSync(join(tmpdir(), "fa-auth-layers-"));
 describe("an agent reads credentials through its layers", () => {
   it("falls back to the user-global file when nothing was named", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("FASTAGENT_AUTH_PATH", "");
-    vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
     writeAuth(GLOBAL, "global-login");
     expect(await anthropicKey(agentDir())).toBe("global-login");
-  });
-
-  it("reads FASTAGENT_AUTH_PATH", async () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "");
-    vi.stubEnv("FASTAGENT_SECRETS_DIR", "");
-    vi.stubEnv("FASTAGENT_AUTH_PATH", writeAuth(join(mkdtempSync(join(tmpdir(), "fa-named-")), "auth.json"), "named"));
-    expect(await anthropicKey(agentDir())).toBe("named");
   });
 });

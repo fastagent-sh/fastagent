@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateRoot } from "../../../src/paths.ts";
+import { unsupportedRuntime } from "../../../src/runtime.ts";
 import { addWakeup } from "../../../src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -19,6 +20,16 @@ function sessionOf(run: { code: number | null; stdout: string; stderr: string })
   }
   return id;
 }
+
+describe("the runtime the CLI runs on", () => {
+  it("is Node from its floor: an older Node and Bun are refused, naming what to run", () => {
+    expect(unsupportedRuntime({ node: "24.15.0" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "24.4.0" })).toBe("fastagent needs Node 24.15.0 or later; this is 24.4.0");
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBe(
+      "fastagent runs on Node 24.15.0 or later, not Bun (1.4.0)",
+    );
+  });
+});
 
 describe("cli: invoke", () => {
   it("--session continues the session an earlier run printed, beside a serve", async () => {

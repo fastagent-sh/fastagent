@@ -7,7 +7,6 @@ import { join, relative, resolve } from "node:path";
 import { shellArg } from "../../shell-arg.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { SECRETS_DIRNAME, displayPath } from "../../paths.ts";
-import { detectRuntime, readPackageJson } from "../../runtime.ts";
 import {
   type ChannelKind,
   appendChannelEnv,
@@ -58,8 +57,7 @@ export async function runAddChannel(kind: ChannelKind, dirArg: string, opts: Add
     declared = await declareChannelDependencies(target, kind);
     for (const name of declared) console.error(`[fastagent] added ${name} to ${inAgent("package.json")}`);
   })().catch(failStartup);
-  const install =
-    detectRuntime(target, await readPackageJson(target)).runtime === "bun" ? "bun install" : "npm install";
+  const install = "npm install";
   const next = [
     `${agentFromCwd === undefined ? install : `(cd ${agentFromCwd} && ${install})`}   # ${
       declared.length > 0 ? `installs ${declared.join(", ")}` : "if @fastagent-sh/fastagent is not installed yet"

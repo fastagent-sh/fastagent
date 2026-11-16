@@ -1,9 +1,8 @@
 /**
- * Signing in to a MODEL PROVIDER, for any front end: {@link loginOver} runs one provider's flow over pi-ai's own
+ * Signing in to a MODEL PROVIDER for local development: {@link loginOver} runs one provider's flow over pi-ai's own
  * `AuthInteraction` and persists the credential through the same {@link fastagentCredentialStore} the runtime reads
- * (one writer, one lock/corruption semantics); {@link loginOptionsOver} is the list a picker offers. An embedding host
- * reaches both through host.ts (`signIn`, `signInOptions`); `fastagent login` is a front end of its own
- * ({@link loginFlow}: terminal menus, then {@link loginOver}).
+ * (one writer, one lock/corruption semantics); {@link loginOptionsOver} is the list a picker offers; `fastagent login`
+ * is the front end ({@link loginFlow}: terminal menus, then {@link loginOver}).
  */
 import { definedValues } from "../../declared-secrets.ts";
 import {
@@ -20,9 +19,49 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { SignInCancelled, type SignInMethod, type SignInOption, type SignInResult } from "../../sign-in-api.ts";
 import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
 import { UNNAMED_AUTH_SOURCE, interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
+
+export type SignInMethod = Credential["type"];
+
+/** One way to sign in to one provider, with what authenticates the provider now. */
+export interface SignInOption {
+  provider: string;
+  /** The provider's name: "OpenAI", "OpenAI Codex". */
+  name: string;
+  method: SignInMethod;
+  /** What signing in this way is called: the provider's own label ("Sign in with ChatGPT"), else a generic one. */
+  label: string;
+  /** An account sign-in backed by a provider subscription. */
+  subscription: boolean;
+  /** Its key comes from the environment only: there is no sign-in to run. */
+  external: boolean;
+  /**
+   * What authenticates the provider now: a stored credential (`OAuth`, `stored credential`), else the environment
+   * (a variable such as `OPENAI_API_KEY`). One credential is stored per provider, so signing in with the other method
+   * replaces a stored one.
+   */
+  status?: { type: SignInMethod; source: string };
+  /** What in the environment authenticates the provider with nothing stored: what still answers after a sign-out. */
+  environment?: string;
+  /**
+   * Why checking the environment for the provider failed: `environment` is then unknown, and so is `status` when
+   * nothing is stored.
+   */
+  problem?: string;
+}
+
+export interface SignInResult {
+  provider: string;
+  method: SignInMethod;
+  /** An API key is checked with one request before it is stored: accepted, or not decidable (stored). */
+  verified: "ok" | "unknown" | "n/a";
+}
+
+/** The person backed out of a sign-in, or its signal aborted: a decision, not a failure. Nothing was stored. */
+export class SignInCancelled extends Error {
+  override name = "SignInCancelled";
+}
 
 /** A sign-in that cannot start as asked: an unknown provider, or a choice a caller without menus did not make. */
 export class LoginRefused extends Error {

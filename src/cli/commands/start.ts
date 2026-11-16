@@ -1,14 +1,8 @@
 /** Production serving. */
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { Agent } from "../../agent-api.ts";
 import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
-import {
-  selectAgentEnvironment,
-  resolveSecretsDir,
-  isDeployedWorkspace,
-  isUnderDir,
-  INSTANCE_ROOT_ENV,
-} from "../../paths.ts";
+import { selectAgentEnvironment, isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
@@ -59,9 +53,6 @@ async function prepareStartWorkspace(): Promise<void> {
   const root = resolve(storage);
   await prepareDeployment(root, storageOwnerFromEnv());
   process.env[INSTANCE_ROOT_ENV] = root;
-  // A default, not an override: an operator who pointed it somewhere else meant it, and silently relocating their
-  // credentials is the one failure they could not diagnose from the logs.
-  process.env.FASTAGENT_SECRETS_DIR ||= join(root, ".secrets");
 }
 
 /** Take the storage on a deployed box, then open the built definition in `dirArg` and serve it. */
@@ -77,11 +68,6 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Sta
   if (isUnderDir(stateRoot, agentDir)) {
     log.info(
       "[fastagent] note: state lives under the definition; use FASTAGENT_ROOT on persistent storage for deployment.",
-    );
-  }
-  if (isUnderDir(resolveSecretsDir(agentDir), agentDir)) {
-    log.info(
-      "[fastagent] note: credentials live under the definition; use FASTAGENT_SECRETS_DIR on persistent storage for deployment.",
     );
   }
   const service = await serveAgent(opened, cliMountOptions());

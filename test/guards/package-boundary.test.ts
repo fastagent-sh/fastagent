@@ -99,7 +99,6 @@ describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
-    expect([...staticPackageGraph("sign-in-api.ts")]).toEqual([]);
     expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
   });
 });

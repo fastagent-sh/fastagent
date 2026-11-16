@@ -1,6 +1,6 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: open an agent in your app, send it messages, serve its channels from your server, keep its credentials, and run it in a desktop host."
+description: "Use FastAgent as a library: open an agent in your app, send it messages, serve its channels from your server, give it its credentials, and run it in a desktop host."
 status: current
 ---
 
@@ -9,7 +9,7 @@ status: current
 Run the agent inside your own app, behind your own auth. It is the same agent the CLI runs.
 
 ```bash
-npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4
+npm i @fastagent-sh/fastagent       # Node ≥ 24.15
 ```
 
 Build the agent with `fastagent build`; your app imports the package that makes.
@@ -36,7 +36,7 @@ await agent.close(); // on shutdown: releases the instance's storage
 - Opening refreshes the model lists (`offline: true` skips the network).
 - One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
   stop work for good, `agent.sessions.cancel(sessionId)` first.
-- MCP servers: sign in with `inspectMcp` and `signInMcp`, then pass `mcp: { store, bindings }` ([MCP servers](mcp.md)).
+- [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
 
 ## 2. Send a message
 
@@ -146,32 +146,11 @@ app.register(async (scope) => {
 
 ## 4. Credentials
 
-The agent reads model credentials from `credentials`, else `<state>/auth.json`, and provider keys from `secrets`.
-Never from the project's `.secrets/` or `~/.fastagent`, so a developer's own login never becomes your app's. The state
-directory holds secrets: keep `.state/` out of git.
-
-Use `credentialFile(path)`, or your own `CredentialStore` (an OS keychain, Electron `safeStorage`). Sign a person in from
-your UI with `signInOptions(store)` and `signIn`:
+The agent reads provider keys from `secrets` by their variable names (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …), and
+nothing from the project's `.secrets/` or `~/.fastagent`, so a developer's own login never becomes your app's.
 
 ```ts
-import { join } from "node:path";
-import { credentialFile, openAgent, signIn, SignInCancelled } from "@fastagent-sh/fastagent";
-
-const credentials = credentialFile(join(app.getPath("userData"), "auth.json"));
-try {
-  await signIn({
-    credentials,
-    provider: "anthropic",
-    method: "oauth",
-    interaction: {
-      prompt: (prompt) => askInWindow(prompt), // text, secret, select, manual_code; reject with SignInCancelled to back out
-      notify: (event) => showInWindow(event), // auth_url, device_code, info, progress
-    },
-  });
-} catch (error) {
-  if (!(error instanceof SignInCancelled)) throw error;
-}
-const agent = await openAgent(definition, { root, credentials });
+const agent = await openAgent(definition, { root, secrets: { ANTHROPIC_API_KEY: vault.read("anthropic") } });
 ```
 
 A gateway or self-hosted model is a provider in the agent's config ([custom models](configuration.md#custom-models)).

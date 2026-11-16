@@ -2,46 +2,19 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-/**
- * How to install and run the AGENT: its own package.json + lockfile decide.
- */
-export interface AgentRuntime {
-  /**
-   * The JS runtime the agent targets — drives the generated Dockerfile base + install/run commands and the
-   * package-manager hints in `init`/`add`.
-   */
-  runtime: "node" | "bun";
-  /**
-   * For `runtime: "bun"`, the version from package.json's `packageManager: "bun@x"` (undefined if a bun lockfile made
-   * it bun but no version is pinned).
-   */
-  bunVersion?: string;
-  /** Whether the runtime's lockfile is present (package-lock.json for node, bun.lock/bun.lockb for bun). */
-  hasLockfile: boolean;
+/** Whether the agent's npm lockfile is present: the image installs from it when it is. */
+export function hasLockfile(dir: string): boolean {
+  return existsSync(join(dir, "package-lock.json"));
 }
 
 /**
- * Detect which JS runtime an agent targets: `bun` when package.json's `packageManager` is `bun@…` OR a bun lockfile
- * (bun.lock/bun.lockb) is present, else `node`.
+ * The oldest Node that runs an agent, set by the instance's storage, `node:sqlite`: Node stops calling it
+ * experimental, and printing so on every start, from 24.15.0.
  */
-export function detectRuntime(dir: string, pkg: { packageManager?: unknown }): AgentRuntime {
-  const pm = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
-  const bunLock = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
-  if (pm.startsWith("bun@") || bunLock) {
-    // corepack pins as `bun@1.3.13+sha256.<hash>`; the version (a Docker tag for oven/bun) is the part BEFORE `+`.
-    return { runtime: "bun", bunVersion: pm.match(/^bun@([^+]+)/)?.[1], hasLockfile: bunLock };
-  }
-  return { runtime: "node", hasLockfile: existsSync(join(dir, "package-lock.json")) };
-}
-
-/**
- * The oldest runtimes that run an agent, both set by the instance's storage, `node:sqlite`: Bun ships it from 1.4.0,
- * and Node stops calling it experimental, and printing so on every start, from 24.15.0.
- */
-export const RUNTIME_FLOOR = { node: "24.15.0", bun: "1.4.0" } as const;
+export const NODE_FLOOR = "24.15.0";
 
 /** Whether `version` (`1.3.13`, `24.4`) is older than `floor`; false for one that names no version (`canary`). */
-export function belowFloor(version: string, floor: string): boolean {
+function belowFloor(version: string, floor: string): boolean {
   const match = /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(version);
   if (match === null) return false;
   const given = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)];
@@ -52,9 +25,10 @@ export function belowFloor(version: string, floor: string): boolean {
 
 /** Why this process's runtime cannot run fastagent, or undefined when it can. Bun reports a Node version too. */
 export function unsupportedRuntime(versions: { node: string; bun?: string } = process.versions): string | undefined {
-  const [name, version, floor] =
-    versions.bun === undefined ? ["Node", versions.node, RUNTIME_FLOOR.node] : ["Bun", versions.bun, RUNTIME_FLOOR.bun];
-  return belowFloor(version, floor) ? `fastagent needs ${name} ${floor} or later; this is ${version}` : undefined;
+  if (versions.bun !== undefined) return `fastagent runs on Node ${NODE_FLOOR} or later, not Bun (${versions.bun})`;
+  return belowFloor(versions.node, NODE_FLOOR)
+    ? `fastagent needs Node ${NODE_FLOOR} or later; this is ${versions.node}`
+    : undefined;
 }
 
 /**
@@ -73,7 +47,6 @@ export function listsFastagent(pkg: {
  * naming itself: read as `{}` it became "does not list @fastagent-sh/fastagent" and an npm-based image, both wrong.
  */
 export async function readPackageJson(dir: string): Promise<{
-  packageManager?: unknown;
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
   optionalDependencies?: Record<string, unknown>;

@@ -105,8 +105,8 @@ function parseForWrite(raw: string | undefined, where: string): Creds {
 /**
  * A read-write `CredentialStore` over the given credentials file (default {@link GLOBAL_AUTH_PATH}; the directory
  * opener passes the project-level `<root>/.secrets/auth.json`), optionally falling back to a second file. A path is
- * read like `FASTAGENT_AUTH_PATH` (`~` is the home directory, a relative one resolves against the cwd), so every
- * caller that names a file names the same one.
+ * read as an override path is (`~` is the home directory, a relative one resolves against the cwd), so every caller
+ * that names a file names the same one.
  *
  * The fallback is PER PROVIDER, not per file: logging one provider into a project must not hide the others a person
  * already has globally. And the layer a credential was READ from is the layer its refresh is written back to —
@@ -199,18 +199,9 @@ export function fastagentCredentialStore(
 
 // ── Which files an agent reads ───────────────────────────────────────────────
 
-/**
- * The auth-file override: the SDK's `authPath` option > `FASTAGENT_AUTH_PATH` env > undefined (then
- * `<secrets dir>/auth.json`). The CLI has no flag for it: a second spelling of one environment variable buys nothing,
- * and the variable is what a deployed container reads anyway.
- */
-function resolveAuthPathOverride(flag: string | undefined, env: NodeJS.ProcessEnv): string | undefined {
-  return resolveOverridePath(flag ?? env.FASTAGENT_AUTH_PATH);
-}
-
-/** The effective auth file for an agent: override if present, else `<secrets dir>/auth.json`. */
-export function resolveAuthPath(dir: string, flag?: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAuthPathOverride(flag, env) ?? join(resolveSecretsDir(dir, env), "auth.json");
+/** The effective auth file for an agent: the `authPath` a caller names, else `<secrets dir>/auth.json`. */
+export function resolveAuthPath(dir: string, authPath?: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveOverridePath(authPath) ?? join(resolveSecretsDir(dir, env), "auth.json");
 }
 
 /**
@@ -223,14 +214,9 @@ export interface AuthLayers {
 }
 
 /**
- * The {@link AuthLayers} an agent directory reads: `authPath` option > `FASTAGENT_AUTH_PATH` > its own file, and
- * behind it the user-global store, because a login is a PERSON on a machine and not a project — one `login -g` then
- * serves every agent here.
- *
- * No fallback when a path was named: "use this file" is an instruction, not a preference. BOTH knobs
- * {@link resolveAuthPath} reads count as that instruction, `FASTAGENT_SECRETS_DIR` included — it is what the
- * Fly/Railway artifacts set, and a deployed container must read its mounted credentials and nothing else
- * (the artifact is the truth).
+ * The {@link AuthLayers} an agent directory reads: the `authPath` a caller names, else its own file and behind it the
+ * user-global store, because a login is a PERSON on a machine and not a project — one `login -g` then serves every
+ * agent here. No fallback when a path was named: "use this file" is an instruction, not a preference.
  */
 export function resolveAuthLayers(
   agentDir: string,
@@ -238,6 +224,5 @@ export function resolveAuthLayers(
   env: NodeJS.ProcessEnv = process.env,
 ): AuthLayers {
   const path = resolveAuthPath(agentDir, authPath, env);
-  const named = resolveAuthPathOverride(authPath, env) ?? resolveOverridePath(env.FASTAGENT_SECRETS_DIR);
-  return named === undefined ? { path, fallback: GLOBAL_AUTH_PATH } : { path };
+  return authPath === undefined ? { path, fallback: GLOBAL_AUTH_PATH } : { path };
 }

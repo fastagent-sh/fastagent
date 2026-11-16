@@ -67,12 +67,12 @@ Use a separate production app for the container: two processes on one bot split 
 ## What ships
 
 The image holds the agent directory at `/app`. It installs `git` when the agent is a repository. The volume holds what
-changes, and is the agent's working directory:
+changes, and is the agent's working directory. Credentials are never kept there: they are the container's
+environment variables.
 
 ```text
 /data/
 ├── .state/           # sessions, channel and schedule state
-├── .secrets/         # credentials kept on the box
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 

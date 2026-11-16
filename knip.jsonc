@@ -12,8 +12,7 @@
     "src/feishu.ts",
     "src/lark.ts",
     "test/**/*.test.ts",
-    // Run by CI's Bun and packed-package jobs, which vitest is not.
-    "test/smoke/bun/*.ts",
+    // Run by CI's packed-package job, which vitest is not.
     "test/smoke/e2e/*.ts"
   ],
   "project": ["src/**/*.ts", "test/**/*.ts"],

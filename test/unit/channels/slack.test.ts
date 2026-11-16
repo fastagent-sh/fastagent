@@ -304,7 +304,7 @@ describe("Slack Socket Mode channel", () => {
     const sent: unknown[] = [];
     const openSocket: OpenSlackSocket = (_url, given) => {
       handlers = given;
-      return { send: (data) => sent.push(JSON.parse(data)), close: () => {} };
+      return { send: (data) => sent.push(JSON.parse(data)), close: () => {}, ping: () => {} };
     };
     const abort = new AbortController();
     const stateRoot = options.stateRoot ?? root();

@@ -5,12 +5,12 @@ This suite follows a four-layer layout (see [AGENTS.md](../AGENTS.md#tests)):
 ```text
 test/
 ├── guards/       # [L0] package boundaries, test hygiene, runtime isolation guards
-├── doubles/      # Shared test doubles (protocol/ holds Bun & WS stand-ins)
+├── doubles/      # Shared test doubles (protocol/ holds WS stand-ins)
 ├── harnesses/    # Multi-suite conformance, channel sandbox, and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
 ├── unit/         # [L1] domain suites: agent-api, definition, cli, channels, deploy, schedules, embedding, security
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
-└── smoke/        # [L3, CI-only] e2e/packed.ts and bun/ runtime checks
+└── smoke/        # [L3, CI-only] e2e/packed.ts
 ```
 
 ## Canonical Doubles & Harnesses
@@ -27,7 +27,7 @@ Use these shared seams instead of writing per-file mocks:
 | `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for channel/scheduler specs | Conforms to `src/agent-api.ts` |
 | `harnesses/channel-harness.ts` | Channel suite setup, fetch settle, queue drain | Shared by `telegram`, `slack`, `feishu` suites |
 | `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable` and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts` |
-| `doubles/protocol/*` | Protocol servers for Bun smoke (`smoke/bun/`) | Local HTTP / WebSocket protocol checks |
+| `doubles/protocol/*` | Protocol servers (Slack's Socket Mode) | Local WebSocket protocol checks |
 
 ## Quick Commands
 

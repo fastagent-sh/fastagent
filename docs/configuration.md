@@ -169,20 +169,18 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/fastagent/clien
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
 | `<root>/.state/` | Storage (`agent.sqlite`), channel and schedule state. One process at a time |
-| `.secrets/` | `.env`, `auth.json`, MCP grants. Never in git or the image |
+| `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
 |---|---|---|
 | `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`) |
 | `--name <name>` | `FASTAGENT_NAME` | the package's name |
-| | `FASTAGENT_SECRETS_DIR` | `.secrets` (`start`: `.secrets/production`) |
-| | `FASTAGENT_AUTH_PATH` | `<secrets>/auth.json` |
 
 The container `deploy docker` writes keeps its root at `/data`. On your own server without a container:
 
 ```bash
 fastagent build
-FASTAGENT_ROOT=/data FASTAGENT_SECRETS_DIR=/data/.secrets fastagent start
+FASTAGENT_ROOT=/data fastagent start
 ```
 
 ## Code: `src/`
