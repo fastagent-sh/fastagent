@@ -14,7 +14,7 @@ import { type FinishedSpan, recordingTelemetry } from "./spans.ts";
 
 const BATCH_SPANS = 512;
 const BATCH_INTERVAL_MS = 5_000;
-/** Spans held for the next batch at most: past it, the oldest are dropped, as a collector that keeps refusing would. */
+/** Spans waiting for the collector at most: a batch past it is dropped, so a collector that hangs holds no backlog. */
 const MAX_HELD_SPANS = 4_096;
 const EXPORT_TIMEOUT_MS = 10_000;
 
@@ -47,13 +47,17 @@ export function otlpTraces(
     ...parsePairs(env.OTEL_EXPORTER_OTLP_TRACES_HEADERS, "OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
     "content-type": "application/json",
   };
+  const serviceName = env.OTEL_SERVICE_NAME?.trim();
   const resourceAttributes: SpanAttributes = {
+    "service.name": resource.serviceName,
     ...parsePairs(env.OTEL_RESOURCE_ATTRIBUTES, "OTEL_RESOURCE_ATTRIBUTES"),
-    "service.name": env.OTEL_SERVICE_NAME?.trim() || resource.serviceName,
+    ...(serviceName ? { "service.name": serviceName } : {}),
     "service.version": resource.serviceVersion,
   };
 
   let held: FinishedSpan[] = [];
+  /** Spans in batches waiting for the collector. */
+  let queued = 0;
   let dropped = 0;
   let sending = Promise.resolve();
   const send = (spans: FinishedSpan[]): Promise<void> =>
@@ -79,17 +83,23 @@ export function otlpTraces(
     }
     const batch = held;
     held = [];
-    if (batch.length > 0) sending = sending.then(() => send(batch));
+    if (batch.length === 0) return sending;
+    if (queued + batch.length > MAX_HELD_SPANS) {
+      dropped += batch.length;
+      return sending;
+    }
+    queued += batch.length;
+    sending = sending
+      .then(() => send(batch))
+      .finally(() => {
+        queued -= batch.length;
+      });
     return sending;
   };
   const timer = setInterval(() => void flush(), BATCH_INTERVAL_MS);
   timer.unref();
   const context = recordingTelemetry((span) => {
     held.push(span);
-    if (held.length > MAX_HELD_SPANS) {
-      held.shift();
-      dropped++;
-    }
     if (held.length >= BATCH_SPANS) void flush();
   });
   return {
@@ -115,7 +125,11 @@ function parsePairs(text: string | undefined, variable: string): Record<string, 
     if (item.trim() === "") continue;
     const at = item.indexOf("=");
     if (at <= 0) throw new Error(`${variable}: "${item.trim()}" is not key=value`);
-    pairs[item.slice(0, at).trim()] = decodeURIComponent(item.slice(at + 1).trim());
+    try {
+      pairs[item.slice(0, at).trim()] = decodeURIComponent(item.slice(at + 1).trim());
+    } catch {
+      throw new Error(`${variable}: "${item.trim()}" is not percent-encoded`);
+    }
   }
   return pairs;
 }

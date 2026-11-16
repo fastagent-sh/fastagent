@@ -208,7 +208,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     .then(() => mcp.close())
     .catch((error: unknown) => {
       log.warn(`[fastagent] MCP cleanup after harness shutdown failed: ${String(error)}`);
-    });
+    })
+    .finally(() => traces?.close());
   const closeAgent = agent.close.bind(agent);
   let closing: Promise<void> | undefined;
   agent.close = () =>

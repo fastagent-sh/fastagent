@@ -257,5 +257,6 @@ argument.
 | `OTEL_SDK_DISABLED=true` | Export nothing |
 
 The protocol is OTLP/HTTP with JSON; any other `OTEL_EXPORTER_OTLP_PROTOCOL` refuses the start. `dev`, `start`,
-`invoke`, `schedules run` and an app's `openAgent` all export. A collector that is down costs the agent nothing: the
+`invoke` and `schedules run` read these variables from the environment or the `.secrets/` value files; an app's `openAgent`
+reads them from its `secrets` ([Embedding](embedding.md#1-open-it)). A collector that is down costs the agent nothing: the
 spans it missed are dropped, and the log says how many.

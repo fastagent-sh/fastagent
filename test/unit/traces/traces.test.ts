@@ -1,7 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createTelemetryAdapterConformance } from "@earendil-works/pi-telemetry/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { otlpTraces } from "../../../packages/fastagent/src/harnesses/telemetry/otlp.ts";
 import { type FinishedSpan, recordingTelemetry } from "../../../packages/fastagent/src/harnesses/telemetry/spans.ts";
 import { log } from "../../../packages/fastagent/src/log.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
@@ -46,20 +49,36 @@ describe("the runs' spans, recorded as pi's telemetry contract asks", () => {
   }
 });
 
-/** A collector on loopback: what it was sent, and with which headers. */
-async function collector() {
+/** A collector on loopback: what it was sent, and with which headers. `held` keeps it from answering until released. */
+async function collector({ held = false } = {}) {
   const received: { headers: Record<string, string | string[] | undefined>; body: any }[] = [];
+  const waiting: (() => void)[] = [];
+  let answering = !held;
   const server = createServer((req, res) => {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
       received.push({ headers: req.headers, body: JSON.parse(body) });
-      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      const answer = () => res.writeHead(200, { "content-type": "application/json" }).end("{}");
+      if (answering) answer();
+      else waiting.push(answer);
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { url, received, close: () => new Promise((resolve) => server.close(resolve)) };
+  const release = () => {
+    answering = true;
+    for (const answer of waiting.splice(0)) answer();
+  };
+  return {
+    url,
+    received,
+    release,
+    close: () => {
+      release();
+      return new Promise((resolve) => server.close(resolve));
+    },
+  };
 }
 
 type OtlpSpan = { name: string; traceId: string; parentSpanId?: string; attributes: { key: string; value: any }[] };
@@ -115,6 +134,77 @@ describe("run traces over OTLP", () => {
     expect((await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 })).status).toBe("completed");
     await agent.close();
     expect(warned.some((line) => line.includes("traces:") && line.includes("dropped"))).toBe(true);
+  });
+
+  it("drops the batches past its limit while the collector hangs, instead of holding a backlog", async () => {
+    const otlp = await collector({ held: true });
+    const warned: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((line) => warned.push(line));
+    try {
+      const traces = otlpTraces({ OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url }, { serviceName: "a", serviceVersion: "1" });
+      if (traces === undefined) throw new Error("expected an exporter");
+      for (let i = 0; i < 10_000; i++) await traces.context.startSpan({ name: "step" }, () => undefined);
+      otlp.release();
+      await traces.close();
+      const sent = otlp.received.reduce((count, { body }) => count + spansOf(body).length, 0);
+      expect(sent).toBeLessThanOrEqual(4_096 + 512);
+      expect(warned.some((line) => line.includes("dropped while the collector was behind"))).toBe(true);
+    } finally {
+      await otlp.close();
+    }
+  });
+
+  it("sends what was recorded when the harness closes on its own", async () => {
+    // Only the close may send: the batch interval never fires.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const otlp = await collector();
+    try {
+      const dir = await fauxAgent("fa-traces-harness-");
+      const agent = await openSource(dir, { secrets: { ...process.env, OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url } });
+      const { id } = await agent.sessions.create();
+      expect((await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 })).status).toBe("completed");
+      await agent.harness.close(BACKGROUND_CONTEXT);
+      for (let tries = 0; otlp.received.length === 0 && tries < 100; tries++) await sleep(20);
+      expect(otlp.received.length).toBeGreaterThan(0);
+      await agent.close();
+    } finally {
+      vi.useRealTimers();
+      await otlp.close();
+    }
+  });
+
+  it("takes service.name from OTEL_RESOURCE_ATTRIBUTES, and OTEL_SERVICE_NAME over it", async () => {
+    const otlp = await collector();
+    try {
+      const nameSent = async (env: Record<string, string>) => {
+        otlp.received.length = 0;
+        const traces = otlpTraces(
+          { OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url, ...env },
+          { serviceName: "instance", serviceVersion: "1" },
+        );
+        await traces?.context.startSpan({ name: "step" }, () => undefined);
+        await traces?.close();
+        return otlp.received[0]?.body.resourceSpans[0].resource.attributes.find(
+          (a: { key: string }) => a.key === "service.name",
+        )?.value.stringValue;
+      };
+      expect(await nameSent({})).toBe("instance");
+      expect(await nameSent({ OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes" })).toBe("from-attributes");
+      expect(
+        await nameSent({ OTEL_RESOURCE_ATTRIBUTES: "service.name=from-attributes", OTEL_SERVICE_NAME: "named" }),
+      ).toBe("named");
+    } finally {
+      await otlp.close();
+    }
+  });
+
+  it("refuses a header value that is not percent-encoded, naming the variable", () => {
+    expect(() =>
+      otlpTraces(
+        { OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318", OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%2" },
+        { serviceName: "a", serviceVersion: "1" },
+      ),
+    ).toThrow('OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%2" is not percent-encoded');
   });
 
   it("refuses to open on a protocol it cannot send, naming the variable", async () => {
