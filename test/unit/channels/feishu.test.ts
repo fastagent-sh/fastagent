@@ -467,6 +467,22 @@ describe("turn flow", () => {
     expect(settled.config.summary).toEqual({ content: "bold answer" });
   });
 
+  it("without a card it posts no placeholder, says why in the log, and still delivers the answer", async () => {
+    const fx = feishuFetch({
+      "/cardkit/v1/cards": () => Response.json({ code: 99991672, msg: "Access denied: cardkit:card:write" }),
+    });
+    const warned: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((message) => warned.push(message));
+    const { handler, idle } = buildChannel({}, "the answer");
+    await handler(feishuRequest(messageEvent({ id: "om_nocard", text: "hello" })));
+    await idle();
+    const sends = fx.calls("receive_id_type=chat_id", "POST");
+    expect(sends.map((call) => [call.body?.msg_type, call.body?.content])).toEqual([
+      ["text", JSON.stringify({ text: "the answer" })],
+    ]);
+    expect(warned.some((line) => line.includes("cardkit:card:write"))).toBe(true);
+  });
+
   it("folds nothing into a turn; its history tool reads the chat it was asked in, by name, and no other chat's thread", async () => {
     feishuFetch();
     const prompts: string[] = [];

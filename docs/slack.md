@@ -1,6 +1,6 @@
 ---
 title: Slack channel
-description: "Run an agent as a Slack app: create the app, Socket Mode, when it answers, reading history, files, rendering, and sending from schedules."
+description: "Run an agent as a Slack app: create the app, Socket Mode, when it answers, reading history, files, streaming, and sending from schedules."
 status: current
 ---
 
@@ -44,9 +44,12 @@ terminal). `fastagent dev` runs the setup itself the first time.
 <details><summary>Creating the app by hand</summary>
 
 Bot Token Scopes: `app_mentions:read`, `assistant:write`, `chat:write`, `files:read`, `files:write`, `im:history`,
-`reactions:write`, `users:read`, plus `channels:history`, `groups:history`, `mpim:history` for group context. Turn on
-**Agents**. Subscribe to `app_home_opened`, `app_context_changed`, `app_mention`, `message.im`, `message.channels`,
-`message.groups`, `message.mpim`. Then run `channels setup slack` and paste the tokens.
+`reactions:write`, `users:read`, plus `channels:history`, `groups:history`, `mpim:history` for reading history. Turn on
+**Agents**. Subscribe to `agent_session_stopped`, `app_home_opened`, `app_context_changed`, `app_mention`, `message.im`,
+`message.channels`, `message.groups`, `message.mpim`. Then run `channels setup slack` and paste the tokens.
+
+An app created before FastAgent subscribed to `agent_session_stopped` shows no stop button: add the event under Event
+Subscriptions.
 
 </details>
 
@@ -79,7 +82,8 @@ is sent. While a turn runs the asker's message shows 👀, then ✅.
 
 ## Stopping a turn
 
-A DM or mention whose whole text is `stop` or `cancel` stops the running turn.
+Slack's stop button on a working thread stops the running turn, and so does a DM or mention whose whole text is `stop`
+or `cancel`.
 
 ## Files and images
 
@@ -87,15 +91,15 @@ Images reach the model as images (it must support vision). Other files are saved
 `<state root>/channels/slack/files/` and their paths given to the agent (up to 20 MB each). A file the asker attached
 that cannot be read fails the turn visibly.
 
-## Rendering
+## Streaming
 
-- `rendering: "native"` (default) streams into the thread and shows each tool call as a short line. These lines stay
-  in the message.
-- `rendering: "classic"` edits one message at most every 3 seconds and settles into the answer alone. Use it for apps
-  without Agent features, or for replies at channel top level.
+The answer streams into its thread as Slack's native agent message, and shows each tool call as a short line, which
+stays in the message. The thread's agent session shows Slack's working indicator and stop button while the turn runs.
+A stream holds at most 10 minutes and 12,000 characters, so a longer answer continues in a new message of the same
+thread. A custom route that answers at a channel's top level (`threadTs: null`) cannot stream: its answer is posted
+once it is done.
 
-Replies use standard Markdown, neutralize `<!channel>`-style pings, and continue in new messages past Slack's length
-limit.
+Replies use standard Markdown and neutralize `<!channel>`-style pings.
 
 ## Sending from schedules (`slack_send`)
 
@@ -119,7 +123,6 @@ channel declared as `support` gives `support_send` and `support_history`.
 
 ```ts
 slack({
-  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
   // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
   // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
   // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)

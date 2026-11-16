@@ -6,7 +6,9 @@ status: current
 
 # Feishu and Lark channel
 
-The agent answers as a Feishu or Lark bot, streaming its answer into a Markdown card.
+The agent answers as a Feishu or Lark bot, streaming its answer into a Markdown card (CardKit). Without the card scope
+(`cardkit:card:write`, "Create and update card") there is no live card: the answer is sent as text once it is done,
+and the log says why.
 
 | | Feishu (飞书) | Lark (international) |
 |---|---|---|

@@ -1,4 +1,9 @@
-/** Slack reply rendering: native Agent streams first, rate-safe edited-message compatibility second. */
+/**
+ * Slack reply rendering, as Slack asks an agent to answer: a native stream (`chat.startStream`) in the reply's thread,
+ * the agent session's status set around it (`agents.sessions.setStatus`). A stream is bounded (10 minutes, 12,000
+ * characters), so a long answer continues in a new stream in the same thread. A reply with no thread (a custom route's
+ * top-level target) cannot be streamed: it is posted once it is done.
+ */
 import type { Json } from "../../agent-api.ts";
 import type { TurnEvent } from "../kit/invoke.ts";
 import { answerText } from "../../answer-text.ts";
@@ -9,20 +14,14 @@ import * as Stream from "effect/Stream";
 import { PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import {
-  RETRY_NOTICE,
-  THINKING_PLACEHOLDER,
   type ChannelFailure,
   applyTurnEvent,
-  composeTurnBody,
   createTurnView,
   defaultErrorMessage,
   humanizeToolName,
-  previewPump,
   renderReply,
-  revealedAnswer,
   serialWriter,
   summarizeToolArgs,
-  toolLines,
   turnEnd,
   unfinishedTurn,
 } from "../kit/preview.ts";
@@ -33,15 +32,14 @@ import {
   chunkSlackText,
   isSlackNativeUnavailable,
 } from "./slack-api.ts";
-import { type CallOptions, DROPPABLE_FRAME } from "../kit/ingress.ts";
 
 export type SlackFailure = ChannelFailure;
-export type SlackRendering = "native" | "classic";
 export { defaultErrorMessage };
 
-const CLASSIC_UPDATE_INTERVAL_MS = 3_000;
 const NATIVE_APPEND_INTERVAL_MS = 750;
-const WORKING_STATUS = "is working on your request…";
+/** Slack finalizes a stream 10 minutes after it starts and refuses one past 12,000 characters: rotate before either. */
+const STREAM_MAX_MS = 9 * 60_000;
+const STREAM_MAX_CHARS = 12_000;
 const GENERIC_FAILURE = "⚠️ The response stream stopped unexpectedly. Please try again.";
 
 /** LLM output uses standard Markdown, never Slack's notification control syntax. Keep explicit sends in
@@ -101,13 +99,12 @@ function withDisclaimer(markdown: string, disclaimer: string | false | undefined
   return disclaimer === false || !disclaimer?.trim() ? body : `${body}\n\n_${disclaimer.trim()}_`;
 }
 
-async function settleClassic(
+/** Post `markdown` as the reply, taking over `previewTs` (a notice this process posted) when there is one. */
+async function settleMessage(
   api: SlackApi,
   target: SlackTarget,
   previewTs: string | undefined,
   markdown: string,
-  /** The renderer's own edit — it spends the mutation slot the pacing depends on. */
-  update: (ts: string, value: string) => Promise<void>,
 ): Promise<void> {
   // Best-effort: the reply lands either way, but a preview left behind sits above it, so say so.
   const dropPreview = (ts: string) =>
@@ -121,7 +118,7 @@ async function settleClassic(
   const [head, ...rest] = chunkSlackMarkdown(markdown);
   if (previewTs && head !== undefined) {
     try {
-      await update(previewTs, head);
+      await api.updateMarkdown(target.channelId, previewTs, head);
     } catch (error) {
       log.warn(`[slack] final edit of the live preview failed (${String(error)}); sending the reply as a new message`);
       await dropPreview(previewTs);
@@ -138,7 +135,7 @@ async function settleClassic(
 
 /**
  * Deliver a reply this process did not generate: a recovered answer. The stream it was written for is gone with its
- * process, so there is none to resume — but a compatibility queue message THIS process posted while the record
+ * process, so there is none to resume — but a queue message THIS process posted while the record
  * waited its turn is taken over rather than left above the answer.
  */
 export async function deliverSlackAnswer(
@@ -147,9 +144,7 @@ export async function deliverSlackAnswer(
   markdown: string,
   previewTs?: string,
 ): Promise<void> {
-  await settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), (ts, value) =>
-    api.updateMarkdown(target.channelId, ts, value),
-  );
+  await settleMessage(api, target, previewTs, sanitizeSlackMarkdown(markdown));
 }
 
 /** Settle a queue/drop/defer notice. These are authored plain strings, so the basic text API is enough. */
@@ -166,11 +161,8 @@ export async function settleSlackPreview(
   await api.postMessage(target, text);
 }
 
-/** Whether an event carries answer text: a text delta, or the settled message it adds up to. */
-const isAnswerText = (event: TurnEvent): boolean =>
-  (event.type === "delta" && event.channel === "text") || (event.type === "entry" && event.entry.kind === "assistant");
-
-function streamClassicSlackReply(
+/** A reply with no thread to stream into: the answer is posted once the turn is done. */
+function postSlackReply(
   events: Stream.Stream<TurnEvent, PromiseFailure>,
   api: SlackApi,
   target: SlackTarget,
@@ -180,76 +172,15 @@ function streamClassicSlackReply(
   onAnswered?: (answer: string) => void,
 ) {
   return Effect.gen(function* () {
-    const clock = yield* Clock.Clock;
-    const now = () => clock.currentTimeMillisUnsafe();
-    // Event → view-state reduction is the shared machine (preview-kit); this renderer owns mrkdwn
-    // sanitizing and delivery. Reasoning stays a static "Thinking…" here: raw chain-of-thought is not
-    // customer-facing on Slack, so the reducer accumulates it but this view never reads it.
     const turn = createTurnView();
-    let previewTs: string | undefined;
-    let previewAttempted = false;
-    let lastMutationAt = 0;
-    let lastSent = "";
-
-    const view = (): string =>
-      composeTurnBody([
-        THINKING_PLACEHOLDER,
-        // Tool names, arguments and progress lines are untrusted text, like the answer.
-        sanitizeSlackMarkdown(toolLines(turn)),
-        turn.retrying ? RETRY_NOTICE : "",
-        sanitizeSlackMarkdown(revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS, now())),
-      ]);
-    const waitForMutationSlot = Effect.suspend(() => {
-      const remaining = lastMutationAt + CLASSIC_UPDATE_INTERVAL_MS - now();
-      return remaining > 0 ? Effect.sleep(remaining) : Effect.void;
-    });
-    const update = async (ts: string, markdown: string, opts?: CallOptions): Promise<void> => {
-      try {
-        await api.updateMarkdown(target.channelId, ts, markdown, opts);
-      } finally {
-        // An ATTEMPT spends the slot, not a success. A droppable frame fails instantly on a 429, so a
-        // success-only timestamp would leave `waitForMutationSlot` open and (with throttleMs 0) re-send
-        // the same rejected view once per token — request amplification aimed at a channel that is
-        // already rate-limiting us. The failure itself still propagates to the pump's onError.
-        lastMutationAt = now();
-      }
-    };
-    const flushPreview = async (): Promise<void> => {
-      const markdown = chunkSlackText(view())[0] ?? THINKING_PLACEHOLDER;
-      if (markdown === lastSent) return;
-      if (previewTs) {
-        await update(previewTs, markdown, DROPPABLE_FRAME);
-      } else {
-        if (previewAttempted) return;
-        previewAttempted = true;
-        previewTs = await api.postMarkdown(target, markdown);
-        lastMutationAt = now();
-      }
-      lastSent = markdown;
-    };
-    const { touch, finish } = yield* previewPump({
-      flush: flushPreview,
-      throttleMs: 0,
-      beforeFlush: Effect.suspend(() => (previewTs ? waitForMutationSlot : Effect.void)),
-      onError: (error) => log.warn(`${label} live preview failed (final reply still sends): ${String(error)}`),
-    });
     yield* renderReply(events, {
       label,
-      finish,
+      finish: Effect.void,
       formatError,
       answer: () => withDisclaimer(turn.answer, disclaimer),
       ...(onAnswered ? { onAnswered } : {}),
-      settle: (markdown) =>
-        Effect.gen(function* () {
-          if (previewTs && markdown.trim()) yield* waitForMutationSlot;
-          yield* joinPromise(() => settleClassic(api, target, previewTs, sanitizeSlackMarkdown(markdown), update));
-        }),
-      onEvent: (event) => {
-        const changed = applyTurnEvent(turn, event, now());
-        // A hidden answer must not open a placeholder followed by a rate-limited edit on a fast turn.
-        if (changed && (!isAnswerText(event) || revealedAnswer(turn, CLASSIC_UPDATE_INTERVAL_MS, now()) !== ""))
-          touch();
-      },
+      settle: (markdown) => joinPromise(() => settleMessage(api, target, undefined, sanitizeSlackMarkdown(markdown))),
+      onEvent: (event) => void applyTurnEvent(turn, event),
     });
   });
 }
@@ -276,28 +207,15 @@ function streamNativeSlackReply(
     const scope = yield* Effect.scope;
     const run = Effect.runSyncWith(yield* Effect.context<never>());
     let streamTs: string | undefined;
-    let retryStatusShown = false;
-    // Keep status updates ordered through the final clear, independently of content appends.
-    const statuses = yield* serialWriter();
-    const setStatus = (status: string): void => {
-      statuses.enqueue(() =>
-        api
-          .setThreadStatus(target, status)
-          .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
-      );
-    };
-    yield* Effect.addFinalizer(() =>
-      Effect.gen(function* () {
-        if (target.channelId.startsWith("D")) setStatus("");
-        // A finalizer does not fail: its defect would make the turn's typed failure one too. Unreachable while
-        // `setStatus` catches its own failures, which no test can make it stop doing.
-        yield* statuses.finish.pipe(
-          Effect.catchTag("PromiseFailure", (error) =>
-            Effect.sync(() => log.warn(`${label} could not finish the Slack Agent status: ${String(error.cause)}`)),
-          ),
-        );
-      }),
-    );
+    /** When the open stream started, and how many characters it carries: what bounds it. */
+    let streamStartedAt = 0;
+    let streamChars = 0;
+    const setStatus = (status: "processing" | "active", title?: string): Promise<void> =>
+      api
+        .setSessionStatus(target, status, title)
+        .catch((error) => log.warn(`${label} could not set the Slack agent session ${status}: ${String(error)}`));
+    // Ready for the next prompt, however the turn ended: a stream's stop says so too, but a turn may end before one.
+    yield* Effect.addFinalizer(() => Effect.promise(() => setStatus("active")));
     let stopAttempted = false;
     const stop = (ts: string, markdown?: string): Promise<void> => {
       // A rejected stop may have landed; scope cleanup must not retry it.
@@ -340,10 +258,19 @@ function streamNativeSlackReply(
       });
     };
     const sendContent = async (markdown: string): Promise<void> => {
+      const chars = Array.from(markdown).length;
+      if (streamTs && (streamChars + chars > STREAM_MAX_CHARS || now() - streamStartedAt >= STREAM_MAX_MS)) {
+        // The answer goes on in a new message of the same thread; the session stays processing.
+        await api.stopStream(target.channelId, streamTs, undefined, "processing");
+        streamTs = undefined;
+      }
       if (streamTs) {
         await api.appendStream(target.channelId, streamTs, markdown);
+        streamChars += chars;
       } else {
         streamTs = await api.startStream(target, markdown);
+        streamStartedAt = now();
+        streamChars = chars;
       }
     };
     const queueMarkdown = (markdown: string): void => {
@@ -392,7 +319,7 @@ function streamNativeSlackReply(
     };
     // ponytail: a trace appended while the answer has an unclosed ``` fence lands inside it, and the
     // trace's own backticks can close it early. Tracking fence parity across chunk boundaries (the job
-    // chunkSlackMarkdown does for the classic renderer) is the fix if a model is ever seen calling a
+    // chunkSlackMarkdown does for a posted reply) is the fix if a model is ever seen calling a
     // tool mid-fence; the trace's blank-line framing keeps every other case well-formed.
     const sendToolTrace = (line: string): void => {
       flushText();
@@ -407,7 +334,7 @@ function streamNativeSlackReply(
           const safeTerminal = sanitizeSlackMarkdown(terminalMarkdown);
           if (renderError !== undefined) {
             if (!streamTs && isSlackNativeUnavailable(renderError)) {
-              log.warn(`${label} native Slack stream was unavailable; delivering one compatibility Markdown reply`);
+              log.warn(`${label} native Slack stream was unavailable; posting the answer as one Markdown reply`);
               await api.sendMarkdown(target, safeTerminal);
               return;
             }
@@ -439,20 +366,7 @@ function streamNativeSlackReply(
         }
       }),
     );
-    yield* joinPromise(async () => {
-      if (target.channelId.startsWith("D")) {
-        await Promise.all([
-          api
-            .setThreadStatus(target, WORKING_STATUS)
-            .catch((error) => log.warn(`${label} could not set Slack Agent status: ${String(error)}`)),
-          threadTitle
-            ? api
-                .setThreadTitle(target, threadTitle)
-                .catch((error) => log.warn(`${label} could not set Slack Agent thread title: ${String(error)}`))
-            : Promise.resolve(),
-        ]);
-      }
-    });
+    yield* joinPromise(() => setStatus("processing", threadTitle));
 
     let messageId: string | undefined;
     let streamError: string | undefined;
@@ -488,26 +402,13 @@ function streamNativeSlackReply(
     };
     yield* Stream.runForEachWhile(events, (event) =>
       Effect.gen(function* () {
-        if (event.type !== "retrying" && retryStatusShown) {
-          // Progress after a retry notice: restore the normal working status so the stale line doesn't
-          // contradict a visibly streaming answer.
-          retryStatusShown = false;
-          setStatus(WORKING_STATUS);
-        }
         if (event.type === "message") messageId = event.message.id;
         if (event.type === "stream_error") streamError = event.error.message;
         const end = turnEnd(event, messageId);
         if (end === undefined) {
           // Slack's native loading status represents private reasoning (`thinking` deltas) without exposing it.
           if (event.type === "delta" && event.channel === "text") appendAnswer(textOf(event));
-          else if (event.type === "retrying") {
-            // A summarization retry backoff pauses the stream (~14s worst case). Channels have no per-message
-            // status surface in native mode; DMs get the explicit Agent status line, restored on progress.
-            if (target.channelId.startsWith("D")) {
-              retryStatusShown = true;
-              setStatus("hit a temporary problem — retrying…");
-            }
-          } else if (event.type === "tool_started") {
+          else if (event.type === "tool_started") {
             const trace = nativeToolTrace(event.name, event.args);
             toolTraces.set(event.toolCallId, trace);
             sendToolTrace(nativeToolLine(trace));
@@ -551,7 +452,6 @@ export function slackReply(
   target: SlackTarget,
   formatError: (failure: SlackFailure) => string | undefined,
   options: {
-    rendering?: SlackRendering;
     threadTitle?: string;
     disclaimer?: string | false;
     label?: string;
@@ -559,13 +459,9 @@ export function slackReply(
   } = {},
 ) {
   return Effect.suspend(() => {
-    const { rendering = "native", threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
-    if (rendering === "native" && target.threadTs) {
-      return streamNativeSlackReply(events, api, target, formatError, threadTitle, disclaimer, label, onAnswered);
-    }
-    if (rendering === "native") {
-      log.info(`${label} native streaming needs a thread target — using the classic renderer for this turn`);
-    }
-    return streamClassicSlackReply(events, api, target, formatError, disclaimer, label, onAnswered);
+    const { threadTitle, disclaimer, label = "[slack]", onAnswered } = options;
+    return target.threadTs
+      ? streamNativeSlackReply(events, api, target, formatError, threadTitle, disclaimer, label, onAnswered)
+      : postSlackReply(events, api, target, formatError, disclaimer, label, onAnswered);
   });
 }
