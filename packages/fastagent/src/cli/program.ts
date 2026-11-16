@@ -27,6 +27,15 @@ const BIND: FlagSpec = {
   flags: "--bind <addr>",
   description: "bind address (dev: 127.0.0.1; start: 0.0.0.0)",
 };
+/** A served instance's Agent API, in place of the local one. */
+const URL_FLAGS: FlagSpec[] = [
+  { flags: "--url <base>", description: "a served instance's Agent API base URL" },
+  { flags: "--key <key>", description: "API key for --url" },
+];
+const urlOptions = (f: Record<string, unknown>) => ({
+  ...(typeof f.url === "string" ? { url: f.url } : {}),
+  ...(typeof f.key === "string" ? { key: f.key } : {}),
+});
 const GLOBAL_AUTH: FlagSpec = {
   flags: "-g, --global",
   description: "use global ~/.fastagent/.secrets/auth.json",
@@ -102,22 +111,23 @@ const build: CommandSpec = {
 const invoke: CommandSpec = {
   name: "invoke",
   summary: "send ONE message to the agent and exit",
-  description: "Send one message locally (or to a served --url) without starting a server; streams answer to stdout.",
+  description:
+    "Send one message and stream its answer to stdout: through the local serve of the instance when one runs, to a " +
+    "served --url, or else in this process.",
   args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
   flags: [
     MODEL,
     NO_INPUT,
     { flags: "--json", description: "print receipt and message events as JSON lines" },
     { flags: "--session <id>", description: "continue an existing session" },
-    { flags: "--url <base>", description: "send to a served Agent API base URL" },
-    { flags: "--key <key>", description: "API key for --url" },
+    ...URL_FLAGS,
     ...INSTANCE_FLAGS,
     ENV_FILE_FLAG,
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
     { cmd: `fastagent invoke --session <id> "which number?"` },
-    { cmd: `fastagent invoke --url https://a.fly.dev "hello"`, note: "a deployment" },
+    { cmd: `fastagent invoke --url https://agent.example.com "hello"`, note: "a deployment" },
   ],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
@@ -125,8 +135,7 @@ const invoke: CommandSpec = {
       input: f.input !== false,
       json: f.json === true,
       ...(typeof f.session === "string" ? { session: f.session } : {}),
-      ...(typeof f.url === "string" ? { url: f.url } : {}),
-      ...(typeof f.key === "string" ? { key: f.key } : {}),
+      ...urlOptions(f),
       instance: instanceFlags(f),
     }),
 };
@@ -183,42 +192,36 @@ const deploy: CommandSpec = {
 
 const schedules: CommandSpec = {
   name: "schedules",
-  summary: "list schedules and wake-ups, run a schedule now, or cancel a wake-up",
+  summary: "run a schedule now, or cancel a wake-up",
   subcommands: [
     {
-      name: "list",
-      summary: "list schedules (src/schedules/<name>.ts) and pending wake-ups",
-      args: [AGENT_ARG],
-      flags: [JSON_FLAG, ...INSTANCE_FLAGS],
-      examples: [{ cmd: "fastagent schedules list" }],
-      run: async (args, flags) =>
-        (await import("./commands/schedules.ts")).runSchedulesList(
-          args[0] as string,
-          flags.json === true,
-          instanceFlags(flags),
-        ),
-    },
-    {
       name: "run",
-      summary: "fire one schedule now, as its clock would",
+      summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
       args: [{ name: "<name>", description: "schedule name" }, AGENT_ARG],
-      flags: [MODEL, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
-      examples: [{ cmd: "fastagent schedules run daily-digest" }],
+      flags: [MODEL, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+      examples: [
+        { cmd: "fastagent schedules run daily-digest" },
+        { cmd: "fastagent schedules run daily-digest --url https://agent.example.com", note: "a deployment" },
+      ],
       run: async (args, f) =>
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {
           model: f.model as string | undefined,
           input: f.input !== false,
+          ...urlOptions(f),
           instance: instanceFlags(f),
         }),
     },
     {
       name: "unwake",
-      summary: "cancel a pending wake-up",
-      args: [{ name: "<id>", description: "wake-up id" }, AGENT_ARG],
-      flags: [...INSTANCE_FLAGS],
+      summary: "cancel a pending wake-up, through the serve that owns the instance if one runs",
+      args: [{ name: "<id>", description: "wake-up id (fastagent info lists them)" }, AGENT_ARG],
+      flags: [...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
       run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string, instanceFlags(f)),
+        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string, {
+          ...urlOptions(f),
+          instance: instanceFlags(f),
+        }),
     },
   ],
 };

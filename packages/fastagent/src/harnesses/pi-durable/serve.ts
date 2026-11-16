@@ -186,7 +186,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(typeof chosen === "object" && "instance" in chosen ? { stateRoot } : {}),
+      ...(chosen === "instance" ? { stateRoot } : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
@@ -306,6 +306,8 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
+    schedules: agent.schedules,
+    wakeups: agent.wakeups,
     harness: agent.harness,
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run schedules nobody closes.

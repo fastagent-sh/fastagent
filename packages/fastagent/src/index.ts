@@ -20,6 +20,7 @@ export type {
   Metadata,
   ModelRef,
   Page,
+  ScheduleRun,
   SendRequest,
   Session,
   SessionChanges,
@@ -30,6 +31,7 @@ export type {
   Tokens,
   Usage,
   WaitOptions,
+  Wakeup,
 } from "@fastagent-sh/client/agent-api";
 export { AgentError, LIMITS, hasEnded } from "@fastagent-sh/client/agent-api";
 

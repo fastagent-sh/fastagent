@@ -3,17 +3,15 @@
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
  * served agent instead, over its Agent API, with the same output and exit code.
  */
-import { join, resolve } from "node:path";
 import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "@fastagent-sh/client/agent-api";
-import { enterAgentEnv } from "../../env.ts";
-import { installProxyFetch } from "../../proxy.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import { connectAgent } from "@fastagent-sh/client";
-import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
-import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
-import { type InstanceFlags, enterEnvFile, instanceInputs } from "../instance.ts";
+import { reachOwner } from "../owner.ts";
+import { failStartup, failUsage } from "../fail.ts";
+import { deploymentAgent } from "../deployment.ts";
+import { type InstanceFlags, instanceInputs } from "../instance.ts";
 
 export interface InvokeOptions {
   model?: string;
@@ -29,20 +27,14 @@ export interface InvokeOptions {
 }
 
 /**
- * `invoke`'s sessions, apart from the instance's storage, so `invoke` runs beside a serve of this directory, which holds
- * that one; one `invoke` at a time holds this one.
- */
-const invokeStorageFile = (stateRoot: string) => join(stateRoot, "invoke.sqlite");
-
-/**
  * The session to send into, a new one or `sessionId`, set to the model this run resolved: every run answers with the
  * model its flags and configuration name, a continued session included.
  */
-async function sessionFor(agent: Agent, sessionId: string | undefined, settings: SessionSettings, file: string) {
+async function sessionFor(agent: Agent, sessionId: string | undefined, settings: SessionSettings, where: string) {
   if (sessionId === undefined) return (await agent.sessions.create(settings)).id;
   await agent.sessions.update(sessionId, settings).catch((error: unknown) => {
     if (error instanceof AgentError && error.code === "not_found") {
-      throw new Error(`--session ${sessionId}: no such session in ${file}; pass an id an earlier invoke printed`);
+      throw new Error(`--session ${sessionId}: no such session in ${where}; pass an id an earlier invoke printed`);
     }
     throw error;
   });
@@ -76,59 +68,34 @@ async function answer(
   return exitCode;
 }
 
-/**
- * The key `--url` calls with: `--key`, or the first of `FASTAGENT_API_KEY` in this command's environment (the file
- * `--env-file` names laid under it). A deployment has no default file.
- */
-function deploymentKey(url: string): string {
-  const [key] = apiKeysFrom(process.env[API_KEY_VARIABLE]);
-  if (key === undefined) {
-    failUsage(
-      `no key to call ${url} with: pass --key, or set ${API_KEY_VARIABLE} in the environment of this command ` +
-        "(or in the file --env-file names)",
-    );
-  }
-  return key;
-}
-
-/**
- * Enter this machine's environment and the proxy it declares, as every command that sends a request does, and answer
- * the key to call `url` with: `--key`, from anywhere (the ambient environment when no agent is here), or the agent's.
- */
-function enterForUrl(dirArg: string, key: string | undefined, url: string): string {
-  const agentDir = optionalAgentDirOrExit(resolve(dirArg));
-  if (agentDir === undefined) {
-    installProxyFetch();
-    if (key === undefined) {
-      failUsage(`no key to call ${url} with: pass --key, or run this in the agent whose deploy wrote one`);
-    }
-    return key;
-  }
-  enterAgentEnv(agentDir);
-  return key ?? deploymentKey(url);
-}
-
 /** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */
 async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOptions & { url: string }) {
   const { url } = opts;
-  const { envFile, ...placed } = opts.instance ?? {};
-  for (const flag of Object.keys(placed))
-    failUsage(`--${flag} places an instance this run opens, and --url opens none`);
-  // A deployment has no default value file: its key is `--key`, the environment, or the file `--env-file` names.
-  enterEnvFile(envFile, { defaultFile: false });
+  const agent = deploymentAgent(dirArg, url, opts.key, opts.instance);
   let settings: SessionSettings | undefined;
   try {
     settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
   } catch (error) {
     failUsage(error instanceof Error ? error.message : String(error));
   }
-  const agent = connectAgent(url, { apiKey: enterForUrl(dirArg, opts.key, url) });
-  console.error(`[fastagent] invoke: ${url}`);
-  const sessionId = await remoteSession(agent, opts.session, settings, url).catch((error: unknown) =>
+  await invokeThrough(agent, url, message, opts, settings, DEPLOYED_AUTH_HINT);
+}
+
+/** Send `message` through the Agent API of a served instance: a deployment's, or the local serve that owns this one. */
+async function invokeThrough(
+  agent: Agent,
+  where: string,
+  message: string,
+  opts: InvokeOptions,
+  settings: SessionSettings | undefined,
+  authHint: string,
+): Promise<never> {
+  console.error(`[fastagent] invoke: ${where}`);
+  const sessionId = await remoteSession(agent, opts.session, settings, where).catch((error: unknown) =>
     failStartup(refusal(error)),
   );
   console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-  process.exit(await answer(agent.messages.stream({ sessionId, content: message }), opts.json, DEPLOYED_AUTH_HINT));
+  process.exit(await answer(agent.messages.stream({ sessionId, content: message }), opts.json, authHint));
 }
 
 /** The served agent's session to send into: a new one, or `sessionId`, set to `--model` when one is given. */
@@ -157,15 +124,34 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     import("../../harnesses/pi-durable/open.ts"),
     import("../shared.ts"),
   ]);
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts);
-  const file = invokeStorageFile(resolveStateRoot(agentDir));
+  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
+    // A running serve of this instance owns its storage and answers with its own model: the message goes through it
+    // (owner.ts), before any model is asked for here.
+    const owner = await reachOwner(resolveStateRoot(target)).catch(failStartup);
+    if (owner === undefined) return;
+    let settings: SessionSettings | undefined;
+    try {
+      settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
+    } catch (error) {
+      failUsage(error instanceof Error ? error.message : String(error));
+    }
+    const agent = connectAgent(owner.url, { apiKey: owner.key });
+    await invokeThrough(
+      agent,
+      `${target}, through its serve at ${owner.url}`,
+      message,
+      opts,
+      settings,
+      LOCAL_AUTH_HINT,
+    );
+  });
+  const stateRoot = resolveStateRoot(agentDir);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { agent, models, config } = await openServing(definition, {
     model: modelSpec,
     ...instanceInputs(agentDir),
-    storage: { file, holders: "another `fastagent invoke` of this agent" },
-    // Its messages do not outlive it: one a stopped invoke left is not run again by the next.
-    unfinished: "abort",
+    // What an earlier serve accepted is a serve's to finish: this process would cut it off at its exit.
+    unfinished: "refuse",
   }).catch(failStartup);
   console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
   await reportAuth(models, modelSpec, agentDir);
@@ -174,7 +160,7 @@ export async function runInvoke(message: string, dirArg: string, opts: InvokeOpt
     model: modelRefOf(modelSpec, "the model"),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   };
-  const sessionId = await sessionFor(agent, opts.session, settings, file).catch(failStartup);
+  const sessionId = await sessionFor(agent, opts.session, settings, stateRoot).catch(failStartup);
   console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
   const exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json, LOCAL_AUTH_HINT);
   await agent.close();

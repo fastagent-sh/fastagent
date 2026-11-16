@@ -10,6 +10,7 @@ import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
+import { ownerKey } from "../owner.ts";
 import { cliMountOptions, serveService } from "../serve.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
@@ -62,6 +63,9 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
     .then((definition) => openServing(definition, { model: modelSpec, ...instanceInputs(agentDir) }))
     .catch(failStartup);
   await reportAssembly(opened, modelSpec);
-  const service = await serveAgent(opened, cliMountOptions()).catch(failStartup);
-  serveService(service, { port: portFlag ?? DEFAULT_HTTP_PORT, host });
+  // This machine's other commands reach the instance through the serve that owns it (owner.ts).
+  const key = ownerKey();
+  const mount = cliMountOptions();
+  const service = await serveAgent(opened, { ...mount, apiKeys: [...(mount.apiKeys ?? []), key] }).catch(failStartup);
+  serveService(service, { port: portFlag ?? DEFAULT_HTTP_PORT, host }, { stateRoot: opened.stateRoot, key });
 }

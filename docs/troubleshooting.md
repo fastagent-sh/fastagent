@@ -48,8 +48,8 @@ the tool. Use a pattern: `str({ pattern: "^https?://\\S+$" })`.
 
 ### `the storage … is held by another process`
 
-Another `dev`, `start` or `schedules run` of this agent is running. Stop it. (`invoke` uses its own storage and can run
-beside them.)
+Another process holds this instance: a `start`, or an `invoke` or `schedules` command that opened it while no `dev`
+ran. Stop it, or run the command again once it ends. A running `dev` is reached through its Agent API instead.
 
 ## Local development
 
@@ -62,8 +62,7 @@ restart. After a broken edit, fix it and save again.
 ### A schedule did not fire
 
 Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A container
-that was stopped or scaled to zero sleeps through it. `fastagent schedules list` shows the
-next and last runs.
+that was stopped or scaled to zero sleeps through it. `fastagent info` shows the next and last runs.
 
 ### `busy`
 

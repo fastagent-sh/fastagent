@@ -269,18 +269,11 @@ export function claimSlot(stateRoot: string, name: string, slot: Date, firedAt: 
 }
 
 /**
- * Every fire this state root still keeps for `name`, oldest first — bounded by `KEEP_CLAIMS` because the claims ARE
- * the history. Nothing here grows: the pruning that keeps the claim gate cheap keeps the history's size fixed too,
- * which is why there is no separate audit file to rotate (what the turn SAID is in its session, not here).
- *
- * THE HISTORY read, and its only caller is the read-only `schedules list --json` — which translates a read fault into a
- * one-line refusal. Its text mode and the serving boot read `latestFire` instead: each asks about ONE claim, and a
- * window of files kept for an operator to look at has no business failing either.
+ * Every fire this state root still keeps for `name`, oldest first, bounded by `KEEP_CLAIMS` because the claims ARE the
+ * history. A claim pruned between the listing and the read is dropped, not reported as an unsettled one.
  */
 export function readFires(stateRoot: string, name: string): Fire[] {
   const dir = claimDir(stateRoot, name);
-  // A claim pruned between the listing and the read is not a fire this state root still keeps, so it is dropped
-  // rather than reported as an unsettled one — which is what `unreported` would claim about a run nobody skipped.
   return listClaims(dir).flatMap((slot) => readClaim(dir, slot) ?? []);
 }
 

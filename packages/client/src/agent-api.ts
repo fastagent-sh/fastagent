@@ -285,6 +285,30 @@ export const MessageKey = Schema.Union([
 ]);
 export type MessageKey = typeof MessageKey.Type;
 
+/**
+ * A schedule fired on demand: the message its occurrence sent, or why the occurrence did not run (its previous run
+ * still holds the schedule's session).
+ */
+export const ScheduleRun = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("sent"), message: Message }),
+  Schema.Struct({ status: Schema.Literal("skipped"), reason: Schema.String }),
+]);
+export type ScheduleRun = typeof ScheduleRun.Type;
+
+/** A wake-up the agent set for itself (`wake`): the session it fires into, when, and with what. */
+export class Wakeup extends Schema.Opaque<Wakeup>()(
+  Schema.Struct({
+    id: Schema.String,
+    sessionId: Schema.String,
+    /** When it fires next (ISO 8601). */
+    fireAt: Schema.String,
+    prompt: Schema.String,
+    /** A recurring one's cron expression, and its time zone. */
+    cron: Schema.optionalKey(Schema.String),
+    tz: Schema.optionalKey(Schema.String),
+  }),
+) {}
+
 export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;
 
@@ -311,6 +335,19 @@ export interface Agent {
     send(request: SendRequest, options?: WaitOptions): Promise<Message>;
     stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
     get(key: MessageKey, options?: WaitOptions): Promise<Message>;
+  };
+  /** The agent's clock, operated by its Caller: what the process serving the agent runs. */
+  schedules: {
+    /**
+     * Fire the schedule `name` now, as its clock would: one occurrence, in the schedule's own session. Answers once its
+     * message is recorded, or with `wait` once it has ended; `skipped` when the schedule's previous run still holds the
+     * session.
+     */
+    run(name: string, options?: WaitOptions): Promise<ScheduleRun>;
+  };
+  wakeups: {
+    /** Cancel a pending wake-up, whichever session set it, and answer what it was. */
+    cancel(id: string): Promise<Wakeup>;
   };
 }
 

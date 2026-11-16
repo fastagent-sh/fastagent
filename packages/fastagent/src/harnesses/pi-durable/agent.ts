@@ -73,6 +73,7 @@ import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
+import { type ClockState, clockOperations } from "../../schedule/operations.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
 export interface AgentCommand {
@@ -102,16 +103,16 @@ export interface DurableAgentOptions {
   thinkingLevel?: ModelThinkingLevel;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
+  /** The instance's clock: its state and its schedules, which `schedules` and `wakeups` operate. */
+  clock?: ClockState;
 }
 
 /**
  * What a process does with the messages an earlier one accepted and did not end (it was stopped, or killed). `"resume"`
- * (the default, a serve's): they run on in this one, as its own work. `"abort"`: they end aborted before anything runs,
- * for a Caller whose messages do not outlive it (`fastagent invoke`), where running one again would run what its user
- * stopped. `"refuse"`: the open fails naming them, for a process that runs one thing and would cut the rest off
- * (`fastagent schedules run`).
+ * (the default, a serve's): they run on in this one, as its own work. `"refuse"`: the open fails naming them, for a
+ * process that runs one thing and would cut the rest off (`fastagent invoke`, `fastagent schedules run`).
  */
-export type Unfinished = "resume" | "abort" | "refuse";
+export type Unfinished = "resume" | "refuse";
 
 export interface DurableAgent extends Agent {
   /** pi-durable's own API, for operating the agent. */
@@ -141,8 +142,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
   try {
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
-    // Before `resume()`, which runs an earlier process's work. An abort enables the scheduler too, but commits first, so
-    // the aborted work does not run (measured).
+    // Before `resume()`, which runs an earlier process's work.
     const unsettled = (await harness.inspect(context)).submissions.filter(isInput);
     const unfinished = options.unfinished ?? "resume";
     if (unsettled.length > 0 && unfinished !== "resume") {
@@ -150,15 +150,9 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
         .filter((id) => sessions.has(id))
         .map((id) => ids.encode(id));
       const said = `${unsettled.length} message(s) an earlier process accepted and stopped before they ended (sessions: ${where.join(", ")})`;
-      if (unfinished === "refuse") {
-        throw new Error(
-          `the storage holds ${said}, which this process would not finish: serve the agent until they end, then try again`,
-        );
-      }
-      for (const conversationId of new Set(unsettled.map((record) => record.conversationId))) {
-        await (await harness.conversation(conversationId, context))?.abort(context);
-      }
-      log.warn(`[fastagent] aborted ${said}: none of it runs again`);
+      throw new Error(
+        `the storage holds ${said}, which this process would not finish: serve the agent until they end, then try again`,
+      );
     } else {
       // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
       for (const record of unsettled) {
@@ -739,13 +733,17 @@ function durableAgent(
     );
   };
 
+  const getSession = (sessionId: string): Promise<Session> =>
+    settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session)));
+  const messages = { send, stream, get };
   return {
     harness,
     info,
+    ...clockOperations({ sessions: { get: getSession, create }, messages }, options.clock),
     usage: () => settle(fromPromise(() => harness.usage(context)).pipe(Effect.map((spent) => usageOfState(spent)))),
     sessions: {
       create,
-      get: (sessionId) => settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session))),
+      get: getSession,
       list,
       update,
       entries,
@@ -754,7 +752,7 @@ function durableAgent(
       compact,
       attachment,
     },
-    messages: { send, stream, get },
+    messages,
     conversation: (sessionId) => Effect.runPromise(reads.conversation(sessionId)),
     close: async () => {
       closing = true;

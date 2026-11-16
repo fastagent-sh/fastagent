@@ -144,7 +144,7 @@ export function removeWakeup(stateRoot: string, id: string, session: string): bo
 }
 
 /**
- * Remove ONE pending wake-up whatever session set it: the operator's `fastagent schedules unwake`, the one way out of a
+ * Remove ONE pending wake-up whatever session set it: the operator's (`wakeups.cancel`), the one way out of a
  * wake-up set in a session nobody can message (a schedule's own). Its caller holds the instance, so no serve's poll
  * writes the store between this read and its write.
  */
