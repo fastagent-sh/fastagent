@@ -22,6 +22,8 @@ export default defineConfig({
   },
   test: {
     pool: "forks",
+    // A module a test imports natively (a built package's, outside Vite) reads the packages' source too.
+    execArgv: ["--conditions=@fastagent-sh/source"],
     projects: [
       {
         extends: true,
