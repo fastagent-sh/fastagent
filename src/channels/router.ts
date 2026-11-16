@@ -5,7 +5,7 @@
  * node:http.
  */
 import type { ChannelHandler, Routes } from "../channel.ts";
-import { text } from "./respond.ts";
+import { text } from "./kit/respond.ts";
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {

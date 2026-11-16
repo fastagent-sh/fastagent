@@ -23,20 +23,6 @@ export interface DeclaredSecret {
   optional: boolean;
 }
 
-/**
- * What an env-var NAME may look like. Checked at the declaration, not left to the host: these names
- * are written verbatim into a Compose file, a Fly/Railway runbook and a CloudFormation parameter, so
- * a typo (`"X_API_KEY "`, `"my key"`) or a quote/newline produces a broken or wrong artifact whose
- * error surfaces in someone's cloud CLI, pointing at nothing. Case is not dictated — `http_proxy` is
- * a real variable — only the shape a shell and every artifact format agree on.
- */
-const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** Whether `name` has the shape of an env-var name ({@link ENV_NAME}). */
-export function isEnvName(name: string): boolean {
-  return ENV_NAME.test(name);
-}
-
 /** Declared names as a stable list, first declaration winning — the form a carrier iterates. */
 function dedupeSecrets(declared: readonly DeclaredSecret[]): DeclaredSecret[] {
   const seen = new Set<string>();

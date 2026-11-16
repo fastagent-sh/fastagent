@@ -1,5 +1,5 @@
-/** What a Telegram bot's setup asks for (channels/setup.ts): its token from BotFather. */
-import { type ChannelSetup, SetupRefused, pasteOne } from "../setup.ts";
+/** What a Telegram bot's setup asks for (kit/setup.ts): its token from BotFather. */
+import { type ChannelSetup, SetupRefused, pasteOne } from "../kit/setup.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 

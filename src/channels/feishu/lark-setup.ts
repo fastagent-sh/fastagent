@@ -1,5 +1,5 @@
 /**
- * What a Lark app's setup asks for (channels/setup.ts). Lark's international cloud cannot complete the bound
+ * What a Lark app's setup asks for (kit/setup.ts). Lark's international cloud cannot complete the bound
  * scan-to-create flow, so its person creates the app on the one-click launcher and pastes the App ID and App Secret,
  * which Lark checks as a pair; the rest is the Feishu engine's.
  */
@@ -7,7 +7,7 @@ import { encodeAddons } from "./register-app.ts";
 import { createFeishuApi, isFeishuCredentialsRefused } from "./feishu-api.ts";
 import { feishuEngine } from "./setup.ts";
 import { feishuAppAddons } from "./setup-mode.ts";
-import { type ChannelSetup, SetupRefused } from "../setup.ts";
+import { type ChannelSetup, SetupRefused } from "../kit/setup.ts";
 import { cloudFor } from "./cloud.ts";
 
 /**

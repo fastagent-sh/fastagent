@@ -1,8 +1,8 @@
 /**
  * Shared channel ingress, abort/retry waiting, and per-call transport retry policy.
  */
-import { readBodyCapped } from "../body.ts";
-import { text } from "../respond.ts";
+import { readBodyCapped } from "./body.ts";
+import { text } from "./respond.ts";
 
 /** Per-call transport options (`DROPPABLE_FRAME` / `CONTEXT_READ` opt out of rate-limit retries). */
 export interface CallOptions {

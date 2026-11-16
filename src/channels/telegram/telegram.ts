@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { ChannelContext, ConnectionChannel, RouteChannel } from "../../channel.ts";
 import { type Needs, needs } from "../../needs.ts";
 import { log } from "../../log.ts";
-import { secretEquals } from "../secret.ts";
+import { secretEquals } from "../kit/secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
 import { type RecentMessages, type RecordedMessage, createRecentMessages, ownMessage } from "./recent.ts";
 import {
@@ -120,7 +120,7 @@ type TelegramRuntimeOptions = TelegramPollingChannelOptions & { apiBaseUrl: stri
 /** The channel's state and policy, over the context it is mounted in: everything but how updates arrive. */
 function createTelegramRuntime(
   { botToken, route, onError, botUsername, apiBaseUrl }: TelegramRuntimeOptions,
-  { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
+  { agent, sessionFor, recordedSession, beginWork, stateDir: stateHome }: ChannelContext,
 ): TelegramRuntime {
   // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
   if (!botToken) {
@@ -199,6 +199,7 @@ function createTelegramRuntime(
     }
   };
   const runner = createTurnRunner<StoredTurn>({
+    beginWork,
     label: "[telegram]",
     store,
     delivered: createSeenRing(join(stateHome, "delivered.json"), "[telegram]"),

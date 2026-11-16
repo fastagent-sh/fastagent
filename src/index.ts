@@ -62,8 +62,8 @@ export {
   type Routes,
 } from "./channel.ts";
 // What a channel reads a request with, answers with, and compares its platform's secret with (constant time).
-export { readBodyCapped } from "./channels/body.ts";
-export { text } from "./channels/respond.ts";
-export { secretEquals } from "./channels/secret.ts";
+export { readBodyCapped } from "./channels/kit/body.ts";
+export { text } from "./channels/kit/respond.ts";
+export { secretEquals } from "./channels/kit/secret.ts";
 // The session a tool runs in, as the Agent hands it out.
 export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";

@@ -14,7 +14,7 @@ import { HttpIncomingMessage, HttpRouter, HttpServer, HttpServerError, HttpServe
 import { HttpApiBuilder, HttpApiError, OpenApi } from "effect/http-api";
 import { type Agent, AgentError, LIMITS, type SessionEvent, agentError, errorData } from "../agent-api.ts";
 import type { ChannelHandler } from "../channel.ts";
-import { secretEquals } from "../channels/secret.ts";
+import { secretEquals } from "../channels/kit/secret.ts";
 import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import {

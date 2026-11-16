@@ -34,6 +34,11 @@ export interface ChannelContext {
    * process stops before it runs is lost unless the platform delivers its event again. A failure goes to the log.
    */
   turn(place: string, work: () => Promise<void>): void;
+  /**
+   * Count work the channel runs outside `turn` as work in flight, which `dev`'s restart waits for: call the returned
+   * function when it ends.
+   */
+  beginWork(): () => void;
   /** The channel's own directory, `<state root>/channels/<its name>`, for the records it must keep. */
   stateDir: string;
 }

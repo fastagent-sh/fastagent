@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -51,8 +51,8 @@ describe("harness neutrality: the contracts and the channel spine import no harn
     "agent-api.ts",
     "channels/router.ts",
     "cli/invoke-stream.ts",
-    "channels/body.ts",
-    "channels/respond.ts",
+    "channels/kit/body.ts",
+    "channels/kit/respond.ts",
     "channels/telegram/telegram.ts",
     "channels/slack/slack.ts",
     "channels/feishu/feishu.ts",
@@ -100,5 +100,80 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph("agent-api.ts")]).toEqual(["effect/Schema"]);
     expect([...staticPackageGraph("channel.ts")]).toEqual([]);
     expect([...staticPackageGraph("mcp-api.ts")]).toEqual([]);
+  });
+});
+
+/**
+ * The split ahead (#1051 step 7): `@fastagent-sh/client` holds the contracts, the HTTP client and the channel kit, and
+ * each first-party channel becomes a package of its own that imports only the client. Every import, a type's included,
+ * must already resolve inside those lines, so the split moves files and changes no code.
+ */
+describe("the client side and the channels stay inside their future packages", () => {
+  const CLIENT = [
+    "agent-api.ts",
+    "answer-text.ts",
+    "atomic-write.ts",
+    "channel.ts",
+    "channels/kit/",
+    "client.ts",
+    "http/client.ts",
+    "http/contract.ts",
+    "log.ts",
+    "needs.ts",
+    "promise-bridge.ts",
+    "runtime-websocket.ts",
+    "state-file.ts",
+    "strip-edges.ts",
+  ];
+  const CHANNELS = ["channels/telegram/", "channels/slack/", "channels/feishu/"];
+  const inside = (file: string, homes: readonly string[]) =>
+    homes.some((home) => (home.endsWith("/") ? file.startsWith(home) : file === home));
+  const filesUnder = (dir: string): string[] =>
+    readdirSync(resolve(srcDir, dir), { recursive: true, encoding: "utf8" })
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => `${dir}${name}`);
+  const specifiers = [
+    /^\s*(?:import|export)\s+(?:type\s+)?(?:\{[^}]*\}|\*(?:\s+as\s+\w+)?|\w+(?:\s*,\s*\{[^}]*\})?)\s*from\s*["']([^"']+)["']/gm,
+    /^\s*import\s*["']([^"']+)["']/gm,
+    /\bimport\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  /** Every import of `file`, static, dynamic or a type's: relative ones as paths under src/, packages by name. */
+  const importsOf = (file: string) => {
+    const relatives: string[] = [];
+    const packages: string[] = [];
+    const text = readFileSync(resolve(srcDir, file), "utf8");
+    for (const [, spec] of specifiers.flatMap((re) => [...text.matchAll(re)])) {
+      if (!spec) continue;
+      if (spec.startsWith(".")) relatives.push(relative(srcDir, resolve(srcDir, dirname(file), spec)));
+      else packages.push(spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : (spec.split("/")[0] ?? spec));
+    }
+    return { relatives, packages };
+  };
+  const clientFiles = CLIENT.flatMap((home) => (home.endsWith("/") ? filesUnder(home) : [home]));
+  const clientPackage = (name: string) => name === "effect" || name === "undici" || name.startsWith("node:");
+
+  it("the client side imports nothing outside it, and no package but effect and undici", () => {
+    const offenders = clientFiles.flatMap((file) => {
+      const { relatives, packages } = importsOf(file);
+      return [
+        ...relatives.filter((target) => !inside(target, CLIENT)),
+        ...packages.filter((name) => !clientPackage(name)),
+      ].map((target) => `${file} → ${target}`);
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("a channel imports only its own directory, the client side, and its platform's SDK", () => {
+    const offenders = CHANNELS.flatMap((home) =>
+      filesUnder(home).flatMap((file) => {
+        const { relatives, packages } = importsOf(file);
+        const sdk = home === "channels/feishu/" ? ["@larksuiteoapi/node-sdk"] : [];
+        return [
+          ...relatives.filter((target) => !target.startsWith(home) && !inside(target, CLIENT)),
+          ...packages.filter((name) => !clientPackage(name) && !sdk.includes(name)),
+        ].map((target) => `${file} → ${target}`);
+      }),
+    );
+    expect(offenders).toEqual([]);
   });
 });

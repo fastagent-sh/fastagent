@@ -288,41 +288,6 @@ describe("WebSocket ingress optional SDK resolution", () => {
     await expect(connection.closed).rejects.toThrow("@larksuiteoapi/node-sdk");
   });
 
-  it("resolves the optional SDK from the agent's own node_modules when bare import fails (global CLI / isolated store)", async () => {
-    vi.doMock("@larksuiteoapi/node-sdk", () => {
-      throw new Error("Cannot find package '@larksuiteoapi/node-sdk'");
-    });
-    const root = sandbox.freshRoot();
-    const agentDir = join(root, "agent");
-    const sdkDir = join(agentDir, "node_modules", "@larksuiteoapi", "node-sdk");
-    mkdirSync(sdkDir, { recursive: true });
-    writeFileSync(join(agentDir, "package.json"), JSON.stringify({ type: "module" }));
-    writeFileSync(join(sdkDir, "package.json"), JSON.stringify({ name: "@larksuiteoapi/node-sdk", main: "index.mjs" }));
-    writeFileSync(
-      join(sdkDir, "index.mjs"),
-      [
-        "export const LoggerLevel = { warn: 2 };",
-        "export class EventDispatcher { register() { return this; } }",
-        "export class WSClient {",
-        "  constructor(opts) { this.opts = opts; }",
-        "  async start() { this.opts.onReady(); }",
-        "  close() {}",
-        "}",
-      ].join("\n"),
-    );
-
-    feishuFetch();
-    const ctx = channelContext({} as Agent, root, "feishu", [agentDir]);
-    const channel = feishuWebSocket({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
-    const ac = new AbortController();
-    const connection = channel.connect(ctx, ac.signal);
-    await expect(connection.ready).resolves.toBeUndefined();
-    ac.abort();
-    await expect(connection.closed).resolves.toBeUndefined();
-  });
-});
-
-describe("ingress verification", () => {
   it("plaintext mode: echoes the url_verification challenge only with the right token", async () => {
     feishuFetch();
     const { handler } = buildChannel();

@@ -7,8 +7,8 @@ import { join } from "node:path";
 import type { ChannelContext, ConnectionChannel, RouteChannel } from "../../channel.ts";
 import { type Needs, needs } from "../../needs.ts";
 import { log } from "../../log.ts";
-import { text } from "../respond.ts";
-import { secretEquals } from "../secret.ts";
+import { text } from "../kit/respond.ts";
+import { secretEquals } from "../kit/secret.ts";
 import { createSeenRing, createThreadParticipants } from "../kit/state.ts";
 import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
 import * as Effect from "effect/Effect";
@@ -255,7 +255,7 @@ interface SlackRuntime {
 function createSlackRuntime(
   policy: ReturnType<typeof resolveSlackPolicy>,
   api: SlackApi,
-  { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
+  { agent, sessionFor, recordedSession, beginWork, stateDir: stateHome }: ChannelContext,
 ): SlackRuntime {
   const { botToken, welcome, reactionEmojis, aiDisclaimer, route, onError } = policy;
   if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
@@ -299,6 +299,7 @@ function createSlackRuntime(
   };
 
   const runner = createTurnRunner<StoredSlackTurn>({
+    beginWork,
     label,
     store,
     seen,

@@ -9,10 +9,10 @@ import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { type Agent, AgentError, type Message } from "../../agent-api.ts";
+import type { ChannelContext } from "../../channel.ts";
 import { type PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
-import { beginWork } from "../busy.ts";
-import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
+import { type TurnSlot, createTurnQueue, unqueuedSlot } from "./turn-queue.ts";
 import type { TurnEvent } from "./invoke.ts";
 import type { SeenRing } from "./state.ts";
 import type { TurnRecordBase, TurnStore } from "./turn-store.ts";
@@ -48,7 +48,10 @@ export async function dispatchStop(
   }
 }
 
-function createTaskTracker(label: string): {
+function createTaskTracker(
+  label: string,
+  beginWork: () => () => void,
+): {
   track(task: Promise<unknown>): void;
   size(): number;
   drain(): Promise<void>;
@@ -140,6 +143,8 @@ interface TurnHooks {
 
 export interface TurnRunnerOptions<S extends TurnRecordBase> {
   label: string;
+  /** The context's count of work in flight: a turn counts from its admission, a side task while it runs. */
+  beginWork: ChannelContext["beginWork"];
   store: TurnStore<S>;
   seen?: { add(id: string): void };
   delivered: SeenRing;
@@ -326,10 +331,11 @@ function runQueuedTurn<S extends TurnRecordBase>(
 }
 
 export function createTurnRunner<S extends TurnRecordBase>(options: TurnRunnerOptions<S>): TurnRunner<S> {
-  const { label, store, seen } = options;
-  const sideTasks = createTaskTracker(label);
+  const { label, store, seen, beginWork } = options;
+  const sideTasks = createTaskTracker(label, beginWork);
   const queue = createTurnQueue<PendingBase<S>>({
     label,
+    beginWork,
     run: (rec, slot) => runQueuedTurn(options, rec, slot, recoveredIds.delete(rec.id)),
   });
   const recoveredIds = new Set<string>();
