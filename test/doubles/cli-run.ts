@@ -11,10 +11,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { buildProject } from "../../packages/fastagent/src/harnesses/pi-durable/build.ts";
-import { openLockedStorage } from "../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
-import { resolveStateRoot } from "../../packages/fastagent/src/paths.ts";
+import { resolveStateRoot, resolveWorkdir } from "../../packages/fastagent/src/paths.ts";
+import { announceOwner, ownerKey } from "../../packages/fastagent/src/cli/owner.ts";
+import { loadSourceDefinition } from "../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { openAgent } from "../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 import { CHILD_REFUSALS } from "../guards/network-guard.ts";
 
 const CLI = fileURLToPath(new URL("../../packages/fastagent/src/cli.ts", import.meta.url));
@@ -256,13 +257,25 @@ export async function fauxAgent(prefix: string, files: Record<string, string> = 
   return dir;
 }
 
-/** Hold the instance's storage as a serve of `dir` does, for the length of `during`. */
+/** Serve the instance of `dir` as `dev` does, owning it (owner.ts), for the length of `during`. */
 export async function whileServed<T>(dir: string, during: () => Promise<T>): Promise<T> {
-  const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"), "the test's serve");
+  const opened = await openAgent(await loadSourceDefinition(dir), {
+    root: resolveWorkdir(dir),
+    secrets: process.env,
+    offline: true,
+  });
   try {
-    return await during();
+    const key = ownerKey();
+    const service = await opened.serve({ apiKeys: [key] });
+    const port = await service.listen(0, "127.0.0.1");
+    const unannounce = announceOwner(resolveStateRoot(dir), "127.0.0.1", port, key);
+    try {
+      return await during();
+    } finally {
+      unannounce();
+    }
   } finally {
-    await held.close(BACKGROUND_CONTEXT);
+    await opened.close();
   }
 }
 

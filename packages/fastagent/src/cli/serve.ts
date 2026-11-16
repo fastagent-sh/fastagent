@@ -5,6 +5,7 @@ import { API_PREFIX } from "@fastagent-sh/client/http/contract";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
 import { failStartup } from "./fail.ts";
+import { announceOwner } from "./owner.ts";
 
 /** What the CLI adds to the assembly: the API's keys. */
 export function cliMountOptions(): ServeOptions {
@@ -13,20 +14,39 @@ export function cliMountOptions(): ServeOptions {
 
 /**
  * Bind, report, warn about reach, and close in order on a signal — the tail dev's worker and start share once the
- * service is assembled.
+ * service is assembled. With `owner`, the serve says it owns the instance (owner.ts) once it listens, holding the
+ * key it serves this machine's commands with, and unsays it first when it stops.
  */
-export function serveService(service: ServedAgent, bind: { port: number; host?: string }): void {
-  serve(service, bind, (p) => reportServing(service, bind.host, p));
+export function serveService(
+  service: ServedAgent,
+  bind: { port: number; host?: string },
+  owner?: { stateRoot: string; key: string },
+): void {
+  let unannounce = () => {};
+  const announced: Service = {
+    ...service,
+    close: () => {
+      unannounce();
+      return service.close();
+    },
+  };
+  serve(announced, bind, (port) => {
+    if (owner !== undefined) unannounce = announceOwner(owner.stateRoot, bind.host, port, owner.key);
+    reportServing(service, bind.host, port, owner !== undefined);
+  });
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the address, and the Agent API. */
-function reportServing(service: ServedAgent, host: string | undefined, boundPort: number): void {
+function reportServing(service: ServedAgent, host: string | undefined, boundPort: number, owned: boolean): void {
   process.send?.({ type: "ready" });
   log.info(bindLine(host, boundPort));
+  const keyed = apiKeysFrom(process.env[API_KEY_VARIABLE]).length > 0;
   log.info(
-    service.api
+    keyed
       ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`
-      : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
+      : owned && service.api
+        ? `[fastagent] Agent API: ${API_PREFIX}, for this machine's fastagent commands — set ${API_KEY_VARIABLE} for other callers`
+        : `[fastagent] Agent API: not served — set ${API_KEY_VARIABLE} to serve it under ${API_PREFIX}`,
   );
 }
 

@@ -230,6 +230,17 @@ export function scriptedAgent(
   const agent: ScriptedAgent = {
     info: async () => ({ name: "scripted", agent: { name: "scripted" }, commands: [], tools: [], models: [] }),
     usage: async () => ({ models: {}, tools: {} }),
+    // A scripted agent has no clock.
+    schedules: {
+      run: async (name) => {
+        throw agentError("not_found", `no schedule "${name}"`);
+      },
+    },
+    wakeups: {
+      cancel: async (id) => {
+        throw agentError("not_found", `no pending wake-up ${id}`);
+      },
+    },
     sessions: {
       async create(createOptions = {}) {
         forks.push(createOptions);

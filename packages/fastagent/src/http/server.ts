@@ -258,7 +258,11 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("getMessageByKey", ({ params, query }) =>
         call("messages.get", (signal) => agent.messages.get(params, { wait: capped(query.wait), signal })),
-      ),
+      )
+      .handle("runSchedule", ({ params, query }) =>
+        call("schedules.run", (signal) => agent.schedules.run(params.name, { wait: capped(query.wait), signal })),
+      )
+      .handle("cancelWakeup", ({ params }) => call("wakeups.cancel", () => agent.wakeups.cancel(params.id))),
   );
 
   const authorization = Layer.succeed(Authorization)({

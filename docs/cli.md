@@ -15,6 +15,11 @@ The agent depends on its own version of FastAgent, and a `fastagent` installed g
 Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
 `npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
 
+**A running instance is operated through the process that runs it.** `invoke`, `schedules run` and `schedules unwake`
+on an agent whose `dev` is running go through that `dev`, by its Agent API, so they see the same sessions and never
+contend for its storage. With no `dev` running they open the instance themselves; with `--url` they act on a
+deployment.
+
 `[agent]` is the agent directory (the one with `fastagent.config.ts`), by default the current one. Nothing is searched
 for: from a subdirectory, a command names the agent's root and stops.
 
@@ -31,7 +36,7 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `models [search]` | list model specs |
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
-| `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
+| `schedules run\|unwake` | fire a schedule now, or cancel a wake-up (`info` lists both, with each schedule's next and last run) |
 | `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
 
 ## Global options
@@ -44,7 +49,8 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `schedules list`, `login` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `login` | Machine-readable output. |
+| `--url <base>`, `--key <key>` | `invoke`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. |
 
 ## Exit codes
 

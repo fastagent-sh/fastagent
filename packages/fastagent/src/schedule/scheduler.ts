@@ -89,7 +89,7 @@ async function untilEnded(agent: ScheduledAgent, key: Parameters<Agent["messages
 async function sendAndWait(
   agent: ScheduledAgent,
   request: SendRequest,
-  onAccepted: () => void,
+  onAccepted: (message: Message) => void,
   signal: AbortSignal,
 ): Promise<SendEnd> {
   let message: Message;
@@ -100,7 +100,7 @@ async function sendAndWait(
     if (error.code === "unconfirmed") return { unfinished: `whether it was recorded is not known: ${error.message}` };
     return { refused: error.message, busy: error.code === "busy" };
   }
-  onAccepted();
+  onAccepted(message);
   return untilEnded(agent, { sessionId: message.sessionId, messageId: message.id }, signal);
 }
 
@@ -125,7 +125,12 @@ function settled(message: Message): { fire: "completed" | "failed"; detail?: str
  * Copying the reply into the log would be a second store of the same text, unstructured, in a stream with a wider
  * audience and a bound that differs per host.
  */
-function runTurn(agent: ScheduledAgent, label: string, request: SendRequest, onAccepted: () => void = () => {}) {
+function runTurn(
+  agent: ScheduledAgent,
+  label: string,
+  request: SendRequest,
+  onAccepted: (message: Message) => void = () => {},
+) {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const startedAt = clock.currentTimeMillisUnsafe();
@@ -174,6 +179,13 @@ export interface ScheduleFireOutcome {
   ms: number;
 }
 
+/**
+ * The claims this process is firing now. A newest claim with no outcome is a dead process's to account for only when no
+ * fire of this one holds it: the resident clock and a fire on demand (`schedules.run`) share a process.
+ */
+const firing = new Set<string>();
+const firingKey = (stateRoot: string, name: string, slot: Date) => `${stateRoot}\0${name}\0${slot.toISOString()}`;
+
 /** Claim → run → settle one occurrence. */
 function fireScheduleOnce(opts: {
   agent: ScheduledAgent;
@@ -182,10 +194,12 @@ function fireScheduleOnce(opts: {
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
   slot: Date;
   now?: () => Date;
+  /** Hears the fire's message once it is recorded. */
+  accepted?: (message: Message) => void;
 }): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
-    const { agent, stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
+    const { stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
     const firedAt = now();
     const skippedReason = yield* Effect.try({
       try: () => {
@@ -211,6 +225,22 @@ function fireScheduleOnce(opts: {
       catch: (cause) => new PromiseFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
+    const held = firingKey(stateRoot, s.name, slot);
+    firing.add(held);
+    return yield* firedClaim(opts).pipe(Effect.ensuring(Effect.sync(() => firing.delete(held))));
+  }).pipe(Effect.uninterruptible);
+}
+
+/** A claimed occurrence, run: its session and prompt, its message, and its outcome written back into the claim. */
+function firedClaim(opts: {
+  agent: ScheduledAgent;
+  stateRoot: string;
+  schedule: Schedule;
+  slot: Date;
+  accepted?: (message: Message) => void;
+}): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
+  return Effect.gen(function* () {
+    const { agent, stateRoot, schedule: s, slot } = opts;
     // Before anything is sent: the session it continues (created and recorded the first time), and its prompt.
     const prepared = yield* Effect.tryPromise({
       try: async () => ({
@@ -226,12 +256,17 @@ function fireScheduleOnce(opts: {
       return { fired: true, failed, ms: 0 };
     }
     // An occurrence on a busy session is refused, and so skipped; its key is the instant, so one occurrence is one run.
-    const r = yield* runTurn(agent, s.name, {
-      sessionId: prepared.success.sessionId,
-      content: [{ type: "text", text: prepared.success.text }],
-      whenBusy: "reject",
-      idempotencyKey: slot.toISOString(),
-    });
+    const r = yield* runTurn(
+      agent,
+      s.name,
+      {
+        sessionId: prepared.success.sessionId,
+        content: [{ type: "text", text: prepared.success.text }],
+        whenBusy: "reject",
+        idempotencyKey: slot.toISOString(),
+      },
+      opts.accepted,
+    );
     // OVERLAP IS NOT FAILURE. The claim still stands — this occurrence is decided and will not be retried — but
     // what decided it was the previous turn still holding the schedule's session, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
@@ -250,25 +285,34 @@ function fireScheduleOnce(opts: {
 }
 
 /**
- * Fire `schedule` once, now, outside its clock (`fastagent schedules run`), the way its clock would: a newest claim no
+ * Fire `schedule` once, now, outside its clock (`schedules.run`), the way its clock would: a newest claim no
  * fire reported is accounted for first, as a boot does, then this instant is the slot, claimed and settled as any.
  */
 export function fireScheduleNow(opts: {
   agent: ScheduledAgent;
   stateRoot: string;
   schedule: Schedule;
+  /** Hears the fire's message once it is recorded. */
+  accepted?: (message: Message) => void;
 }): Effect.Effect<ScheduleFireOutcome & { slot: Date }, PromiseFailure> {
   return Effect.gen(function* () {
-    const { agent, stateRoot, schedule } = opts;
+    const { agent, stateRoot, schedule, accepted } = opts;
     const fire = yield* Effect.try({
       try: () => latestFire(stateRoot, schedule.name),
       catch: (cause) => new PromiseFailure(cause),
     });
-    if (fire !== undefined && fire.outcome === undefined) {
+    if (
+      fire !== undefined &&
+      fire.outcome === undefined &&
+      !firing.has(firingKey(stateRoot, schedule.name, new Date(fire.slot)))
+    ) {
       yield* accountForUnreportedFire(agent, stateRoot, schedule.name, fire);
     }
     const slot = new Date((yield* Clock.Clock).currentTimeMillisUnsafe());
-    return { slot, ...(yield* fireScheduleOnce({ agent, stateRoot, schedule, slot })) };
+    return {
+      slot,
+      ...(yield* fireScheduleOnce({ agent, stateRoot, schedule, slot, ...(accepted ? { accepted } : {}) })),
+    };
   });
 }
 
@@ -312,7 +356,7 @@ function accountForUnreportedFire(
     if (sessionId === undefined || taken === undefined) {
       log.warn(
         `[schedule] ${name}: the fire claimed at ${fire.firedAt} never sent its message — the process stopped ` +
-          `before it, and that slot stays skipped (see \`fastagent schedules list\`)`,
+          `before it, and that slot stays skipped (see \`fastagent info\`)`,
       );
       // No duration: this fire was never timed, and the process that could have timed it is gone.
       settleClaim(stateRoot, name, slot, "interrupted");

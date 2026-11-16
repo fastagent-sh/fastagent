@@ -261,6 +261,14 @@ export function durableSubject(): AgentApiSubject {
       starters: ["Say hello", "What can you do?"],
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
+      // Its clock: `digest` answers at once, `long` holds until released.
+      clock: {
+        stateRoot: directory,
+        schedules: [
+          { name: "digest", cron: "0 9 * * *", prompt: "the digest" },
+          { name: "long", cron: "0 9 * * *", prompt: "hold" },
+        ],
+      },
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
       settings: {
         retry: { maxRetries: 1, baseDelayMs: 1 },
@@ -297,6 +305,7 @@ export function durableSubject(): AgentApiSubject {
     signalled: () => signalled,
     effects: () => effects,
     failStorage: () => fail(),
+    stateRoot: () => directory,
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);

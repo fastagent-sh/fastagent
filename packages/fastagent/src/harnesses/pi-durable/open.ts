@@ -304,6 +304,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+    ...(options.stateRoot === undefined ? {} : { clock: { stateRoot: options.stateRoot, schedules: code.schedules } }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),

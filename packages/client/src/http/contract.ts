@@ -29,12 +29,14 @@ import {
   ListOptions,
   Message,
   MessageStreamEvent,
+  ScheduleRun,
   SendRequest,
   Session,
   SessionChanges,
   SessionEvent,
   Usage,
   Wait,
+  Wakeup,
   errorData,
 } from "../agent-api.ts";
 
@@ -250,6 +252,17 @@ const AgentGroup = HttpApiGroup.make("agent")
       params: { ...sessionPath, idempotencyKey: IdempotencyKey },
       query: WaitQuery,
       success: Message,
+      error: Refused,
+    }),
+    HttpApiEndpoint.post("runSchedule", "/schedules/:name/run", {
+      params: { name: Schema.String },
+      query: WaitQuery,
+      success: ScheduleRun,
+      error: Refused,
+    }),
+    HttpApiEndpoint.delete("cancelWakeup", "/wakeups/:id", {
+      params: { id: Schema.String },
+      success: Wakeup,
       error: Refused,
     }),
   )

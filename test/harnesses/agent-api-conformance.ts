@@ -24,6 +24,7 @@ import {
   type SessionEvent,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
+import { addWakeup, listWakeups } from "../../packages/fastagent/src/schedule/wakeups.ts";
 
 export interface AgentApiSubject {
   /** A fresh agent over fresh storage. `signedOut` leaves its model provider without a credential. */
@@ -39,6 +40,8 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
+  /** The instance's state, where its clock keeps its wake-ups; its schedules are `digest` and `long` (a `hold`). */
+  stateRoot(): string;
   /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
   keysSends?: boolean;
   stop(): Promise<void>;
@@ -345,6 +348,47 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const one = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
         const other = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
         expect(other.id).not.toBe(one.id);
+      });
+    });
+
+    describe("Clock", () => {
+      it("fires a schedule now in its own session, answering once recorded or, with wait, once ended", async () => {
+        const fired = await agent.schedules.run("digest");
+        if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
+        expect(fired.message).toMatchObject({ status: expect.stringMatching(/^(queued|running|completed)$/) });
+        expect((await ended(agent, fired.message)).answer?.text).toBe("answer: the digest");
+        const again = await agent.schedules.run("digest", { wait: WAIT });
+        expect(again).toMatchObject({
+          status: "sent",
+          message: { sessionId: fired.message.sessionId, status: "completed", answer: { text: "answer: the digest" } },
+        });
+        await expect(agent.schedules.run("nope")).rejects.toMatchObject({ code: "not_found" });
+      });
+
+      it("skips an occurrence while the schedule's previous run still holds its session", async () => {
+        const first = await agent.schedules.run("long");
+        expect(first.status).toBe("sent");
+        await holding();
+        expect(await agent.schedules.run("long")).toMatchObject({ status: "skipped", reason: expect.any(String) });
+        subject.release();
+      });
+
+      it("cancels a pending wake-up whichever session set it, answering what it was, and not_found once gone", async () => {
+        const sessionId = await newSession(agent);
+        const set = addWakeup(subject.stateRoot(), {
+          session: sessionId,
+          prompt: "check in",
+          fireAt: new Date(Date.now() + 3_600_000),
+        });
+        if (!set.ok) throw new Error(set.error);
+        expect(await agent.wakeups.cancel(set.id)).toEqual({
+          id: set.id,
+          sessionId,
+          fireAt: set.fireAt,
+          prompt: "check in",
+        });
+        expect(listWakeups(subject.stateRoot())).toEqual([]);
+        await expect(agent.wakeups.cancel(set.id)).rejects.toMatchObject({ code: "not_found" });
       });
     });
 

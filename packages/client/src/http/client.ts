@@ -377,6 +377,17 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         );
       },
     },
+    schedules: {
+      run: async (name, runOptions) => {
+        // Answered once the message is recorded; a wait then follows the message, as `messages.get` does.
+        const run = await request(client.runSchedule({ params: { name }, query: {} }), runOptions?.signal);
+        if (run.status === "skipped" || runOptions?.wait === undefined) return run;
+        return { status: "sent", message: await waited(async () => run.message, runOptions) };
+      },
+    },
+    wakeups: {
+      cancel: (id) => request(client.cancelWakeup({ params: { id } })),
+    },
   };
 }
 

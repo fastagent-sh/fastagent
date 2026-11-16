@@ -66,6 +66,15 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
       await service.close();
     }
   });
+
+  it("an opened instance offers the agent wake and unwake, which its clock fires", async () => {
+    const opened = await openSource(await agentDir());
+    try {
+      expect((await opened.info()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining(["wake", "unwake"]));
+    } finally {
+      await opened.close();
+    }
+  });
 });
 
 describe("openAgent: an agent directory opened in an app", () => {

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
+import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 import { addWakeup } from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -35,11 +36,12 @@ describe("the runtime the CLI runs on", () => {
 });
 
 describe("cli: invoke", () => {
-  it("--session continues the session an earlier run printed, beside a serve", async () => {
+  it("goes through the serve that owns the instance, and --session continues a session an earlier run printed", async () => {
     const dir = await agent("fa-invoke-session-");
     await whileServed(dir, async () => {
       const first = await runInProcess(["invoke", "hello", dir]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
+      expect(first.stderr).toContain("through its serve at http://127.0.0.1:");
       const sessionId = sessionOf(first);
       const second = await runInProcess(["invoke", "--session", sessionId, "again", dir]);
       expect([second.code, second.stdout.trim(), sessionOf(second)], second.stderr).toEqual([0, "seen 2", sessionId]);
@@ -112,17 +114,14 @@ registerHooks({
 const schedule = (cron: string, extra = "") =>
   `export default { kind: "fastagent.schedule", cron: ${JSON.stringify(cron)}${extra}, prompt: "go" };\n`;
 
-describe("cli: schedules", () => {
-  it("schedules list reads BOTH owners: the declared schedules and the agent's own pending wake-ups", async () => {
-    const dir = await agentWorkspace("fa-list-", {
+describe("cli: the agent's clock", () => {
+  it("info lists the schedules, each with its next and last run, and the agent's own pending wake-ups", async () => {
+    const dir = await agentWorkspace("fa-clock-info-", {
       "src/schedules/daily.ts": schedule("0 9 * * *"),
-      "src/schedules/weekly.ts": `export default {
-  kind: "fastagent.needs",
-  secrets: [{ name: "FA_TEST_ABSENT", optional: false }],
-  build: () => ({ kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" }),
-};\n`,
+      "src/schedules/weekly.ts":
+        'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
     });
-    const claims = join(dir, ".fastagent", "dev", ".state", "schedule", "claims", "daily");
+    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
     await mkdir(claims, { recursive: true });
     await writeFile(
       join(claims, "2026-01-01T09-00-00-000Z"),
@@ -135,25 +134,20 @@ describe("cli: schedules", () => {
     });
     if (!added.ok) throw new Error(added.error);
 
-    const text = await runInProcess(["schedules", "list", dir]);
-    expect(text.code).toBe(0);
-    expect(text.stdout).toMatch(
-      /daily\s+next \S+\s+cron 0 9 \* \* \*\s+last 2026-01-01T09:00:00.000Z failed\s+session=\(none yet\)/,
-    );
-    expect(text.stdout).toMatch(/weekly\s+next \S+\s+cron 0 9 \* \* 1 Asia\/Shanghai\s+never run/);
-    expect(text.stdout).toContain(`wake ${added.id}`);
-    expect(text.stdout).toContain("session=chat:42");
-
-    const asJson = await runInProcess(["schedules", "list", "--json", dir]);
-    const parsed = JSON.parse(asJson.stdout) as {
-      schedules: { name: string; session: string | null; fires: { outcome?: string }[] }[];
-      wakeups: { id: string }[];
+    const info = JSON.parse((await runInProcess(["info", dir, "--json"])).stdout) as {
+      schedules: { name: string; tz: string | null; next: string | null; last: { outcome: string | null } | null }[];
+      wakeups: { id: string; sessionId: string; prompt: string }[];
     };
-    expect(parsed.schedules.map((s) => [s.name, s.session, s.fires.map((f) => f.outcome)])).toEqual([
-      ["daily", null, ["failed"]],
-      ["weekly", null, []],
+    expect(info.schedules.map((s) => [s.name, s.tz, typeof s.next, s.last])).toEqual([
+      ["daily", null, "string", { slot: "2026-01-01T09:00:00.000Z", outcome: "failed" }],
+      ["weekly", "Asia/Shanghai", "string", null],
     ]);
-    expect(parsed.wakeups.map((w) => w.id)).toEqual([added.id]);
+    expect(info.wakeups).toEqual([
+      expect.objectContaining({ id: added.id, sessionId: "chat:42", prompt: "check the deploy" }),
+    ]);
+    const text = await runInProcess(["info", dir]);
+    expect(text.stdout).toMatch(/daily \(next \S+, last failed\)/);
+    expect(text.stdout).toContain(`${added.id} at ${added.fireAt}: check the deploy`);
   });
 
   it("schedules run continues its session and records interrupted and completed claims", async () => {
@@ -169,11 +163,37 @@ describe("cli: schedules", () => {
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
     const second = await runInProcess(["schedules", "run", "digest", dir]);
     expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
-    const listed = JSON.parse((await runInProcess(["schedules", "list", "--json", dir])).stdout) as {
-      schedules: { name: string; session: string | null; fires: { outcome?: string }[] }[];
-    };
-    expect(listed.schedules[0]?.session).toEqual(expect.any(String));
-    expect(listed.schedules[0]?.fires.map((fire) => fire.outcome)).toEqual(["interrupted", "completed", "completed"]);
+    expect(readFires(resolveStateRoot(dir), "digest").map((fire) => fire.outcome)).toEqual([
+      "interrupted",
+      "completed",
+      "completed",
+    ]);
+  });
+
+  it("goes through the serve that owns the instance: a schedule fired, a wake-up cancelled, a message sent", async () => {
+    const dir = await agent("fa-clock-owner-", {
+      "src/schedules/digest.ts":
+        'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
+    });
+    await whileServed(dir, async () => {
+      const fired = await runInProcess(["schedules", "run", "digest", dir]);
+      expect([fired.code, fired.stdout.trim()], fired.stderr).toEqual([0, "seen 1"]);
+      const added = addWakeup(resolveStateRoot(dir), {
+        session: "chat:42",
+        prompt: "check the deploy",
+        fireAt: new Date(Date.now() + 3_600_000),
+      });
+      if (!added.ok) throw new Error(added.error);
+      const unwoken = await runInProcess(["schedules", "unwake", added.id, dir]);
+      expect([unwoken.code, unwoken.stdout], unwoken.stderr).toEqual([0, expect.stringContaining(added.id)]);
+      const gone = await runInProcess(["schedules", "unwake", added.id, dir]);
+      expect([gone.code, gone.stderr]).toEqual([
+        1,
+        expect.stringContaining(`not_found: no pending wake-up ${added.id}`),
+      ]);
+      const refused = await runInProcess(["schedules", "run", "digest", dir, "--model", "faux/m"]);
+      expect([refused.code, refused.stderr]).toEqual([2, expect.stringContaining("drop --model")]);
+    });
   });
 });
 

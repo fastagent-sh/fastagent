@@ -68,6 +68,8 @@ may write into one session, so the session's status says it is busy, not whether
 | `messages.send` | Send a message; answers once it is recorded, or with `wait` (seconds) once it has ended |
 | `messages.stream` | Send a message and receive it as it is written |
 | `messages.get` | A message by id or by its key, with `wait` too |
+| `schedules.run(name, { wait? })` | Fire a schedule now, as its clock would, in the schedule's own session: `{ status: "sent", message }`, or `{ status: "skipped", reason }` while its previous run still holds that session |
+| `wakeups.cancel(id)` | Cancel a wake-up the agent set for itself (`wake`), whichever session set it; answers what it was |
 
 A `signal` lets go of a wait or a stream, never of the work: the message goes on. Only `cancel` stops the agent. A
 `wait` is an upper bound: the answer may come before the message ends, so check `status`.
@@ -175,6 +177,8 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`; `messages.stream` with `"stream": true` |
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
+| `POST /v1/schedules/{name}/run?wait` | `schedules.run` |
+| `DELETE /v1/wakeups/{id}` | `wakeups.cancel` |
 
 A send's body is `{ content, whenBusy?, metadata?, wait?, stream? }`, and its key the `Idempotency-Key` header, percent-encoded.
 An event stream sends each event as `event: <type>` with its JSON as `data`, and a comment at least every 15 seconds so
