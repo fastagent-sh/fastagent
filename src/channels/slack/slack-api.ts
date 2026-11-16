@@ -31,12 +31,12 @@ export interface DownloadedSlackFile {
   size: number;
 }
 
-export interface UploadedSlackFile {
+interface UploadedSlackFile {
   id: string;
   name: string;
 }
 
-export interface SentSlackMessage {
+interface SentSlackMessage {
   /** The first message's ts (a long Markdown body continues in further messages). */
   ts: string;
   /** Where it landed: a user-id target (`U…`) resolves to that user's DM channel (`D…`). */

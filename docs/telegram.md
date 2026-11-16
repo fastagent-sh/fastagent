@@ -10,8 +10,16 @@ The agent answers as a Telegram bot, streaming its answer into one message that 
 
 ## Set it up
 
+Declare it in `fastagent.config.ts`:
+
+```ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+import { telegram } from "@fastagent-sh/fastagent/telegram";
+
+export default defineAgent({ channels: { telegram: telegram() } });
+```
+
 ```bash
-fastagent add telegram              # src/channels/telegram.ts and the telegram_send tool
 fastagent channels setup telegram   # opens @BotFather; paste the token (hidden, checked with Telegram)
 fastagent dev                       # polls Telegram: no public URL needed
 ```
@@ -30,7 +38,8 @@ The bot polls Telegram for its updates, in `dev` and in a deployment alike, so i
 polled by one process: a second poller of the same bot ends with `another process polls this bot`. Give a deployment
 a bot of its own (`fastagent channels setup telegram --env-file prod.env`).
 
-`telegramChannel` receives by webhook at `POST /telegram` instead, verified with a `secretToken` of your choosing.
+`telegramChannel({ botToken, secretToken })` receives by webhook at `POST /telegram` instead, verified with a
+`secretToken` of your choosing.
 FastAgent does not call `setWebhook` for it: point the bot at the URL yourself, with the same `secret_token`. Polling
 removes the bot's webhook when it starts.
 
@@ -64,49 +73,39 @@ reason. Files are never deleted automatically.
 ## Sending from schedules (`telegram_send`)
 
 A schedule or a wake-up has no chat to reply in: its prompt names the chat id, and the agent sends with
-`telegram_send` (text or a file). In a chat turn the reply is sent for you; calling the tool too posts twice.
-`fastagent add telegram` again updates the tool and keeps your channel file.
+`telegram_send` (text or a file). In a chat turn the reply is sent for you; calling the tool too posts twice. The
+tool is named after the channel: a channel declared as `support` gives `support_send`.
 
-## The channel file
+## Options
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
-
-export default needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
-  telegramPollingChannel({
-    botToken: secrets.TELEGRAM_BOT_TOKEN,
-    onError: (failed) => `⚠️ ${failed.details}`, // optional; the scaffold shows details for development
-  }),
-);
+telegram({
+  onError: (failed) => `⚠️ ${failed.details}`, // what the chat sees when a turn fails; details only for developers
+});
 ```
 
 Customize with `route(update)`: return `null` to ignore an update, or `{ conversation?, chatId?, threadId?, text? }`.
 A custom route decides group summoning itself; reuse `defaultTelegramRoute` and pass `botUsername`:
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { defaultTelegramRoute, telegramEnvelope, telegramPollingChannel } from "@fastagent-sh/fastagent/telegram";
+import { defaultTelegramRoute, telegram, telegramEnvelope } from "@fastagent-sh/fastagent/telegram";
 
 const botUsername = "my_bot";
 
-export default needs(["TELEGRAM_BOT_TOKEN"], (secrets) =>
-  telegramPollingChannel({
-    botToken: secrets.TELEGRAM_BOT_TOKEN,
-    botUsername,
-    route(update) {
-      const base = defaultTelegramRoute(update, { botUsername });
-      if (!base) return null;
-      const message = update.message;
-      if (!message) return null;
-      return {
-        ...base,
-        conversation: `${message.chat.id}`, // one conversation per chat, topics included
-        text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
-      };
-    },
-  }),
-);
+const channel = telegram({
+  botUsername,
+  route(update) {
+    const base = defaultTelegramRoute(update, { botUsername });
+    if (!base) return null;
+    const message = update.message;
+    if (!message) return null;
+    return {
+      ...base,
+      conversation: `${message.chat.id}`, // one conversation per chat, topics included
+      text: `${telegramEnvelope(message)}\n\nAnswer briefly.`,
+    };
+  },
+});
 ```
 
 `onError(failed)` sets what the user sees when a turn fails (the log always has the details). Show `failed.details`

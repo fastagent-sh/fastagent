@@ -18,7 +18,10 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = ["model", "thinkingLevel", "starters", "providers", "mcpServers"];
+const KEYS = ["model", "thinkingLevel", "starters", "providers", "mcpServers", "channels"];
+
+/** A channel's name prefixes its tools (`<name>_send`) and names its state directory. */
+const CHANNEL_NAME = /^[a-z][a-z0-9_]{0,31}$/;
 
 /** The keys whose values are plain data; `providers` and `mcpServers` are checked by their own readers. */
 const DATA: Schema = obj({
@@ -48,7 +51,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, starters, providers, mcpServers } = config as AgentConfig;
+  const { model, thinkingLevel, starters, providers, mcpServers, channels } = config as AgentConfig;
   const validator = compile(DATA);
   const data = { model, thinkingLevel, starters };
   if (!validator.check(data)) {
@@ -60,7 +63,22 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (mcpServers !== undefined) declareServers(mcpServers, file);
+  if (channels !== undefined) checkChannelNames(channels, file);
   return config as AgentConfig;
+}
+
+function checkChannelNames(channels: unknown, file: string): void {
+  if (typeof channels !== "object" || channels === null || Array.isArray(channels)) {
+    throw new Error(`${file}: "channels" must be an object of channels by name`);
+  }
+  for (const name of Object.keys(channels)) {
+    if (!CHANNEL_NAME.test(name)) {
+      throw new Error(
+        `${file}: channel name "${name}" must be lowercase letters, digits and _, starting with a letter (it ` +
+          "prefixes the channel's tools)",
+      );
+    }
+  }
 }
 
 /** What `info()` reports of who the agent is: the package's name and description, and its starters. */

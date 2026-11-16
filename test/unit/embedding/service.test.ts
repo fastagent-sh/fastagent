@@ -42,9 +42,10 @@ async function agentDir(files: Record<string, string> = {}, config = `{ model: "
 
 describe("serveAgent over an opened directory", () => {
   it("mounts channel routes on a handler, with health beside them", async () => {
-    const dir = await agentDir({
-      "src/channels/hook.mjs": `export default () => ({ "POST /hook": () => new Response("from-channel") });`,
-    });
+    const dir = await agentDir(
+      {},
+      `{ model: "${CODEX_MODEL}", channels: { hook: { routes: () => ({ "POST /hook": () => new Response("from-channel") }) } } }`,
+    );
     const service = await createAgentService(dir);
     try {
       expect(await (await service.fetch(new Request("http://h/hook", { method: "POST" }))).text()).toBe("from-channel");
@@ -118,9 +119,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     await unset.close();
 
     const claiming = await openSource(
-      await agentDir({
-        "src/channels/claims.mjs": `export default () => ({ "POST /v1/hook": () => new Response("ok") });`,
-      }),
+      await agentDir({}, `{ channels: { claims: { routes: () => ({ "POST /v1/hook": () => new Response("ok") }) } } }`),
     );
     await expect(claiming.serve()).rejects.toThrow('route "POST /v1/hook" is under /v1, which the Agent API serves');
     await claiming.close();

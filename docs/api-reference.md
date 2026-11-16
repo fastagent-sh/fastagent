@@ -12,7 +12,7 @@ A compact reference for `@fastagent-sh/fastagent`. The package has one entry per
 |---|---|
 | `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `McpError`, and what an author writes: `defineAgent`, `defineChannel`, `defineSchedule`, `needs`, `sessionIdOf`, and a channel's helpers |
 | `@fastagent-sh/fastagent/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers) |
-| `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu`, `/lark` | Each first-party channel, and the transport and thread reader its tools use |
+| `@fastagent-sh/fastagent/telegram`, `/slack`, `/feishu` | Each first-party channel: `telegram()`, `slack()`, `feishu()` for `fastagent.config.ts`, and its webhook factory |
 
 Each export's signature and its documentation are its declaration: the package ships them (`dist/*.d.ts`), and an
 editor shows them. They come from `src/index.ts`, `src/client.ts` and each channel's entry, which name every export.

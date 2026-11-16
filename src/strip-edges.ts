@@ -15,8 +15,3 @@ export function stripEnd(text: string, isEdge: (char: string) => boolean): strin
   while (end > 0 && isEdge(text[end - 1] as string)) end--;
   return text.slice(0, end);
 }
-
-/** A URL or path without the `/` that ends it. */
-export function stripTrailingSlashes(text: string): string {
-  return stripEnd(text, (char) => char === "/");
-}

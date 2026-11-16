@@ -83,7 +83,7 @@ async function productionClient(
   options: FeishuWsConnectionOptions,
   callbacks: FeishuWsClientCallbacks,
 ): Promise<FeishuWsClient> {
-  // An optional peer: only an agent that opens a WebSocket installs it (`fastagent add feishu|lark` declares it).
+  // An optional peer: only an agent with a Feishu channel installs it.
   const { EventDispatcher, LoggerLevel, WSClient } = await loadFeishuSdk(options.resolveFrom).catch(
     (cause: unknown) => {
       throw new Error(

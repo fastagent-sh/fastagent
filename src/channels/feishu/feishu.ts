@@ -1,10 +1,12 @@
 /**
- * Canonical Feishu bot-channel engine: verified webhook or official-SDK WebSocket → dedup → route → persist → enqueue
- * → stream a live card.
+ * The Feishu bot channel, for Feishu (open.feishu.cn) and Lark (open.larksuite.com) alike (`domain`): the official
+ * SDK's WebSocket (`feishu()`) or a verified webhook (`feishuChannel`) → dedup → route → persist → enqueue → stream a
+ * live card.
  */
 import { join } from "node:path";
 import { Effect } from "effect";
-import type { ChannelContext, ChannelModule, LongConnectionChannelModule, Routes } from "../../channel.ts";
+import type { ChannelContext, ConnectionChannel, RouteChannel, Routes } from "../../channel.ts";
+import { type Needs, needs } from "../../needs.ts";
 import { resolveDirsFor } from "../context.ts";
 import { log } from "../../log.ts";
 import { text } from "../respond.ts";
@@ -16,9 +18,9 @@ import { createMessageOwners, createSeenRing, createThreadParticipants, senderCo
 import type { ForkSource } from "../../channel.ts";
 import {
   type PlaceMessage,
+  type RoomThreads,
   createAskLog,
   createRoomThreads,
-  registerRoomThreads,
   threadForkSource,
 } from "../kit/history.ts";
 import { foldBudget } from "../kit/fold-budget.ts";
@@ -34,7 +36,7 @@ import { acknowledgeFeishuAsk } from "./reaction.ts";
 import { joinPromise } from "../../promise-bridge.ts";
 import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { discussionBlock } from "../kit/context-buffer.ts";
-import { FEISHU_CLOUD, type FeishuCloudProfile } from "./cloud.ts";
+import { type FeishuCloudKind, type FeishuCloudProfile, cloudFor } from "./cloud.ts";
 import {
   type FeishuPosition,
   collectFoldedAttachments,
@@ -62,9 +64,8 @@ import {
 } from "./parse.ts";
 import { type FeishuFailure, defaultErrorMessage, settleFeishuPreview, feishuReply } from "./preview.ts";
 import { connectFeishuWs } from "./ws-ingress.ts";
-import { registerFeishuApi } from "./shared-api.ts";
+import { feishuTools } from "./tools.ts";
 
-// Canonical public surface; the Lark subpath aliases these types/functions at its compatibility boundary.
 export { defaultFeishuRoute, feishuEnvelope };
 export type { FeishuFailure, FeishuMessage, FeishuMessageEvent, FeishuRoute };
 
@@ -132,17 +133,23 @@ function isStoredFeishuTurn(t: unknown): t is StoredFeishuTurn {
 /** One accepted turn: the persisted intent. */
 type PendingFeishuTurn = Omit<StoredFeishuTurn, "attempts">;
 
-interface FeishuChannelBaseOptions {
-  /** App ID (developer console → Credentials & Basic Info). */
-  appId: string;
-  /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
-  appSecret: string;
+/** The policy of a Feishu channel, whichever way it receives. */
+export interface FeishuOptions {
+  /** `lark` for a Lark-international tenant (open.larksuite.com). Default `feishu`. */
+  domain?: FeishuCloudKind;
   /** Policy: whether/where to answer an event (return null to ignore). */
   route?: (event: FeishuMessageEvent) => FeishuRoute | null;
   /** Customer-facing failure text for the chat (the dev-facing full `details` always go to the operator log). */
   onError?: (failed: FeishuFailure) => string | undefined;
   /** API origin override (tests / self-hosted gateways). */
   apiBaseUrl?: string;
+}
+
+interface FeishuChannelBaseOptions extends FeishuOptions {
+  /** App ID (developer console → Credentials & Basic Info). */
+  appId: string;
+  /** App Secret (same page) — drives both ingress authentication and outbound API calls. */
+  appSecret: string;
 }
 
 export interface FeishuChannelOptions extends FeishuChannelBaseOptions {
@@ -156,20 +163,7 @@ export type FeishuWebSocketChannelOptions = FeishuChannelBaseOptions & {
   encryptKey?: never;
 };
 
-/**
- * Build the canonical Feishu Request-URL webhook channel at `POST /feishu`. Whoever hosts it sets the Request URL on
- * the app: FastAgent registers no URL.
- */
-export function feishuChannel(opts: FeishuChannelOptions): ChannelModule {
-  return buildFeishuChannel(FEISHU_CLOUD, opts, feishuChannel.name);
-}
-
-/** Build the canonical Feishu WebSocket long-connection channel. */
-export function feishuWebSocketChannel(opts: FeishuWebSocketChannelOptions): LongConnectionChannelModule {
-  return buildFeishuWebSocketChannel(FEISHU_CLOUD, opts, feishuWebSocketChannel.name);
-}
-
-/** Internal compatibility seams: protocol behavior comes from Feishu; the profile binds cloud edges. */
+/** The test seam: the WebSocket ingress a connection opens. */
 interface FeishuWebSocketChannelDeps {
   connectWs?: typeof connectFeishuWs;
 }
@@ -181,6 +175,8 @@ interface FeishuRuntime {
    */
   acceptEvent(event: FeishuMessageEvent): void;
   turnsIdle(): Promise<void>;
+  /** A group turn's room, for the `threads` tool: the chat it was asked in, and its threads. */
+  rooms: RoomThreads;
 }
 
 /**
@@ -247,20 +243,18 @@ function createBotIdentity(deps: {
 function createFeishuRuntimeFactory(
   profile: FeishuCloudProfile,
   opts: FeishuChannelBaseOptions,
-  factoryName: string,
+  /** Shared with the send tool. A turn's own posts go through `placeApi`. */
+  api: FeishuApi,
 ): (ctx: ChannelContext) => FeishuRuntime {
   const { appId, appSecret, route, onError } = opts;
-  const baseUrl = opts.apiBaseUrl ?? profile.apiBase;
   const { kind } = profile;
   const label = `[${kind}]`;
   return ({ agent, sessionFor, recordedSession, stateDir: stateHome }) => {
     // Credential checks run when serving starts, not while the authored module is imported.
     if (!appId || !appSecret) {
-      throw new Error(`${factoryName} requires appId + appSecret (developer console → Credentials & Basic Info)`);
+      throw new Error(`the ${kind} channel requires appId + appSecret (developer console → Credentials & Basic Info)`);
     }
     const formatError = onError ?? defaultErrorMessage;
-    // Shared with the send tools (registered below). A turn's own posts go through `placeApi`.
-    const api = createFeishuApi({ kind, baseUrl, appId, appSecret });
 
     void api.listAppScopes().then(
       (scopes) => {
@@ -310,14 +304,12 @@ function createFeishuRuntimeFactory(
       path: join(stateHome, "history.json"),
       isControl: (id) => stops.has(id),
     });
-    // A group turn's room, for the thread-reading tool (`feishuThreads`): the chat it was asked in, and its threads.
     const rooms = createRoomThreads({
       list: (chatId) => history.threads(chatId),
       read: async (chatId, threadId) =>
         (await history.snapshot(feishuHistoryKey({ chatId, threadId }))).text ||
         `(thread ${threadId} shows no messages)`,
     });
-    registerRoomThreads(kind, stateHome, rooms);
     /**
      * The client a turn posts through: what it posts into its place (answer, queue notice, stop feedback) is in the
      * turn's session already, so the place records it for that conversation and its next read leaves it out; another
@@ -450,7 +442,6 @@ function createFeishuRuntimeFactory(
         );
       },
     });
-    registerFeishuApi(appId, kind, api);
     let seqCounter = runner.recover().reduce((max, r) => Math.max(max, r.seq), 0);
 
     // Who the agent has heard in a thread decides whether a bare message addresses it (the participant model), and it
@@ -602,7 +593,7 @@ function createFeishuRuntimeFactory(
       }
     };
 
-    return { acceptEvent, turnsIdle: runner.idle };
+    return { acceptEvent, turnsIdle: runner.idle, rooms };
   };
 }
 
@@ -702,35 +693,54 @@ function createFeishuWebhookRoutes(
   return { [`POST /${kind}`]: handler };
 }
 
-export function buildFeishuChannel(
-  profile: FeishuCloudProfile,
-  opts: FeishuChannelOptions,
-  factoryName: string,
-): ChannelModule {
-  const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
-  return (ctx) => {
-    if (!opts.verificationToken) {
-      throw new Error(
-        `${factoryName} receives by webhook and needs a non-empty verificationToken: copy ` +
-          `${profile.envPrefix}_VERIFICATION_TOKEN from the console (Events & Callbacks), or receive by WebSocket ` +
-          `with ${factoryName.replace(/Channel$/, "WebSocketChannel")} instead`,
-      );
-    }
-    return createFeishuWebhookRoutes(profile, opts, createRuntime(ctx));
-  };
+/**
+ * A Feishu channel receiving the way `receive` says, and its tools, over one client: `send` posts through it, and
+ * `threads` reads the rooms of the runtime the channel mounts.
+ */
+function withTools<C>(
+  opts: FeishuChannelBaseOptions,
+  receive: (profile: FeishuCloudProfile, runtime: (ctx: ChannelContext) => FeishuRuntime) => C,
+): C & { tools: ReturnType<typeof feishuTools> } {
+  const profile = cloudFor(opts.domain ?? "feishu");
+  const { appId, appSecret } = opts;
+  const api = createFeishuApi({ kind: profile.kind, baseUrl: opts.apiBaseUrl ?? profile.apiBase, appId, appSecret });
+  const createRuntime = createFeishuRuntimeFactory(profile, opts, api);
+  let rooms: RoomThreads | undefined;
+  const channel = receive(profile, (ctx) => {
+    const runtime = createRuntime(ctx);
+    rooms = runtime.rooms;
+    return runtime;
+  });
+  return { ...channel, tools: feishuTools(profile.kind, api, () => rooms) };
 }
 
-export function buildFeishuWebSocketChannel(
-  profile: FeishuCloudProfile,
+/**
+ * Build a Feishu channel that receives by its Request-URL webhook at `POST /feishu` (`POST /lark` for Lark). Whoever
+ * hosts it sets the Request URL on the app: FastAgent registers no URL.
+ */
+export function feishuChannel(opts: FeishuChannelOptions): RouteChannel {
+  return withTools(opts, (profile, runtimeFor) => ({
+    routes(ctx) {
+      if (!opts.verificationToken) {
+        throw new Error(
+          `feishuChannel receives by webhook and needs a non-empty verificationToken: copy ` +
+            `${profile.envPrefix}_VERIFICATION_TOKEN from the console (Events & Callbacks), or receive by WebSocket ` +
+            "with feishu() instead",
+        );
+      }
+      return createFeishuWebhookRoutes(profile, opts, runtimeFor(ctx));
+    },
+  }));
+}
+
+/** A Feishu channel that receives over the official SDK's WebSocket, given its app's credentials. */
+export function feishuWebSocket(
   opts: FeishuWebSocketChannelOptions,
-  factoryName: string,
   deps: FeishuWebSocketChannelDeps = {},
-): LongConnectionChannelModule {
-  const createRuntime = createFeishuRuntimeFactory(profile, opts, factoryName);
-  return {
-    name: `${profile.kind} websocket`,
+): ConnectionChannel {
+  return withTools(opts, (profile, runtimeFor) => ({
     connect(ctx, signal) {
-      const runtime = createRuntime(ctx);
+      const runtime = runtimeFor(ctx);
       return (deps.connectWs ?? connectFeishuWs)(
         {
           kind: profile.kind,
@@ -743,5 +753,26 @@ export function buildFeishuWebSocketChannel(
         signal,
       );
     },
-  };
+  }));
+}
+
+/**
+ * The Feishu channel `fastagent.config.ts` declares: the app `FEISHU_APP_ID` and `FEISHU_APP_SECRET` name
+ * (`LARK_APP_ID` and `LARK_APP_SECRET` with `domain: "lark"`), over a WebSocket this process opens, and its `send` and
+ * `threads` tools.
+ */
+export function feishu(options: FeishuOptions = {}): Needs<ConnectionChannel> {
+  const prefix = cloudFor(options.domain ?? "feishu").envPrefix;
+  const id = `${prefix}_APP_ID`;
+  const secret = `${prefix}_APP_SECRET`;
+  return needs(
+    [
+      { name: id, description: "The app's App ID (Credentials & Basic Info)" },
+      { name: secret, description: "The app's App Secret (Credentials & Basic Info)" },
+    ],
+    (values) => {
+      const read = values as Record<string, string>;
+      return feishuWebSocket({ ...options, appId: read[id] as string, appSecret: read[secret] as string });
+    },
+  );
 }

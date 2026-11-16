@@ -170,42 +170,6 @@ const start: CommandSpec = {
     }),
 };
 
-const channelSub = (kind: "telegram" | "slack" | "feishu" | "lark", summary: string): CommandSpec => ({
-  name: kind,
-  summary,
-  args: [AGENT_ARG],
-  flags: [JSON_FLAG],
-  examples: [{ cmd: `fastagent add ${kind}` }],
-  run: async (args, f) =>
-    (await import("./commands/add.ts")).runAddChannel(kind, args[0] as string, { json: f.json === true }),
-});
-
-const add: CommandSpec = {
-  name: "add",
-  summary: "connect a channel (telegram, slack, feishu, lark) or vendor a skill",
-  description: "Scaffold src/channels/<kind>.ts and companion tools, or vendor a skill into skills/<name>/.",
-  subcommands: [
-    channelSub("telegram", "scaffold the Telegram bot channel and send tool"),
-    channelSub("slack", "scaffold the Slack channel and send/threads tools"),
-    channelSub("feishu", "scaffold the Feishu channel and send/threads tools"),
-    channelSub("lark", "scaffold the Lark (international) channel and send/threads tools"),
-    {
-      name: "skill",
-      summary: "vendor an Agent Skills skill into skills/<name>/",
-      args: [{ name: "[source]", description: "owner/repo/path, local path, or global skill name" }, AGENT_ARG],
-      flags: [{ flags: "--update", description: "overwrite an existing skill from source" }],
-      examples: [
-        { cmd: "fastagent add skill anthropics/skills/document-skills/pdf" },
-        { cmd: "fastagent add skill ./my-skill --update" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/add.ts")).runAddSkill(args[0] as string | undefined, args[1] as string, {
-          update: f.update === true,
-        }),
-    },
-  ],
-};
-
 const deploy: CommandSpec = {
   name: "deploy",
   summary: "write the portable container (Dockerfile, .dockerignore) and print how to run it",
@@ -366,7 +330,6 @@ const specs: readonly CommandSpec[] = [
   schedules,
   dev,
   start,
-  add,
   channels,
   deploy,
   login,

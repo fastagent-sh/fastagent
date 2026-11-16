@@ -5,7 +5,6 @@
       "src/**/*.ts",
       "test/**/*.ts",
       "!src/scaffold/templates/**",
-      "!src/channels/*/scaffold/**",
       "!test/fixtures/.tmp-*"
     ]
   },

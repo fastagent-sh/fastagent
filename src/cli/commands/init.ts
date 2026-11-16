@@ -31,7 +31,6 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (!opts.install || installFailed) console.error(`    npm install`);
   console.error(`    fastagent dev   # serve locally and iterate`);
-  console.error(`    fastagent add skill <owner/repo/path>   # vendor more skills from GitHub`);
 }
 
 /** Run `npm install` in `cwd` (inherit stdio). */

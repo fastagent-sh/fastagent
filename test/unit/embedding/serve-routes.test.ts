@@ -2,8 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Routes } from "../../../src/channel.ts";
-import type { AnyChannelModule } from "../../../src/channels/discover.ts";
+import type { Channel, Routes } from "../../../src/channel.ts";
 import { router } from "../../../src/channels/router.ts";
 import { routesFor } from "../../../src/service.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
@@ -29,14 +28,14 @@ describe("serve: router", () => {
 
 describe("serving surface: routesFor", () => {
   const agent = scriptedAgent((request) => scriptedRun(request));
-  const channels = (modules: Record<string, unknown>) =>
-    new Map(Object.entries(modules) as [string, AnyChannelModule][]);
+  const channels = (byName: Record<string, Routes>) =>
+    new Map(Object.entries(byName).map(([name, routes]): [string, Channel] => [name, { routes: () => routes }]));
 
   it("serves the channels' routes, with health beside them unless a channel serves it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-surface-"));
-    const beside = routesFor(agent, dir, channels({ hook: () => ({ "POST /hook": () => new Response("x") }) }));
+    const beside = routesFor(agent, dir, channels({ hook: { "POST /hook": () => new Response("x") } }));
     expect(Object.keys(beside.routes).sort()).toEqual(["GET /health", "POST /hook"]);
-    const own = routesFor(agent, dir, channels({ probe: () => ({ "/health": () => new Response("mine") }) }));
+    const own = routesFor(agent, dir, channels({ probe: { "/health": () => new Response("mine") } }));
     expect(await (await own.routes["/health"]!(new Request("http://x/health"))).text()).toBe("mine");
     expect(Object.keys(own.routes)).toEqual(["/health"]);
   });

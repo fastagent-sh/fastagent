@@ -43,31 +43,26 @@ export type { Service } from "./service.ts";
 export { McpError, type McpErrorCode } from "./mcp-api.ts";
 export { baseEnv } from "./child-env.ts";
 
-export {
-  defineAgent,
-  defineSchedule,
-  needs,
-  type AgentConfig,
-  type Needs,
-  type SecretSpec,
-  type SecretValues,
-} from "./harnesses/pi-durable/define.ts";
+export { defineAgent, defineSchedule, type AgentConfig } from "./harnesses/pi-durable/define.ts";
+export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
 export { defineDefinition, type AgentDefinition } from "./harnesses/pi-durable/definition.ts";
 export {
   defineChannel,
+  type Channel,
   type ChannelContext,
   type ChannelHandler,
-  type ChannelModule,
+  type ChannelTool,
+  type ConnectionChannel,
   type ForkSource,
   type LongConnection,
-  type LongConnectionChannelModule,
+  type RouteChannel,
   type Routes,
 } from "./channel.ts";
 // What a channel reads a request with, answers with, and compares its platform's secret with (constant time).
 export { readBodyCapped } from "./channels/body.ts";
 export { text } from "./channels/respond.ts";
 export { secretEquals } from "./channels/secret.ts";
-// The session a tool runs in, as the Agent hands it out: what a channel's thread-reading tool asks with.
+// The session a tool runs in, as the Agent hands it out.
 export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";

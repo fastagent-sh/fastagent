@@ -5,7 +5,7 @@
 import { basename } from "node:path";
 import { isCancel, log as clackLog, password, text } from "@clack/prompts";
 import { feishuSetup } from "../channels/feishu/setup.ts";
-import { larkSetup } from "../channels/lark/setup.ts";
+import { larkSetup } from "../channels/feishu/lark-setup.ts";
 import { slackSetup } from "../channels/slack/setup.ts";
 import { type ChannelSetup, type PastedValues, SetupRefused } from "../channels/setup.ts";
 import { telegramSetup } from "../channels/telegram/setup.ts";
@@ -23,6 +23,8 @@ const SETUPS = {
 export type SetupKind = keyof typeof SETUPS;
 
 export const isSetupKind = (name: string): name is SetupKind => Object.hasOwn(SETUPS, name);
+
+export const SETUP_KINDS = Object.keys(SETUPS) as SetupKind[];
 
 const say = (message: string): void => console.error(`[fastagent] ${message}`);
 

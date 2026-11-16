@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setUpMissingChannels } from "../../../src/cli/first-run-channels.ts";
-import { scaffoldChannel } from "../../../src/scaffold/add-channel.ts";
 import { agentWorkspace } from "../../doubles/cli-run.ts";
 
 vi.mock("../../../src/git.ts", () => import("../../doubles/git-double.ts"));
@@ -62,14 +61,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-/** An agent with the Telegram channel `add telegram` writes, and no credentials. */
-async function telegramAgent(files: Record<string, string> = {}): Promise<string> {
-  const dir = await agentWorkspace("fa-dev-first-run-", {
+/** An agent declaring a Telegram channel, named `bot`, and no credentials. */
+function telegramAgent(): Promise<string> {
+  return agentWorkspace("fa-dev-first-run-", {
     "package.json": JSON.stringify({ type: "module", dependencies: { "@fastagent-sh/fastagent": "*" } }),
-    ...files,
+    "fastagent.config.ts": `import { telegram } from "@fastagent-sh/fastagent/telegram";
+export default { channels: { bot: telegram() } };
+`,
   });
-  await scaffoldChannel(dir, "telegram");
-  return dir;
 }
 
 const outcome = (run: Promise<void>) =>
@@ -89,7 +88,7 @@ describe("dev sets up the channels the development instance lacks", () => {
     expect(await readFile(join(dir, ".secrets", ".env"), "utf8")).not.toContain("TELEGRAM_SECRET_TOKEN");
     // The dev worker inherits this process's environment, so the value must be there and not only in the file.
     expect(process.env.TELEGRAM_BOT_TOKEN).toBe(GOOD_BOT);
-    expect(said.join("\n")).toContain("telegram has no credentials");
+    expect(said.join("\n")).toContain('channel "bot" has no credentials');
 
     // The second run has nothing to ask.
     await setUpMissingChannels(dir);

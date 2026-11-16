@@ -10,7 +10,7 @@ export interface FeishuCloudProfile {
   };
 }
 
-export const FEISHU_CLOUD: FeishuCloudProfile = {
+const FEISHU_CLOUD: FeishuCloudProfile = {
   kind: "feishu",
   envPrefix: "FEISHU",
   apiBase: "https://open.feishu.cn",
@@ -19,7 +19,7 @@ export const FEISHU_CLOUD: FeishuCloudProfile = {
   },
 };
 
-export const LARK_COMPAT_CLOUD: FeishuCloudProfile = {
+const LARK_COMPAT_CLOUD: FeishuCloudProfile = {
   kind: "lark",
   envPrefix: "LARK",
   apiBase: "https://open.larksuite.com",

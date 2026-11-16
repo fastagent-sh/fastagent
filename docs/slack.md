@@ -10,8 +10,16 @@ The agent answers as a Slack app, in threads, streaming with Slack's native Agen
 
 ## Set it up
 
+Declare it in `fastagent.config.ts`:
+
+```ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+import { slack } from "@fastagent-sh/fastagent/slack";
+
+export default defineAgent({ channels: { slack: slack() } });
+```
+
 ```bash
-fastagent add slack              # src/channels/slack.ts, and the slack_send and slack-threads tools
 fastagent channels setup slack   # creates the app from a link; paste its tokens
 fastagent dev                    # Socket Mode: no public URL needed
 ```
@@ -48,7 +56,7 @@ The app receives over a Socket Mode connection, in `dev` and in a deployment ali
 hands each event to one of an app's connections, so give a deployment an app of its own:
 `fastagent channels setup slack --env-file prod.env`.
 
-`slackChannel` receives by the Events API at `POST /slack` instead, verified with the app's signing secret. FastAgent
+`slackChannel({ botToken, signingSecret })` receives by the Events API at `POST /slack` instead, verified with the app's signing secret. FastAgent
 does not set its Request URL: set it under Event Subscriptions yourself, and turn Socket Mode off.
 
 If Socket Mode connects but nothing answers, Socket Mode may be off in the app's settings
@@ -63,7 +71,7 @@ If Socket Mode connects but nothing answers, Socket Mode may be off in the app's
 - A message that mentions only other people is discussion, not a question.
 
 Before answering, it reads what was said in the place since its last answer (by name, newest first, bounded). Invite
-the app only to channels it may read. The `slack-threads` tool lets the agent list and read other threads of the
+the app only to channels it may read. The `slack_threads` tool lets the agent list and read other threads of the
 channel it was asked in.
 
 A message that arrives while the agent works is passed to the running work; if both are answered together, one answer
@@ -104,26 +112,19 @@ export default defineSchedule({
 });
 ```
 
-In a chat turn the reply is sent for you; calling the tool too posts twice. `fastagent add slack` again updates the
-tools and keeps your channel file.
+In a chat turn the reply is sent for you; calling the tool too posts twice. The tools are named after the channel: a
+channel declared as `support` gives `support_send` and `support_threads`.
 
-## The channel file
+## Options
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { slackSocketChannel } from "@fastagent-sh/fastagent/slack";
-
-export default needs(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"], (secrets) =>
-  slackSocketChannel({
-    botToken: secrets.SLACK_BOT_TOKEN,
-    appToken: secrets.SLACK_APP_TOKEN,
-    rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
-    // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
-    // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
-    // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
-    onError: (failed) => `⚠️ ${failed.details}`, // development transparency
-  }),
-);
+slack({
+  rendering: "native", // native Agent stream with inline tool traces; "classic" is the compatibility renderer
+  // aiDisclaimer: "AI-generated; verify important information.", // optional policy footer
+  // welcome: "Custom first-run DM greeting", // sent once on first DM open; false disables (default: generic)
+  // reactionAck: false, // disable the 👀→✅ ack on the user's message (default on; needs reactions:write)
+  onError: (failed) => `⚠️ ${failed.details}`, // development transparency
+});
 ```
 
 `welcome` sets the one-time greeting on a user's first DM (`false` turns it off). `reactionAck` sets or turns off the

@@ -1,9 +1,10 @@
 /**
- * Telegram bot channel: verify the webhook secret token → decide via `route(update)` → run the turn → stream the
- * agent's reply back to the chat, ACK 200.
+ * Telegram bot channel: an update, by long polling (`telegram()`) or by webhook (`telegramChannel`) → decide via
+ * `route(update)` → run the turn → stream the agent's reply back to the chat.
  */
 import { join } from "node:path";
-import type { ChannelContext, ChannelModule, LongConnectionChannelModule } from "../../channel.ts";
+import type { ChannelContext, ConnectionChannel, RouteChannel } from "../../channel.ts";
+import { type Needs, needs } from "../../needs.ts";
 import { log } from "../../log.ts";
 import { secretEquals } from "../secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
@@ -25,7 +26,8 @@ import {
   telegramPlaceKey,
   telegramStop,
 } from "./parse.ts";
-import { registerTelegramTransport } from "./shared-api.ts";
+import { telegramTools } from "./tools.ts";
+import { telegramTransport } from "./transport.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
 import { attachmentsDir } from "../kit/text.ts";
 import { createJsonWebhookRoute } from "../kit/ingress.ts";
@@ -119,7 +121,7 @@ type TelegramRuntimeOptions = TelegramPollingChannelOptions & { apiBaseUrl: stri
 function createTelegramRuntime(
   { botToken, route, onError, botUsername, apiBaseUrl }: TelegramRuntimeOptions,
   { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
-): TelegramRuntime {
+): TelegramRuntime & { record(placeKey: string, entry: BufferEntry): void } {
   // Validate at activation so deploy may inspect the module shape before secrets are provisioned.
   if (!botToken) {
     throw new Error("telegramChannel requires a non-empty botToken (used to send the agent's reply)");
@@ -164,12 +166,6 @@ function createTelegramRuntime(
     messages: agent.messages,
     isPosition: (value): value is number => typeof value === "number",
     compare: (a, b) => a - b,
-  });
-  // The send tool rides this channel's token, and what it sends lands in this buffer (shared-api.ts says why).
-  registerTelegramTransport({
-    apiBaseUrl,
-    botToken,
-    record: (placeKey, entry) => buffer.push(placeKey, entry),
   });
   // Durable turn intent (L1): persist an accepted turn pre-ACK, remove it when the turn ends; a crash leaves it for
   // replay on the next start.
@@ -370,50 +366,82 @@ function createTelegramRuntime(
     }
     return;
   };
-  return { accept, turnsIdle: runner.idle };
+  return { accept, turnsIdle: runner.idle, record: (placeKey, entry) => buffer.push(placeKey, entry) };
+}
+
+/**
+ * A Telegram channel receiving the way `receive` says, and its send tool, which rides the same bot: what it sends lands
+ * in the buffer of the runtime the channel mounts (transport.ts says why).
+ */
+function withTools<C>(
+  options: TelegramRuntimeOptions,
+  receive: (runtime: (ctx: ChannelContext) => TelegramRuntime) => C,
+): C & { tools: ReturnType<typeof telegramTools> } {
+  let record: ((placeKey: string, entry: BufferEntry) => void) | undefined;
+  const channel = receive((ctx) => {
+    const runtime = createTelegramRuntime(options, ctx);
+    record = runtime.record;
+    return runtime;
+  });
+  return { ...channel, tools: telegramTools(telegramTransport(options.apiBaseUrl, options.botToken, () => record)) };
 }
 
 /**
  * Build a Telegram bot channel that receives by webhook at `POST /telegram`. Whoever hosts it points the bot there
  * (`setWebhook` with the same `secret_token`): FastAgent registers no URL.
  */
-export function telegramChannel(options: TelegramChannelOptions): ChannelModule {
+export function telegramChannel(options: TelegramChannelOptions): RouteChannel {
   const { secretToken, apiBaseUrl = TELEGRAM_API } = options;
-  return (ctx) => {
-    if (!secretToken) {
-      throw new Error(
-        "telegramChannel requires a non-empty secretToken (the webhook secret_token; an unset one accepts forged updates)",
-      );
-    }
-    const runtime = createTelegramRuntime({ ...options, apiBaseUrl }, ctx);
-    const handler = createJsonWebhookRoute<TelegramUpdate>({
-      maxBytes: MAX_UPDATE_BYTES,
-      turnsIdle: runtime.turnsIdle,
-      beforeBody: (req) =>
-        secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secretToken)
-          ? undefined
-          : new Response("invalid secret token\n", { status: 401 }),
-      handle: (_req, _raw, update) => {
-        runtime.accept(update);
-        return new Response(null, { status: 200 });
-      },
-    });
-    return { "POST /telegram": handler };
-  };
+  return withTools({ ...options, apiBaseUrl }, (runtimeFor) => ({
+    routes(ctx) {
+      if (!secretToken) {
+        throw new Error(
+          "telegramChannel requires a non-empty secretToken (the webhook secret_token; an unset one accepts forged updates)",
+        );
+      }
+      const runtime = runtimeFor(ctx);
+      const handler = createJsonWebhookRoute<TelegramUpdate>({
+        maxBytes: MAX_UPDATE_BYTES,
+        turnsIdle: runtime.turnsIdle,
+        beforeBody: (req) =>
+          secretEquals(req.headers.get("x-telegram-bot-api-secret-token"), secretToken)
+            ? undefined
+            : new Response("invalid secret token\n", { status: 401 }),
+        handle: (_req, _raw, update) => {
+          runtime.accept(update);
+          return new Response(null, { status: 200 });
+        },
+      });
+      return { "POST /telegram": handler };
+    },
+  }));
 }
 
 /**
- * Build a Telegram bot channel that receives by long polling: the process asks Telegram for updates, so no public URL
- * and no webhook secret are involved. It takes the webhook away from the bot first (`getUpdates` does not work while
- * one is set), so a bot is polled by one process or reached by one webhook, never both.
+ * A Telegram bot channel that receives by long polling, given its token: the process asks Telegram for updates, so no
+ * public URL and no webhook secret are involved. It takes the webhook away from the bot first (`getUpdates` does not
+ * work while one is set), so a bot is polled by one process or reached by one webhook, never both.
  */
-export function telegramPollingChannel(options: TelegramPollingChannelOptions): LongConnectionChannelModule {
+export function telegramPolling(options: TelegramPollingChannelOptions): ConnectionChannel {
   const apiBaseUrl = options.apiBaseUrl ?? TELEGRAM_API;
-  return {
-    name: "telegram long polling",
+  return withTools({ ...options, apiBaseUrl }, (runtimeFor) => ({
     connect(ctx, signal) {
-      const runtime = createTelegramRuntime({ ...options, apiBaseUrl }, ctx);
+      const runtime = runtimeFor(ctx);
       return pollTelegramUpdates({ apiBaseUrl, botToken: options.botToken, accept: runtime.accept }, signal);
     },
-  };
+  }));
+}
+
+/** What `telegram()` is given: the policy, the bot token being `TELEGRAM_BOT_TOKEN`. */
+export type TelegramOptions = Omit<TelegramPollingChannelOptions, "botToken">;
+
+/**
+ * The Telegram channel `fastagent.config.ts` declares: the bot `TELEGRAM_BOT_TOKEN` names, polled by this process, and
+ * its `send` tool.
+ */
+export function telegram(options: TelegramOptions = {}): Needs<ConnectionChannel> {
+  return needs(
+    [{ name: "TELEGRAM_BOT_TOKEN", description: "The bot's token, from @BotFather" }],
+    ({ TELEGRAM_BOT_TOKEN }) => telegramPolling({ ...options, botToken: TELEGRAM_BOT_TOKEN }),
+  );
 }

@@ -8,6 +8,7 @@ const ROOT = import.meta.dirname;
 export const made: string[] = [];
 
 const DEFINE = "../../../../../src/harnesses/pi-durable/define.ts";
+const NEEDS = "../../../../../src/needs.ts";
 
 /** An agent package with `files`, its directory under test/fixtures. */
 export function agentPackage(files: Record<string, string>): string {
@@ -42,7 +43,7 @@ Ask for the order number, then read references/codes.md.
   "prompts/review.md": "---\ndescription: Review something\n---\nReview $1 carefully. Everything: $@\n",
   "src/tools/weather.ts": `import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
-import { needs } from "${DEFINE}";
+import { needs } from "${NEEDS}";
 export default needs(
   [
     { name: "WEATHER_KEY", description: "The weather service's API key" },
@@ -70,6 +71,31 @@ export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: 
 };
 
 export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
+
+/** The configuration with a channel `ops` declared: it reads `OPS_TOKEN`, and its tool says what it was called with. */
+export const WITH_CHANNEL: Record<string, string> = {
+  ...FILES,
+  "fastagent.config.ts": `import { faux } from "./model.ts";
+import { needs } from "../../../src/needs.ts";
+export default {
+  model: "fixture/m",
+  providers: [faux.provider],
+  channels: {
+    ops: needs(["OPS_TOKEN"], ({ OPS_TOKEN }) => ({
+      connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }),
+      tools: [
+        {
+          name: "whoami",
+          description: "Say where the call runs",
+          parameters: { type: "object", properties: {} },
+          execute: async (_args, call) => \`token \${OPS_TOKEN}, session \${call.sessionId}\`,
+        },
+      ],
+    })),
+  },
+};
+`,
+};
 
 export const toolCall = (name: string, args: Record<string, string>) =>
   fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: "toolUse" });

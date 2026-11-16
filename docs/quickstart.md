@@ -58,8 +58,16 @@ Mention the tool in `SYSTEM.md` so the model knows when to use it. A tool that n
 
 ## 5. Add a channel
 
+Declare it in `fastagent.config.ts`:
+
+```ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+import { telegram } from "@fastagent-sh/fastagent/telegram"; // or slack, feishu
+
+export default defineAgent({ model: "openai/gpt-5.5", channels: { telegram: telegram() } });
+```
+
 ```bash
-fastagent add telegram    # or slack, feishu, lark
 fastagent dev             # asks for the bot's credentials the first time
 ```
 

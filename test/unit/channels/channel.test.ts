@@ -4,30 +4,28 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../../../src/agent-api.ts";
-import type { ChannelModule } from "../../../src/channel.ts";
+import type { Channel } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
-import {
-  type AnyChannelModule,
-  channelIngress,
-  channelModuleProblem,
-  mountChannels,
-} from "../../../src/channels/discover.ts";
+import { channelIngress, channelProblem, mountChannels } from "../../../src/channels/discover.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
 const freshRoot = () => mkdtempSync(join(tmpdir(), "fa-channel-"));
 const accepted = () => new Response(null, { status: 202 });
-const mount = (modules: Record<string, unknown>) =>
-  mountChannels(new Map(Object.entries(modules) as [string, AnyChannelModule][]), {} as Agent, freshRoot());
+const mount = (channels: Record<string, Channel>) =>
+  mountChannels(new Map(Object.entries(channels)), {} as Agent, freshRoot());
+const routes = (keyed: Record<string, () => Response>): Channel => ({ routes: () => keyed });
 
 describe("mountChannels", () => {
   it("merges every route channel's routes and binds each long connection; none mounts nothing", () => {
     expect(mount({})).toEqual({ routes: {}, longConnections: [], routeChannels: [] });
-    const socket = { name: "socket", connect: () => ({ ready: Promise.resolve(), closed: new Promise(() => {}) }) };
+    const socket: Channel = {
+      connect: () => ({ ready: Promise.resolve(), closed: new Promise<void>(() => {}) }),
+    };
     const mounted = mount({
-      github: (() => ({ "POST /webhook": accepted })) satisfies ChannelModule,
-      stripe: (() => ({ "POST /stripe": accepted })) satisfies ChannelModule,
+      github: routes({ "POST /webhook": accepted }),
+      stripe: routes({ "POST /stripe": accepted }),
       socket,
     });
     expect(Object.keys(mounted.routes).sort()).toEqual(["POST /stripe", "POST /webhook"]);
@@ -36,27 +34,28 @@ describe("mountChannels", () => {
   });
 
   it("refuses a route another channel already serves, naming both", () => {
-    expect(() => mount({ a: () => ({ "POST /hook": accepted }), b: () => ({ "/hook": accepted }) })).toThrow(
-      'src/channels/b serves "/hook", which src/channels/a already serves as "POST /hook"',
+    expect(() => mount({ a: routes({ "POST /hook": accepted }), b: routes({ "/hook": accepted }) })).toThrow(
+      'channel "b" serves "/hook", which channel "a" already serves as "POST /hook"',
     );
   });
 });
 
-describe("channelModuleProblem: what a channel file default-exports", () => {
-  it("accepts a route factory and a named long connection, by shape", () => {
-    expect(channelModuleProblem(() => ({}))).toBeUndefined();
-    const socket = { name: "socket", connect: () => ({}) };
-    expect(channelModuleProblem(socket)).toBeUndefined();
-    expect(channelIngress(() => ({}))).toBe("webhook");
-    expect(channelIngress(socket as never)).toBe("long-connection");
+describe("channelProblem: what fastagent.config.ts may declare as a channel", () => {
+  const tool = { name: "send", description: "send it", parameters: { type: "object" }, execute: async () => "" };
+
+  it("accepts a route channel and a connection channel, with tools", () => {
+    expect(channelProblem({ routes: () => ({}) })).toBeUndefined();
+    expect(channelProblem({ connect: () => ({}), tools: [tool] })).toBeUndefined();
+    expect(channelIngress({ routes: () => ({}) })).toBe("webhook");
+    expect(channelIngress({ connect: () => ({}) as never })).toBe("long-connection");
   });
 
   it("refuses anything else, saying what it must be", () => {
-    for (const value of [undefined, 1, { name: "socket", start() {} }]) {
-      expect(channelModuleProblem(value)).toMatch(/must default-export \(ctx\) => Routes or \{ name, connect/);
+    for (const value of [undefined, 1, () => ({}), { routes() {}, connect() {} }]) {
+      expect(channelProblem(value)).toMatch(/must be a channel \(defineChannel\), receiving by routes\(ctx\) or/);
     }
-    expect(channelModuleProblem({ name: " ", connect: () => ({}) })).toBe(
-      "long-connection channel name must be a non-empty string",
+    expect(channelProblem({ connect() {}, tools: [{ ...tool, name: "Send-it" }] })).toBe(
+      "tools[0].name must be lowercase letters, digits and _, starting with a letter",
     );
   });
 });

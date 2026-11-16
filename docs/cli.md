@@ -26,8 +26,6 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `start` | serve the build |
 | `models [search]` | list model specs |
 | `login [provider]`, `logout`, `auth check` | manage model credentials |
-| `add telegram\|slack\|feishu\|lark` | add a channel file and its tools |
-| `add skill <source>` | copy an Agent Skills skill into `skills/` |
 | `channels setup <name>` | create or connect the platform app and keep its credentials |
 | `schedules list\|run\|unwake` | inspect, run now, or cancel a wake-up |
 | `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |

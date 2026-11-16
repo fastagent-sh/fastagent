@@ -4,12 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { channelContext } from "../../../src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type Agent, type ErrorCode, agentError } from "../../../src/agent-api.ts";
-import {
-  type FeishuChannelOptions,
-  feishuChannel as buildFeishuChannel,
-  feishuWebSocketChannel,
-} from "../../../src/feishu.ts";
-import { larkChannel } from "../../../src/lark.ts";
+import { feishuWebSocket } from "../../../src/channels/feishu/feishu.ts";
+import { type FeishuChannelOptions, feishuChannel as buildFeishuChannel } from "../../../src/feishu.ts";
 import { eventSignature } from "../../../src/channels/feishu/crypto.ts";
 import { log } from "../../../src/log.ts";
 import { type ScriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
@@ -178,7 +174,7 @@ function buildChannel(
     verificationToken: TOKEN,
     apiBaseUrl: BASE,
     ...channelOpts,
-  })(channelContext(protocol, root, "feishu"));
+  }).routes(channelContext(protocol, root, "feishu"));
   const handler = routes["POST /feishu"];
   if (!handler) throw new Error("expected POST /feishu");
   const idle = sandbox.trackIdle(handler);
@@ -261,13 +257,15 @@ function messageEvent(over: {
 describe("construction fails closed", () => {
   it("requires appId/appSecret/verificationToken at mount (metadata remains inspectable before secrets exist)", () => {
     const ctx = channelContext({} as Agent, "/tmp/unused-feishu-construction", "feishu");
-    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" })(ctx)).toThrow(/appId/);
-    expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /receives by webhook .*FEISHU_VERIFICATION_TOKEN.*feishuWebSocketChannel/,
+    expect(() => buildFeishuChannel({ appId: "", appSecret: "s", verificationToken: "t" }).routes(ctx)).toThrow(
+      /appId/,
     );
-    expect(() => larkChannel({ appId: "a", appSecret: "s", verificationToken: "" })(ctx)).toThrow(
-      /LARK_VERIFICATION_TOKEN.*larkWebSocketChannel/,
+    expect(() => buildFeishuChannel({ appId: "a", appSecret: "s", verificationToken: "" }).routes(ctx)).toThrow(
+      /receives by webhook .*FEISHU_VERIFICATION_TOKEN.*feishu\(\) instead/,
     );
+    expect(() =>
+      buildFeishuChannel({ domain: "lark", appId: "a", appSecret: "s", verificationToken: "" }).routes(ctx),
+    ).toThrow(/LARK_VERIFICATION_TOKEN/);
   });
 });
 
@@ -280,7 +278,7 @@ describe("WebSocket ingress optional SDK resolution", () => {
     });
     feishuFetch();
     const ctx = channelContext({} as Agent, sandbox.freshRoot(), "feishu");
-    const channel = feishuWebSocketChannel({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
+    const channel = feishuWebSocket({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
     const connection = channel.connect(ctx, new AbortController().signal);
     await expect(connection.ready).rejects.toThrow(
       /feishu websocket could not load @larksuiteoapi\/node-sdk .*`npm install @larksuiteoapi\/node-sdk`/,
@@ -313,7 +311,7 @@ describe("WebSocket ingress optional SDK resolution", () => {
 
     feishuFetch();
     const ctx = channelContext({} as Agent, root, "feishu", [agentDir]);
-    const channel = feishuWebSocketChannel({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
+    const channel = feishuWebSocket({ appId: "cli_0123456789abcdef", appSecret: "s", apiBaseUrl: BASE });
     const ac = new AbortController();
     const connection = channel.connect(ctx, ac.signal);
     await expect(connection.ready).resolves.toBeUndefined();
@@ -608,19 +606,20 @@ describe("a group's main timeline is a session per sender (Feishu)", () => {
   });
 });
 
-describe("the Lark compatibility profile", () => {
-  it("reuses the Feishu engine with its own route, state, envelope, p2p mode, and log brand", async () => {
+describe("domain lark", () => {
+  it("is the Feishu channel with Lark's route, state, envelope, p2p mode, and log brand", async () => {
     const fx = feishuFetch();
     const info: string[] = [];
     vi.spyOn(log, "info").mockImplementation((message) => info.push(message));
     const root = sandbox.freshRoot();
     const { agent, calls } = replyingAgent("pong");
-    const routes = larkChannel({
+    const routes = buildFeishuChannel({
+      domain: "lark",
       appId: "app",
       appSecret: "secret",
       verificationToken: TOKEN,
       apiBaseUrl: BASE,
-    })(channelContext(agent, root, "lark"));
+    }).routes(channelContext(agent, root, "lark"));
     expect(routes["POST /feishu"]).toBeUndefined();
     const handler = routes["POST /lark"];
     if (!handler) throw new Error("expected POST /lark");
@@ -629,7 +628,6 @@ describe("the Lark compatibility profile", () => {
     expect(res.status).toBe(200);
     await maybeIdle();
     expect(calls[0]?.prompt.text).toContain("[lark: chat oc_1 (p2p)");
-    // The lark-branded assembly path carries the same reply contract as canonical feishu.
     expect(calls[0]?.prompt.text).toContain("delivered to the current chat by the channel itself");
     expect(conversationOf(join(root, "channels", "lark"), calls[0]?.sessionId)).toBe("lark:oc_1"); // its own state
     // A direct message is answered in place: a plain send, not a quoted thread reply.

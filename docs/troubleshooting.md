@@ -34,7 +34,7 @@ key (`OPENAI_API_KEY`, …) in `.secrets/.env`.
 
 `Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file in `src/`. Check:
 - `npm install` ran, and `package.json` has `"type": "module"` and the packages the code imports;
-- the file sits directly in `src/tools/`, `src/extensions/`, `src/channels/` or `src/schedules/` and default-exports
+- the file sits directly in `src/tools/`, `src/extensions/` or `src/schedules/` and default-exports
   what that directory holds; helpers live outside them.
 
 ### `Invalid schema for function '…'`

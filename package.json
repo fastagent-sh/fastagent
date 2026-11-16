@@ -54,10 +54,6 @@
       "types": "./dist/feishu.d.ts",
       "default": "./dist/feishu.js"
     },
-    "./lark": {
-      "types": "./dist/lark.d.ts",
-      "default": "./dist/lark.js"
-    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -100,7 +96,6 @@
     "commander": "^15.0.0",
     "croner": "^11.0.0",
     "effect": "^4.0.7",
-    "giget": "^3.3.0",
     "ignore": "^7.0.14",
     "proper-lockfile": "^4.1.2",
     "undici": "^8.6.0",

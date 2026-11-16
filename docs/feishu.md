@@ -1,27 +1,35 @@
 ---
-title: Feishu channel (Lark compatibility)
+title: Feishu and Lark channel
 description: "Run an agent as a Feishu (飞书) or Lark bot: create the app, the WebSocket connection, scopes, when it answers, threads, cards, files, and sending from schedules."
 status: current
 ---
 
-# Feishu channel (Lark compatibility)
+# Feishu and Lark channel
 
 The agent answers as a Feishu or Lark bot, streaming its answer into a Markdown card.
 
 | | Feishu (飞书) | Lark (international) |
 |---|---|---|
 | Console | `open.feishu.cn` | `open.larksuite.com` |
-| Add | `fastagent add feishu` | `fastagent add lark` |
+| Declare | `feishu()` | `feishu({ domain: "lark" })` |
 | Variables | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | `LARK_APP_ID`, `LARK_APP_SECRET` |
 
 Pick the cloud your tenant is on. One agent can serve both, with two apps.
 
 ## Set it up
 
+Declare it in `fastagent.config.ts`:
+
+```ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+import { feishu } from "@fastagent-sh/fastagent/feishu";
+
+export default defineAgent({ channels: { feishu: feishu() } });
+```
+
 ```bash
-fastagent add feishu              # src/channels/feishu.ts, the feishu-send and feishu-threads tools, and the WebSocket SDK in package.json
-npm install                       # installs @larksuiteoapi/node-sdk
-fastagent channels setup feishu   # scan or open the link to create the app; credentials are kept for you
+npm install @larksuiteoapi/node-sdk   # the WebSocket SDK the channel opens its connection with
+fastagent channels setup feishu       # scan or open the link to create the app; credentials are kept for you
 fastagent dev                     # WebSocket: no public URL needed
 ```
 
@@ -57,9 +65,10 @@ the App ID and Secret, a process that stays running, and `@larksuiteoapi/node-sd
 **Use separate apps for dev and production**: two instances on one app split its events. Make the production app with
 `fastagent channels setup feishu --env-file prod.env`, which keeps its credentials in that file.
 
-`feishuChannel` and `larkChannel` receive by webhook at `POST /feishu` and `POST /lark` instead, checked by the
-Verification Token, or with an Encrypt Key by signature (plaintext is then refused; without one there is no replay
-protection, and startup warns). FastAgent does not set the Request URL: set it in the console yourself.
+`feishuChannel({ appId, appSecret, verificationToken, encryptKey? })` receives by webhook instead, at `POST /feishu`
+(`POST /lark` with `domain: "lark"`), checked by the Verification Token, or with an Encrypt Key by signature
+(plaintext is then refused; without one there is no replay protection, and startup warns). FastAgent does not set the
+Request URL: set it in the console yourself.
 
 ## When it answers
 
@@ -71,7 +80,7 @@ protection, and startup warns). FastAgent does not set the Request URL: set it i
 
 - A thread opened on one of the bot's answers starts from that conversation's history.
 - Before answering, it reads what was said in the place since its last answer (by name, bounded). A thread's first
-  turn also reads the room. The `feishu-threads` tool lets it read other threads of the group.
+  turn also reads the room. The `feishu_threads` tool lets it read other threads of the group.
 - A reply to one of its answers continues the session that answer came from.
 - A message that arrives while it works is passed to the running work and may share its answer. A waiting message
   shows a reaction until it is answered.
@@ -88,25 +97,19 @@ Images reach the model as images (it must support vision). Files, audio and vide
 attachment fails the turn visibly. Without `im:message.group_msg`, a bare image in a group is not delivered: send the
 question and the image together, or reply to the image with a mention.
 
-## Sending from schedules (`feishu-send` / `lark-send`)
+## Sending from schedules (`feishu_send`)
 
 A schedule or a wake-up has no chat to reply in: its prompt names the chat id, and the agent sends text or a Markdown
-card with the send tool. It cannot target a thread yet. In a chat turn the reply is sent for you; calling the tool too
-posts twice. `fastagent add feishu` again updates the tools and keeps your channel file.
+card with `feishu_send`. It cannot target a thread yet. In a chat turn the reply is sent for you; calling the tool too
+posts twice. The tools are named after the channel: a channel declared as `lark` gives `lark_send` and `lark_threads`.
 
-## The channel file
+## Options
 
 ```ts
-import { needs } from "@fastagent-sh/fastagent";
-import { feishuWebSocketChannel } from "@fastagent-sh/fastagent/feishu";
-
-export default needs(["FEISHU_APP_ID", "FEISHU_APP_SECRET"], (secrets) =>
-  feishuWebSocketChannel({
-    appId: secrets.FEISHU_APP_ID,
-    appSecret: secrets.FEISHU_APP_SECRET,
-    onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
-  }),
-);
+feishu({
+  domain: "feishu", // or "lark"
+  onError: (failed) => `⚠️ ${failed.details}`, // dev transparency; drop for a public bot
+});
 ```
 
 `route(event)` replaces the answering policy: return `null` to ignore, or `{ conversation?, chatId?, text? }`. A custom

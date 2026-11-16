@@ -2,7 +2,7 @@
  * Channel conversation history, ask position log, group room thread lookup, and thread fork point lookup.
  */
 import { type Agent, AgentError, type Message } from "../../agent-api.ts";
-import type { ForkSource } from "../../channel.ts";
+import type { ChannelTool, ForkSource } from "../../channel.ts";
 import { log } from "../../log.ts";
 import { loadStateFile, saveStateFile } from "../../state-file.ts";
 import { BUFFER_LINE_MAX_CHARS } from "./context-buffer.ts";
@@ -270,30 +270,38 @@ export function createRoomThreads(reader: ThreadReader): RoomThreads {
   };
 }
 
-const mounted = new Map<string, Map<string, RoomThreads>>();
-
-export function registerRoomThreads(kind: string, stateDir: string, rooms: RoomThreads): void {
-  const byChannel = mounted.get(kind) ?? new Map<string, RoomThreads>();
-  byChannel.set(stateDir, rooms);
-  mounted.set(kind, byChannel);
-}
-
-export function roomThreads(
+/**
+ * The `threads` tool: the threads of the room the message running in a session was asked in, and only those. `rooms`
+ * is the mounted channel's, undefined until it is served in this process.
+ */
+export function threadsTool(
   kind: string,
-  sessionId: string | undefined,
-): { list(): Promise<string>; read(threadId: string): Promise<string> } {
-  const serving = [...(mounted.get(kind)?.values() ?? [])];
-  if (serving.length === 0) {
-    throw new Error(`no ${kind} channel is serving in this process: threads are read only in a chat turn`);
-  }
-  const rooms = sessionId === undefined ? undefined : serving.find((each) => each.roomOf(sessionId) !== undefined);
-  const room = sessionId === undefined ? undefined : rooms?.roomOf(sessionId);
-  if (rooms === undefined || room === undefined) {
-    throw new Error(
-      `this turn was not asked in a ${kind} group chat: threads are read only from the group a turn was asked in`,
-    );
-  }
-  return { list: () => rooms.reader.list(room), read: (threadId) => rooms.reader.read(room, threadId) };
+  rooms: () => RoomThreads | undefined,
+  text: { description: string; threadId: string },
+): ChannelTool {
+  return {
+    name: "threads",
+    description: text.description,
+    parameters: {
+      type: "object",
+      properties: { threadId: { type: "string", description: text.threadId } },
+      additionalProperties: false,
+    },
+    async execute(args, { sessionId }) {
+      const serving = rooms();
+      if (serving === undefined) {
+        throw new Error(`the ${kind} channel is not serving in this process: threads are read only in a chat turn`);
+      }
+      const room = sessionId === undefined ? undefined : serving.roomOf(sessionId);
+      if (room === undefined) {
+        throw new Error(
+          `this turn was not asked in a ${kind} group chat: threads are read only from the group a turn was asked in`,
+        );
+      }
+      const { threadId } = args as { threadId?: string };
+      return threadId === undefined ? serving.reader.list(room) : serving.reader.read(room, threadId);
+    },
+  };
 }
 
 export interface ThreadSummary {

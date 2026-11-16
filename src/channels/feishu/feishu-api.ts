@@ -14,8 +14,8 @@
  *  5. Every failure is a {@link FeishuApiError} naming the call; self-description is a property of the
  *     error type, not per-call-site string assembly.
  *
- * Typed methods cover messages, cards, resources and app configuration. Proactive tools share this
- * transport through shared-api.ts. The official SDK handles WebSocket ingress in ws-ingress.ts.
+ * Typed methods cover messages, cards, resources and app configuration. A channel and its tools share one client
+ * (tools.ts). The official SDK handles WebSocket ingress in ws-ingress.ts.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import type { ImageAttachment as ImageRef } from "../kit/invoke.ts";

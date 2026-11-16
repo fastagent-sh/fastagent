@@ -10,13 +10,12 @@
     "src/telegram.ts",
     "src/slack.ts",
     "src/feishu.ts",
-    "src/lark.ts",
     "test/**/*.test.ts",
     // Run by CI's packed-package job, which vitest is not.
     "test/smoke/e2e/*.ts"
   ],
   "project": ["src/**/*.ts", "test/**/*.ts"],
-  // Scaffold bundles/templates are copied as files at scaffold time, never imported.
-  "ignore": ["src/channels/*/scaffold/**", "src/scaffold/templates/**"],
+  // Scaffold templates are copied as files at scaffold time, never imported.
+  "ignore": ["src/scaffold/templates/**"],
   "ignoreBinaries": ["fastagent", "flock"]
 }

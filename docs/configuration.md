@@ -9,7 +9,7 @@ status: current
 | What | Where |
 |---|---|
 | Behavior | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, code in `src/` |
-| Model, providers, MCP servers, starters | `fastagent.config.ts` |
+| Model, providers, MCP servers, channels, starters | `fastagent.config.ts` |
 | Where one instance runs | flags and environment variables |
 | Secrets | `.secrets/.env`, `.secrets/auth.json` (`fastagent login`), provider variables |
 
@@ -37,6 +37,7 @@ Every key is optional. An unknown key refuses the start.
 | `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
+| `channels` | none | [Channels](channels.md) the agent is reached on, by name |
 
 The name and description of the agent come from its `package.json`.
 
@@ -189,7 +190,6 @@ FASTAGENT_ROOT=/data fastagent start
 |---|---|
 | `src/tools/` | a tool: `defineTool` from `@earendil-works/pi-durable` |
 | `src/extensions/` | an extension: `defineExtension` |
-| `src/channels/` | a channel ([Channels](channels.md)) |
 | `src/schedules/` | a schedule: `defineSchedule` |
 
 Any of them may be wrapped in `needs`. Every file is loaded; there is nothing to register. Tests (`*.test.*`) are

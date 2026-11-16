@@ -1,6 +1,6 @@
 /**
  * A Caller's durable state under the state root, with no cross-instance locking: a channel's files are in its own
- * directory (`<stateRoot>/channels/<the channel file's name>/`) and the schedules' in `schedule/`, so what must not
+ * directory (`<stateRoot>/channels/<the channel's name>/`) and the schedules' in `schedule/`, so what must not
  * happen is two processes serving the SAME channel — which also means one ingress credential in two places, and no
  * local guard can see that.
  */

@@ -85,7 +85,7 @@ const telegramChannel = (
   const home = stateDir ?? freshStateDir();
   const root = rootOfHome.get(home);
   if (!root) throw new Error("test stateDir must come from freshStateDir()");
-  const handler = buildTelegramChannel(opts)(
+  const handler = buildTelegramChannel(opts).routes(
     channelContext(stopped ? withStop(agent, stopped) : agent, root, "telegram"),
   )["POST /telegram"]!;
   // Register the turn-queue idle so drainAndClean() awaits this channel's fire-and-forget turns deterministically.

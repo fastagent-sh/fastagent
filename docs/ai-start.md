@@ -25,9 +25,8 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | Facts about the project it works on | the project's own files, which the agent reads with its tools |
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
-| Chat channels | `src/channels/` (use a built-in channel) |
 | Timed work | `src/schedules/`, and the `wake` tool |
-| Model, providers, MCP servers | `fastagent.config.ts` |
+| Model, providers, MCP servers, chat channels | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
 
 Let the agent choose its steps; a fixed pipeline belongs in your app only when the product needs one. **A prompt or a
@@ -167,7 +166,7 @@ fastagent info --json      # lists the plan-batches tool and /skill:review-batch
 ```
 
 To prove type checking is on, change `batchCount(5, 2)` to `batchCount("5", 2)` in the test: `npm run typecheck` must
-fail. Then restore it. Reuse a published skill with `fastagent add skill <owner/repo/path>`, after reading it.
+fail. Then restore it.
 
 ## 5. Send one real message
 
@@ -195,12 +194,14 @@ restart it. Restart it yourself after editing `lib/`, which is not watched. Only
 
 ## 6. Add a channel
 
-| Channel | Run | The owner |
-|---|---|---|
-| Telegram | `fastagent add telegram && fastagent channels setup telegram --json` | creates the bot with @BotFather and saves `TELEGRAM_BOT_TOKEN` to `.secrets/.env` (or runs `fastagent channels setup telegram` in a terminal) |
-| Slack | `fastagent add slack && fastagent channels setup slack --json` | creates the app from the link, installs it, and saves its tokens to `.secrets/.env` (or runs `fastagent channels setup slack` in a terminal) |
-| Feishu | `fastagent add feishu && fastagent channels setup feishu --json` | runs `fastagent channels setup feishu` in a terminal (or adds `FEISHU_APP_ID` / `FEISHU_APP_SECRET`), then publishes in the console |
-| Lark | `fastagent add lark && fastagent channels setup lark --json` | creates the app from the link and saves its App ID and Secret to `.secrets/.env` (or runs `fastagent channels setup lark` in a terminal) |
+Declare the channel under `channels` in `fastagent.config.ts` ([Channels](channels.md)), then:
+
+| Channel | Declare | Run | The owner |
+|---|---|---|---|
+| Telegram | `telegram()` | `fastagent channels setup telegram --json` | creates the bot with @BotFather and saves `TELEGRAM_BOT_TOKEN` to `.secrets/.env` (or runs `fastagent channels setup telegram` in a terminal) |
+| Slack | `slack()` | `fastagent channels setup slack --json` | creates the app from the link, installs it, and saves its tokens to `.secrets/.env` (or runs `fastagent channels setup slack` in a terminal) |
+| Feishu | `feishu()` | `npm install @larksuiteoapi/node-sdk && fastagent channels setup feishu --json` | runs `fastagent channels setup feishu` in a terminal (or adds `FEISHU_APP_ID` / `FEISHU_APP_SECRET`), then publishes in the console |
+| Lark | `feishu({ domain: "lark" })` | `npm install @larksuiteoapi/node-sdk && fastagent channels setup lark --json` | creates the app from the link and saves its App ID and Secret to `.secrets/.env` (or runs `fastagent channels setup lark` in a terminal) |
 
 With `--json`, `channels setup` validates `.secrets/.env` (or `--env-file`) statelessly: when credentials are missing or
 refused it exits 2 with `need_user_action` (env var names, guide URL, and `rerun` command); once written, re-running

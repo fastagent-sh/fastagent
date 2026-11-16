@@ -1,13 +1,13 @@
 /**
- * The registry: every module in `src/tools/`, `src/extensions/`, `src/channels/` and
- * `src/schedules/` with what it default-exports, so nothing is imported by hand. A file directly in the directory is a
- * module, and anything else a module imports (a helper) lives outside these directories.
+ * The registry: every module in `src/tools/`, `src/extensions/` and `src/schedules/` with what it default-exports, so
+ * nothing is imported by hand. A file directly in the directory is a module, and anything else a module imports (a
+ * helper) lives outside these directories.
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REGISTRY_KINDS = ["tools", "extensions", "channels", "schedules"] as const;
+export const REGISTRY_KINDS = ["tools", "extensions", "schedules"] as const;
 type RegistryKind = (typeof REGISTRY_KINDS)[number];
 
 /** One module of the definition: where it is, and what it default-exports. */

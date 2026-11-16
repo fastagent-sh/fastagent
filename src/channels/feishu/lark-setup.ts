@@ -3,12 +3,12 @@
  * scan-to-create flow, so its person creates the app on the one-click launcher and pastes the App ID and App Secret,
  * which Lark checks as a pair; the rest is the Feishu engine's.
  */
-import { encodeAddons } from "../feishu/register-app.ts";
-import { createFeishuApi, isFeishuCredentialsRefused } from "../feishu/feishu-api.ts";
-import { feishuEngine } from "../feishu/setup.ts";
-import { feishuAppAddons } from "../feishu/setup-mode.ts";
+import { encodeAddons } from "./register-app.ts";
+import { createFeishuApi, isFeishuCredentialsRefused } from "./feishu-api.ts";
+import { feishuEngine } from "./setup.ts";
+import { feishuAppAddons } from "./setup-mode.ts";
 import { type ChannelSetup, SetupRefused } from "../setup.ts";
-import { cloudFor } from "../feishu/cloud.ts";
+import { cloudFor } from "./cloud.ts";
 
 /**
  * Lark's one-click launcher, where the person creates the app. The launcher is unbound (the bound confirm page is broken

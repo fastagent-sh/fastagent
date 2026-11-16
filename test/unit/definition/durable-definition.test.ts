@@ -34,6 +34,7 @@ import {
   ENV,
   toolCall,
   lastToolResult,
+  WITH_CHANNEL,
 } from "../../fixtures/durable-definition-fixtures.ts";
 
 afterAll(() => {
@@ -61,6 +62,16 @@ describe("an agent definition on pi-durable", () => {
     expect(built.schedules.map((schedule) => schedule.name)).toEqual(["daily"]);
   });
 
+  it("builds a channel fastagent.config.ts declares with the secrets it reads, refusing to run without them", async () => {
+    const definition = await loadSourceDefinition(agentPackage(WITH_CHANNEL));
+    expect(() => buildDefinition(definition, ENV)).toThrow(
+      "missing required secrets: OPS_TOKEN (fastagent.config.ts channels.ops)",
+    );
+    const built = buildDefinition(definition, { ...ENV, OPS_TOKEN: "t" });
+    expect([...built.channels.keys()]).toEqual(["ops"]);
+    expect(built.tools.map((tool) => tool.name)).toEqual(["weather", "ops_whoami"]);
+  });
+
   describe("opened", () => {
     const opened: DurableAgent[] = [];
     afterAll(async () => {
@@ -71,7 +82,7 @@ describe("an agent definition on pi-durable", () => {
       const dir = agentPackage(files);
       const definition = await loadSourceDefinition(opening(dir));
       const { faux } = (await import(join(dir, "model.ts"))) as { faux: ReturnType<typeof fauxProvider> };
-      const code = buildDefinition(definition, ENV);
+      const code = buildDefinition(definition, { ...ENV, OPS_TOKEN: "t" });
       const agent = await assembleAgent(definition, {
         storage: new MemoryStorage(),
         runsAs: NOT_HOSTED,
@@ -117,6 +128,14 @@ describe("an agent definition on pi-durable", () => {
         (context) => fauxAssistantMessage(lastToolResult(context)),
       ]);
       expect((await ask(agent, "weather?")).answer?.text).toBe("London: sunny (key k-123, region none)");
+    });
+
+    it("offers a channel's tool under the channel's name, run with the session it is called in", async () => {
+      const { agent, faux } = await open(WITH_CHANNEL);
+      faux.setResponses([() => toolCall("ops_whoami", {}), (context) => fauxAssistantMessage(lastToolResult(context))]);
+      const sessionId = (await agent.sessions.create()).id;
+      const sent = await agent.messages.send({ sessionId, content: "where?" }, { wait: 30 });
+      expect(sent.answer?.text).toBe(`token t, session ${sessionId}`);
     });
 
     it("offers its prompt templates and skills as commands, expanded for the model and kept as sent", async () => {

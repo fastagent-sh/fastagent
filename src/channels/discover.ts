@@ -1,40 +1,52 @@
 /**
  * A definition's channels, mounted: each route channel's routes, and each long connection bound to its context. The
- * modules are what the definition built (`BuiltDefinition.channels`); a channel's shape is checked there, by
- * {@link channelModuleProblem}, and its routes here, where it is first called.
+ * channels are what the definition built (`BuiltDefinition.channels`), by the name `fastagent.config.ts` gives them; a
+ * channel's shape is checked there, by {@link channelProblem}, and its routes here, where they are first asked for.
  */
 import type { Agent } from "../agent-api.ts";
-import type { ChannelModule, LongConnection, LongConnectionChannelModule, Routes } from "../channel.ts";
+import type { Channel, LongConnection, Routes } from "../channel.ts";
 import { channelContext } from "./context.ts";
 import { assertRouteKey, routeKeysConflict } from "./router.ts";
 
-export type AnyChannelModule = ChannelModule | LongConnectionChannelModule;
-
-/** A long-connection module bound to the same context route factories receive. */
+/** A long connection bound to the context its channel is mounted with. */
 export interface LoadedLongConnectionChannel {
   name: string;
   connect(signal: AbortSignal): LongConnection;
 }
 
-function longConnectionModule(value: unknown): value is LongConnectionChannelModule {
-  return value !== null && typeof value === "object" && typeof (value as { connect?: unknown }).connect === "function";
+const TOOL_NAME = /^[a-z][a-z0-9_]*$/;
+
+function toolProblem(value: unknown, i: number): string | undefined {
+  const tool = value as Partial<Record<"name" | "description" | "parameters" | "execute", unknown>> | null;
+  if (typeof tool?.name !== "string" || !TOOL_NAME.test(tool.name)) {
+    return `tools[${i}].name must be lowercase letters, digits and _, starting with a letter`;
+  }
+  if (typeof tool.description !== "string" || tool.description.trim() === "") {
+    return `tool "${tool.name}" needs a description`;
+  }
+  if (typeof tool.parameters !== "object" || tool.parameters === null) {
+    return `tool "${tool.name}" needs parameters, a JSON Schema object`;
+  }
+  return typeof tool.execute === "function" ? undefined : `tool "${tool.name}" needs an execute function`;
 }
 
-/** Why `value` is not a channel module: a route channel's `(ctx) => Routes`, or a long connection's object. */
-export function channelModuleProblem(value: unknown): string | undefined {
-  if (typeof value === "function") return undefined;
-  if (!longConnectionModule(value)) return "must default-export (ctx) => Routes or { name, connect(ctx, signal) }";
-  return typeof value.name === "string" && value.name.trim() !== ""
-    ? undefined
-    : "long-connection channel name must be a non-empty string";
+/** Why `value` is not a channel: one of `routes(ctx)` or `connect(ctx, signal)`, and well-formed `tools`. */
+export function channelProblem(value: unknown): string | undefined {
+  const channel = value as Partial<Record<"routes" | "connect" | "tools", unknown>> | null;
+  const routes = typeof channel?.routes === "function";
+  const connect = typeof channel?.connect === "function";
+  if (routes === connect) {
+    return "must be a channel (defineChannel), receiving by routes(ctx) or by connect(ctx, signal), not both";
+  }
+  const tools = channel?.tools;
+  if (tools === undefined) return undefined;
+  if (!Array.isArray(tools)) return "tools must be an array";
+  return tools.map(toolProblem).find((problem) => problem !== undefined);
 }
 
-/** HOW A CHANNEL IS REACHED — the authored structural fact, and the ONE shape it travels in. */
-export type ChannelIngress = "webhook" | "long-connection";
-
-/** How a channel module is reached: its routes, or the connection it opens. */
-export function channelIngress(module: AnyChannelModule): ChannelIngress {
-  return typeof module === "function" ? "webhook" : "long-connection";
+/** How a channel is reached: at its routes, or over the connection it opens. */
+export function channelIngress(channel: Channel): "webhook" | "long-connection" {
+  return "routes" in channel ? "webhook" : "long-connection";
 }
 
 function validateRoutes(value: unknown, label: string): [string, (req: Request) => Response | Promise<Response>][] {
@@ -59,7 +71,7 @@ function validateRoutes(value: unknown, label: string): [string, (req: Request) 
  * route is refused), and the connections.
  */
 export function mountChannels(
-  modules: ReadonlyMap<string, AnyChannelModule>,
+  channels: ReadonlyMap<string, Channel>,
   agent: Agent,
   stateRoot: string,
   resolveFrom: readonly string[] = [],
@@ -68,14 +80,14 @@ export function mountChannels(
   const owners = new Map<string, string>();
   const longConnections: LoadedLongConnectionChannel[] = [];
   const routeChannels: string[] = [];
-  for (const [name, module] of modules) {
-    const label = `src/channels/${name}`;
+  for (const [name, channel] of channels) {
+    const label = `channel "${name}"`;
     const ctx = channelContext(agent, stateRoot, name, resolveFrom);
-    if (typeof module !== "function") {
-      longConnections.push({ name: module.name, connect: (signal) => module.connect(ctx, signal) });
+    if (!("routes" in channel)) {
+      longConnections.push({ name, connect: (signal) => channel.connect(ctx, signal) });
       continue;
     }
-    const declared = module(ctx) as unknown;
+    const declared = channel.routes(ctx) as unknown;
     if (
       declared !== null &&
       typeof declared === "object" &&

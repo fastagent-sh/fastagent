@@ -3,46 +3,47 @@
  * the way the first run picks a model: in the parent process, at a terminal, once per project. Without a terminal
  * nothing is asked and nothing waits: the command that does it for a coding agent is named.
  */
-import { codeSecrets } from "../harnesses/pi-durable/definition.ts";
+import { channelSource, codeSecrets } from "../harnesses/pi-durable/definition.ts";
 import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { missingSecrets } from "../declared-secrets.ts";
 import { dotEnvPath, loadEnvValues } from "../value-file.ts";
-import { type SetupKind, isSetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
+import { SETUP_KINDS, type SetupKind, setUpChannel, setupNames } from "./channel-setup.ts";
 import { failStartup, failUsage } from "./fail.ts";
 import { isInteractive } from "./shared.ts";
 
-/** The first-party channels the agent mounts whose credentials this process's environment lacks. */
-async function lackingChannels(agentDir: string): Promise<SetupKind[]> {
+/**
+ * The setups that supply what the agent's channels lack in this process's environment, each with the channel that
+ * lacks it. Only what a setup supplies: a channel reading other variables is its author's to fill.
+ */
+async function lackingChannels(agentDir: string): Promise<{ kind: SetupKind; channel: string }[]> {
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const missing = missingSecrets(codeSecrets(definition), process.env);
-  return definition.registry.channels.flatMap(({ file, name }) => {
-    if (!isSetupKind(name)) return [];
-    // Only what the channel's own setup supplies: a channel file of the same name that reads other variables is its
-    // author's to fill.
-    const supplied = setupNames(name);
-    return missing.some((secret) => secret.declaredIn === file && supplied.includes(secret.name)) ? [name] : [];
+  return Object.keys(definition.config.channels ?? {}).flatMap((channel) => {
+    const lacking = missing.filter((secret) => secret.declaredIn === channelSource(channel)).map(({ name }) => name);
+    const kind = SETUP_KINDS.find((each) => setupNames(each).some((name) => lacking.includes(name)));
+    return kind === undefined ? [] : [{ kind, channel }];
   });
 }
 
 export async function setUpMissingChannels(agentDir: string, opts: { input?: boolean } = {}): Promise<void> {
-  const kinds = await lackingChannels(agentDir);
-  if (kinds.length === 0) return;
+  const lacking = await lackingChannels(agentDir);
+  if (lacking.length === 0) return;
   if (opts.input === false || !isInteractive()) {
-    const lacking = kinds
+    const says = lacking
       .map(
-        (kind) =>
-          `${kind} has no credentials in ${dotEnvPath(agentDir)}: run \`fastagent channels setup ${kind} --json\``,
+        ({ kind, channel }) =>
+          `channel "${channel}" has no credentials in ${dotEnvPath(agentDir)}: run ` +
+          `\`fastagent channels setup ${kind} --json\``,
       )
       .join("; ");
-    failUsage(
-      `${lacking} (it hands the person's part to its user), or run \`fastagent dev\` in a terminal, which asks`,
-    );
+    failUsage(`${says} (it hands the person's part to its user), or run \`fastagent dev\` in a terminal, which asks`);
   }
 
   const file = dotEnvPath(agentDir);
-  for (const kind of kinds) {
+  for (const { kind, channel } of lacking) {
     console.error(
-      `[fastagent] ${kind} has no credentials in ${file} yet: setting it up (\`fastagent channels setup ${kind}\`)`,
+      `[fastagent] channel "${channel}" has no credentials in ${file} yet: setting it up ` +
+        `(\`fastagent channels setup ${kind}\`)`,
     );
     const outcome = await setUpChannel({
       kind,
@@ -54,8 +55,8 @@ export async function setUpMissingChannels(agentDir: string, opts: { input?: boo
     }).catch((error: unknown) =>
       failStartup(
         new Error(
-          `${kind} setup did not finish (${(error as Error).message}): \`dev\` needs it while src/channels/${kind}.ts ` +
-            `exists. Run \`fastagent channels setup ${kind}\` when ready, or remove the file`,
+          `${kind} setup did not finish (${(error as Error).message}): \`dev\` needs it while ${channelSource(channel)} ` +
+            `is declared. Run \`fastagent channels setup ${kind}\` when ready, or remove the channel`,
           { cause: error },
         ),
       ),

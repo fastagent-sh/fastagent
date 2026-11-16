@@ -13,12 +13,11 @@ own channel. You keep writing the agent as files. FastAgent runs it.
 
 ```txt
 reviewer/
-├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ model, providers })
+├── fastagent.config.ts   # marks the directory as an agent: defineAgent({ model, providers, channels })
 ├── SYSTEM.md             # the system prompt
 ├── AGENTS.md             # optional: how this agent is built and changed
 ├── skills/  prompts/     # optional: skills, and prompt templates run as /<name>
 ├── src/tools/            # optional: tools
-├── src/channels/         # optional: Telegram, Slack, Feishu or your own
 └── src/schedules/        # optional: prompts run on a cron
 ```
 

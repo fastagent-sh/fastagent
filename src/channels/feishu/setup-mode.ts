@@ -1,3 +1,8 @@
+/**
+ * What a Feishu or Lark app must carry for the channel: the one event it receives over the long connection, and the
+ * scopes beyond the platform's agent template, each with what the agent loses without it. App creation requests them
+ * (`setup.ts`, `lark-setup.ts`), and a running channel warns about any the tenant withheld (`feishu.ts`).
+ */
 /** The one event an agent app cannot serve without: an inbound message. */
 export const FEISHU_MESSAGE_RECEIVE_EVENT = "im.message.receive_v1";
 
