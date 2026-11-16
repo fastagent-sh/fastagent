@@ -8,6 +8,10 @@
  * row, which every commit writes: a takeover writes that row too, so the stalled holder's next commit finds another
  * token, or conflicts with the takeover, and fails the Session instead of writing beside the new holder. The lease
  * lives in its own row so renewing it never conflicts with a commit.
+ *
+ * Fencing the storage does not stop a tool already running. So a holder that cannot renew gives the instance up itself
+ * before its lease can lapse (`GIVE_UP_AFTER`), and says so (`onLost`), for its runs to be stopped before a successor
+ * may resume them.
  */
 import type { Context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
@@ -73,6 +77,9 @@ export interface LeaseOptions {
 
 const DEFAULT_LEASE: LeaseOptions = { leaseMs: LEASE_MS, waitMs: LEASE_MS + 5_000 };
 
+/** The share of the lease a holder goes without renewing before it gives the instance up. */
+const GIVE_UP_AFTER = 2 / 3;
+
 /** OCC conflicts: PostgreSQL's serialization failure, and Aurora DSQL's own code for it. */
 const CONFLICT = new Set(["40001", "OC000"]);
 const isConflict = (error: unknown) => CONFLICT.has(String((error as { code?: unknown }).code));
@@ -131,6 +138,9 @@ export class PostgresStorage implements Storage {
   /** Why this process may no longer write the instance: another took it over. */
   private lost: Error | undefined;
   private renewal: ReturnType<typeof setInterval> | undefined;
+  /** When the lease was last extended, by this process's clock. */
+  private renewedAt = Date.now();
+  private onLost: ((error: Error) => void) | undefined;
   private readonly db: PgDatabase;
   private readonly instance: string;
   private nextId: number;
@@ -147,11 +157,13 @@ export class PostgresStorage implements Storage {
   /**
    * Open `instance` in `db`, whose tables `migrate` made, holding its lease; the storage owns `db` and closes it. A held
    * instance is waited for (`lease.waitMs`), then refused with `InstanceHeld`, naming `holders`, what else opens it.
+   * `onLost` is told once when this process stops holding the instance while open: another took it over, or the
+   * database was out of reach for most of the lease.
    */
   static async open(
     db: PgDatabase,
     instance: string,
-    options: { holders?: string; lease?: LeaseOptions } = {},
+    options: { holders?: string; lease?: LeaseOptions; onLost?: (error: Error) => void } = {},
   ): Promise<PostgresStorage> {
     const lease = options.lease ?? DEFAULT_LEASE;
     const owner = crypto.randomUUID();
@@ -166,6 +178,7 @@ export class PostgresStorage implements Storage {
       const taken = await PostgresStorage.take(db, instance, owner, lease.leaseMs);
       if (taken !== undefined) {
         const storage = new PostgresStorage(db, instance, taken, owner);
+        storage.onLost = options.onLost;
         storage.renewEvery(lease.leaseMs);
         return storage;
       }
@@ -221,19 +234,39 @@ export class PostgresStorage implements Storage {
         )
         .then(
           ([kept]) => {
-            if (kept === undefined) this.loseLease();
+            if (kept === undefined) this.giveUp(this.loseLease());
+            else this.renewedAt = Date.now();
           },
-          // The next tick retries; a takeover meanwhile is caught by the commit's own check.
-          (error: unknown) => log.warn(`[fastagent] renewing the lease of "${this.instance}" failed: ${String(error)}`),
+          (error: unknown) => {
+            const unrenewedMs = Date.now() - this.renewedAt;
+            log.warn(`[fastagent] renewing the lease of "${this.instance}" failed: ${String(error)}`);
+            // The next tick retries, while a successor cannot take the instance yet.
+            if (unrenewedMs < leaseMs * GIVE_UP_AFTER) return;
+            this.giveUp(
+              this.loseLease(
+                new Error(
+                  `the instance "${this.instance}" was given up: its lease went ${Math.round(unrenewedMs / 1000)}s ` +
+                    `without renewal (${String(error)}), and another process may take it over after ${leaseMs / 1000}s`,
+                ),
+              ),
+            );
+          },
         );
     }, leaseMs / 3);
     this.renewal.unref();
   }
 
-  private loseLease(): Error {
+  private loseLease(why?: Error): Error {
     clearInterval(this.renewal);
-    this.lost ??= new Error(`the instance "${this.instance}" was taken over by another process`);
+    this.lost ??= why ?? new Error(`the instance "${this.instance}" was taken over by another process`);
     return this.lost;
+  }
+
+  /** Say, once, that this process no longer holds the instance: what runs in it must stop. */
+  private giveUp(lost: Error): void {
+    const onLost = this.onLost;
+    this.onLost = undefined;
+    onLost?.(lost);
   }
 
   /**
@@ -752,12 +785,12 @@ export class PostgresStorage implements Storage {
 export async function openPostgresStorage(
   connectionString: string,
   instance: string,
-  holders?: string,
+  options: { holders?: string; onLost?: (error: Error) => void } = {},
 ): Promise<PostgresStorage> {
   const db = openPgDatabase(connectionString);
   try {
     await migrate(db);
-    return await PostgresStorage.open(db, instance, holders === undefined ? {} : { holders });
+    return await PostgresStorage.open(db, instance, options);
   } catch (error) {
     await db
       .close()

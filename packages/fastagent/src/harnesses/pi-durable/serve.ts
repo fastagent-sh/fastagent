@@ -136,10 +136,18 @@ export function describeInstanceStorage(place: InstancePlace): string {
   return url ? `PostgreSQL ${describeDatabase(url)}, instance "${place.name}"` : join(place.stateRoot, "agent.sqlite");
 }
 
-/** The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's. */
-function openInstanceStorage(place: InstancePlace): Promise<Storage> {
+/**
+ * The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's,
+ * whose hold can end while open (`onLost`).
+ */
+function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
   const url = place.env[DATABASE_URL_ENV];
-  if (url) return openPostgresStorage(url, place.name, NAMED_INSTANCE_HOLDERS);
+  if (url) {
+    return openPostgresStorage(url, place.name, {
+      holders: NAMED_INSTANCE_HOLDERS,
+      ...(onLost === undefined ? {} : { onLost }),
+    });
+  }
   return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
 }
 
@@ -156,9 +164,13 @@ export async function holdingInstance<T>(place: InstancePlace, work: () => T): P
   }
 }
 
-function openStorage(place: InstancePlace, storage: ServingStorage): Promise<Storage> | Storage {
+function openStorage(
+  place: InstancePlace,
+  storage: ServingStorage,
+  onLost: (error: Error) => void,
+): Promise<Storage> | Storage {
   if (storage === "memory") return new MemoryStorage();
-  if (storage === "instance") return openInstanceStorage(place);
+  if (storage === "instance") return openInstanceStorage(place, onLost);
   return openLockedStorage(storage.file, storage.holders);
 }
 
@@ -202,7 +214,9 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const chosen = options.storage ?? "instance";
   const place: InstancePlace = { stateRoot, name, env };
-  const storage = await openStorage(place, chosen);
+  // Before the agent exists, a lost hold fails its open's first commit instead.
+  let stopRuns: ((error: Error) => void) | undefined;
+  const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
   if (chosen === "instance" && env[DATABASE_URL_ENV])
     log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
   let mcp: McpClients | undefined;
@@ -232,6 +246,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
   }
+  // No longer the instance's holder: its runs stop before another process may resume them.
+  stopRuns = (error) => {
+    log.error(`[fastagent] ${error.message}: stopping its runs`);
+    agent.harness
+      .close(BACKGROUND_CONTEXT)
+      .catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
+  };
   // A storage failure or a direct harness close also ends the resources this open acquired.
   void agent.harness.closed
     .then(() => mcp.close())

@@ -1,15 +1,20 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  type PgDatabase,
+  openPgDatabase,
+} from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
   InstanceHeld,
   PostgresStorage,
   openPostgresStorage,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
+import { fauxAgent } from "../../doubles/cli-run.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
+import { openSource } from "../../harnesses/open-source.ts";
 
 let postgres: ServedPostgres;
 beforeAll(async () => {
@@ -110,6 +115,69 @@ describe("one process writes an instance at a time", () => {
     await successor.close(BACKGROUND_CONTEXT);
     await stalled.close(BACKGROUND_CONTEXT);
   });
+});
+
+describe("a holder cut off from the database", () => {
+  it("gives the instance up, saying so, while its lease still keeps a successor out", async () => {
+    const instance = freshInstance();
+    const base = openPgDatabase(postgres.url);
+    await migrate(base);
+    let cut = false;
+    const unreachable = () =>
+      Promise.reject(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    const db: PgDatabase = {
+      query: (text, params) => (cut ? unreachable() : base.query(text, params)),
+      transaction: (work) => (cut ? unreachable() : base.transaction(work)),
+      close: () => base.close(),
+    };
+    const lost: Error[] = [];
+    const leaseMs = 3_000;
+    const holder = await PostgresStorage.open(db, instance, {
+      lease: { leaseMs, waitMs: 0 },
+      onLost: (error) => lost.push(error),
+    });
+    cut = true;
+    await vi.waitFor(() => expect(lost).toHaveLength(1), { timeout: 10_000 });
+    expect(lost[0]?.message).toMatch(
+      new RegExp(`^the instance "${instance}" was given up: its lease went \\d+s without`),
+    );
+    const watcher = openPgDatabase(postgres.url);
+    const [lease] = await watcher.query<{ current: boolean }>(
+      "SELECT lease_until > now() AS current FROM durable_leases WHERE instance = $1",
+      [instance],
+    );
+    await watcher.close();
+    expect(lease?.current).toBe(true);
+    cut = false;
+    await expect(newConversation(holder)).rejects.toThrow(`the instance "${instance}" was given up`);
+    await holder.close(BACKGROUND_CONTEXT);
+  });
+});
+
+it("an open agent stops its runs once another process takes its instance over", async () => {
+  // Only the lease's renewal ticks are driven by hand; everything else runs on real time.
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const dir = await fauxAgent("fa-postgres-taken-");
+    const agent = await openSource(dir, {
+      name: "taken",
+      secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url },
+    });
+    let closed = false;
+    void agent.harness.closed.then(() => {
+      closed = true;
+    });
+    const db = openPgDatabase(postgres.url);
+    await db.query("UPDATE durable_leases SET lease_until = now() - interval '1 second' WHERE instance = 'taken'");
+    await db.close();
+    const successor = await leased("taken", { leaseMs: 60_000, waitMs: 0 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.waitFor(() => expect(closed).toBe(true), { timeout: 5_000 });
+    await successor.close(BACKGROUND_CONTEXT);
+    await agent.close();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("names an unreachable database without its credentials", async () => {

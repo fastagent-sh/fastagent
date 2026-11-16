@@ -25,6 +25,9 @@ const TABLES = [
     instance text NOT NULL, id bigint NOT NULL, conversation_id bigint NOT NULL, head bigint, commit_seq bigint NOT NULL,
     record text NOT NULL, PRIMARY KEY (instance, id))`,
   `CREATE INDEX IF NOT EXISTS durable_entries_by_conversation ON durable_entries (instance, conversation_id, id)`,
+  // A conversation's latest head marker without reading every entry after it (`findLatestHeadMarker`).
+  `CREATE INDEX IF NOT EXISTS durable_entry_heads_by_conversation
+    ON durable_entries (instance, conversation_id, id) WHERE head IS NOT NULL`,
   `CREATE TABLE IF NOT EXISTS durable_tasks (
     instance text NOT NULL, id bigint NOT NULL, conversation_id bigint NOT NULL, kind text NOT NULL, status text NOT NULL,
     abort_requested smallint NOT NULL, background smallint NOT NULL, record text NOT NULL, PRIMARY KEY (instance, id))`,
