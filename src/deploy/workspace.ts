@@ -1,7 +1,7 @@
 /**
  * A deployed box's initialization of its storage: the lease, and the record of which agent the storage is for. The
- * program is the image's; the storage is the instance's root, its working directory with its state, credentials and
- * content (`.state/`, `.secrets/`, `content/`), which outlives every image.
+ * program is the image's; the storage is the instance's root, its working directory with its state (`.state/`), which
+ * outlives every image.
  */
 import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
