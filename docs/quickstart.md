@@ -8,6 +8,10 @@ status: current
 
 You need Node ≥ 24.15 and the CLI: `npm i -g @fastagent-sh/fastagent`.
 
+The agent depends on its own version of FastAgent, and a `fastagent` installed globally runs that version inside it.
+Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
+`npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
+
 ## 1. Create an agent
 
 ```bash

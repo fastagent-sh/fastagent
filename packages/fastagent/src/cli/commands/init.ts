@@ -18,7 +18,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
     console.error(`[fastagent] installing dependencies (npm install)…`);
     installFailed = (await npmInstall(dir)) !== 0;
     if (installFailed) {
-      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`fastagent dev\``);
+      console.error(`[fastagent] warn: npm install failed — run it manually in ${dir} before \`npm run dev\``);
     }
   }
   const repository = await initRepository(dir);
@@ -30,7 +30,7 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
   if (!opts.install || installFailed) console.error(`    npm install`);
-  console.error(`    fastagent dev   # serve locally and iterate`);
+  console.error(`    npm run dev   # serve locally and iterate`);
 }
 
 /** Run `npm install` in `cwd` (inherit stdio). */

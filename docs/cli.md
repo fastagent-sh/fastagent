@@ -11,6 +11,10 @@ fastagent <command> [args] [options]
 fastagent <command> --help     # every argument, flag and example, generated from the code
 ```
 
+The agent depends on its own version of FastAgent, and a `fastagent` installed globally runs that version inside it.
+Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
+`npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
+
 `[agent]` is the agent directory (the one with `fastagent.config.ts`), by default the current one. Nothing is searched
 for: from a subdirectory, a command names the agent's root and stops.
 

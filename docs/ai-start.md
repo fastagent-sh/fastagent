@@ -42,7 +42,9 @@ cd my-agent
 ```
 
 The agent lives in its own directory, beside the project it works on. `init` installs dependencies (run `npm install`
-if that failed) and makes the first git commit. Stay in `my-agent/` for the rest of this guide.
+if that failed) and makes the first git commit. Stay in `my-agent/` for the rest of this guide: there the global
+`fastagent` runs the agent's own installed version. Without a global install, run `npx @fastagent-sh/fastagent
+<command>`, never `npx fastagent`, which is another package on npm.
 
 ## 3. Set up TypeScript
 
