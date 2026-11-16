@@ -51,4 +51,3 @@ interface, the [Agent API](agent-api.md).
 
 - One instance spread over several processes (one process owns an instance's storage today).
 - A sandbox around the agent process: its tools act with the process's authority.
-- Telemetry export (OpenTelemetry).

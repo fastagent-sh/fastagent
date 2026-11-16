@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions and schedules."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions, schedules and run traces."
 status: current
 ---
 
@@ -239,3 +239,23 @@ Every opened instance gives the agent `wake` and `unwake`; only a serve's clock 
 
 `FASTAGENT_LOG_LEVEL` is `debug`, `info`, `warn` or `error`. Defaults: `debug` for `dev`, `info` for `start`, which
 keeps message content out of the logs.
+
+## Run traces
+
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) and every run goes to that OpenTelemetry
+collector as a trace: the message's admission, each step of its run with the tools it called, and each model request
+with its tokens and cost. A model request also carries the GenAI names (`gen_ai.request.model`,
+`gen_ai.usage.input_tokens`, …) that LLM observability tools read. A trace holds no content: no prompt, answer or tool
+argument.
+
+| Variable | |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's base URL; traces go to `<base>/v1/traces` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | `key=value,…`, percent-encoded values: what the collector authenticates with |
+| `OTEL_SERVICE_NAME` | `service.name`; default the instance's name |
+| `OTEL_RESOURCE_ATTRIBUTES` | More resource attributes, `key=value,…` |
+| `OTEL_SDK_DISABLED=true` | Export nothing |
+
+The protocol is OTLP/HTTP with JSON; any other `OTEL_EXPORTER_OTLP_PROTOCOL` refuses the start. `dev`, `start`,
+`invoke`, `schedules run` and an app's `openAgent` all export. A collector that is down costs the agent nothing: the
+spans it missed are dropped, and the log says how many.

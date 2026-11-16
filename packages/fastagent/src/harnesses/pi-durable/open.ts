@@ -14,6 +14,7 @@ import {
   defineExtension,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
 import { loadRawProgramConfig } from "../../program-config.ts";
@@ -227,6 +228,8 @@ export interface AssembleAgentOptions {
   unfinished?: Unfinished;
   /** The whole environment of the processes the agent starts (child-env.ts): nothing of this process's is added. */
   processEnv: Readonly<Record<string, string>>;
+  /** Where the runs' spans go. */
+  telemetry?: TelemetryContext;
 }
 
 /**
@@ -305,6 +308,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.stateRoot === undefined ? {} : { clock: { stateRoot: options.stateRoot, schedules: code.schedules } }),
+    ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),
