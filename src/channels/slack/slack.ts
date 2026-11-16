@@ -510,12 +510,22 @@ function createSlackRuntime(
     if (event?.type !== "agent_session_stopped" || !event.channel || !event.thread_ts) return;
     const teamId = slackTeamId(envelope) ?? auth.teamId();
     if (!teamId) return;
+    // Slack delivers an event again when it saw no acknowledgement: one press is one stop.
+    const delivery = `stopped:${envelope.event_id ?? `${event.channel}:${event.thread_ts}:${event.event_ts}`}`;
+    if (seen.has(delivery)) return;
+    seen.add(delivery);
     const conversation = threadKey(teamId, event.channel, event.thread_ts);
     const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
     runner.track(
       dispatchStop(agent, recordedSession(conversation), label)
         .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
-        .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`)),
+        .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
+        // Slack leaves the session processing after a press: a turn that ends sets it active, and one may not exist.
+        .then(() =>
+          api
+            .setSessionStatus(target, "active")
+            .catch((error) => log.warn(`${label} could not set the stopped session active: ${String(error)}`)),
+        ),
     );
   };
 

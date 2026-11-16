@@ -260,8 +260,13 @@ function streamNativeSlackReply(
     const sendContent = async (markdown: string): Promise<void> => {
       const chars = Array.from(markdown).length;
       if (streamTs && (streamChars + chars > STREAM_MAX_CHARS || now() - streamStartedAt >= STREAM_MAX_MS)) {
-        // The answer goes on in a new message of the same thread; the session stays processing.
-        await api.stopStream(target.channelId, streamTs, undefined, "processing");
+        // The answer goes on in a new message of the same thread; the session stays processing. Slack may have
+        // finalized the old stream already (10 minutes after it started), and then its stop is refused.
+        await api
+          .stopStream(target.channelId, streamTs, undefined, "processing")
+          .catch((error) =>
+            log.warn(`${label} could not close a full Slack stream; continuing in a new one: ${String(error)}`),
+          );
         streamTs = undefined;
       }
       if (streamTs) {
