@@ -51,7 +51,11 @@ function historyText({ messages, earlier }: PlaceRead, where: string): string {
   return [head, ...messages.map(placeLine)].join("\n");
 }
 
-/** Where each session's turn runs, while it runs: what the `history` tool reads. */
+/**
+ * Where each session's turns run, while they run: what the `history` tool reads. Turns of one session overlap (a
+ * message that arrives while it works steers the running work), so each turn's entry is its own, and the session reads
+ * where its latest still-running turn was asked.
+ */
 export interface SessionPlaces {
   /** The session's turn runs in `place` until the returned leave is called. */
   enter(sessionId: string, place: string): () => void;
@@ -59,15 +63,19 @@ export interface SessionPlaces {
 }
 
 export function createSessionPlaces(): SessionPlaces {
-  const places = new Map<string, string>();
+  const entered = new Map<string, string[]>();
   return {
     enter(session, place) {
-      places.set(session, place);
+      entered.set(session, [...(entered.get(session) ?? []), place]);
       return () => {
-        if (places.get(session) === place) places.delete(session);
+        const kept = [...(entered.get(session) ?? [])];
+        const at = kept.lastIndexOf(place);
+        if (at !== -1) kept.splice(at, 1);
+        if (kept.length === 0) entered.delete(session);
+        else entered.set(session, kept);
       };
     },
-    placeOf: (session) => places.get(session),
+    placeOf: (session) => entered.get(session)?.at(-1),
   };
 }
 

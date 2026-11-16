@@ -107,8 +107,6 @@ export function createFeishuHistory(deps: {
     const listed = await api.listMessages(
       thread ? { type: "thread", id: thread } : { type: "chat", id: place.chatId },
       HISTORY_MAX_LIMIT,
-      undefined,
-      CONTEXT_READ,
     );
     // A thread id names a thread in ANY chat the bot is in: reading one of another chat would leak that chat here.
     const stranger = thread ? listed.items.find((item) => item.chat_id !== place.chatId) : undefined;

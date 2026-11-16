@@ -231,11 +231,11 @@ export function createSlackHistory(deps: {
     const thread = threadId ?? place.threadTs;
     const page =
       thread === undefined
-        ? await api.channelHistory(place.channelId, { limit }, CONTEXT_READ).then(({ messages, hasMore }) => ({
+        ? await api.channelHistory(place.channelId, { limit }).then(({ messages, hasMore }) => ({
             messages: messages.reverse(),
             hasMore,
           }))
-        : await api.threadReplies(place.channelId, thread, { limit: THREAD_PAGE }, CONTEXT_READ);
+        : await api.threadReplies(place.channelId, thread, { limit: THREAD_PAGE });
     const spoken = page.messages.filter(
       (message): message is SlackListedMessage & { ts: string } =>
         message.ts !== undefined &&

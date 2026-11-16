@@ -12,7 +12,7 @@ export interface CallOptions {
 /** A live-preview snapshot superseded by the next frame: never wait out a rate limit for it. */
 export const DROPPABLE_FRAME: CallOptions = { retries: 0 };
 
-/** A context-enrichment read the turn can survive without: never wait out a rate limit for it. */
+/** A read whose result is only a label (a person's name), shown without it: never wait out a rate limit for it. */
 export const CONTEXT_READ: CallOptions = { retries: 0 };
 
 /** Run `fn` when `signal` aborts; returns a cleanup that removes the listener. */

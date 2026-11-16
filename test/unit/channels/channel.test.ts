@@ -7,6 +7,7 @@ import type { Agent } from "../../../src/agent-api.ts";
 import type { Channel } from "../../../src/channel.ts";
 import { channelContext } from "../../../src/channels/context.ts";
 import { channelIngress, channelProblem, mountChannels } from "../../../src/channels/discover.ts";
+import { createSessionPlaces } from "../../../src/channels/kit/history.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -73,5 +74,28 @@ describe("channelContext: what a channel is handed", () => {
     expect(agent.forks).toHaveLength(1);
     expect(JSON.parse(readFileSync(join(ctx.stateDir, "sessions.json"), "utf8"))).toEqual({ "chat-1": first });
     expect(await ctx.sessionFor("chat-2")).not.toBe(first);
+  });
+});
+
+describe("createSessionPlaces: where a session's turns run, for the history tool", () => {
+  it("keeps a still-running turn's place when an overlapping turn of the session in the same place ends", () => {
+    const places = createSessionPlaces();
+    const leaveFirst = places.enter("s1", "chat-1");
+    const leaveSecond = places.enter("s1", "chat-1"); // a message that steers the running work
+    leaveFirst();
+    expect(places.placeOf("s1")).toBe("chat-1");
+    leaveSecond();
+    expect(places.placeOf("s1")).toBeUndefined();
+  });
+
+  it("reads where the latest still-running turn was asked", () => {
+    const places = createSessionPlaces();
+    const leaveChannel = places.enter("s1", "channel");
+    const leaveThread = places.enter("s1", "thread");
+    expect(places.placeOf("s1")).toBe("thread");
+    leaveThread();
+    expect(places.placeOf("s1")).toBe("channel");
+    leaveChannel();
+    expect(places.placeOf("s1")).toBeUndefined();
   });
 });
