@@ -8,7 +8,7 @@ test/
 ├── doubles/      # Shared test doubles
 ├── harnesses/    # Multi-suite conformance and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
-├── unit/         # [L1] domain suites: agent-api, definition, cli, deploy, schedules, embedding, security, traces
+├── unit/         # [L1] domain suites: agent-api, definition, cli, deploy, schedules, embedding, security, storage, traces
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
 └── smoke/        # [L3, CI-only] e2e/packed.ts
 ```
@@ -22,6 +22,7 @@ Use these shared seams instead of writing per-file mocks:
 | `doubles/cli-run.ts` (`runInProcess`, `fauxAgent`, `agentWorkspace`) | Spawning `packages/fastagent/src/cli.ts` for command logic | `integration/double-parity/cli-run-parity.integration.test.ts` |
 | `doubles/git-double.ts` (`gitAnswersIn`) | `packages/fastagent/src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
 | `doubles/tsc-double.ts` | `packages/fastagent/src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
+| `doubles/postgres-double.ts` (`servedPostgres`) | A PostgreSQL server (PGlite on a loopback port) | `integration/double-parity/postgres-double.integration.test.ts`, against `FASTAGENT_TEST_POSTGRES_URL` |
 | `doubles/storage-no-wait.ts` | `packages/fastagent/src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
 | `doubles/codex-model.ts`, `kept-catalog.ts` | Model providers and catalog refreshes | pi-ai's `fauxProvider` |
 | `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for scheduler specs | Conforms to `packages/client/src/agent-api.ts` |

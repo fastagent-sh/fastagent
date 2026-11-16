@@ -59,6 +59,19 @@ jobs:
   integration:
     name: Integration (Node 24.15.0)
     runs-on: ubuntu-latest
+    services:
+      # The server the PostgreSQL double is held against (double-parity/postgres-double.integration.test.ts).
+      postgres:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_PASSWORD: fastagent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -74,6 +87,8 @@ jobs:
         run: npm ci
 
       - name: Integration tests
+        env:
+          FASTAGENT_TEST_POSTGRES_URL: postgres://postgres:fastagent@127.0.0.1:5432/postgres
         run: npm run test:integration -- --reporter=default --reporter=json --outputFile.json=test-reports/integration.json
 
       - name: Keep the integration report of a failed run

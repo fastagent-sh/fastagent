@@ -136,6 +136,12 @@ export function resolveOverridePath(raw: string | undefined): string | undefined
 /** Where an instance is, from the environment: its root, the agent's working directory with its state inside. */
 export const INSTANCE_ROOT_ENV = "FASTAGENT_ROOT";
 
+/**
+ * The PostgreSQL database an instance's sessions live in, instead of its own `agent.sqlite`. Instances share it, each
+ * under the name it is given (`FASTAGENT_NAME`): there is no default, so two never meet by accident.
+ */
+export const DATABASE_URL_ENV = "FASTAGENT_DATABASE_URL";
+
 /** Where fastagent keeps what it makes for a local instance of the project in `dir`, one directory per environment. */
 export const INSTANCES_DIRNAME = ".fastagent";
 

@@ -68,4 +68,6 @@ environment variables.
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 
-A new image replaces the program; the volume stays.
+A new image replaces the program; the volume stays. To keep the sessions in a managed PostgreSQL database instead of
+the volume, give the container `FASTAGENT_DATABASE_URL`
+([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)); the volume still holds the schedule state.

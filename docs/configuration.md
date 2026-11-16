@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions, schedules and run traces."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, sessions in PostgreSQL, tools, extensions, schedules and run traces."
 status: current
 ---
 
@@ -166,13 +166,13 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | Storage (`agent.sqlite`) and schedule state. One process at a time |
+| `<root>/.state/` | Sessions (`agent.sqlite`, unless they are [in PostgreSQL](#sessions-in-postgresql)) and schedule state. One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
 |---|---|---|
 | `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`) |
-| `--name <name>` | `FASTAGENT_NAME` | the package's name |
+| `--name <name>` | `FASTAGENT_NAME` | the package's name; none with `FASTAGENT_DATABASE_URL`, where it is required |
 
 The container `deploy docker` writes keeps its root at `/data`. On your own server without a container:
 
@@ -180,6 +180,29 @@ The container `deploy docker` writes keeps its root at `/data`. On your own serv
 fastagent build
 FASTAGENT_ROOT=/data fastagent start
 ```
+
+## Sessions in PostgreSQL
+
+Set `FASTAGENT_DATABASE_URL` and an instance keeps its sessions and runs in that PostgreSQL database instead of
+`<root>/.state/agent.sqlite`. A new machine, container or root with the same name continues them.
+
+```bash
+FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=require' FASTAGENT_NAME=support fastagent start
+```
+
+- **Name each instance.** Instances in one database are told apart by the name you give them (`--name` or
+  `FASTAGENT_NAME`; an app: `openAgent`'s `name`). There is no default: a command that opens an instance without one
+  exits 2.
+- **An instance belongs to its agent.** The first agent (package) to open a name owns it; another agent with the same
+  name is refused: `the instance "support" belongs to the agent "@acme/support", not "@acme/sales"`.
+- **One database per environment.** Point `dev` at a development database, never at production's: with the same
+  name, it would continue production's sessions whenever production is not running.
+- **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
+  saying who holds it. A process that dies frees its instance within 30 seconds.
+- **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
+- **Still under `<root>/.state/`:** schedule state, wake-ups and `auth.json`. Keep the root on persistent storage when
+  the agent has schedules or uses `wake`.
+- `fastagent info` shows where the sessions are (`storage:`), without the password.
 
 ## Code: `src/`
 

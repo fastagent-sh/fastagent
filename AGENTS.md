@@ -34,9 +34,9 @@ that API from outside the runtime: channels are not part of it.
 - **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; the runtime's
   `mcp-api.ts` imports nothing. Each package's `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
-- **One process owns an instance's state.** That state is the instance's SQLite storage and each Caller's files under
-  the state root. A deployment routes every session of one storage to one process. What a Caller reads back is
-  durable before it is reported.
+- **One process owns an instance's state.** That state is the instance's storage (its SQLite file, or its rows in the
+  PostgreSQL database `FASTAGENT_DATABASE_URL` names) and each Caller's files under the state root. A deployment
+  routes every session of one storage to one process. What a Caller reads back is durable before it is reported.
 - **The artifact carries the agent; the machine lends it an environment.** Prompt files, `AGENTS.md`, `src/` and
   `skills/` come from the bundle, never from the machine (no skill or prompt from `~/.pi/agent`). The box supplies
   only commands and variables, the way `bash` inherits `PATH`.

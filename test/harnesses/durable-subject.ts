@@ -1,6 +1,6 @@
 /**
- * The Agent on pi-durable as a conformance subject (agent-api-conformance.ts): SQLite storage in a temporary directory,
- * a scripted model and the tools the suite's messages ask for.
+ * The Agent on pi-durable as a conformance subject (agent-api-conformance.ts): its storage (SQLite in a temporary
+ * directory, by default), a scripted model and the tools the suite's messages ask for.
  */
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -146,7 +146,12 @@ function failable(storage: Storage): { storage: Storage; fail(): void } {
   return { storage: proxy, fail: () => (failed = true) };
 }
 
-export function durableSubject(): AgentApiSubject {
+/** Where a subject keeps its sessions: a store of its own per directory, which a reopen of the directory finds again. */
+export type SubjectStorage = (directory: string) => Promise<Storage>;
+
+const sqliteIn: SubjectStorage = (directory) => openNodeSqliteStorage(join(directory, "agent.sqlite"));
+
+export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApiSubject {
   let directory = "";
   let current: DurableAgent | undefined;
   let fail: () => void = () => {};
@@ -250,7 +255,7 @@ export function durableSubject(): AgentApiSubject {
     const { models, model } = subjectModels(signedOut);
     const registry = createRegistry();
     registry.install(tools(without));
-    const storage = failable(await openNodeSqliteStorage(join(directory, "agent.sqlite")));
+    const storage = failable(await openStorage(directory));
     fail = storage.fail;
     current = await openDurableAgent({
       storage: storage.storage,

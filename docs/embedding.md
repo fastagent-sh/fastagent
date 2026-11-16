@@ -37,6 +37,9 @@ await agent.close(); // on shutdown: releases the instance's storage
 - One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
   stop work for good, `agent.sessions.cancel(sessionId)` first.
 - [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
+- `secrets.FASTAGENT_DATABASE_URL` keeps the sessions in PostgreSQL
+  ([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), under the instance's `name`, which is then
+  required.
 - [Run traces](configuration.md#run-traces) are exported when `secrets` holds `OTEL_EXPORTER_OTLP_ENDPOINT` (and the
   other `OTEL_*` variables). Pass them there, not in `env`: what is in `env` reaches the agent's commands.
 

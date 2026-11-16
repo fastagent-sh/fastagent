@@ -9,6 +9,7 @@ import { definedValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
 import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
+  DATABASE_URL_ENV,
   INSTANCE_ROOT_ENV,
   isDeployedWorkspace,
   resolveOverridePath,
@@ -121,6 +122,16 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
   };
 }
 
+/** An instance in a database is opened by the name it is given: a command that opens one without a name exits 2. */
+export function refuseUnnamedDatabaseInstance(): void {
+  if (process.env[DATABASE_URL_ENV] && enteredInstanceName() === undefined) {
+    failUsage(
+      `${DATABASE_URL_ENV} keeps the sessions in a database that instances share by name: ` +
+        `name this one with --name <name> or ${INSTANCE_NAME_ENV}`,
+    );
+  }
+}
+
 /**
  * What `openServing` is given for the agent in `agentDir`, as the flags and variables entered above say: where the
  * instance is, and its secrets, which for a command are its environment once the value file is entered.
@@ -128,6 +139,7 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
 export function instanceInputs(
   agentDir: string,
 ): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
+  refuseUnnamedDatabaseInstance();
   const workdir = resolveWorkdir(agentDir);
   // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");

@@ -17,14 +17,16 @@ import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
 import type { Agent } from "@fastagent-sh/client/agent-api";
-import { STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
+import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
 import type { AgentConfig } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
+import { describeDatabase } from "./postgres/database.ts";
+import { openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
-import { instanceName } from "../../instance-name.ts";
+import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
 import { otlpTraces } from "../telemetry/otlp.ts";
 import { fastagentVersion } from "../../version.ts";
 
@@ -54,8 +56,9 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   /**
-   * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, which one process
-   * holds at a time (storage.ts), with `wake` and `unwake`, since a serve's clock fires the wake-ups they keep. The other
+   * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, or the PostgreSQL database
+   * `FASTAGENT_DATABASE_URL` names (postgres/storage.ts), which one process holds at a time, with `wake` and `unwake`,
+   * since a serve's clock fires the wake-ups they keep. The other
    * two never meet the storage a serve of the same directory holds, and have no `wake`, since no clock fires for them:
    * `{ file }` is a database of the caller's own, held the same way (`holders`, when given, names in the refusal of a
    * second opener what else opens it), and `"memory"` keeps nothing.
@@ -92,6 +95,9 @@ type ServingStorage = "instance" | { file: string; holders?: string } | "memory"
 /** Who opens the instance's storage, for the refusal of a second opener. */
 const INSTANCE_HOLDERS =
   "another `fastagent dev`, `start` or `schedules` command of this agent (or of another agent with the same state root)";
+/** Who opens an instance in a database: any process, on any machine, of an instance of that name. */
+const NAMED_INSTANCE_HOLDERS =
+  "another `fastagent dev`, `start` or `schedules` command of an instance of this name, on this machine or another";
 
 export interface OpenedServing {
   agent: DurableAgent;
@@ -114,15 +120,54 @@ export interface OpenedServing {
   schedules: BuiltDefinition["schedules"];
 }
 
-/** The instance's database, under its state root. */
-const instanceStorageFile = (stateRoot: string) => join(stateRoot, "agent.sqlite");
+/** What decides where an instance's storage is: its state root, or a database several instances share. */
+export interface InstancePlace {
+  stateRoot: string;
+  env: Readonly<Record<string, string | undefined>>;
+  /** The name it was given, which opens it in a database: never a default there. */
+  name?: string;
+  /** The agent it runs (its package's name), which an instance in a database belongs to. */
+  agent?: string;
+}
+
+/** Where the instance's storage is, as a person reads it: the database (without credentials), or the file. */
+export function describeInstanceStorage(place: InstancePlace): string {
+  const url = place.env[DATABASE_URL_ENV];
+  if (!url) return join(place.stateRoot, "agent.sqlite");
+  const instance = place.name === undefined ? `no instance: set ${INSTANCE_NAME_ENV}` : `instance "${place.name}"`;
+  return `PostgreSQL ${describeDatabase(url)}, ${instance}`;
+}
+
+/**
+ * The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's,
+ * whose hold can end while open (`onLost`).
+ */
+function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
+  const url = place.env[DATABASE_URL_ENV];
+  if (url) {
+    if (place.name === undefined) {
+      return Promise.reject(
+        new Error(
+          `${DATABASE_URL_ENV}: an instance in a database is opened by its name, and none was given: ` +
+            `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
+        ),
+      );
+    }
+    return openPostgresStorage(url, place.name, {
+      holders: NAMED_INSTANCE_HOLDERS,
+      ...(place.agent === undefined ? {} : { agent: place.agent }),
+      ...(onLost === undefined ? {} : { onLost }),
+    });
+  }
+  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
+}
 
 /**
  * Run `work` holding the instance's storage, so no serve of the instance runs meanwhile: how a command changes the
  * instance's state outside a serve without losing a write to a serve's own.
  */
-export async function holdingInstance<T>(stateRoot: string, work: () => T): Promise<T> {
-  const storage = await openLockedStorage(instanceStorageFile(stateRoot), INSTANCE_HOLDERS);
+export async function holdingInstance<T>(place: InstancePlace, work: () => T): Promise<T> {
+  const storage = await openInstanceStorage(place);
   try {
     return await work();
   } finally {
@@ -130,9 +175,13 @@ export async function holdingInstance<T>(stateRoot: string, work: () => T): Prom
   }
 }
 
-function openStorage(stateRoot: string, storage: ServingStorage): Promise<Storage> | Storage {
+function openStorage(
+  place: InstancePlace,
+  storage: ServingStorage,
+  onLost: (error: Error) => void,
+): Promise<Storage> | Storage {
   if (storage === "memory") return new MemoryStorage();
-  if (storage === "instance") return openLockedStorage(instanceStorageFile(stateRoot), INSTANCE_HOLDERS);
+  if (storage === "instance") return openInstanceStorage(place, onLost);
   return openLockedStorage(storage.file, storage.holders);
 }
 
@@ -175,7 +224,17 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // Before anything is opened: a setting it cannot honor refuses the open.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const chosen = options.storage ?? "instance";
-  const storage = await openStorage(stateRoot, chosen);
+  const place: InstancePlace = {
+    stateRoot,
+    env,
+    agent: definition.name,
+    ...(options.name === undefined ? {} : { name }),
+  };
+  // Before the agent exists, a lost hold fails its open's first commit instead.
+  let stopRuns: ((error: Error) => void) | undefined;
+  const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
+  if (chosen === "instance" && env[DATABASE_URL_ENV])
+    log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
   let mcp: McpClients | undefined;
   let agent: DurableAgent;
   try {
@@ -203,6 +262,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
   }
+  // No longer the instance's holder: its runs stop before another process may resume them.
+  stopRuns = (error) => {
+    log.error(`[fastagent] ${error.message}: stopping its runs`);
+    agent.harness
+      .close(BACKGROUND_CONTEXT)
+      .catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
+  };
   // A storage failure or a direct harness close also ends the resources this open acquired.
   void agent.harness.closed
     .then(() => mcp.close())
