@@ -1,6 +1,6 @@
 ---
 title: Develop an Agent with FastAgent
-description: "The agent development guide for humans and coding agents: responsibilities, TypeScript tools, local checks, native channels, scheduling and deployment."
+description: "The agent development guide for humans and coding agents: responsibilities, TypeScript tools, local checks, scheduling and deployment."
 status: current
 ---
 
@@ -11,7 +11,7 @@ with a check you can run.
 
 ```text
 decide what it does → init → prompt, skill, tool → test locally → one real message
-  → channel → schedule → deploy → report what was verified
+  → schedule → deploy → report what was verified
 ```
 
 ## 1. Decide what goes where
@@ -26,7 +26,7 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
 | Timed work | `src/schedules/`, and the `wake` tool |
-| Model, providers, MCP servers, chat channels | `fastagent.config.ts` |
+| Model, providers, MCP servers | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
 
 Let the agent choose its steps; a fixed pipeline belongs in your app only when the product needs one. **A prompt or a
@@ -46,7 +46,7 @@ if that failed) and makes the first git commit. Stay in `my-agent/` for the rest
 
 ## 3. Set up TypeScript
 
-Write tools, channels, schedules, helpers and tests in TypeScript. Node ≥ 24.15 runs it directly by stripping types,
+Write tools, schedules, helpers and tests in TypeScript. Node ≥ 24.15 runs it directly by stripping types,
 so:
 - import relative files with `.ts` extensions (`../lib/batches.ts`), and types with `import type`;
 - avoid enums, namespaces, parameter properties, decorators and JSX.
@@ -192,26 +192,7 @@ when the message completed. Check the tool use and the answer, not only the exit
 For ongoing work the owner runs `fastagent dev`: prompt and skill edits apply on the next message, and `src/` edits
 restart it. Restart it yourself after editing `lib/`, which is not watched. Only one `dev` or `start` runs per agent.
 
-## 6. Add a channel
-
-Declare the channel under `channels` in `fastagent.config.ts` ([Channels](channels.md)), then:
-
-| Channel | Declare | Run | The owner |
-|---|---|---|---|
-| Telegram | `telegram()` | `fastagent channels setup telegram --json` | creates the bot with @BotFather and saves `TELEGRAM_BOT_TOKEN` to `.secrets/.env` (or runs `fastagent channels setup telegram` in a terminal) |
-| Slack | `slack()` | `fastagent channels setup slack --json` | creates the app from the link, installs it, and saves its tokens to `.secrets/.env` (or runs `fastagent channels setup slack` in a terminal) |
-| Feishu | `feishu()` | `npm install @larksuiteoapi/node-sdk && fastagent channels setup feishu --json` | runs `fastagent channels setup feishu` in a terminal (or adds `FEISHU_APP_ID` / `FEISHU_APP_SECRET`), then publishes in the console |
-| Lark | `feishu({ domain: "lark" })` | `npm install @larksuiteoapi/node-sdk && fastagent channels setup lark --json` | creates the app from the link and saves its App ID and Secret to `.secrets/.env` (or runs `fastagent channels setup lark` in a terminal) |
-
-With `--json`, `channels setup` validates `.secrets/.env` (or `--env-file`) statelessly: when credentials are missing or
-refused it exits 2 with `need_user_action` (env var names, guide URL, and `rerun` command); once written, re-running
-`--json` verifies them and exits 0. Then run `fastagent dev --no-input` (no public URL needed) and have the owner send a
-real message. A passed URL check is not a conversation.
-
-Chat replies are sent for you. Use a send tool (`telegram_send`, `slack_send`, …) only to reach someone outside the
-current turn, with an approved recipient.
-
-## 7. Add a schedule
+## 6. Add a schedule
 
 **`src/schedules/daily-review.ts`**
 
@@ -222,13 +203,13 @@ export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
   prompt:
-    "Review pending proposals and use telegram_send to send a short digest to Telegram chat 123456789. " +
+    "Review pending proposals and post a short digest with the post_digest tool. " +
     "Leave unapproved actions pending.",
 });
 ```
 
 
-A schedule has no chat to reply in, so its prompt names the send tool and the recipient. Each run continues the
+A schedule's plain reply reaches no one, so its prompt names the tool that delivers it. Each run continues the
 schedule's own session.
 
 ```bash
@@ -239,14 +220,14 @@ fastagent schedules run daily-review   # a real run now (refused while dev serve
 The agent can also schedule its own follow-ups with `wake`; test one while serving. A schedule fires only while the
 agent runs, so run its container without scaling it to zero.
 
-## 8. Embed it in an app (optional)
+## 7. Embed it in an app (optional)
 
 Open the built package with `openAgent(definition, { root })` and call the [Agent API](agent-api.md): `sessions.create`,
-then `messages.send` with `wait`, or `messages.stream`. `await agent.serve()` adds its channels and schedules. The app
+then `messages.send` with `wait`, or `messages.stream`. `await agent.serve()` adds its schedules. The app
 keeps auth, users and data. One instance is one trust domain: give users who must not see each other an instance each
 ([security model](agent-api.md#security)). See [Embedding](embedding.md).
 
-## 9. Deploy
+## 8. Deploy
 
 Choose the host and its cost with the owner, and read [Deploy](deploy.md) before creating anything.
 
@@ -254,7 +235,7 @@ Choose the host and its cost with the owner, and read [Deploy](deploy.md) before
 fastagent deploy docker      # writes Dockerfile + .dockerignore, prints the docker build and run commands
 ```
 
-The owner keeps the values (the model's API key, channel credentials, `FASTAGENT_API_KEY`) in a file of their own and
+The owner keeps the values (the model's API key, `FASTAGENT_API_KEY`) in a file of their own and
 passes it to the container: never in this conversation. If `deploy docker` stops, fix the cause it names and run it
 again ([Troubleshooting](troubleshooting.md#a-deploy-stopped-and-the-message-does-not-say-why)). Then check the
 deployment:
@@ -268,20 +249,19 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions, channel and schedule state | on the container's volume at `/data` |
+| Sessions and schedule state | on the container's volume at `/data` |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
-Channels replay an accepted turn at least once, so tools with side effects must tolerate a repeat.
+An accepted message is answered at least once across a restart, so tools with side effects must tolerate a repeat.
 
-## 10. Report what you verified
+## 9. Report what you verified
 
 | Check | Proves | Does not prove |
 |---|---|---|
-| typecheck, tests, `info --json` | types, logic, what the agent loads | model or channel behavior |
-| `invoke` | a model call and the tool path | channels, clock, deployment |
+| typecheck, tests, `info --json` | types, logic, what the agent loads | model behavior |
+| `invoke` | a model call and the tool path | clock, deployment |
 | `schedules run` | one run of the schedule | that the clock fires it |
-| a real chat message | the channel end to end | proactive delivery |
-| `invoke --url` | the deployment answers | its channels and clock |
+| `invoke --url` | the deployment answers | its clock |
 
 Report the commands you ran and their results, the owner's remaining steps, and what was not tested. Keep secrets and
 machine state out of commits, and stop servers you started.

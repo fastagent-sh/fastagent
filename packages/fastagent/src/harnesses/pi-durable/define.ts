@@ -4,7 +4,6 @@
  * assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import type { Channel } from "../../channel.ts";
 import type { McpServerDeclaration } from "../../mcp/config.ts";
 import type { Needs } from "../../needs.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
@@ -19,8 +18,6 @@ export interface AgentConfig {
   /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */
   providers?: readonly (Provider | Needs<Provider>)[];
   mcpServers?: Record<string, McpServerDeclaration>;
-  /** The channels the agent is reached on, by name: the name prefixes its tools and keeps its state apart. */
-  channels?: Record<string, Channel | Needs<Channel>>;
 }
 
 /** @public */

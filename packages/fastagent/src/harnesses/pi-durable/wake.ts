@@ -40,7 +40,7 @@ export function wakeExtension(
           "id when the job is done. Exactly one of `in`/`cron`. When the time comes, a new message arrives in this " +
           "same conversation with `prompt` as its instruction, tagged with the wake-up's id so you can tell it from a " +
           "user's, and you keep the full context of this conversation. Its plain reply is delivered to no one: to " +
-          "reach a person it must call a delivery tool (a channel's send tool), as a scheduled job does.",
+          "reach a person it must call a delivery tool, as a scheduled job does.",
         parameters: obj({
           in: opt(
             union([str(), num()], {

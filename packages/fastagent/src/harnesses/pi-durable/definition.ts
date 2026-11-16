@@ -72,7 +72,6 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
     ...spec.config,
     ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
     ...(spec.config.starters === undefined ? {} : { starters: Object.freeze([...spec.config.starters]) }),
-    ...(spec.config.channels === undefined ? {} : { channels: Object.freeze({ ...spec.config.channels }) }),
   });
   return Object.freeze({
     [DEFINITION]: true as const,
@@ -106,13 +105,7 @@ function declarers({ registry, config }: Pick<DefinitionSpec, "registry" | "conf
   return [
     ...REGISTRY_KINDS.flatMap((kind) => registry[kind].map(({ file, value }) => ({ declaredIn: file, value }))),
     ...(config.providers ?? []).map((value, i) => ({ declaredIn: `${CONFIG_FILE} providers[${i}]`, value })),
-    ...Object.entries(config.channels ?? {}).map(([name, value]) => ({ declaredIn: channelSource(name), value })),
   ];
-}
-
-/** Where the channel `name` is declared: what a refusal of it, or of a secret it reads, names. */
-export function channelSource(name: string): string {
-  return `${CONFIG_FILE} channels.${name}`;
 }
 
 interface Declarer {

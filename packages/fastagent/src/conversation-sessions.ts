@@ -1,14 +1,13 @@
 /**
- * Which Agent session each of a Caller's conversations talks in: a channel's chats and threads (its `sessionFor`), a
- * schedule's runs. The Agent names sessions, so a Caller keeps this map, in its own state (a channel's
- * `<stateDir>/sessions.json`, the schedules' `schedule/sessions.json`), and creates a conversation's session in one
- * order: the session, then the record, then the message. The map takes one conversation's calls
+ * Which Agent session each of a Caller's conversations talks in (a schedule's runs). The Agent names sessions, so a
+ * Caller keeps this map, in its own state (the schedules' `schedule/sessions.json`), and creates a conversation's
+ * session in one order: the session, then the record, then the message. The map takes one conversation's calls
  * one at a time, so two messages for one new conversation meet it one after the other and get one session. A crash
  * between the session and the record leaves a session nothing refers to, which the retry does not reuse; no message is
  * answered twice, since a message is sent only once its session is recorded.
  */
 import { dirname } from "node:path";
-import { type Agent, AgentError, type CreateSessionOptions } from "@fastagent-sh/client/agent-api";
+import { type Agent, AgentError } from "@fastagent-sh/client/agent-api";
 import { log } from "./log.ts";
 import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
@@ -20,19 +19,6 @@ async function newSession(agent: SessionsAgent): Promise<string> {
   const created = await agent.sessions.create().catch((error: unknown) => {
     if (!(error instanceof AgentError)) throw error;
     throw new AgentError({ ...error, message: `creating a session failed: ${error.message}` });
-  });
-  return created.id;
-}
-
-/** A new session forked from `from`, or an empty one when there is nothing to fork. */
-export async function forkedSession(agent: SessionsAgent, from: CreateSessionOptions["forkFrom"]): Promise<string> {
-  if (from === undefined) return newSession(agent);
-  const created = await agent.sessions.create({ forkFrom: from }).catch((error: unknown) => {
-    if (!(error instanceof AgentError)) throw error;
-    throw new AgentError({
-      ...error,
-      message: `starting a session forked from ${from.sessionId} failed: ${error.message}`,
-    });
   });
   return created.id;
 }

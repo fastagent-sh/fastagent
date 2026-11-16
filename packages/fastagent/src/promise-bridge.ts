@@ -7,8 +7,7 @@
  *     to the next turn while the previous one is still running. {@link joinPromise} and {@link abortThenJoin} wait for
  *     the pending promise to settle before releasing, aborting first when the callee takes a signal. {@link fromPromise} is the opt-out for work a caller may walk away from, so a call site
  *     holding a lease, a session or any other resource must not use it.
- *  2. THE CAUSE SURVIVES. The harness's `failureOf` (`instanceof SessionFailed`), the channels' platform error types
- *     and every operator-facing message read the original error, so {@link PromiseFailure} carries it verbatim and
+ *  2. THE CAUSE SURVIVES. The harness's `failureOf` (`instanceof SessionFailed`) and every operator-facing message read the original error, so {@link PromiseFailure} carries it verbatim and
  *     {@link originalError} returns it. Effect's own `tryPromise` maps to `UnknownError` and does not join.
  *
  * Policy stays with the caller: whether a failure rejects a request, is logged, or ends a turn.

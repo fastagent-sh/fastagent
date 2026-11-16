@@ -60,7 +60,7 @@ export async function runInvokeStream(
           err(`[tool] ${toolName.get(event.toolCallId) ?? event.toolCallId} › ${clipStatus(event.text)}`);
           return undefined;
         case "retrying":
-          // Operator-facing: include the reason (channels show a neutral customer line instead).
+          // Operator-facing: include the reason.
           err(
             `[fastagent] transient failure — retrying (${event.attempt}/${event.maxAttempts} in ${event.delayMs}ms): ${event.reason}`,
           );

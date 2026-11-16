@@ -106,10 +106,9 @@ export interface OpenedServing {
   agentDir: string;
   /** The agent's working directory. */
   workdir: string;
-  /** Where the instance's state is: its storage, its channels' and schedules' state, its wake-ups. */
+  /** Where the instance's state is: its storage, its schedules' state, its wake-ups. */
   stateRoot: string;
-  /** The definition's channels and schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
-  channels: BuiltDefinition["channels"];
+  /** The definition's schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   schedules: BuiltDefinition["schedules"];
 }
 
@@ -224,7 +223,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     agentDir: projectDir,
     workdir,
     stateRoot,
-    channels: code.channels,
     schedules: code.schedules,
   };
 }
@@ -232,7 +230,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
 /** An agent opened in this process: the Agent API, and how it is served and operated. */
 export interface LocalAgent extends Agent {
   /**
-   * Channels, schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
+   * Schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;
@@ -310,7 +308,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     messages: agent.messages,
     harness: agent.harness,
     serve(serveOptions = {}) {
-      // Its storage is let go, or about to be: a service now would run channels and schedules nobody closes.
+      // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
       const serving = serveAgent(opened, serveOptions).then(

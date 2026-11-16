@@ -104,15 +104,8 @@ describe("package lines", () => {
   });
 });
 
-describe("harness neutrality: the channel spine imports no harness package", () => {
-  const neutral = [
-    "channels/router.ts",
-    "channels/serve.ts",
-    "cli/invoke-stream.ts",
-    "channels/telegram/telegram.ts",
-    "channels/slack/slack.ts",
-    "channels/feishu/feishu.ts",
-  ];
+describe("harness neutrality: the Agent API's server imports no harness package", () => {
+  const neutral = ["http/serve.ts", "http/server.ts", "cli/invoke-stream.ts"];
   it("none of them pulls an @earendil-works/* package", () => {
     const offenders = neutral.flatMap((entry) =>
       [...staticPackageGraph(resolve(srcOf("fastagent"), entry))]
@@ -139,7 +132,6 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
-    expect([...staticPackageGraph(resolve(srcOf("fastagent"), "channel.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
   });
 });

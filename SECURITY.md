@@ -28,22 +28,20 @@ We aim to acknowledge a report within 5 business days and to provide a remediati
 
 In scope:
 
-- the `@fastagent-sh/fastagent` package (CLI, library API, reference implementation),
-- the first-party channel adapters (`/telegram`, `/slack`, `/feishu`, `/lark`),
-- credential and grant handling in `<secrets dir>/auth.json` and `<secrets dir>/mcp-auth.json` (default `<dir>/.secrets/`, or `<dir>/.secrets/production/` for `start`), the global `~/.fastagent/.secrets/auth.json`, `<state>/auth.json` and `<state>/mcp-auth.json` when embedded with `openAgent`, and the OAuth/env auth resolution path.
+- the `@fastagent-sh/fastagent` and `@fastagent-sh/client` packages (CLI, library API, reference implementation),
+- credential handling in `<secrets dir>/auth.json` (`<dir>/.secrets/`, or `<dir>/.secrets/production/` for `start`), the global `~/.fastagent/.secrets/auth.json`, `<state>/auth.json` when embedded with `openAgent`, and the OAuth/env auth resolution path.
 
 Out of scope:
 
 - vulnerabilities in your own agent definition (`AGENTS.md`, skills, tools you author),
-- third-party model providers, hosts, and channels,
+- third-party model providers, MCP servers, and hosts,
 - issues that require a compromised local machine or leaked secrets you control.
 
 ## Handling secrets
 
 FastAgent treats credentials and environment as instance config, never as part of the agent definition:
 
-- keep `.secrets/` (`.env`, `auth.json`, `mcp-auth.json`), `~/.fastagent/.secrets/auth.json`, `.state/`, and provider keys out of version control,
-- `.secrets/` carries its own `.gitignore` (allowing only `.gitignore` and `.env.example`), and the scaffolded root `.gitignore` excludes `.fastagent`, `.state`, `.env` and `.env.*`; if you point `--env-file`, `FASTAGENT_SECRETS_DIR` or `FASTAGENT_AUTH_PATH` at another path inside a repository, exclude that path in `.gitignore` yourself,
-- webhook channels require a verification secret (e.g. `TELEGRAM_SECRET_TOKEN`) and fail at startup when it is missing, rather than accepting forged deliveries.
+- keep `.secrets/` (`.env`, `auth.json`), `~/.fastagent/.secrets/auth.json`, `.state/`, and provider keys out of version control,
+- `.secrets/` carries its own `.gitignore` (allowing only `.gitignore` and `.env.example`), and the scaffolded root `.gitignore` excludes `.fastagent`, `.state`, `.env` and `.env.*`; if you point `--env-file` at another path inside a repository, exclude that path in `.gitignore` yourself.
 
 If you find a case where a secret can leak into the agent definition, logs, or the deployable artifact, report it through the process above.

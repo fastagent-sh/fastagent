@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { secretEquals } from "../../../packages/fastagent/src/channels/kit/secret.ts";
+import { secretEquals } from "../../../packages/fastagent/src/http/secret.ts";
 
 describe("secretEquals", () => {
   it("compares equal/unequal strings, including length mismatches (no throw)", () => {

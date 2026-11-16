@@ -42,7 +42,7 @@ export function missingSecrets(declared: readonly DeclaredSecret[], env: NodeJS.
   return dedupeSecrets(declared.filter((s) => !s.optional)).filter((s) => !env[s.name]);
 }
 
-/** "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); SLACK_BOT_TOKEN (fastagent.config.ts channels.slack)" — grouped
+/** "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); GATEWAY_KEY (fastagent.config.ts providers[0])", grouped
  *  by where it is declared, since that is the unit the author fixes. */
 export function describeSecrets(declared: readonly DeclaredSecret[]): string {
   const bySource = new Map<string, string[]>();

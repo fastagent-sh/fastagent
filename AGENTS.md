@@ -1,8 +1,8 @@
 # fastagent — Agent Guide
 
 FastAgent turns a file-defined agent (`SYSTEM.md`, `AGENTS.md`, `skills/`, code under `src/`) into a live service: in
-an app, on Telegram, Slack or Feishu, on a clock, or behind a custom channel, all through one API of its own, the
-Agent API.
+an app, over HTTP, or on a clock, all through one API of its own, the Agent API. Chat platforms reach an agent through
+that API from outside the runtime: channels are not part of it.
 
 ## The code is the only source of truth
 
@@ -31,8 +31,8 @@ Agent API.
 - **One harness, pi-durable.** A harness-neutral layer was tried and dropped: it cost more than it bought.
   `@earendil-works/pi-*` is imported only under `packages/fastagent/src/harnesses/`. An author's tools and extensions are pi-durable code,
   by choice.
-- **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; its `channel.ts` and
-  the runtime's `mcp-api.ts` import nothing. Each package's `src/index.ts` names every export and exports no assembly
+- **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; the runtime's
+  `mcp-api.ts` imports nothing. Each package's `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
 - **One process owns an instance's state.** That state is the instance's SQLite storage and each Caller's files under
   the state root. A deployment routes every session of one storage to one process. What a Caller reads back is
@@ -67,7 +67,7 @@ Agent API.
 ## Tests
 
 **What the suite tests: user-visible contracts and high-risk invariants, never wiring.** A test proves either a contract
-a user or host relies on (through the entry they call: Agent API, CLI command, package export, channel ingress, generated
+a user or host relies on (through the entry they call: Agent API, CLI command, package export, generated
 files) or a pure/concurrency invariant whose failure silently corrupts state or security. Each contract gets one test for
 its main case, one for each promised refusal, and one for each security boundary. Never test internal call order,
 private helpers, or non-actionable wording.
@@ -89,7 +89,6 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 | --- | --- | --- |
 | Agent API / HTTP (`packages/client/src/agent-api.ts`, `src/http/` in both packages) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
 | CLI command or flag (`packages/fastagent/src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
-| Channel (`packages/fastagent/src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, its tools | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
 | Deploy (`packages/fastagent/src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts | No secrets in artifacts |
 | Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
 | Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |

@@ -8,7 +8,7 @@ import { dirname } from "node:path";
  *
  * The temp name is FIXED (`<path>.tmp`), which rests on one process writing one state root: a deployment runs one
  * container, `dev`'s supervisor respawns its worker only after the old one has exited, and these writes are
- * synchronous. The fixed name is also the seam channel tests use to inject a write failure. Revisit before adding a
+ * synchronous. Revisit before adding a
  * writer that is not one process's synchronous write.
  *
  * `mode` is applied to the temp first, so the content is never briefly world-readable, and the `chmod` is not

@@ -1,6 +1,6 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: open an agent in your app, send it messages, serve its channels from your server, give it its credentials, and run it in a desktop host."
+description: "Use FastAgent as a library: open an agent in your app, send it messages, serve it from your server, give it its credentials, and run it in a desktop host."
 status: current
 ---
 
@@ -80,29 +80,28 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 **One instance is one trust domain**: the agent's tools can reach every session in it. Give users who must not see each
 other an instance each ([security model](agent-api.md#security)).
 
-## 3. Serve its channels and schedules
+## 3. Serve its schedules and the Agent API
 
 ```ts
 const service = await agent.serve();
-await service.ready; // long connections up; rejects if one cannot come up
 // mount service.fetch in your app (below), or give it a server of its own:
 const port = await service.listen(8787);
 // ...
 await agent.close(); // closes the service, then releases the storage
 ```
 
-- `service.fetch` answers the channels' routes and `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
+- `service.fetch` answers `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
   `@fastagent-sh/client`.
 
 ### Mounting `fetch`
 
-`service.fetch` takes a `Request` and returns a `Response`. It routes on the path (`/telegram`, `/health`), so mount it
+`service.fetch` takes a `Request` and returns a `Response`. It routes on the path (`/health`, `/v1/...`), so mount it
 under a prefix your framework strips. On Node's `(req, res)`, bridge it with `getRequestListener` from
 `@hono/node-server`.
 
-> **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, and
-> webhook channels verify signatures over the raw body:
+> **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, which
+> the Agent API reads itself:
 >
 > ```ts
 > app.use("/agent", getRequestListener(service.fetch, { overrideGlobalObjects: false })); // first
@@ -167,8 +166,7 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
   stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
 - **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
   `sessions.cancel` was stopping it.
-- **`serve()`.** A webhook channel's URL is yours to point the platform at. `close()` ends the API's event streams,
-  gives requests in flight 500 ms, then stops the channels and schedules.
+- **`serve()`.** `close()` ends the API's event streams, gives requests in flight 500 ms, then stops the schedules.
 - **Users kept apart are yours.** An app serving its own users over one instance checks every session id a request
   names, a fork's source included, and that holds only for an agent whose tools reach neither its storage nor its
   files.

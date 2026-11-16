@@ -1,14 +1,13 @@
 # FastAgent
 
-> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, connected to Telegram, Slack or Feishu, running on a clock, or behind a custom channel. The harness is pi-durable; models come from pi-ai, with your own providers in code.
+> FastAgent is the serving layer for local agent directories. It takes a directory out of the terminal and turns it into a running agent service: embedded in an app, called over HTTP through its Agent API, or running on a clock. The harness is pi-durable; models come from pi-ai, with your own providers in code.
 
 Key facts:
 
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 24.15.
-- An agent is a directory of its own, marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md` (its prompt), `AGENTS.md`, `skills/`, `prompts/`, code under `src/tools/`, `src/extensions/`, `src/schedules/`, and channels declared in `fastagent.config.ts`. `fastagent build` compiles it into `dist/` for `start`, embedding and deploy.
-- The contract is the [Agent API](https://fastagent.sh/docs/agent-api/), in process (`openAgent`) and over HTTP (`connectAgent` from `@fastagent-sh/client`): sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve answers its channels' routes, which verify their platform, and the API under `/v1` only when `FASTAGENT_API_KEY` holds a key.
-- Core CLI: `fastagent init | info | dev | invoke | build | start | models | login | logout | auth | channels | schedules | deploy`. A coding agent checks an agent with `fastagent info --json`, `fastagent auth check --provider <id>`, `fastagent invoke` (`--json` for its events, `--session` to continue a conversation) and `fastagent schedules run`; `fastagent login <provider> --method account --json` prints the address the owner signs in at.
-- Channels: Telegram, Slack, Feishu/Lark, plus custom adapters.
+- An agent is a directory of its own, marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md` (its prompt), `AGENTS.md`, `skills/`, `prompts/`, code under `src/tools/`, `src/extensions/`, `src/schedules/`. `fastagent build` compiles it into `dist/` for `start`, embedding and deploy.
+- The contract is the [Agent API](https://fastagent.sh/docs/agent-api/), in process (`openAgent`) and over HTTP (`connectAgent` from `@fastagent-sh/client`): sessions the Agent names, messages whose outcome outlives their callers, a durable history. A serve answers `GET /health`, and the API under `/v1` only when `FASTAGENT_API_KEY` holds a key.
+- Core CLI: `fastagent init | info | dev | invoke | build | start | models | login | logout | auth | schedules | deploy`. A coding agent checks an agent with `fastagent info --json`, `fastagent auth check --provider <id>`, `fastagent invoke` (`--json` for its events, `--session` to continue a conversation) and `fastagent schedules run`; `fastagent login <provider> --method account --json` prints the address the owner signs in at.
 
 ## Start here
 
@@ -21,14 +20,9 @@ Key facts:
 - [Overview](https://fastagent.sh/docs/overview/): what FastAgent is and is not.
 - [Quickstart](https://fastagent.sh/docs/quickstart/): scaffold, check, add a tool, and run.
 - [Agent development guide](https://fastagent.sh/docs/ai-start/): step-by-step instructions for authors and coding agents.
-- [Configuration](https://fastagent.sh/docs/configuration/): model, providers, environment, secrets, ports, tools, channels, and schedules.
+- [Configuration](https://fastagent.sh/docs/configuration/): model, providers, environment, secrets, ports, tools, and schedules.
 - [CLI reference](https://fastagent.sh/docs/cli/): every command and flag.
 - [Embedding](https://fastagent.sh/docs/embedding/): use FastAgent as a library inside your own app.
-- [Channels](https://fastagent.sh/docs/channels/): connect chat platforms and custom channels.
-- [Telegram channel](https://fastagent.sh/docs/telegram/): Telegram bot setup and tools.
-- [Slack channel](https://fastagent.sh/docs/slack/): Slack app setup and tools.
-- [Feishu / Lark channel](https://fastagent.sh/docs/feishu/): Feishu and Lark bot setup and tools.
-- [Channel development](https://fastagent.sh/docs/channel-development/): build a custom channel adapter.
 - [MCP servers](https://fastagent.sh/docs/mcp/): connect MCP tool servers.
 - [Deploy](https://fastagent.sh/docs/deploy/): run the agent in a container on any host.
 - [Troubleshooting](https://fastagent.sh/docs/troubleshooting/): common setup and runtime issues.

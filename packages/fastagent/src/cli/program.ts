@@ -47,7 +47,7 @@ const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
   description:
-    "Open the agent and serve its channels, schedules, and wake-ups; restarts worker on src/ or config edits.",
+    "Open the agent and serve its schedules, wake-ups and Agent API; restarts worker on src/ or config edits.",
   args: [AGENT_ARG],
   flags: [
     PORT,
@@ -73,7 +73,7 @@ const dev: CommandSpec = {
 const info: CommandSpec = {
   name: "info",
   summary: "print what the directory builds into, without serving",
-  description: "Inspect model, tools, extensions, channels, schedules, commands and secrets read-only.",
+  description: "Inspect model, tools, extensions, schedules, commands and secrets read-only.",
   args: [AGENT_ARG],
   flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
@@ -223,39 +223,6 @@ const schedules: CommandSpec = {
   ],
 };
 
-const channels: CommandSpec = {
-  name: "channels",
-  summary: "a channel's platform app, for one instance",
-  subcommands: [
-    {
-      name: "setup",
-      summary: "set up a channel's platform app and store its credentials",
-      description:
-        "Guide setup in a terminal, or validate values statelessly under --json/--no-input (exit 2 when missing).",
-      args: [{ name: "<platform>", description: "telegram, slack, feishu, or lark" }, AGENT_ARG],
-      flags: [
-        {
-          flags: "--env-file <file>",
-          description: "keep a deployment's credentials in this file (default: the development .secrets/.env)",
-        },
-        JSON_FLAG,
-        NO_INPUT,
-      ],
-      examples: [
-        { cmd: "fastagent channels setup telegram" },
-        { cmd: "fastagent channels setup slack --json", note: "validate or inspect missing steps" },
-        { cmd: "fastagent channels setup feishu --env-file prod.env", note: "a separate app for a deployment" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/channels.ts")).runChannelsSetup(args[0] as string, args[1] as string, {
-          ...(typeof f.envFile === "string" ? { envFile: f.envFile } : {}),
-          json: f.json === true,
-          input: f.input !== false,
-        }),
-    },
-  ],
-};
-
 const login: CommandSpec = {
   name: "login",
   summary: "sign in to a model provider (account OAuth or API key)",
@@ -330,7 +297,6 @@ const specs: readonly CommandSpec[] = [
   schedules,
   dev,
   start,
-  channels,
   deploy,
   login,
   logout,

@@ -1,14 +1,12 @@
 /**
- * A Caller's durable state under the state root, with no cross-instance locking: a channel's files are in its own
- * directory (`<stateRoot>/channels/<the channel's name>/`) and the schedules' in `schedule/`, so what must not
- * happen is two processes serving the SAME channel — which also means one ingress credential in two places, and no
- * local guard can see that.
+ * A Caller's durable state under the state root (the schedules', in `schedule/`), with no cross-instance locking: one
+ * process owns an instance's state root.
  */
 import { mkdirSync, readFileSync } from "node:fs";
 import { writeFileAtomic } from "./atomic-write.ts";
 import { log } from "./log.ts";
 
-/** Create the channel's state home — the one shared spelling of it, so no channel invents its own. */
+/** Create a Caller's state home: the one shared spelling of it. */
 export function ensureStateHome(dir: string): void {
   mkdirSync(dir, { recursive: true });
 }
@@ -21,7 +19,7 @@ export function loadStateFile(path: string): unknown {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return undefined; // first run — normal
     // Permissions/IO: an environment error — fail the boot loudly rather than run on invisible state.
-    throw new Error(`channel state file ${path} is unreadable — fix permissions/disk and restart: ${String(e)}`, {
+    throw new Error(`state file ${path} is unreadable — fix permissions/disk and restart: ${String(e)}`, {
       cause: e,
     });
   }

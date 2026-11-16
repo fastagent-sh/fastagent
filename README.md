@@ -17,8 +17,8 @@
 </p>
 
 FastAgent serves an agent directory (`SYSTEM.md`, `skills/`, TypeScript tools) as a live service: inside your app,
-as a Telegram, Slack or Feishu bot, on a schedule, or behind your own channel. You keep the files you have. There is no
-new framework to learn.
+over HTTP through its Agent API, or on a schedule, and no message is lost across a restart. You keep the files you have.
+There is no new framework to learn.
 
 <p align="center">
   <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy docker writes the container it runs in." width="860">
@@ -39,8 +39,7 @@ fastagent dev                 # serve locally, reloading on edits
 fastagent invoke "hello"      # send it one message
 ```
 
-Then declare a channel in `fastagent.config.ts` (`channels: { telegram: telegram() }`) or run it in a container
-(`fastagent deploy docker`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
+Then run it in a container (`fastagent deploy docker`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
 ## Embed it in your app
 

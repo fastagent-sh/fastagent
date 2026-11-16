@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions, channels and schedules."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, tools, extensions and schedules."
 status: current
 ---
 
@@ -9,7 +9,7 @@ status: current
 | What | Where |
 |---|---|
 | Behavior | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, code in `src/` |
-| Model, providers, MCP servers, channels, starters | `fastagent.config.ts` |
+| Model, providers, MCP servers, starters | `fastagent.config.ts` |
 | Where one instance runs | flags and environment variables |
 | Secrets | `.secrets/.env`, `.secrets/auth.json` (`fastagent login`), provider variables |
 
@@ -37,7 +37,6 @@ Every key is optional. An unknown key refuses the start.
 | `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
-| `channels` | none | [Channels](channels.md) the agent is reached on, by name |
 
 The name and description of the agent come from its `package.json`.
 
@@ -97,8 +96,7 @@ Read the key through `needs`, never write it into the config: the config ships i
 `SYSTEM.md` is the whole prompt, read for every message. FastAgent appends: the agent's `AGENTS.md`, its skills, where
 it works, and (when deployed) what a self-edit changes. Nothing comes from the machine (no `~/.pi/agent`).
 
-Prompt templates (`prompts/<name>.md`) run on a bare `/<name>`, and on a channel anyone can type one. A template named
-like a platform command (`prompts/start.md` for Telegram's `/start`) takes that command over.
+Prompt templates (`prompts/<name>.md`) run on a message that is a bare `/<name>`, whoever sends it.
 
 ## Auth and secrets
 
@@ -134,9 +132,9 @@ export default needs(
 );
 ```
 
-A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions, channels, schedules and providers.
+A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions, schedules and providers.
 
-A value that differs between deployments but is not secret (a repository name, a channel id) is read the same way:
+A value that differs between deployments but is not secret (a repository name, a team id) is read the same way:
 declare it with `optional: true` and fall back to a default in code.
 
 ## Ports and bind address
@@ -146,9 +144,8 @@ port   dev:   --port > 8787                       start: --port > PORT > 8787
 bind   dev:   --bind > 127.0.0.1                  start: --bind > all interfaces
 ```
 
-`--bind` takes an IP or `localhost`. A serve answers its channels' routes (each checks its platform), the
-[Agent API](#the-agent-api-over-http) with a key, and `GET /health`: public, `200 {"status": "ok"}` once ready and
-`503 {"status": "starting"}` before.
+`--bind` takes an IP or `localhost`. A serve answers the [Agent API](#the-agent-api-over-http) with a key, and
+`GET /health`: public, `200 {"status": "ok"}`.
 
 ## The Agent API over HTTP
 
@@ -169,7 +166,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | Storage (`agent.sqlite`), channel and schedule state. One process at a time |
+| `<root>/.state/` | Storage (`agent.sqlite`) and schedule state. One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
@@ -214,7 +211,7 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * 1-5",
   tz: "America/New_York",
-  prompt: "Generate today's digest and send it with slack_send to channel C0123456789.",
+  prompt: "Generate today's digest and post it with the post_digest tool.",
 });
 ```
 

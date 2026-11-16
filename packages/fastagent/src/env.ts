@@ -19,7 +19,7 @@ export function applyEnvValues(values: ReadonlyMap<string, string>): void {
  *
  * ONE function because the two steps are one fact in a fixed order — the proxy can be declared in the `.env`, so it
  * has to be read first, and `installProxyFetch` reads the environment at construction. A command that did only half
- * would send an authored tool, a channel's app-creation flow, or a skill download DIRECT on a machine that has no
+ * would send an authored tool or a skill download DIRECT on a machine that has no
  * direct route. Whether a given request then uses the proxy is the dispatcher's decision, not the
  * caller's — see {@link installProxyFetch} on loopback.
  */

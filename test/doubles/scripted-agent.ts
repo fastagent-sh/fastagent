@@ -23,7 +23,7 @@ import {
   agentError,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
-import type { TurnEvent } from "../../packages/fastagent/src/channels/kit/invoke.ts";
+import type { TurnEvent } from "./scripted-run.ts";
 
 export type Script = (request: SendRequest) => AsyncIterable<TurnEvent> | Iterable<TurnEvent>;
 
@@ -334,28 +334,6 @@ export function scriptedAgent(
   return agent;
 }
 
-/** What a stop answers when it stopped work in progress. */
-export const stoppedRun = { stopped: ["message"] };
-
-/** `agent` with its `sessions.cancel` answering `stopped`, each session it is called for recorded in `canceled`. */
-export function withStop<A extends Agent>(
-  agent: A,
-  stopped: (sessionId: string) => { stopped: string[] },
-): A & { canceled: string[] } {
-  const canceled: string[] = [];
-  return {
-    ...agent,
-    sessions: {
-      ...agent.sessions,
-      cancel: async (sessionId: string) => {
-        canceled.push(sessionId);
-        return stopped(sessionId);
-      },
-    },
-    canceled,
-  };
-}
-
 /** What a message asks, read back as text and images: the shape a channel builds its content from. */
 export interface Prompt {
   text: string;
@@ -369,8 +347,3 @@ export function promptOf(request: Pick<SendRequest, "content">): Prompt {
   const images = parts.flatMap((part) => (part.type === "image" ? [{ mimeType: part.mimeType, data: part.data }] : []));
   return images.length > 0 ? { text, images } : { text };
 }
-
-/** A message as a test records it: the request, and what it asks read back ({@link promptOf}). */
-export type Asked = SendRequest & { prompt: Prompt };
-
-export const asked = (request: SendRequest): Asked => ({ ...request, prompt: promptOf(request) });

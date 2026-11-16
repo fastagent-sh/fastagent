@@ -1,6 +1,6 @@
 ---
 title: Quickstart
-description: "Five minutes from an installed CLI to a running agent: create it, send it a message, add a tool, a channel and a schedule."
+description: "Five minutes from an installed CLI to a running agent: create it, send it a message, add a tool and a schedule."
 status: current
 ---
 
@@ -56,24 +56,7 @@ fastagent invoke "Reverse the word hello with the reverse tool"
 Mention the tool in `SYSTEM.md` so the model knows when to use it. A tool that needs a secret declares it with
 [`needs`](configuration.md#secrets-in-code).
 
-## 5. Add a channel
-
-Declare it in `fastagent.config.ts`:
-
-```ts
-import { defineAgent } from "@fastagent-sh/fastagent";
-import { telegram } from "@fastagent-sh/fastagent/telegram"; // or slack, feishu
-
-export default defineAgent({ model: "openai/gpt-5.5", channels: { telegram: telegram() } });
-```
-
-```bash
-fastagent dev             # asks for the bot's credentials the first time
-```
-
-No public URL needed: Telegram is polled, Slack and Feishu hold a connection. See [Channels](channels.md).
-
-## 6. Run it on a clock
+## 5. Run it on a clock
 
 ```ts
 // src/schedules/daily-digest.ts
@@ -82,14 +65,14 @@ import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({
   cron: "0 9 * * *",
   tz: "America/New_York",
-  prompt: "Summarize yesterday's activity and send it with telegram_send to chat 123456789.",
+  prompt: "Summarize yesterday's activity and post it with the post_digest tool.",
 });
 ```
 
-A schedule only sends the agent a message, so name where the answer goes (a send tool and a chat id) in the prompt.
+A schedule only sends the agent a message, so name where the answer goes (a tool that delivers it) in the prompt.
 Try it now with `fastagent schedules run daily-digest`. See [Schedules](configuration.md#schedules).
 
-## 7. Serve it for real
+## 6. Serve it for real
 
 ```bash
 fastagent build && fastagent start

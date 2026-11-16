@@ -8,9 +8,9 @@ import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, isUnderDir } from "./paths.ts";
 import { dotEnvPath } from "./value-file.ts";
 import { log } from "./log.ts";
-import { activeWork } from "./channels/busy.ts";
+import { activeWork } from "./busy.ts";
 
-/** The agent's code (its tools, extensions, channels and schedules), loaded ONCE per worker: a restart is its only re-read. */
+/** The agent's code (its tools, extensions and schedules), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
 
 const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, .secrets/.env`;
@@ -52,7 +52,7 @@ export function listenForRestart(
     if ((message as { type?: unknown } | null)?.type !== "restart" || restarting) return;
     restarting = true;
     void (async () => {
-      // `busy` counts pieces of work (a channel turn is counted queued and again leased), not turns, so no number.
+      // `busy` counts pieces of work, not turns, so no number.
       if (busy() > 0) log.info("[fastagent] restarting once the turns running now finish");
       const deadline = Date.now() + limitMs;
       while (busy() > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, pollMs));
@@ -105,8 +105,8 @@ export async function runDevSupervisor(agentDir: string): Promise<void> {
     if (worker) {
       reloadPending = true;
       // The worker stops once its running turns finish (listenForRestart); the exit handler respawns it then. A turn
-      // that wrote the very file that changed is not cut off by its own edit. A worker whose channel is already
-      // closed is exiting: its exit handler respawns it, and `send` would throw ERR_IPC_CHANNEL_CLOSED.
+      // that wrote the very file that changed is not cut off by its own edit. A worker whose IPC channel is
+      // already closed is exiting: its exit handler respawns it, and `send` would throw ERR_IPC_CHANNEL_CLOSED.
       if (worker.connected) worker.send({ type: "restart" });
     } else {
       spawnWorker(); // worker was down (broken edit) — retry now
