@@ -11,10 +11,10 @@
  * retried with a growing wait; a refused token and Socket Mode turned off for the app (`link_disabled`) end it with their
  * reason, because retrying cannot fix them.
  */
-import type { LongConnection } from "@fastagent-sh/client/channel";
-import { RuntimeWebSocket, pinger, watchPongs } from "@fastagent-sh/client/runtime-websocket";
-import { log } from "@fastagent-sh/client/log";
-import { pause, whenAborted } from "@fastagent-sh/client/kit/ingress";
+import type { LongConnection } from "../../channel.ts";
+import { RuntimeWebSocket, pinger, watchPongs } from "../../runtime-websocket.ts";
+import { log } from "../../log.ts";
+import { pause, whenAborted } from "../kit/ingress.ts";
 import type { SlackEventEnvelope } from "./parse.ts";
 
 const RETRY_FIRST_MS = 1_000;

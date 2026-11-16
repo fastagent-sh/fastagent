@@ -4,32 +4,21 @@
  * live card.
  */
 import { join } from "node:path";
-import type { ChannelContext, ConnectionChannel, RouteChannel, Routes } from "@fastagent-sh/client/channel";
-import { type Needs, needs } from "@fastagent-sh/client/needs";
-import { log } from "@fastagent-sh/client/log";
-import { text } from "@fastagent-sh/client/kit/respond";
-import { secretEquals } from "@fastagent-sh/client/kit/secret";
-import { loadStateFile, saveStateFile } from "@fastagent-sh/client/state-file";
-import { createJsonWebhookRoute, signatureIsFresh } from "@fastagent-sh/client/kit/ingress";
-import { attachmentsDir } from "@fastagent-sh/client/kit/text";
-import {
-  createMessageOwners,
-  createSeenRing,
-  createThreadParticipants,
-  senderConversation,
-} from "@fastagent-sh/client/kit/state";
-import type { ForkSource } from "@fastagent-sh/client/channel";
-import { type SessionPlaces, createSessionPlaces, threadForkSource } from "@fastagent-sh/client/kit/history";
-import {
-  DROPPED_TURN_NOTICE,
-  SHARED_ANSWER_NOTICE,
-  createTurnRunner,
-  dispatchStop,
-  isStopText,
-} from "@fastagent-sh/client/kit/turn";
+import type { ChannelContext, ConnectionChannel, RouteChannel, Routes } from "../../channel.ts";
+import { type Needs, needs } from "../../needs.ts";
+import { log } from "../../log.ts";
+import { text } from "../kit/respond.ts";
+import { secretEquals } from "../kit/secret.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
+import { createJsonWebhookRoute, signatureIsFresh } from "../kit/ingress.ts";
+import { attachmentsDir } from "../kit/text.ts";
+import { createMessageOwners, createSeenRing, createThreadParticipants, senderConversation } from "../kit/state.ts";
+import type { ForkSource } from "../../channel.ts";
+import { type SessionPlaces, createSessionPlaces, threadForkSource } from "../kit/history.ts";
+import { DROPPED_TURN_NOTICE, SHARED_ANSWER_NOTICE, createTurnRunner, dispatchStop, isStopText } from "../kit/turn.ts";
 import { acknowledgeFeishuAsk } from "./reaction.ts";
-import { joinPromise } from "@fastagent-sh/client/promise-bridge";
-import { type TurnRecordBase, createTurnStore } from "@fastagent-sh/client/kit/turn-store";
+import { joinPromise } from "../../promise-bridge.ts";
+import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { type FeishuCloudKind, type FeishuCloudProfile, cloudFor } from "./cloud.ts";
 import { createFeishuHistory, feishuHistoryKey } from "./history.ts";
 import { decryptEvent, verifySignature } from "./crypto.ts";

@@ -8,7 +8,7 @@ import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings }
 import { enterAgentEnv } from "../../env.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { connectAgent } from "@fastagent-sh/client/http/client";
+import { connectAgent } from "@fastagent-sh/client";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../../http/server.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";

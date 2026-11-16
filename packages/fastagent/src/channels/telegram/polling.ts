@@ -8,9 +8,9 @@
  * and a second process polling the same bot end the connection with their reason, because retrying cannot fix them (and
  * the last would only take turns with the other process).
  */
-import type { LongConnection } from "@fastagent-sh/client/channel";
-import { log } from "@fastagent-sh/client/log";
-import { pause } from "@fastagent-sh/client/kit/ingress";
+import type { LongConnection } from "../../channel.ts";
+import { log } from "../../log.ts";
+import { pause } from "../kit/ingress.ts";
 import { TelegramApiError, callApi } from "./telegram-api.ts";
 import type { TelegramUpdate } from "./parse.ts";
 

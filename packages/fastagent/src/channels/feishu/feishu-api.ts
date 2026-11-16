@@ -18,10 +18,10 @@
  * (tools.ts). The official SDK handles WebSocket ingress in ws-ingress.ts.
  */
 import { mkdir, writeFile } from "node:fs/promises";
-import type { ImageAttachment as ImageRef } from "@fastagent-sh/client/kit/invoke";
+import type { ImageAttachment as ImageRef } from "../kit/invoke.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
-import { attachmentPath, utf8Prefix } from "@fastagent-sh/client/kit/text";
-import { type CallOptions, DROPPABLE_FRAME } from "@fastagent-sh/client/kit/ingress";
+import { attachmentPath, utf8Prefix } from "../kit/text.ts";
+import { type CallOptions, DROPPABLE_FRAME } from "../kit/ingress.ts";
 
 /** Per-attempt timeout for a JSON API call — small JSON round-trips, so 30s is generous. */
 const API_TIMEOUT_MS = 30_000;

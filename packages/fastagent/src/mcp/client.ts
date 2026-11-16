@@ -14,10 +14,10 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { abortThenJoin, joinPromise, originalError } from "@fastagent-sh/client/promise-bridge";
+import { abortThenJoin, joinPromise, originalError } from "../promise-bridge.ts";
 import { McpError } from "../mcp-api.ts";
 import type { McpServer } from "./config.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../log.ts";
 
 export interface McpTool {
   name: string;

@@ -15,7 +15,7 @@ import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
 import { mcpTools } from "./mcp.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import { STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";

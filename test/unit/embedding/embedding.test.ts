@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { getRequestListener } from "@hono/node-server";
-import type { ChannelHandler } from "../../../packages/client/src/channel.ts";
+import type { ChannelHandler } from "../../../packages/fastagent/src/channel.ts";
 import { router } from "../../../packages/fastagent/src/channels/router.ts";
 import { serviceOver } from "../../../packages/fastagent/src/service.ts";
 

@@ -4,7 +4,7 @@
  * default is the definition's name made into one (`@scope/pkg` is not one), so two instances of one definition on one
  * machine take distinct names only by being given them.
  */
-import { stripEdges } from "@fastagent-sh/client/strip-edges";
+import { stripEdges } from "./strip-edges.ts";
 
 export const INSTANCE_NAME_ENV = "FASTAGENT_NAME";
 

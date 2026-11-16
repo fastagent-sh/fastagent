@@ -3,8 +3,8 @@
  * `history`, what the place a turn was asked in said, as the channel recorded it.
  */
 import { basename } from "node:path";
-import type { ChannelTool } from "@fastagent-sh/client/channel";
-import { type SessionPlaces, historyTool } from "@fastagent-sh/client/kit/history";
+import type { ChannelTool } from "../../channel.ts";
+import { type SessionPlaces, historyTool } from "../kit/history.ts";
 import type { RecentMessages } from "./recent.ts";
 import type { TelegramTransport } from "./transport.ts";
 

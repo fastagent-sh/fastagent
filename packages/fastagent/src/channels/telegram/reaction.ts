@@ -3,9 +3,9 @@
  * answered. A bot holds one reaction per message, so setting the second replaces the first. ✅ is not among the emoji
  * Telegram lets a bot react with.
  */
-import { log } from "@fastagent-sh/client/log";
-import { DROPPABLE_FRAME } from "@fastagent-sh/client/kit/ingress";
-import { NO_ACK, type TurnAck } from "@fastagent-sh/client/kit/turn";
+import { log } from "../../log.ts";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
+import { NO_ACK, type TurnAck } from "../kit/turn.ts";
 import { callApi } from "./telegram-api.ts";
 
 const WAITING = "👀";

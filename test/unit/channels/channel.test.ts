@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../../../packages/client/src/agent-api.ts";
-import type { Channel } from "../../../packages/client/src/channel.ts";
+import type { Channel } from "../../../packages/fastagent/src/channel.ts";
 import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
 import { channelIngress, channelProblem, mountChannels } from "../../../packages/fastagent/src/channels/discover.ts";
-import { createSessionPlaces } from "../../../packages/client/src/kit/history.ts";
+import { createSessionPlaces } from "../../../packages/fastagent/src/channels/kit/history.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 
 afterEach(() => vi.restoreAllMocks());

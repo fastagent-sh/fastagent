@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelTool } from "../../../packages/client/src/channel.ts";
+import type { ChannelTool } from "../../../packages/fastagent/src/channel.ts";
 import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { type Agent, type ErrorCode, agentError } from "../../../packages/client/src/agent-api.ts";
@@ -11,7 +11,7 @@ import {
   feishuChannel as buildFeishuChannel,
 } from "../../../packages/fastagent/src/feishu.ts";
 import { eventSignature } from "../../../packages/fastagent/src/channels/feishu/crypto.ts";
-import { log } from "../../../packages/client/src/log.ts";
+import { log } from "../../../packages/fastagent/src/log.ts";
 import { type ScriptedAgent, promptOf, scriptedAgent, stoppedRun, withStop } from "../../doubles/scripted-agent.ts";
 import { ev } from "../../doubles/scripted-run.ts";
 import { createChannelSandbox, flushFetchMock, replyingAgent } from "../../harnesses/channel-harness.ts";

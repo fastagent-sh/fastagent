@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { afterEach, describe, expect, it } from "vitest";
-import { writeFileAtomic } from "../../../packages/client/src/atomic-write.ts";
+import { writeFileAtomic } from "../../../packages/fastagent/src/atomic-write.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { withLockedFile } from "../../../packages/fastagent/src/locked-file.ts";
 

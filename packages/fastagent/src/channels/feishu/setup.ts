@@ -4,7 +4,7 @@
  * pastes them). What is left to the person is the permission work and the publish, which depend on what the platform
  * says about the app.
  */
-import type { ChannelSetup, HeldValues, SetupValue } from "@fastagent-sh/client/kit/setup";
+import type { ChannelSetup, HeldValues, SetupValue } from "../kit/setup.ts";
 import { type FeishuCloudKind, cloudFor } from "./cloud.ts";
 import { type FeishuApi, createFeishuApi } from "./feishu-api.ts";
 import { registerFeishuApp } from "./register-app.ts";

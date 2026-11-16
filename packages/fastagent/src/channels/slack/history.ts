@@ -3,10 +3,10 @@
  * thread from `conversations.replies`, its people named through `users.info`. Nothing is kept: Slack asks an app not to
  * store what it reads.
  */
-import type { PlaceMessage, PlaceRead } from "@fastagent-sh/client/kit/history";
-import { CONTEXT_READ } from "@fastagent-sh/client/kit/ingress";
+import type { PlaceMessage, PlaceRead } from "../kit/history.ts";
+import { CONTEXT_READ } from "../kit/ingress.ts";
 import { slackMessageText } from "./parse.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import { type SlackApi, SlackApiError, type SlackListedMessage } from "./slack-api.ts";
 
 /** Message subtypes that are someone saying something; every other subtype is the platform's (a join, a topic). */

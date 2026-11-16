@@ -9,10 +9,10 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { Json, SessionEvent } from "../agent-api.ts";
-import { answerText } from "../answer-text.ts";
-import { PromiseFailure, originalError, joinPromise } from "../promise-bridge.ts";
-import { log } from "../log.ts";
+import type { Json, SessionEvent } from "@fastagent-sh/client/agent-api";
+import { answerText } from "../../answer-text.ts";
+import { PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import type { TurnEvent } from "./invoke.ts";
 import { truncateCodePointPrefix, truncateCodePointSuffix } from "./text.ts";
 

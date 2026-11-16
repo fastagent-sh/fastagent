@@ -5,14 +5,14 @@
  * top-level target) cannot be streamed: it is posted once it is done.
  */
 import type { Json } from "@fastagent-sh/client/agent-api";
-import type { TurnEvent } from "@fastagent-sh/client/kit/invoke";
-import { answerText } from "@fastagent-sh/client/answer-text";
+import type { TurnEvent } from "../kit/invoke.ts";
+import { answerText } from "../../answer-text.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import type * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { PromiseFailure, joinPromise } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import { PromiseFailure, joinPromise } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import {
   type ChannelFailure,
   applyTurnEvent,
@@ -24,7 +24,7 @@ import {
   summarizeToolArgs,
   turnEnd,
   unfinishedTurn,
-} from "@fastagent-sh/client/kit/preview";
+} from "../kit/preview.ts";
 import {
   type SlackApi,
   type SlackTarget,

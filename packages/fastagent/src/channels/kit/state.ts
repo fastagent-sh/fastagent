@@ -2,8 +2,8 @@
  * Channel per-instance persistent state tables: bounded dedup ring (`SeenRing`), message ownership (`MessageOwners`),
  * group-thread participation (`ThreadParticipants`), and sender conversation keying.
  */
-import { log } from "../log.ts";
-import { loadStateFile, saveStateFile } from "../state-file.ts";
+import { log } from "../../log.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /** Conversation key for a sender on a group's main timeline. */
 export function senderConversation(place: string, sender: string | number | undefined): string {

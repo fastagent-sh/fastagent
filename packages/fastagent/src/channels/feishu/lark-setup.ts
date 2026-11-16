@@ -7,7 +7,7 @@ import { encodeAddons } from "./register-app.ts";
 import { createFeishuApi, isFeishuCredentialsRefused } from "./feishu-api.ts";
 import { feishuEngine } from "./setup.ts";
 import { feishuAppAddons } from "./setup-mode.ts";
-import { type ChannelSetup, SetupRefused } from "@fastagent-sh/client/kit/setup";
+import { type ChannelSetup, SetupRefused } from "../kit/setup.ts";
 import { cloudFor } from "./cloud.ts";
 
 /**

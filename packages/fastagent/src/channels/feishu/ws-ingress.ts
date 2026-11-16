@@ -1,5 +1,5 @@
-import type { LongConnection } from "@fastagent-sh/client/channel";
-import { log } from "@fastagent-sh/client/log";
+import type { LongConnection } from "../../channel.ts";
+import { log } from "../../log.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import type { FeishuMessageEvent } from "./parse.ts";
 

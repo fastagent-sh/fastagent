@@ -9,8 +9,8 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { once } from "node:events";
 import type { Readable } from "node:stream";
-import { writeFileAtomic } from "@fastagent-sh/client/atomic-write";
-import { log } from "@fastagent-sh/client/log";
+import { writeFileAtomic } from "../atomic-write.ts";
+import { log } from "../log.ts";
 import { exists } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
 

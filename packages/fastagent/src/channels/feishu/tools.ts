@@ -2,8 +2,8 @@
  * The tools a Feishu channel gives the agent: `send`, over the channel's own client, and `history`, the place a turn was
  * asked in, read from the platform.
  */
-import type { ChannelTool } from "@fastagent-sh/client/channel";
-import { type PlaceRead, type SessionPlaces, historyTool } from "@fastagent-sh/client/kit/history";
+import type { ChannelTool } from "../../channel.ts";
+import { type PlaceRead, type SessionPlaces, historyTool } from "../kit/history.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import type { FeishuApi } from "./feishu-api.ts";
 

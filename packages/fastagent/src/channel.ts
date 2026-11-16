@@ -4,7 +4,7 @@
  * `channels` in `fastagent.config.ts`, by a name its tools and its state carry. Importing a host, a framework, or a
  * harness here is forbidden.
  */
-import type { Agent, CreateSessionOptions } from "./agent-api.ts";
+import type { Agent, CreateSessionOptions } from "@fastagent-sh/client/agent-api";
 
 /** A mounted request handler (a channel's fetch, or a plain route like health). */
 export type ChannelHandler = (req: Request) => Response | Promise<Response>;

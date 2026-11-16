@@ -2,9 +2,9 @@
  * A Feishu or Lark place's history, read from `im/v1/messages` when the `history` tool asks: a chat's top level or a
  * thread in it, newest first, with senders named from the chat's members. Nothing is kept between reads.
  */
-import { log } from "@fastagent-sh/client/log";
-import { HISTORY_MAX_LIMIT, type PlaceMessage, type PlaceRead } from "@fastagent-sh/client/kit/history";
-import { CONTEXT_READ } from "@fastagent-sh/client/kit/ingress";
+import { log } from "../../log.ts";
+import { HISTORY_MAX_LIMIT, type PlaceMessage, type PlaceRead } from "../kit/history.ts";
+import { CONTEXT_READ } from "../kit/ingress.ts";
 import type { FeishuApi, FeishuListedMessage } from "./feishu-api.ts";
 import { decodeFeishuContent } from "./normalize.ts";
 

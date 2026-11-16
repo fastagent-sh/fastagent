@@ -7,7 +7,7 @@
  */
 
 import { gzipSync } from "node:zlib";
-import { stripEnd } from "@fastagent-sh/client/strip-edges";
+import { stripEnd } from "../../strip-edges.ts";
 
 /** Feishu accounts endpoint (the flow starts here for every user; a Lark-tenant scan switches over). */
 const FEISHU_ACCOUNTS = "https://accounts.feishu.cn";

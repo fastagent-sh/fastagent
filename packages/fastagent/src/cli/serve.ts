@@ -3,7 +3,7 @@ import { bindLabel, classifyBind } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "@fastagent-sh/client/http/contract";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../log.ts";
 import { failStartup } from "./fail.ts";
 
 /** What the CLI adds to the assembly: its shutdown grace, exit on a connection that drops, and the API's keys. */

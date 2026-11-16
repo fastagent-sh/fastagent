@@ -62,8 +62,8 @@ import {
   hasEnded as messageHasEnded,
 } from "@fastagent-sh/client/agent-api";
 import { beginWork } from "../../channels/busy.ts";
-import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";

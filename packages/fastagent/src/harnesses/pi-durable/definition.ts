@@ -5,7 +5,7 @@
 import type { DeclaredSecret } from "../../declared-secrets.ts";
 import { declareMcp, mcpSecrets } from "../../mcp/config.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
-import { isNeeds } from "@fastagent-sh/client/needs";
+import { isNeeds } from "../../needs.ts";
 import type { AgentConfig } from "./define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 

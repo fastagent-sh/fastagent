@@ -18,7 +18,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { writeFileAtomic } from "@fastagent-sh/client/atomic-write";
+import { writeFileAtomic } from "../../atomic-write.ts";
 import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
 import { UNNAMED_AUTH_SOURCE, interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
 

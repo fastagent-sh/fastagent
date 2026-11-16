@@ -6,7 +6,7 @@
  */
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import type * as Stream from "effect/Stream";
-import type { PromiseFailure } from "@fastagent-sh/client/promise-bridge";
+import type { PromiseFailure } from "../../promise-bridge.ts";
 import {
   type ImageAttachment as ImageRef,
   attachedFilesManifest,
@@ -14,7 +14,7 @@ import {
   turnStream,
   type TurnEvent,
   promptContent,
-} from "@fastagent-sh/client/kit/invoke";
+} from "../kit/invoke.ts";
 import { resolveFiles, resolveImages } from "./telegram-api.ts";
 
 /** Appended to the prompt (not the system prompt): the channel owns Telegram-HTML formatting. */

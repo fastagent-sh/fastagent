@@ -1,4 +1,4 @@
-import { codePointPrefix } from "@fastagent-sh/client/kit/text";
+import { codePointPrefix } from "../kit/text.ts";
 import type { SlackEventEnvelope, SlackMessageEvent, SlackRoute } from "./model.ts";
 
 export type { SlackEventEnvelope, SlackFile, SlackMessageEvent, SlackRoute } from "./model.ts";

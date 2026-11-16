@@ -5,14 +5,14 @@
  */
 import { isAbsolute, join } from "node:path";
 import type { Agent } from "@fastagent-sh/client/agent-api";
-import type { ChannelContext } from "@fastagent-sh/client/channel";
+import type { ChannelContext } from "../channel.ts";
 import { conversationSessions, forkedSession } from "../conversation-sessions.ts";
 import * as Effect from "effect/Effect";
-import { originalError, joinPromise } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
-import { ensureStateHome } from "@fastagent-sh/client/state-file";
+import { originalError, joinPromise } from "../promise-bridge.ts";
+import { log } from "../log.ts";
+import { ensureStateHome } from "../state-file.ts";
 import { beginWork } from "./busy.ts";
-import { createTurnQueue } from "@fastagent-sh/client/kit/turn-queue";
+import { createTurnQueue } from "./kit/turn-queue.ts";
 
 /** The directory of the channel `name`'s own state under `stateRoot`: its context's `stateDir`. */
 function channelStateDir(stateRoot: string, name: string): string {

@@ -5,10 +5,10 @@
  * the update is acknowledged: an acknowledged update is not delivered again.
  */
 import { join } from "node:path";
-import { log } from "@fastagent-sh/client/log";
-import { truncateCodePointPrefix } from "@fastagent-sh/client/kit/text";
-import { ensureStateHome, loadStateFile, saveStateFile } from "@fastagent-sh/client/state-file";
-import type { PlaceRead } from "@fastagent-sh/client/kit/history";
+import { log } from "../../log.ts";
+import { truncateCodePointPrefix } from "../kit/text.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "../../state-file.ts";
+import type { PlaceRead } from "../kit/history.ts";
 
 const KEPT_PER_PLACE = 200;
 

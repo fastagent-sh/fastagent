@@ -9,6 +9,8 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "paths": {},
+    // Only what `fetch` brings: the web's own globals (AbortSignal, crypto), no Node API.
+    "lib": ["ES2022", "ES2024.Promise", "DOM"],
     "outDir": "dist",
     "rootDir": "src"
   },

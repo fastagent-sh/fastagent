@@ -7,9 +7,9 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
-import type { ChannelHandler } from "@fastagent-sh/client/channel";
-import { log } from "@fastagent-sh/client/log";
-import { text } from "@fastagent-sh/client/kit/respond";
+import type { ChannelHandler } from "../channel.ts";
+import { log } from "../log.ts";
+import { text } from "./kit/respond.ts";
 
 /** The totality boundary every serving path shares; `prepare` shapes the handler's response inside it. */
 export function totalFetch(

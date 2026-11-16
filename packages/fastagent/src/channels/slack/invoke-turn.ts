@@ -1,7 +1,7 @@
 /** Resolve Slack file IDs at dequeue, then stream one harness-neutral Agent turn. */
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import type * as Stream from "effect/Stream";
-import type { PromiseFailure } from "@fastagent-sh/client/promise-bridge";
+import type { PromiseFailure } from "../../promise-bridge.ts";
 import {
   type ImageAttachment as ImageRef,
   attachedFilesManifest,
@@ -9,7 +9,7 @@ import {
   turnStream,
   type TurnEvent,
   promptContent,
-} from "@fastagent-sh/client/kit/invoke";
+} from "../kit/invoke.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
 
 const MARKDOWN_INSTRUCTION =

@@ -3,7 +3,7 @@
  * restarting it on agent edits.
  */
 import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
-import { setLogLevel } from "@fastagent-sh/client/log";
+import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { selectAgentEnvironment } from "../../paths.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";

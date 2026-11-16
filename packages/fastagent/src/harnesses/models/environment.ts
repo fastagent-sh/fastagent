@@ -6,7 +6,7 @@
  */
 import { join } from "node:path";
 import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { catalogsIn } from "./catalog.ts";
 import {

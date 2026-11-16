@@ -4,7 +4,7 @@
  * channel's shape is checked there, by {@link channelProblem}, and its routes here, where they are first asked for.
  */
 import type { Agent } from "@fastagent-sh/client/agent-api";
-import type { Channel, LongConnection, Routes } from "@fastagent-sh/client/channel";
+import type { Channel, LongConnection, Routes } from "../channel.ts";
 import { channelContext } from "./context.ts";
 import { assertRouteKey, routeKeysConflict } from "./router.ts";
 

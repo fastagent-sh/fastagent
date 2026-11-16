@@ -5,7 +5,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import { type RecordedMessage, ownMessage } from "./recent.ts";
 import { telegramPlaceKey } from "./parse.ts";
 import { callApi, chunkText } from "./telegram-api.ts";

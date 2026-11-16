@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { type PromiseFailure, fromPromise } from "@fastagent-sh/client/promise-bridge";
+import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 
 const SCAN_PAGE = 500;
 

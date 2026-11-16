@@ -7,8 +7,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type * as Scope from "effect/Scope";
-import { log } from "../log.ts";
-import { originalError } from "../promise-bridge.ts";
+import { log } from "../../log.ts";
+import { originalError } from "../../promise-bridge.ts";
 
 /** A turn's place in its conversation. */
 export interface TurnSlot {

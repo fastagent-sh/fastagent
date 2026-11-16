@@ -1,5 +1,5 @@
 /** Lightweight Slack emoji ack on the user's triggering message: 👀 while working, ✅ when done. */
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import type { SlackApi } from "./slack-api.ts";
 
 const EMOJI_RE = /^(?:[a-z0-9_+-]+)(?:::skin-tone-[2-6])?$/;

@@ -11,8 +11,8 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
-import { writeFileAtomic } from "@fastagent-sh/client/atomic-write";
-import { log } from "@fastagent-sh/client/log";
+import { writeFileAtomic } from "../atomic-write.ts";
+import { log } from "../log.ts";
 
 /** Path of a JSON file under `<stateRoot>/schedule/`. */
 export function scheduleFile(stateRoot: string, name: string): string {

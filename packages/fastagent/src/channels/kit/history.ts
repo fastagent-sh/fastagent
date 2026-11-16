@@ -4,8 +4,8 @@
  * where each turn runs ({@link SessionPlaces}) and how one of its places is read; the tool reads only that place, or a
  * thread in it. Also: where a thread's session forks from.
  */
-import { type Agent, AgentError, type Message } from "../agent-api.ts";
-import type { ChannelTool, ForkSource } from "../channel.ts";
+import { type Agent, AgentError, type Message } from "@fastagent-sh/client/agent-api";
+import type { ChannelTool, ForkSource } from "../../channel.ts";
 import { truncateCodePointPrefix } from "./text.ts";
 
 /** One message of a place, as the tool shows it. */

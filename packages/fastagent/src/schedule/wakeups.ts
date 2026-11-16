@@ -3,7 +3,7 @@
  * `schedules/` files).
  */
 import { randomUUID } from "node:crypto";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../log.ts";
 import { cronError, nextRun, recurringCronError } from "./cron.ts";
 import { readScheduleFile, scheduleFile, writeScheduleFile } from "./state.ts";
 

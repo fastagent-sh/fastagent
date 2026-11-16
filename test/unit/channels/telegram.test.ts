@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ChannelTool } from "../../../packages/client/src/channel.ts";
+import type { ChannelTool } from "../../../packages/fastagent/src/channel.ts";
 import { channelContext } from "../../../packages/fastagent/src/channels/context.ts";
 import {
   type TelegramChannelOptions,

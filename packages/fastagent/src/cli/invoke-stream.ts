@@ -1,6 +1,6 @@
 /** Render one message's answer, as `messages.stream` delivers it, plus an exit code: 0 only for `completed`. */
 import { AgentError, type Message, type MessageStreamEvent, errorData } from "@fastagent-sh/client/agent-api";
-import { answerText } from "@fastagent-sh/client/answer-text";
+import { answerText } from "../answer-text.ts";
 
 /** A command that sends a message exits 0 only when it completed. */
 export const exitCodeOf = (message: Pick<Message, "status">): number => (message.status === "completed" ? 0 : 1);

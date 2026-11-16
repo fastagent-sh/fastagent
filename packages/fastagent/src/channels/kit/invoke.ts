@@ -14,9 +14,9 @@ import {
   type Message,
   type MessageStreamEvent,
   type SendRequest,
-} from "../agent-api.ts";
-import { PromiseFailure, originalError, joinPromise } from "../promise-bridge.ts";
-import { log } from "../log.ts";
+} from "@fastagent-sh/client/agent-api";
+import { PromiseFailure, originalError, joinPromise } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 
 /** Acquire lazily; interruption closes the source, while natural exhaustion needs no extra return. */
 function eventStream<A>(open: () => AsyncIterable<A>, label: string): Stream.Stream<A, PromiseFailure, Scope.Scope> {

@@ -4,9 +4,9 @@
  * assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import type { Channel } from "@fastagent-sh/client/channel";
+import type { Channel } from "../../channel.ts";
 import type { McpServerDeclaration } from "../../mcp/config.ts";
-import type { Needs } from "@fastagent-sh/client/needs";
+import type { Needs } from "../../needs.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
 /** What `fastagent.config.ts` default-exports: the agent's own settings, the same for every place it runs. */

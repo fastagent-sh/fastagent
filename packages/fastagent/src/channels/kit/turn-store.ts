@@ -6,8 +6,8 @@
  * deterministically crashes the process would otherwise replay forever under a container restart policy; a real
  * exactly-once story needs the different backend above.
  */
-import { log } from "../log.ts";
-import { loadStateFile, saveStateFile } from "../state-file.ts";
+import { log } from "../../log.ts";
+import { loadStateFile, saveStateFile } from "../../state-file.ts";
 
 /** How many times a turn may START without finishing before it is dropped rather than run again. */
 const MAX_TURN_ATTEMPTS = 3;

@@ -10,8 +10,8 @@ import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
-import { type PromiseFailure, fromPromise, originalError } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import { RELEASE_ENTRY } from "./entries.ts";
 import { queuedInputs } from "./messages.ts";
 

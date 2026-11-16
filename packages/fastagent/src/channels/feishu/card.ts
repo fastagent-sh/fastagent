@@ -3,7 +3,7 @@
  * and the message content that mounts a card entity into a chat.
  */
 
-import { truncateCodePointPrefix } from "@fastagent-sh/client/kit/text";
+import { truncateCodePointPrefix } from "../kit/text.ts";
 
 /** The append-only answer element's id — shared by create (card.ts) and update (preview.ts). */
 export const ANSWER_ELEMENT_ID = "answer";

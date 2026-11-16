@@ -11,8 +11,8 @@
     },
     "packages/client": {
       "project": ["src/**/*.ts"],
-      // Every module is an entry through the "./*" export, which only FastAgent's own packages import: an export no
-      // package uses is dead, not public.
+      // `/agent-api` and `/http/contract` are entries only FastAgent's runtime imports: an export no package uses is
+      // dead, not public. The root entry's exports are public (`@public`).
       "includeEntryExports": true
     },
     "packages/fastagent": {

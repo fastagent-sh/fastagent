@@ -3,7 +3,7 @@
  * exactly as the open platform defines them.
  */
 import { createDecipheriv, createHash } from "node:crypto";
-import { secretEquals } from "@fastagent-sh/client/kit/secret";
+import { secretEquals } from "../kit/secret.ts";
 
 /**
  * Decrypt an `{"encrypt": …}` event payload to its plaintext JSON string; throws on malformed input or invalid

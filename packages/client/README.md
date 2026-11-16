@@ -1,7 +1,7 @@
 # @fastagent-sh/client
 
-The client side of [FastAgent](https://fastagent.sh): the Agent API's types and an HTTP client for an agent that
-FastAgent serves, and the contract a channel is written against.
+The client of [FastAgent](https://fastagent.sh): the Agent API's types and an HTTP client for an agent that FastAgent
+serves.
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -12,9 +12,7 @@ const message = await agent.messages.send({ sessionId: id, content: "hi" }, { wa
 console.log(message.answer?.text);
 ```
 
-- `@fastagent-sh/client`: the Agent API and `connectAgent`. It needs only `fetch`.
-- `@fastagent-sh/client/channel`: the channel contract (`defineChannel`, `ChannelContext`).
-
-Every other path in this package belongs to FastAgent's own packages and changes without notice.
+`@fastagent-sh/client` is the Agent API and `connectAgent`, and needs only `fetch`. Its other two entries,
+`/agent-api` (the API's schemas) and `/http/contract` (the API over HTTP), are the ones FastAgent's runtime builds its server from.
 
 See [the Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md).

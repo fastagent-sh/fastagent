@@ -9,8 +9,8 @@
  */
 import { dirname } from "node:path";
 import { type Agent, AgentError, type CreateSessionOptions } from "@fastagent-sh/client/agent-api";
-import { log } from "@fastagent-sh/client/log";
-import { ensureStateHome, loadStateFile, saveStateFile } from "@fastagent-sh/client/state-file";
+import { log } from "./log.ts";
+import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
 /** What the map asks of the Agent: whether a recorded session is still there, and a new one when it is not. */
 type SessionsAgent = { sessions: Pick<Agent["sessions"], "get" | "create"> };

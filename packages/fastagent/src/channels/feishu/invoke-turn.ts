@@ -13,8 +13,8 @@
  */
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import type * as Stream from "effect/Stream";
-import type { PromiseFailure } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import type { PromiseFailure } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import {
   type ImageAttachment as ImageRef,
   attachedFilesManifest,
@@ -26,10 +26,10 @@ import {
   turnStream,
   type TurnEvent,
   promptContent,
-} from "@fastagent-sh/client/kit/invoke";
+} from "../kit/invoke.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
-import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "@fastagent-sh/client/kit/text";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
 
 /** The per-turn REPLY CONTRACT, appended to the prompt (not the system prompt). Two halves, one
  *  concept — what happens to the reply: its FORMAT (rendered in a card whose markdown element is the

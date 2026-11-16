@@ -6,7 +6,7 @@ import { isAbsolute, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import type { DeclaredSecret } from "../declared-secrets.ts";
-import { isEnvName } from "@fastagent-sh/client/needs";
+import { isEnvName } from "../needs.ts";
 import { McpError } from "../mcp-api.ts";
 import { AGENT_CONFIG_FILE } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";

@@ -20,10 +20,10 @@ import {
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
-import type { ChannelHandler } from "@fastagent-sh/client/channel";
-import { secretEquals } from "@fastagent-sh/client/kit/secret";
-import { PromiseFailure, fromPromise, abortThenJoin } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import type { ChannelHandler } from "../channel.ts";
+import { secretEquals } from "../channels/kit/secret.ts";
+import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
+import { log } from "../log.ts";
 import {
   API_PREFIX,
   AgentHttpApi,

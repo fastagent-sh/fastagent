@@ -18,9 +18,9 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { ImageAttachment as ImageRef } from "@fastagent-sh/client/kit/invoke";
-import { attachmentPath } from "@fastagent-sh/client/kit/text";
-import type { CallOptions } from "@fastagent-sh/client/kit/ingress";
+import type { ImageAttachment as ImageRef } from "../kit/invoke.ts";
+import { attachmentPath } from "../kit/text.ts";
+import type { CallOptions } from "../kit/ingress.ts";
 import type { TelegramUpdate } from "./parse.ts";
 
 /** Telegram's hard text limit per message. */

@@ -20,7 +20,7 @@ import {
 } from "../harnesses/pi-durable/open.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { isDeployedWorkspace } from "../paths.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../log.ts";
 import { type InstanceFlags, enterInstance } from "./instance.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { openExternalUrl } from "../open-url.ts";

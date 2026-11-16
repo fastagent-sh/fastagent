@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "./log.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { loadEnvValues, parseEnvContent, valueFileOf } from "./value-file.ts";
 

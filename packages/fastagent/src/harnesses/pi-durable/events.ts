@@ -32,7 +32,7 @@ import {
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
-import { type PromiseFailure, fromPromise, originalError } from "@fastagent-sh/client/promise-bridge";
+import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
 import { isPublished, replyText, thinkingOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import { type EndedRecord, hasEnded, isInput, sessionOf } from "./messages.ts";

@@ -5,12 +5,12 @@
  * carry unbalanced HTML); on completion the same message is edited into the final answer as HTML. One
  * message, works in groups and private (unlike sendMessageDraft, which is private/forum-topic only).
  */
-import type { TurnEvent } from "@fastagent-sh/client/kit/invoke";
+import type { TurnEvent } from "../kit/invoke.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { DROPPABLE_FRAME } from "@fastagent-sh/client/kit/ingress";
-import { type PromiseFailure, joinPromise } from "@fastagent-sh/client/promise-bridge";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
+import { type PromiseFailure, joinPromise } from "../../promise-bridge.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -24,8 +24,8 @@ import {
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "@fastagent-sh/client/kit/preview";
-import { log } from "@fastagent-sh/client/log";
+} from "../kit/preview.ts";
+import { log } from "../../log.ts";
 import {
   TELEGRAM_MAX_TEXT,
   type Target,

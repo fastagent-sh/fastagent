@@ -4,8 +4,8 @@
  * health check), so the router adds no guard of its own. Fetch-only, so any runtime can serve it; serve.ts binds it to
  * node:http.
  */
-import type { ChannelHandler, Routes } from "@fastagent-sh/client/channel";
-import { text } from "@fastagent-sh/client/kit/respond";
+import type { ChannelHandler, Routes } from "../channel.ts";
+import { text } from "./kit/respond.ts";
 
 /** Parse a route key: `"METHOD /path"` → `{ method, path }`, or `"/path"` → `{ path }` (any method). */
 export function parseRouteKey(key: string): { method?: string; path: string } {

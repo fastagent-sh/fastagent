@@ -1,5 +1,5 @@
 /** Telegram protocol parsing — PURE: message field extraction, the prompt envelope, and the summon/route policy. */
-import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "@fastagent-sh/client/kit/text";
+import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
 import { RECORDED_MAX_CHARS } from "./recent.ts";
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */

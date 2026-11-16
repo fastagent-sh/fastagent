@@ -3,7 +3,7 @@
  * its scopes, events and Socket Mode switch are what FastAgent needs; the values only they can read off its pages are
  * pasted: the bot token and the app-level token Socket Mode connects with.
  */
-import { type ChannelSetup, SetupRefused, pasteOne } from "@fastagent-sh/client/kit/setup";
+import { type ChannelSetup, SetupRefused, pasteOne } from "../kit/setup.ts";
 import { buildSlackManifest, slackManifestLink } from "./manifest.ts";
 import { SlackApiError, createSlackApi } from "./slack-api.ts";
 import { TerminalSocketError, openSlackConnection } from "./socket.ts";

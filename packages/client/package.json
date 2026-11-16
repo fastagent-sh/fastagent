@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/client",
   "version": "0.31.0",
-  "description": "The FastAgent Agent API client and the channel contract: talk to a FastAgent agent, or build a channel for one.",
+  "description": "The FastAgent Agent API and its HTTP client: talk to an agent FastAgent serves, from anywhere fetch runs.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -32,10 +32,15 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./*": {
-      "@fastagent-sh/source": "./src/*.ts",
-      "types": "./dist/*.d.ts",
-      "default": "./dist/*.js"
+    "./agent-api": {
+      "@fastagent-sh/source": "./src/agent-api.ts",
+      "types": "./dist/agent-api.d.ts",
+      "default": "./dist/agent-api.js"
+    },
+    "./http/contract": {
+      "@fastagent-sh/source": "./src/http/contract.ts",
+      "types": "./dist/http/contract.d.ts",
+      "default": "./dist/http/contract.js"
     },
     "./package.json": "./package.json"
   },
@@ -54,7 +59,6 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "effect": "^4.0.7",
-    "undici": "^8.6.0"
+    "effect": "^4.0.7"
   }
 }

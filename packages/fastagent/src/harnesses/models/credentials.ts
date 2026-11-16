@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { globalHome, SECRETS_DIRNAME, resolveOverridePath, resolveSecretsDir } from "../../paths.ts";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
 import { withLockedFile } from "../../locked-file.ts";
 

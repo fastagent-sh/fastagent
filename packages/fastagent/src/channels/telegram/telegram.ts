@@ -3,10 +3,10 @@
  * `route(update)` → run the turn → stream the agent's reply back to the chat.
  */
 import { join } from "node:path";
-import type { ChannelContext, ConnectionChannel, RouteChannel } from "@fastagent-sh/client/channel";
-import { type Needs, needs } from "@fastagent-sh/client/needs";
-import { log } from "@fastagent-sh/client/log";
-import { secretEquals } from "@fastagent-sh/client/kit/secret";
+import type { ChannelContext, ConnectionChannel, RouteChannel } from "../../channel.ts";
+import { type Needs, needs } from "../../needs.ts";
+import { log } from "../../log.ts";
+import { secretEquals } from "../kit/secret.ts";
 import { telegramTurnStream } from "./invoke-turn.ts";
 import { type RecentMessages, type RecordedMessage, createRecentMessages, ownMessage } from "./recent.ts";
 import {
@@ -27,27 +27,16 @@ import {
 import { telegramTools } from "./tools.ts";
 import { telegramTransport } from "./transport.ts";
 import { type TelegramFailure, defaultErrorMessage, deliverTelegramAnswer, telegramReply } from "./preview.ts";
-import { attachmentsDir } from "@fastagent-sh/client/kit/text";
-import { createJsonWebhookRoute } from "@fastagent-sh/client/kit/ingress";
+import { attachmentsDir } from "../kit/text.ts";
+import { createJsonWebhookRoute } from "../kit/ingress.ts";
 import { type Target, callApi, sendMessage } from "./telegram-api.ts";
-import { type SessionPlaces, createSessionPlaces } from "@fastagent-sh/client/kit/history";
-import {
-  createMessageOwners,
-  createSeenRing,
-  isSenderConversation,
-  senderConversation,
-} from "@fastagent-sh/client/kit/state";
+import { type SessionPlaces, createSessionPlaces } from "../kit/history.ts";
+import { createMessageOwners, createSeenRing, isSenderConversation, senderConversation } from "../kit/state.ts";
 import { PRIVACY_MODE_EFFECT, PRIVACY_MODE_FIX } from "./privacy.ts";
-import {
-  DROPPED_TURN_NOTICE,
-  NO_ACK,
-  SHARED_ANSWER_NOTICE,
-  createTurnRunner,
-  dispatchStop,
-} from "@fastagent-sh/client/kit/turn";
-import { type TurnRecordBase, createTurnStore } from "@fastagent-sh/client/kit/turn-store";
+import { DROPPED_TURN_NOTICE, NO_ACK, SHARED_ANSWER_NOTICE, createTurnRunner, dispatchStop } from "../kit/turn.ts";
+import { type TurnRecordBase, createTurnStore } from "../kit/turn-store.ts";
 import { acknowledgeTelegramAsk } from "./reaction.ts";
-import { joinPromise } from "@fastagent-sh/client/promise-bridge";
+import { joinPromise } from "../../promise-bridge.ts";
 import { pollTelegramUpdates } from "./polling.ts";
 
 interface StoredTurn extends TurnRecordBase {

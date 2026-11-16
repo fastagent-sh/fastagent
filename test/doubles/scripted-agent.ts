@@ -23,7 +23,7 @@ import {
   agentError,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
-import type { TurnEvent } from "../../packages/client/src/kit/invoke.ts";
+import type { TurnEvent } from "../../packages/fastagent/src/channels/kit/invoke.ts";
 
 export type Script = (request: SendRequest) => AsyncIterable<TurnEvent> | Iterable<TurnEvent>;
 

@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
 import { selectAgentEnvironment, isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
-import { log, setLogLevel } from "@fastagent-sh/client/log";
+import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";

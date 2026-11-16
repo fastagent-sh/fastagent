@@ -2,8 +2,8 @@
  * The acknowledgement a turn waiting behind a running one puts on its asker's message: "OnIt" while it waits, "DONE"
  * when it is answered. Removing a reaction needs the id the platform gave it, so the mark keeps it.
  */
-import { log } from "@fastagent-sh/client/log";
-import { NO_ACK, type TurnAck } from "@fastagent-sh/client/kit/turn";
+import { log } from "../../log.ts";
+import { NO_ACK, type TurnAck } from "../kit/turn.ts";
 import type { FeishuApi } from "./feishu-api.ts";
 
 const WAITING = "OnIt";

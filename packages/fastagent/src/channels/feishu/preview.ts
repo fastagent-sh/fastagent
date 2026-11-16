@@ -10,12 +10,12 @@
  * preview, said in the log; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
  */
 import { setTimeout as sleep } from "node:timers/promises";
-import type { TurnEvent } from "@fastagent-sh/client/kit/invoke";
+import type { TurnEvent } from "../kit/invoke.ts";
 import * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import * as Clock from "effect/Clock";
-import { type PromiseFailure, joinPromise } from "@fastagent-sh/client/promise-bridge";
-import { log } from "@fastagent-sh/client/log";
+import { type PromiseFailure, joinPromise } from "../../promise-bridge.ts";
+import { log } from "../../log.ts";
 import {
   ANSWER_ELEMENT_ID,
   CARD_MARKDOWN_MAX_BYTES,
@@ -25,7 +25,7 @@ import {
   streamingCardJson,
 } from "./card.ts";
 import { type FeishuApi, type FeishuTarget, chunkFeishuText, isCardStreamingClosed } from "./feishu-api.ts";
-import { DROPPABLE_FRAME } from "@fastagent-sh/client/kit/ingress";
+import { DROPPABLE_FRAME } from "../kit/ingress.ts";
 import {
   RETRY_NOTICE,
   THINKING_PLACEHOLDER,
@@ -39,8 +39,8 @@ import {
   revealedAnswer,
   thinkingLine,
   toolLines,
-} from "@fastagent-sh/client/kit/preview";
-import { truncateCodePointPrefix, truncateUtf8 } from "@fastagent-sh/client/kit/text";
+} from "../kit/preview.ts";
+import { truncateCodePointPrefix, truncateUtf8 } from "../kit/text.ts";
 
 /** A terminal failure, as the channel hands it to `onError` — the shared channel shape. */
 export type FeishuFailure = ChannelFailure;

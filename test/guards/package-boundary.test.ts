@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url";
 
 /**
  * The workspace's package lines. A package reaches another only by its name, and only one it depends on; the client
- * side (`@fastagent-sh/client`) imports no runtime, so it loads where only `fetch` is (its root entry), and a channel
- * reaches the runtime only through the client.
+ * (`@fastagent-sh/client`) imports no runtime, so its root entry loads where only `fetch` is.
  */
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PACKAGES = ["client", "fastagent"] as const;
@@ -103,25 +102,6 @@ describe("package lines", () => {
     const reached = [...staticPackageGraph(entry), ...staticPackageGraph(entry, true)];
     expect(reached.filter((spec) => packageOf(spec) !== "effect")).toEqual([]);
   });
-
-  it("a channel imports only its own directory, @fastagent-sh/client, and its platform's SDK", () => {
-    const offenders = ["telegram", "slack", "feishu"].flatMap((platform) => {
-      const home = resolve(srcOf("fastagent"), "channels", platform);
-      const sdk = platform === "feishu" ? ["@larksuiteoapi/node-sdk"] : [];
-      return filesUnder(home).flatMap((file) => {
-        const { relatives, bare } = importsOf(file);
-        return [
-          ...relatives.filter((target) => !target.startsWith(`${home}/`)).map((target) => relative(repo, target)),
-          ...bare.filter(
-            (spec) =>
-              !spec.startsWith("node:") &&
-              !["effect", "undici", "@fastagent-sh/client", ...sdk].includes(packageOf(spec)),
-          ),
-        ].map((target) => `${relative(repo, file)} → ${target}`);
-      });
-    });
-    expect(offenders).toEqual([]);
-  });
 });
 
 describe("harness neutrality: the channel spine imports no harness package", () => {
@@ -159,7 +139,7 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
-    expect([...staticPackageGraph(resolve(srcOf("client"), "channel.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("fastagent"), "channel.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import lockfile from "proper-lockfile";
-import { writeFileAtomic } from "@fastagent-sh/client/atomic-write";
+import { writeFileAtomic } from "./atomic-write.ts";
 import { SECRET_FILE_MODE } from "./paths.ts";
 
 const WRITE_OPTIONS = { encoding: "utf8", mode: SECRET_FILE_MODE } as const;

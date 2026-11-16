@@ -8,7 +8,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
-import { log } from "@fastagent-sh/client/log";
+import { log } from "../../log.ts";
 import type { RunsAs } from "../../serving-command.ts";
 import type { AgentCommand } from "./agent.ts";
 

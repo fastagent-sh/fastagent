@@ -18,7 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import type { Entry, Message, Session } from "@fastagent-sh/client/agent-api";
-import { type PromiseFailure, fromPromise } from "@fastagent-sh/client/promise-bridge";
+import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import type { Sessions } from "./sessions.ts";

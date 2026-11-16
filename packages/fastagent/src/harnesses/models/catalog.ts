@@ -24,7 +24,7 @@ import {
   isModelType,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
-import { writeFileAtomic } from "@fastagent-sh/client/atomic-write";
+import { writeFileAtomic } from "../../atomic-write.ts";
 
 const PUBLISHED_URL = "https://pi.dev/api/models";
 /** The model types this pi-ai takes; asked for, since pi.dev answers a client that names none with chat models only. */

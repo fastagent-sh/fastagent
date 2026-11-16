@@ -10,10 +10,10 @@ Agent API.
   what the file owns and why it is that way, next to the code the reason is about. Read the code and its headers. Start
   from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
-- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, the
-  channel contract and kit; it imports no runtime) and `@fastagent-sh/fastagent` (the runtime and the CLI). A package
-  reaches another only by name, and in the repository reads its source through the `@fastagent-sh/source` export
-  condition; `test/guards/package-boundary.test.ts` holds the lines.
+- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API and `connectAgent`;
+  it imports no runtime) and `@fastagent-sh/fastagent` (the runtime and the CLI). A package reaches another only by
+  name, and in the repository reads its source through the `@fastagent-sh/source` export condition;
+  `test/guards/package-boundary.test.ts` holds the lines.
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
   (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
   state file, call order or history.
@@ -89,7 +89,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 | --- | --- | --- |
 | Agent API / HTTP (`packages/client/src/agent-api.ts`, `src/http/` in both packages) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
 | CLI command or flag (`packages/fastagent/src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
-| Channel (`packages/fastagent/src/channels/`, `packages/client/src/kit/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, its tools | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
+| Channel (`packages/fastagent/src/channels/`) | `test/unit/channels/`: verified ingress, DM/group summon, `/stop`, its tools | `scriptedAgent` (`test/doubles/scripted-agent.ts`) + `channel-harness.ts` + stubbed `fetch` |
 | Deploy (`packages/fastagent/src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts | No secrets in artifacts |
 | Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
 | Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |

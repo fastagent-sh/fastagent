@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type TurnRecordBase, createTurnStore } from "../../../packages/client/src/kit/turn-store.ts";
+import { type TurnRecordBase, createTurnStore } from "../../../packages/fastagent/src/channels/kit/turn-store.ts";
 
 interface Rec extends TurnRecordBase {
   seq: number;
