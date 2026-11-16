@@ -1,13 +1,13 @@
 /**
- * Canonical Feishu live-preview rendering (also reused by Lark compatibility). The preview is ONE streaming CARD of
+ * Feishu (and Lark) live-preview rendering. The preview is ONE streaming CARD of
  * two elements — the volatile `process` block and the append-only `answer` (card.ts explains why the split is the
  * prefix-stability fix) — streamed as full-text snapshots per element under a strictly increasing `sequence`, then
  * settled in place with the final answer alone. A queued turn mounts the same card early with its queue status and
  * execution takes the entity over, so there is no second reply. Streaming rides the cardkit quota, not the 5 QPS
  * per-chat message quota or the 20-edit cap on text messages — which is why the preview is a card.
  *
- * Degrade tiers (fail visibly, per turn): a card that cannot be created or mounted falls back to a TEXT placeholder
- * with NO live updates; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
+ * A card that cannot be created or mounted (most often a missing `cardkit:card:write`) leaves the turn without a live
+ * preview, said in the log; streaming closed mid-turn freezes the preview. The final write is authoritative either way.
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import type { TurnEvent } from "../kit/invoke.ts";
@@ -78,9 +78,7 @@ function tailLines(text: string, maxPoints: number): string {
 }
 
 /** A visible preview mounted into the chat. */
-export type MountedFeishuPreview =
-  | { kind: "card"; cardId: string; messageId: string }
-  | { kind: "text"; messageId: string };
+export type MountedFeishuPreview = { kind: "card"; cardId: string; messageId: string };
 
 /** The preview lifecycle also needs a no-message state when setup failed entirely. */
 type Preview = MountedFeishuPreview | { kind: "none" };
@@ -113,66 +111,37 @@ async function finalize(
       return;
     }
   }
-  if (preview.kind === "text") {
-    if (chunkFeishuText(text).length === 1) {
-      try {
-        await api.editTextMessage(preview.messageId, text);
-        return;
-      } catch {
-        // Edit failed (edit window / count / policy) — fall through to delete + fresh send below.
-      }
-    }
-  }
   if (preview.kind !== "none") await api.deleteMessage(preview.messageId).catch(() => {});
   await api.sendText(target, text);
 }
 
-/**
- * Mount one preview message: preferably a streaming card entity (`initial` seeds the process element; the answer
- * element starts empty), with a static text message as the visible fallback.
- */
+/** Mount the preview: a streaming card entity (`initial` seeds the process element; the answer element starts empty). */
 async function mountFeishuPreview(
   api: FeishuApi,
   target: FeishuTarget,
   initial: string,
   label = "[feishu]",
 ): Promise<MountedFeishuPreview> {
-  try {
-    const cardId = await api.createCard(streamingCardJson(initial));
-    const content = cardEntityContent(cardId);
-    const mountOnce = (): Promise<string | undefined> =>
-      target.replyTo !== undefined
-        ? api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
-        : api.sendMessage(target.chatId, "interactive", content);
-    let messageId: string | undefined;
-    // Field-observed: the mount can reject a JUST-minted card id (code 230099 / "cardid is invalid").
-    for (let attempt = 1; ; attempt++) {
-      try {
-        messageId = await mountOnce();
-        break;
-      } catch (e) {
-        if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
-        log.warn(
-          `${label} mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`,
-        );
-        await sleep(attempt * 400);
-      }
+  const cardId = await api.createCard(streamingCardJson(initial));
+  const content = cardEntityContent(cardId);
+  const mountOnce = (): Promise<string | undefined> =>
+    target.replyTo !== undefined
+      ? api.replyMessage(target.replyTo, "interactive", content, { replyInThread: target.replyInThread })
+      : api.sendMessage(target.chatId, "interactive", content);
+  let messageId: string | undefined;
+  // Field-observed: the mount can reject a JUST-minted card id (code 230099 / "cardid is invalid").
+  for (let attempt = 1; ; attempt++) {
+    try {
+      messageId = await mountOnce();
+      break;
+    } catch (e) {
+      if (attempt >= 3 || !/230099|11310|cardid is invalid/i.test(String(e))) throw e;
+      log.warn(`${label} mount rejected the fresh card (card=${cardId}, attempt ${attempt}) — retrying: ${String(e)}`);
+      await sleep(attempt * 400);
     }
-    if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
-    return { kind: "card", cardId, messageId };
-  } catch (e) {
-    // Card tier failed — degrade to a text placeholder with NO live updates (the text tier's 20-edit cap is spent on
-    // terminal writes only).
-    log.warn(`${label} streaming card unavailable — live preview degrades to a static placeholder: ${String(e)}`);
-    const messageId =
-      target.replyTo !== undefined
-        ? await api.replyMessage(target.replyTo, "text", JSON.stringify({ text: initial }), {
-            replyInThread: target.replyInThread,
-          })
-        : await api.sendMessage(target.chatId, "text", JSON.stringify({ text: initial }));
-    if (messageId === undefined) throw new Error("text preview send returned ok without a message_id");
-    return { kind: "text", messageId };
   }
+  if (messageId === undefined) throw new Error("interactive send returned ok without a message_id");
+  return { kind: "card", cardId, messageId };
 }
 
 /**
@@ -237,7 +206,7 @@ export function feishuReply(
         lastProcess = process;
         return;
       }
-      if (preview.kind !== "card" || streamDead) return; // text tier / dead stream: frozen until the terminal write
+      if (preview.kind !== "card" || streamDead) return; // no card / dead stream: frozen until the terminal write
       try {
         // `last*` advances BEFORE each write: a frame that fails for a non-streaming reason is logged once (the
         // pump's onError) and not re-sent until its content actually changes.

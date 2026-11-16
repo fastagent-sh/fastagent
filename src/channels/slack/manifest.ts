@@ -16,6 +16,8 @@ const SLACK_BOT_SCOPES = [
   "users:read",
 ] as const;
 const SLACK_BOT_EVENTS = [
+  // Slack shows a working agent session's stop button only to an app that hears it.
+  "agent_session_stopped",
   "app_context_changed",
   "app_home_opened",
   "app_mention",

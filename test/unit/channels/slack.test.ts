@@ -218,10 +218,12 @@ describe("Slack sessions, context, and thread participation", () => {
     expect(calls).toHaveLength(1);
     expect(conversationOf(stateRoot, calls[0]?.sessionId)).toBe("T1:D1:1.0");
     expect(calls[0]?.prompt.text).toContain("[slack: team T1, channel D1 (direct)");
+    // The thread's agent session: working with its title, then ready for the next prompt.
+    expect(slackBodies(fetchMock, "agents.sessions.setStatus")).toEqual([
+      { channel_id: "D1", thread_ts: "1.0", status: "processing", title: "hi" },
+      { channel_id: "D1", thread_ts: "1.0", status: "active" },
+    ]);
     const methods = fetchMock.mock.calls.map(([url]) => String(url).split("/").pop());
-    expect(methods).toContain("assistant.threads.setStatus");
-    expect(methods).toContain("assistant.threads.setTitle");
-    expect(methods).toContain("chat.startStream");
     expect(methods).toContain("chat.stopStream");
     const start = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/chat.startStream"));
     expect(JSON.parse(String(start?.[1]?.body))).toMatchObject({
@@ -230,6 +232,56 @@ describe("Slack sessions, context, and thread participation", () => {
       markdown_text: expect.stringContaining("hello back"),
     });
     expect(JSON.stringify(JSON.parse(String(start?.[1]?.body)))).not.toContain("AI-generated content");
+  });
+
+  it("continues an answer past a stream's 12,000 characters in a new stream of the same thread", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("a".repeat(13_000));
+    const { handler } = mount(agent);
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "write a lot" })));
+    await settle();
+    const starts = slackBodies(fetchMock, "chat.startStream");
+    expect(starts.map((body) => [body.thread_ts, String(body.markdown_text).length])).toEqual([
+      ["1.0", 10_000],
+      ["1.0", 3_000],
+    ]);
+    // The first stream closes with its session still working; the last one ends it.
+    expect(slackBodies(fetchMock, "chat.stopStream").map((body) => body.session_status)).toEqual([
+      "processing",
+      undefined,
+    ]);
+  });
+
+  it("goes on in a new stream when Slack has already finalized the full one and refuses its stop", async () => {
+    const fetchMock = okFetch();
+    let stops = 0;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/chat.stopStream") && stops++ === 0) {
+        return Response.json({ ok: false, error: "message_not_in_streaming_state" });
+      }
+      return fetchMock(input, init);
+    });
+    const { agent } = replyingAgent("a".repeat(13_000));
+    const { handler } = mount(agent);
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "write a lot" })));
+    await settle();
+    const starts = slackBodies(fetchMock, "chat.startStream").map((body) => String(body.markdown_text));
+    expect(starts.map((text) => text.length)).toEqual([10_000, 3_000]);
+    expect(starts.join("")).not.toContain("stopped unexpectedly");
+    expect(slackBodies(fetchMock, "chat.appendStream")).toEqual([]);
+  });
+
+  it("posts the answer once it is done when a route sends it to a channel's top level, where nothing streams", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { agent } = replyingAgent("the answer");
+    const { handler } = mount(agent, { route: () => ({ threadTs: null }) });
+    await handler(signedRequest(message("1.0", { channel: "D1", channel_type: "im", text: "hi" })));
+    await settle();
+    expect(slackBodies(fetchMock, "chat.startStream")).toEqual([]);
+    expect(slackBodies(fetchMock, "chat.postMessage")).toMatchObject([{ channel: "D1", markdown_text: "the answer" }]);
+    expect(slackBodies(fetchMock, "chat.postMessage")[0]).not.toHaveProperty("thread_ts");
   });
 
   it("a bare reply reaches the agent in a thread it answered in, while one human is in it", async () => {
@@ -326,6 +378,37 @@ describe("Slack stop command", () => {
     expect(aborted).toEqual(["session-dm"]);
     expect(invoked).toEqual([]); // a control action, never a turn
     expect(slackBodies(fetchMock, "chat.postMessage").map((b) => b.text)).toEqual(["⏹ Stopped."]);
+  });
+
+  it("Slack's stop button on the thread's agent session stops that thread's session and says so there", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const { stopped, aborted } = fakeStop("stopped");
+    const stateRoot = root();
+    mkdirSync(join(stateRoot, "channels", "slack"), { recursive: true });
+    writeFileSync(
+      join(stateRoot, "channels", "slack", "sessions.json"),
+      JSON.stringify({ "T1:D1:10.0": "session-dm" }),
+    );
+    const { handler } = mount(agent, {}, stateRoot, stopped);
+    const press = {
+      type: "event_callback",
+      team_id: "T1",
+      event_id: "Ev-stop",
+      event: { type: "agent_session_stopped", channel: "D1", thread_ts: "10.0", user: "U1" },
+    };
+    expect((await handler(signedRequest(press))).status).toBe(200);
+    await settle();
+    expect((await handler(signedRequest(press))).status).toBe(200); // delivered again: one press is one stop
+    await settle();
+    expect(aborted).toEqual(["session-dm"]);
+    expect(slackBodies(fetchMock, "chat.postMessage")).toMatchObject([
+      { channel: "D1", thread_ts: "10.0", text: "⏹ Stopped." },
+    ]);
+    // Slack leaves the session processing after a press: the channel sets it ready again.
+    expect(slackBodies(fetchMock, "agents.sessions.setStatus")).toEqual([
+      { channel_id: "D1", thread_ts: "10.0", status: "active" },
+    ]);
   });
 });
 

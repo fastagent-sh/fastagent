@@ -1,5 +1,5 @@
 /**
- * Feishu Open API transport, reused by the Lark compatibility profile. ONE pipeline (`call`) carries every JSON call — per-method wire code
+ * Feishu Open API transport, for Feishu and Lark alike. ONE pipeline (`call`) carries every JSON call — per-method wire code
  * does not exist, so a transport rule can never be missing from one call site. The transport invariants
  * live here and nowhere else:
  *
@@ -173,8 +173,6 @@ export interface FeishuApi {
   /** Send `text`, split at the platform's size cap: ordinary groups quote only the first chunk;
    *  threaded targets use reply_in_thread on every chunk. Returns the FIRST message_id. */
   sendText(target: FeishuTarget, text: string): Promise<string | undefined>;
-  /** Edit a sent text message in place (PUT; the platform caps edits at 20 per message). */
-  editTextMessage(messageId: string, text: string): Promise<void>;
   /** Recall (delete) a message the bot sent. */
   deleteMessage(messageId: string): Promise<void>;
   /** React to any message in a chat the bot is in; returns the reaction's id, which removing it needs. */
@@ -483,12 +481,6 @@ export function createFeishuApi(opts: FeishuApiOptions): FeishuApi {
           first = false;
         }
         return firstId;
-      },
-      async editTextMessage(messageId, text) {
-        await call("editTextMessage", "PUT", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
-          msg_type: "text",
-          content: JSON.stringify({ text }),
-        });
       },
       async deleteMessage(messageId) {
         await call("deleteMessage", "DELETE", `/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`);

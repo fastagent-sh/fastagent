@@ -10,7 +10,6 @@ export {
   type SlackEventEnvelope,
   type SlackFile,
   type SlackMessageEvent,
-  type SlackRendering,
   type SlackRoute,
   type SlackFailure,
 } from "./channels/slack/slack.ts";

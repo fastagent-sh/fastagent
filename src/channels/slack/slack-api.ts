@@ -78,7 +78,7 @@ const NATIVE_UNAVAILABLE_ERRORS = new Set([
   "not_allowed_token_type",
 ]);
 
-/** A definitive capability rejection is safe to route through the compatibility renderer. Network,
+/** A definitive capability rejection is safe to answer by posting the reply instead. Network,
  * internal, and timeout failures are ambiguous: Slack may already have created the stream. */
 export function isSlackNativeUnavailable(error: unknown): boolean {
   return error instanceof SlackApiError && !!error.slackError && NATIVE_UNAVAILABLE_ERRORS.has(error.slackError);
@@ -152,9 +152,13 @@ export interface SlackApi {
   sendMarkdown(target: SlackTarget, markdown: string): Promise<SentSlackMessage>;
   startStream(target: SlackTarget, markdown?: string): Promise<string>;
   appendStream(channelId: string, ts: string, markdown: string): Promise<void>;
-  stopStream(channelId: string, ts: string, markdown?: string): Promise<void>;
-  setThreadStatus(target: SlackTarget, status: string): Promise<void>;
-  setThreadTitle(target: SlackTarget, title: string): Promise<void>;
+  /** Close a stream; its agent session becomes `sessionStatus` (default `active`). */
+  stopStream(channelId: string, ts: string, markdown?: string, sessionStatus?: "processing" | "active"): Promise<void>;
+  /**
+   * Set the agent session of `target`'s thread `processing` (Slack's working indicator and stop button) or `active`
+   * (ready for the next prompt), creating it with `title` when it is new.
+   */
+  setSessionStatus(target: SlackTarget, status: "processing" | "active", title?: string): Promise<void>;
   addReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
   removeReaction(channelId: string, timestamp: string, emoji: string): Promise<void>;
   fileInfo(fileId: string): Promise<SlackFile>;
@@ -469,27 +473,21 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
     async appendStream(channelId, ts, markdown) {
       await call("chat.appendStream", { channel: channelId, ts, markdown_text: markdown });
     },
-    async stopStream(channelId, ts, markdown) {
+    async stopStream(channelId, ts, markdown, sessionStatus) {
       await call("chat.stopStream", {
         channel: channelId,
         ts,
         ...(markdown ? { markdown_text: markdown } : {}),
+        ...(sessionStatus ? { session_status: sessionStatus } : {}),
       });
     },
-    async setThreadStatus(target, status) {
+    async setSessionStatus(target, status, title) {
       if (!target.threadTs) return;
-      await call("assistant.threads.setStatus", {
+      await call("agents.sessions.setStatus", {
         channel_id: target.channelId,
         thread_ts: target.threadTs,
         status,
-      });
-    },
-    async setThreadTitle(target, title) {
-      if (!target.threadTs) return;
-      await call("assistant.threads.setTitle", {
-        channel_id: target.channelId,
-        thread_ts: target.threadTs,
-        title,
+        ...(title ? { title } : {}),
       });
     },
     async addReaction(channelId, timestamp, emoji) {

@@ -40,7 +40,6 @@ import {
 } from "./parse.ts";
 import {
   type SlackFailure,
-  type SlackRendering,
   defaultErrorMessage,
   deliverSlackAnswer,
   settleSlackPreview,
@@ -53,15 +52,7 @@ import { createWelcomedUsers } from "./welcomed.ts";
 
 export { defaultSlackRoute, slackEnvelope };
 
-export type {
-  SlackEventEnvelope,
-  SlackFailure,
-  SlackFile,
-  SlackMessageEvent,
-  SlackRendering,
-  SlackRoute,
-  SlackSocketChannelOptions,
-};
+export type { SlackEventEnvelope, SlackFailure, SlackFile, SlackMessageEvent, SlackRoute, SlackSocketChannelOptions };
 
 const MAX_EVENT_BYTES = 1 << 20;
 /**
@@ -116,13 +107,6 @@ export interface SlackChannelOptions {
   botToken: string;
   /** App signing secret used to verify the raw Events API request body. */
   signingSecret: string;
-  /**
-   * `native` (default) uses Slack Agent streams for threaded replies; `classic` retains the compatibility renderer
-   * based on one rate-limited edited message. A top-level target necessarily uses `classic`, because Slack streams
-   * require a parent user message — a custom route reaches one either by returning `threadTs: null` or by redirecting
-   * to another channel without naming a thread.
-   */
-  rendering?: SlackRendering;
   /** Optional footer for successful Agent replies. */
   aiDisclaimer?: string | false;
   /**
@@ -237,16 +221,12 @@ type SlackPolicyOptions = Omit<SlackChannelOptions, "signingSecret">;
 
 /** The policy as the runtime reads it: defaults applied and what can be refused refused, at construction. */
 function resolveSlackPolicy(options: SlackPolicyOptions) {
-  const { rendering = "native", welcome = DEFAULT_WELCOME, reactionAck = {} } = options;
-  if (!(["native", "classic"] as const).includes(rendering)) {
-    throw new Error('slackChannel rendering must be "native" or "classic"');
-  }
+  const { welcome = DEFAULT_WELCOME, reactionAck = {} } = options;
   if (welcome !== false && typeof welcome !== "string") {
     throw new Error("slackChannel welcome must be a string or false");
   }
   return {
     botToken: options.botToken,
-    rendering,
     welcome,
     reactionEmojis: resolveReactionEmojis(reactionAck),
     aiDisclaimer: options.aiDisclaimer,
@@ -277,7 +257,7 @@ function createSlackRuntime(
   api: SlackApi,
   { agent, sessionFor, recordedSession, stateDir: stateHome }: ChannelContext,
 ): SlackRuntime {
-  const { botToken, rendering, welcome, reactionEmojis, aiDisclaimer, route, onError } = policy;
+  const { botToken, welcome, reactionEmojis, aiDisclaimer, route, onError } = policy;
   if (!botToken) throw new Error("slackChannel requires a non-empty botToken (Bot User OAuth Token)");
 
   const label = "[slack]";
@@ -382,7 +362,6 @@ function createSlackRuntime(
               ),
               (events) =>
                 slackReply(events, api, targetOf(turn), formatError, {
-                  rendering,
                   threadTitle: turn.threadTitle,
                   disclaimer: aiDisclaimer,
                   label,
@@ -522,6 +501,34 @@ function createSlackRuntime(
     }
   };
 
+  /**
+   * Slack's own stop button on a working agent session (`agent_session_stopped`): stops the thread's conversation, as a
+   * `stop` message does. Under a custom route a thread may talk in another session; its stop is the route's to say.
+   */
+  const stopSession = (envelope: SlackEventEnvelope): void => {
+    const event = envelope.event;
+    if (event?.type !== "agent_session_stopped" || !event.channel || !event.thread_ts) return;
+    const teamId = slackTeamId(envelope) ?? auth.teamId();
+    if (!teamId) return;
+    // Slack delivers an event again when it saw no acknowledgement: one press is one stop.
+    const delivery = `stopped:${envelope.event_id ?? `${event.channel}:${event.thread_ts}:${event.event_ts}`}`;
+    if (seen.has(delivery)) return;
+    seen.add(delivery);
+    const conversation = threadKey(teamId, event.channel, event.thread_ts);
+    const target: SlackTarget = { channelId: event.channel, threadTs: event.thread_ts };
+    runner.track(
+      dispatchStop(agent, recordedSession(conversation), label)
+        .then((feedback) => api.postMessage(target, feedback).then(() => undefined))
+        .catch((error) => log.warn(`${label} stop feedback failed: ${String(error)}`))
+        // Slack leaves the session processing after a press: a turn that ends sets it active, and one may not exist.
+        .then(() =>
+          api
+            .setSessionStatus(target, "active")
+            .catch((error) => log.warn(`${label} could not set the stopped session active: ${String(error)}`)),
+        ),
+    );
+  };
+
   // First-run DM welcome: app_home_opened(tab="messages") signals a DM open. Post once per user.
   const welcomeInFlight = new Set<string>();
   const maybeWelcome = (envelope: SlackEventEnvelope): void => {
@@ -561,6 +568,7 @@ function createSlackRuntime(
     ingest: async (envelope) => {
       await auth.ready();
       maybeWelcome(envelope);
+      stopSession(envelope);
       acceptEvent(envelope);
     },
     turnsIdle: runner.idle,
