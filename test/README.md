@@ -8,7 +8,7 @@ test/
 ├── doubles/      # Shared test doubles
 ├── harnesses/    # Multi-suite conformance and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
-├── unit/         # [L1] domain suites: agent-api, definition, cli, deploy, schedules, embedding, security
+├── unit/         # [L1] domain suites: agent-api, definition, cli, deploy, schedules, embedding, security, traces
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
 └── smoke/        # [L3, CI-only] e2e/packed.ts
 ```

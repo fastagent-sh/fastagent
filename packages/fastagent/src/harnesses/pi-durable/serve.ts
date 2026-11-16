@@ -25,6 +25,8 @@ import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { openLockedStorage } from "./storage.ts";
 import { instanceName } from "../../instance-name.ts";
+import { otlpTraces } from "../telemetry/otlp.ts";
+import { fastagentVersion } from "../../version.ts";
 
 export interface OpenServingOptions extends CredentialSourceOptions {
   /** The instance's name. Default: the definition's, as one segment. */
@@ -170,6 +172,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     code.providers,
     { stateRoot, environment: secrets, env, offline: options.offline ?? env.FASTAGENT_OFFLINE === "1" },
   );
+  // Before anything is opened: a setting it cannot honor refuses the open.
+  const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const chosen = options.storage ?? "instance";
   const storage = await openStorage(stateRoot, chosen);
   let mcp: McpClients | undefined;
@@ -190,11 +194,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
+      ...(traces === undefined ? {} : { telemetry: traces.context }),
     });
   } catch (error) {
     const failures: unknown[] = [error];
     if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
     await storage.close(BACKGROUND_CONTEXT).catch((cleanup: unknown) => failures.push(cleanup));
+    await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
   }
   // A storage failure or a direct harness close also ends the resources this open acquired.
@@ -202,7 +208,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     .then(() => mcp.close())
     .catch((error: unknown) => {
       log.warn(`[fastagent] MCP cleanup after harness shutdown failed: ${String(error)}`);
-    });
+    })
+    .finally(() => traces?.close());
   const closeAgent = agent.close.bind(agent);
   let closing: Promise<void> | undefined;
   agent.close = () =>
@@ -210,6 +217,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       const failures: unknown[] = [];
       await closeAgent().catch((error: unknown) => failures.push(error));
       await mcp.close().catch((error: unknown) => failures.push(error));
+      // Last: what the agent recorded up to its close goes out with it.
+      await traces?.close();
       if (failures.length) throw new AggregateError(failures, "Agent close failed");
     })());
   return {

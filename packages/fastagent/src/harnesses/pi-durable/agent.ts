@@ -73,6 +73,7 @@ import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
+import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type ClockState, clockOperations } from "../../schedule/operations.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
@@ -105,6 +106,8 @@ export interface DurableAgentOptions {
   unfinished?: Unfinished;
   /** The instance's clock: its state and its schedules, which `schedules` and `wakeups` operate. */
   clock?: ClockState;
+  /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
+  telemetry?: TelemetryContext;
 }
 
 /**
@@ -134,6 +137,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
       registry: options.registry,
       ...(options.settings === undefined ? {} : { settings: options.settings }),
       ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
       onReport: (report) => log.warn(`[fastagent] pi-durable reported ${report.kind}: ${String(report.error)}`),
     },
     context,
