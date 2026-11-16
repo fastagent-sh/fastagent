@@ -31,9 +31,12 @@ The first `fastagent dev` asks for the credentials a declared channel lacks, or 
 name). A channel whose variables are unset stops `dev` and `start`, naming them.
 
 The name you give a channel (`telegram` above) names its tools and keeps its state apart: lowercase letters, digits
-and `_`. Each first-party channel gives the agent a `<name>_send` tool, for a message no chat turn carries (a
-schedule's, a wake-up's); Slack and Feishu add `<name>_threads`, which reads the threads of the group a turn was asked
-in.
+and `_`. Each first-party channel gives the agent two tools:
+
+- `<name>_send`: a message no chat turn carries (a schedule's, a wake-up's).
+- `<name>_history`: the recent messages of the chat, channel or thread a turn was asked in, or of a thread there
+  (`threadId`), 30 by default and up to 50. A turn carries only the message it answers and the one it replies to; the
+  agent reads what came before when it needs it. It reads only the place the turn was asked in.
 
 ## How a channel receives
 

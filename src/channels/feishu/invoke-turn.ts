@@ -8,9 +8,8 @@
  *
  * Inputs have two tiers. PRIMARY is the summoning message plus the message it explicitly replied to;
  * any load failure there aborts visibly so the Agent never runs without an input the user pointed at.
- * BUFFERED resources come from earlier un-summoned thread/group discussion and from reply-chain
- * ancestors, and degrade per attachment: one expired background file must not block the current ask
- * or hide its still-readable siblings.
+ * BACKGROUND resources come from the reply chain's ancestors, and degrade per attachment: one expired
+ * background file must not block the current ask or hide its still-readable siblings.
  */
 import type { Agent } from "../../agent-api.ts";
 import type * as Stream from "effect/Stream";
@@ -28,8 +27,6 @@ import {
   type TurnEvent,
   promptContent,
 } from "../kit/invoke.ts";
-import { BUFFER_ATTACH_MAX } from "../kit/context-buffer.ts";
-import type { FeishuBufferedRef } from "./history.ts";
 import type { DownloadedFile, FeishuApi } from "./feishu-api.ts";
 import { type FeishuMention, parseContent } from "./parse.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
@@ -64,16 +61,24 @@ interface FeishuAttachmentInput {
   name?: string;
 }
 
-/** A turn's primary resources plus background resources folded from the context buffer. */
+/** A turn's own resources, and the message it replied to. */
 export interface FeishuTurnAttachments {
-  primary: {
-    images: FeishuAttachmentInput[];
-    files: FeishuAttachmentInput[];
-    /** The replied-to message's id, when the summon is a reply. */
-    parentId?: string;
-  };
-  buffered: { files: FeishuBufferedRef[]; images: FeishuBufferedRef[]; skipped: number };
+  images: FeishuAttachmentInput[];
+  files: FeishuAttachmentInput[];
+  /** The replied-to message's id, when the summon is a reply. */
+  parentId?: string;
 }
+
+/** A reply-chain ancestor's resource, with who posted it, for the manifest. */
+interface ChainRef {
+  messageId: string;
+  key: string;
+  name?: string;
+  from: string;
+}
+
+/** How many of the chain ancestors' files and images (each kind) a turn loads: the walk must not fan out. */
+const CHAIN_ATTACH_MAX = 3;
 
 /** A turn's inputs, resolved to what agent.invoke consumes: vision images inline, plus a prompt suffix
  *  (the reply-referent block + the downloaded-file manifest) appended after the base text. */
@@ -110,12 +115,12 @@ function fetchedSenderLabel(
 }
 
 /** One walk's yield: the rendered chain block (empty when there are no ancestors), plus the
- *  ancestors' attachments as BUFFERED-tier refs — context, not the ask, so an unloadable one costs a
+ *  ancestors' attachments as background refs — context, not the ask, so an unloadable one costs a
  *  note, never the turn. */
 interface ReplyChain {
   block: string;
-  images: FeishuBufferedRef[];
-  files: FeishuBufferedRef[];
+  images: ChainRef[];
+  files: ChainRef[];
 }
 
 /**
@@ -147,8 +152,8 @@ async function walkReplyChain(
   visited: Set<string>,
 ): Promise<ReplyChain> {
   const nodes: { id: string; label?: string; text: string }[] = [];
-  const images: FeishuBufferedRef[] = [];
-  const files: FeishuBufferedRef[] = [];
+  const images: ChainRef[] = [];
+  const files: ChainRef[] = [];
   // No parent above the referent = no chain — not a truncated one. The marker below is only for
   // walks that END SHORT of a root that exists.
   if (start === undefined) return { block: "", images, files };
@@ -206,16 +211,16 @@ async function walkReplyChain(
 
 /**
  * Resolve a turn's inputs (module header): fetch the reply referent's content and resolve its reply
- * chain, then load every image (vision) and file (disk). Primary failures throw; buffered resources
+ * chain, then load every image (vision) and file (disk). Primary failures throw; the chain's resources
  * degrade independently.
  */
 async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurnAttachments): Promise<ResolvedInputs> {
-  const images = [...attachments.primary.images];
-  const files = [...attachments.primary.files];
+  const images = [...attachments.images];
+  const files = [...attachments.files];
   let referentBlock = "";
   let chain: ReplyChain = { block: "", images: [], files: [] };
-  if (attachments.primary.parentId !== undefined) {
-    const parentId = attachments.primary.parentId;
+  if (attachments.parentId !== undefined) {
+    const parentId = attachments.parentId;
     // A referent is CONTEXT, not the ask. Losing it (deleted, restricted, unreadable) must not cost
     // the user their answer — every first message of a thread carries one, so a hard failure here
     // would turn an ordinary platform edge into a lost turn. Degrade visibly instead: the operator
@@ -258,46 +263,36 @@ async function resolveTurnInputs(t: FeishuTurnTransport, attachments: FeishuTurn
   for (const ref of files)
     downloaded.push(await t.api.fetchFile(ref.msg, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir));
 
-  // A replied-to buffered message is now primary. Filter by message-scoped identity so it is not
-  // downloaded twice or rendered twice in the manifest.
+  // A chain ancestor's resource that is also primary is not loaded twice. What the cap drops is counted into the
+  // missing-attachments note like every other unloaded ref.
   const primaryImages = new Set(images.map((ref) => `${ref.msg}\u0000${ref.key}`));
   const primaryFiles = new Set(files.map((ref) => `${ref.msg}\u0000${ref.key}`));
-  // Chain ancestors and the context buffer share ONE background budget: BUFFER_ATTACH_MAX per kind.
-  // The cap is part of the tier's meaning, not an accident of who collected the ref — a rich-text
-  // ancestor must not turn the walk into an unbounded fan-out of downloads. Chain refs take slots
-  // FIRST: they are the direct upstream of the message the user pointed at, buffer refs are ambient
-  // discussion. Duplicates (a chain that points back into still-buffered discussion) count once, and
-  // what the cap drops is counted into the missing-attachments note like every other unloaded ref.
-  const capMerge = (chainRefs: FeishuBufferedRef[], bufferRefs: FeishuBufferedRef[], primary: Set<string>) => {
+  const capped = (refs: ChainRef[], primary: Set<string>) => {
     const seen = new Set<string>();
-    const merged: FeishuBufferedRef[] = [];
-    for (const ref of [...chainRefs, ...bufferRefs]) {
+    const kept: ChainRef[] = [];
+    for (const ref of refs) {
       const identity = `${ref.messageId}\u0000${ref.key}`;
       if (primary.has(identity) || seen.has(identity)) continue;
       seen.add(identity);
-      merged.push(ref);
+      kept.push(ref);
     }
-    return { kept: merged.slice(0, BUFFER_ATTACH_MAX), dropped: Math.max(0, merged.length - BUFFER_ATTACH_MAX) };
+    return { kept: kept.slice(0, CHAIN_ATTACH_MAX), dropped: Math.max(0, kept.length - CHAIN_ATTACH_MAX) };
   };
-  const mergedImages = capMerge(chain.images, attachments.buffered.images, primaryImages);
-  const mergedFiles = capMerge(chain.files, attachments.buffered.files, primaryFiles);
-  const bufferedImages = mergedImages.kept;
-  const bufferedFiles = mergedFiles.kept;
-  const backgroundImages = await loadBackground(bufferedImages, (ref) => t.api.fetchImage(ref.messageId, ref.key), {
+  const mergedImages = capped(chain.images, primaryImages);
+  const mergedFiles = capped(chain.files, primaryFiles);
+  const chainImages = mergedImages.kept;
+  const chainFiles = mergedFiles.kept;
+  const backgroundImages = await loadBackground(chainImages, (ref) => t.api.fetchImage(ref.messageId, ref.key), {
     label: t.label,
     what: "image",
   });
   const backgroundFiles = await loadBackground(
-    bufferedFiles,
+    chainFiles,
     (ref) => t.api.fetchFile(ref.messageId, ref.key, ref.name ?? ref.key, t.chatId, t.filesDir),
     { label: t.label, what: "attachment" },
   );
   const missingNote = missingAttachmentsNote(
-    backgroundImages.lost +
-      backgroundFiles.lost +
-      attachments.buffered.skipped +
-      mergedImages.dropped +
-      mergedFiles.dropped,
+    backgroundImages.lost + backgroundFiles.lost + mergedImages.dropped + mergedFiles.dropped,
   );
   const backgroundImageManifest = backgroundImagesManifest(
     imageRefs.length,
@@ -326,8 +321,8 @@ export function feishuTurnStream(
   agent: Agent,
   turn: {
     session: () => Promise<string>;
-    /** While it runs, the room its thread-reading tool reads (a group turn's chat). */
-    enter?: (sessionId: string) => () => void;
+    /** While it runs, the place its `history` tool reads. */
+    enter: (sessionId: string) => () => void;
     key: string;
     text: string;
     steer: SteeredTurn;
@@ -339,7 +334,7 @@ export function feishuTurnStream(
     agent,
     label: transport.label,
     session: turn.session,
-    ...(turn.enter === undefined ? {} : { enter: turn.enter }),
+    enter: turn.enter,
     resolve: () => resolveTurnInputs(transport, attachments),
     turn: (resolved) => ({
       idempotencyKey: turn.key,

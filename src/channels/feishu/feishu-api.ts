@@ -153,8 +153,7 @@ interface FeishuAppScope {
 export interface FeishuApi {
   /**
    * This client over the same pipeline and token cache, reporting the id of every message it creates (a send, a reply,
-   * each chunk of a long text). The channel sends through one to know which messages in a chat's history are its own
-   * turn output; the send tool shares the plain client, so what the agent sends itself stays part of the discussion.
+   * each chunk of a long text). A turn sends through one so a reply to what it posted reaches its conversation.
    */
   recordingSends(onSent: (messageId: string) => void): FeishuApi;
   /** Validate appId/appSecret by acquiring the tenant token through this pipeline. Does not require

@@ -147,7 +147,7 @@ export async function loadBackground<R, T>(
     if (result.status === "fulfilled") loaded.push({ ref, value: result.value });
     else {
       lost++;
-      log.warn(`${opts.label} could not load an earlier (buffered) ${opts.what}: ${String(result.reason)}`);
+      log.warn(`${opts.label} could not load a background ${opts.what}: ${String(result.reason)}`);
     }
   }
   return { loaded, lost };
@@ -166,7 +166,7 @@ export function attachedFilesManifest(files: readonly ManifestFile[]): string {
 }
 
 export function attributedFileName(name: string, from: string, msg?: string | number): string {
-  return `${name} (from ${from}${msg !== undefined ? `, msg ${msg}` : ""}, earlier discussion)`;
+  return `${name} (from ${from}${msg !== undefined ? `, msg ${msg}` : ""}, reply chain)`;
 }
 
 export function backgroundImagesManifest(
@@ -174,7 +174,7 @@ export function backgroundImagesManifest(
   refs: readonly { from: string; messageId: string }[],
 ): string {
   return refs.length
-    ? `\n\n[background vision images from earlier discussion — appended after ${primaryCount} primary image(s):\n${refs
+    ? `\n\n[background vision images from the reply chain — appended after ${primaryCount} primary image(s):\n${refs
         .map((ref, index) => `- vision image ${primaryCount + index + 1}: from ${ref.from}, msg ${ref.messageId}`)
         .join("\n")}\n]`
     : "";
@@ -182,6 +182,6 @@ export function backgroundImagesManifest(
 
 export function missingAttachmentsNote(missing: number): string {
   return missing > 0
-    ? `\n[note: ${missing} attachment(s) from the earlier discussion are not loaded (no longer available, or older than the most recent few)]`
+    ? `\n[note: ${missing} attachment(s) from the reply chain are not loaded (no longer available, or beyond the first few)]`
     : "";
 }

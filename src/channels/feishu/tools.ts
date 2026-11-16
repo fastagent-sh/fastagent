@@ -1,6 +1,9 @@
-/** The tools a Feishu channel gives the agent: `send`, over the channel's own client, and `threads`. */
+/**
+ * The tools a Feishu channel gives the agent: `send`, over the channel's own client, and `history`, the place a turn was
+ * asked in, read from the platform.
+ */
 import type { ChannelTool } from "../../channel.ts";
-import { type RoomThreads, threadsTool } from "../kit/history.ts";
+import { type PlaceRead, type SessionPlaces, historyTool } from "../kit/history.ts";
 import type { FeishuCloudKind } from "./cloud.ts";
 import type { FeishuApi } from "./feishu-api.ts";
 
@@ -13,7 +16,12 @@ interface SendArgs {
 export function feishuTools(
   kind: FeishuCloudKind,
   api: Pick<FeishuApi, "sendText" | "sendMessage">,
-  rooms: () => RoomThreads | undefined,
+  mounted: () =>
+    | {
+        places: SessionPlaces;
+        history: (place: string, query: { limit: number; threadId?: string }) => Promise<PlaceRead>;
+      }
+    | undefined,
 ): ChannelTool[] {
   const platform = kind === "lark" ? "Lark" : "Feishu";
   return [
@@ -56,14 +64,15 @@ export function feishuTools(
         return `sent card to chat ${chatId}`;
       },
     },
-    threadsTool(kind, rooms, {
-      description:
-        `Read the threads (topics) of the ${platform} group chat you are answering in. Without \`threadId\`, list ` +
-        "its recent threads, newest first, each with its id; with a `threadId` from that list, read that thread. " +
-        "Use it when a question here concerns something discussed in a thread, such as whether a problem raised " +
-        "there was resolved: the answer is often what a person wrote in the thread. Only this chat's threads can " +
-        "be read, and only in a group chat turn.",
-      threadId: "a thread id from the list (omt_…); omit it to list",
-    }),
+    historyTool(
+      kind,
+      () => mounted()?.places,
+      async (place, query) => {
+        const history = mounted()?.history;
+        if (history === undefined) throw new Error(`the ${kind} channel is not serving in this process`);
+        return history(place, query);
+      },
+      "a thread's id (omt_…) in this chat, to read that thread",
+    ),
   ];
 }

@@ -1,5 +1,5 @@
 /**
- * Durable channel turn runner, steered-turn gate, side-task tracker, `/stop` dispatch, and shared discussion reader.
+ * Durable channel turn runner, steered-turn gate, side-task tracker, and `/stop` dispatch.
  */
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -13,8 +13,6 @@ import { type PromiseFailure, originalError, joinPromise } from "../../promise-b
 import { log } from "../../log.ts";
 import { beginWork } from "../busy.ts";
 import { type TurnSlot, createTurnQueue, unqueuedSlot } from "../turn-queue.ts";
-import { foldBudget } from "./fold-budget.ts";
-import { type AskLog, type Discussion, type PlaceHistory, type PlaceMessage, readStart } from "./history.ts";
 import type { TurnEvent } from "./invoke.ts";
 import type { SeenRing } from "./state.ts";
 import type { TurnRecordBase, TurnStore } from "./turn-store.ts";
@@ -81,31 +79,6 @@ function createTaskTracker(label: string): {
   };
 }
 
-/** Shared discussion fold over `AskLog` + `PlaceHistory` for channels whose platform supports history reads. */
-export async function readPlaceDiscussion<C>(opts: {
-  agent: Agent;
-  label: string;
-  asks: AskLog<C>;
-  history: PlaceHistory<C>;
-  sessionId: string | undefined;
-  historyKey: string | undefined;
-  conversation: string;
-  turnId: string;
-  until: C | undefined;
-}): Promise<Discussion<PlaceMessage>> {
-  if (opts.historyKey === undefined || opts.until === undefined) return { text: "", folded: [] };
-  const start = await readStart(opts.asks, opts.label, opts.conversation, opts.sessionId, opts.until);
-  const fold = await opts.history.fold({
-    key: opts.historyKey,
-    conversation: opts.conversation,
-    budget: await foldBudget(opts.agent, opts.sessionId),
-    ...(start.after === undefined ? {} : { after: start.after }),
-    until: opts.until,
-  });
-  if (fold.unread) opts.asks.forget(opts.conversation, opts.turnId);
-  return start.unreadable === undefined ? fold : { ...fold, text: `${start.unreadable}\n${fold.text}`.trimEnd() };
-}
-
 function gatedReply(opts: {
   events: Stream.Stream<TurnEvent, PromiseFailure>;
   held: boolean;
@@ -165,10 +138,9 @@ interface TurnHooks {
   ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
 }
 
-export interface TurnRunnerOptions<S extends TurnRecordBase, F> {
+export interface TurnRunnerOptions<S extends TurnRecordBase> {
   label: string;
   store: TurnStore<S>;
-  discussion(rec: PendingBase<S>): Promise<Discussion<F>>;
   seen?: { add(id: string): void };
   delivered: SeenRing;
   where(rec: PendingBase<S>): string;
@@ -178,7 +150,6 @@ export interface TurnRunnerOptions<S extends TurnRecordBase, F> {
   acknowledgeHeld?(rec: PendingBase<S>): Promise<TurnAck>;
   execute(
     rec: PendingBase<S>,
-    discussion: Discussion<F>,
     onAnswered: (answer: string) => void,
     turn: TurnHooks,
   ): Effect.Effect<void, PromiseFailure, Scope.Scope>;
@@ -193,8 +164,8 @@ export interface TurnRunner<S extends TurnRecordBase> {
   idle(): Promise<void>;
 }
 
-function runQueuedTurn<S extends TurnRecordBase, F>(
-  options: TurnRunnerOptions<S, F>,
+function runQueuedTurn<S extends TurnRecordBase>(
+  options: TurnRunnerOptions<S>,
   rec: PendingBase<S>,
   slot: TurnSlot = unqueuedSlot,
   afterRestart = false,
@@ -314,16 +285,13 @@ function runQueuedTurn<S extends TurnRecordBase, F>(
     const work =
       recovered !== undefined
         ? Effect.suspend(() => hooks.deliverOnce(options.deliverAnswer(rec, recovered)))
-        : joinPromise(() => options.discussion(rec)).pipe(
-            Effect.flatMap((discussion) =>
-              options.execute(
-                rec,
-                discussion,
-                (answer) => {
-                  answered = store.answered(rec.id, answer, answerKey());
-                },
-                hooks,
-              ),
+        : Effect.suspend(() =>
+            options.execute(
+              rec,
+              (answer) => {
+                answered = store.answered(rec.id, answer, answerKey());
+              },
+              hooks,
             ),
           );
     const delivered = yield* Effect.scoped(work).pipe(
@@ -357,7 +325,7 @@ function runQueuedTurn<S extends TurnRecordBase, F>(
   });
 }
 
-export function createTurnRunner<S extends TurnRecordBase, F>(options: TurnRunnerOptions<S, F>): TurnRunner<S> {
+export function createTurnRunner<S extends TurnRecordBase>(options: TurnRunnerOptions<S>): TurnRunner<S> {
   const { label, store, seen } = options;
   const sideTasks = createTaskTracker(label);
   const queue = createTurnQueue<PendingBase<S>>({

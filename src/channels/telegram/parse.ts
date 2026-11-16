@@ -1,6 +1,6 @@
 /** Telegram protocol parsing — PURE: message field extraction, the prompt envelope, and the summon/route policy. */
-import { BUFFER_LINE_MAX_CHARS } from "../kit/context-buffer.ts";
 import { REFERENT_MAX_CODE_POINTS, truncateCodePointPrefix } from "../kit/text.ts";
+import { RECORDED_MAX_CHARS } from "./recent.ts";
 
 /** A Telegram message (the common subset; `[k]` keeps the rest reachable without a types dependency). */
 export interface TelegramMessage {
@@ -71,7 +71,7 @@ export function extractImages(m: TelegramMessage): string[] {
 }
 
 /** The message's OWN photo (largest size), without the replied-to message's. */
-export function ownImages(m: TelegramMessage): string[] {
+function ownImages(m: TelegramMessage): string[] {
   return [m.photo?.at(-1)?.file_id].filter((id): id is string => Boolean(id));
 }
 
@@ -81,14 +81,14 @@ export function extractFiles(m: TelegramMessage): string[] {
 }
 
 /** The message's OWN files, without the replied-to message's. */
-export function ownFiles(m: TelegramMessage): string[] {
+function ownFiles(m: TelegramMessage): string[] {
   return [m.document?.file_id, m.voice?.file_id, m.video?.file_id, m.audio?.file_id].filter((id): id is string =>
     Boolean(id),
   );
 }
 
 /**
- * The place a message lives in: a chat, or a forum topic within it. The context buffer's bucket and the default
+ * The place a message lives in: a chat, or a forum topic within it. Where its history is recorded, and the default
  * conversation, for an update and for a message the agent sends itself alike.
  */
 export function telegramPlaceKey(chatId: number | string, threadId?: number): string {
@@ -124,9 +124,9 @@ function bodyOf(m: TelegramMessage): string | undefined {
   return m.text ?? m.caption ?? attachmentSummary(m);
 }
 
-/** A one-line, length-capped rendering of a message's content for the context buffer. */
+/** A one-line, length-capped rendering of a message's content, as its place records it. */
 export function messageText(m: TelegramMessage): string {
-  return truncateCodePointPrefix((bodyOf(m) ?? "").replace(/\s+/g, " ").trim(), BUFFER_LINE_MAX_CHARS);
+  return truncateCodePointPrefix((bodyOf(m) ?? "").replace(/\s+/g, " ").trim(), RECORDED_MAX_CHARS);
 }
 
 /**

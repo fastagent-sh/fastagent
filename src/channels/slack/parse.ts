@@ -94,7 +94,7 @@ export function slackEnvelope(envelope: SlackEventEnvelope): string {
         codePointPrefix(String(entity.value).replace(/\s+/g, " "), 200),
     )
     .join(", ");
-  const scope = direct ? "" : "\n[group chat — multiple people; recent discussion is sender-prefixed]";
+  const scope = direct ? "" : "\n[group chat — multiple people; each message is prefixed with its sender]";
   const context = activeContext ? `\n[Slack context currently open for the user: ${activeContext}]` : "";
   return `[slack: ${meta}]${scope}${context}\n${slackMessageText(event)}`;
 }

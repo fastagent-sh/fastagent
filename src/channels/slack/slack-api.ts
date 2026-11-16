@@ -123,15 +123,7 @@ interface SlackRange {
   limit: number;
 }
 
-/** Where a posted message landed: a channel's top level, or a thread in it. */
-type OnSent = (where: { channelId: string; threadTs?: string }, ts: string) => void;
-
 export interface SlackApi {
-  /**
-   * The same transport, reporting every message it posts (`chat.postMessage`, every chunk of a long body, and
-   * `chat.startStream`) with where it landed. Edits, deletions and file uploads are not reported.
-   */
-  recordingSends(onSent: OnSent): SlackApi;
   /** A channel's top-level messages in `range`, NEWEST first (`conversations.history`). */
   channelHistory(
     channelId: string,
@@ -280,11 +272,10 @@ function assertLongLivedBotToken(botToken: string): void {
 
 export function createSlackApi(options: SlackApiOptions): SlackApi {
   assertLongLivedBotToken(options.botToken);
-  return slackClient(options, undefined);
+  return slackClient(options);
 }
 
-/** A transport holds no state between calls, so a recording one is simply another instance. */
-function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions, onSent?: OnSent): SlackApi {
+function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOptions): SlackApi {
   const apiBase = baseUrl.replace(/\/$/, "");
 
   const call = async <T extends SlackBody>(
@@ -363,11 +354,6 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
     return { bytes: await readBytesCapped(response), contentType: response.headers.get("content-type") ?? undefined };
   };
 
-  const sent = (channelId: string, threadTs: string | undefined, ts: string): string => {
-    onSent?.({ channelId, ...(threadTs ? { threadTs } : {}) }, ts);
-    return ts;
-  };
-
   const postMarkdown = async (target: SlackTarget, markdown: string): Promise<SentSlackMessage> => {
     const data = await call<SlackBody & { ts?: string; channel?: string }>("chat.postMessage", {
       channel: target.channelId,
@@ -379,11 +365,10 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
     if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
     // The response's `channel` is what resolves a user-id target to its DM; a channel target echoes itself.
     const channelId = data.channel ?? target.channelId;
-    return { ts: sent(channelId, target.threadTs, data.ts), channelId };
+    return { ts: data.ts, channelId };
   };
 
   const api: SlackApi = {
-    recordingSends: (record) => slackClient({ botToken, baseUrl }, record),
     async channelHistory(channelId, range, opts) {
       const data = await call<SlackBody & { messages?: SlackListedMessage[]; has_more?: boolean }>(
         "conversations.history",
@@ -428,7 +413,7 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
         unfurl_media: false,
       });
       if (!data.ts) throw new SlackApiError("chat.postMessage", 200, "response carried no ts");
-      return sent(data.channel ?? target.channelId, target.threadTs, data.ts);
+      return data.ts;
     },
     async postMarkdown(target, markdown) {
       return (await postMarkdown(target, markdown)).ts;
@@ -479,7 +464,7 @@ function slackClient({ botToken, baseUrl = "https://slack.com/api" }: SlackApiOp
         ...(markdown ? { markdown_text: markdown } : {}),
       });
       if (!data.ts) throw new SlackApiError("chat.startStream", 200, "response carried no ts");
-      return sent(target.channelId, target.threadTs, data.ts);
+      return data.ts;
     },
     async appendStream(channelId, ts, markdown) {
       await call("chat.appendStream", { channel: channelId, ts, markdown_text: markdown });

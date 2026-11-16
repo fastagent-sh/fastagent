@@ -51,8 +51,9 @@ removes the bot's webhook when it starts.
 | Group | an `@bot` mention, or a reply to the bot | one per sender |
 | Topic | the same | the whole topic |
 
-- In groups, the bot reads the un-summoned discussion (kept 14 days) and gets what was said since its last answer, with
-  senders and reply links, plus recent files and photos.
+- The agent reads what was said in the chat or topic with `telegram_history`, with senders, reply links and its own
+  answers. Telegram cannot read a chat's history, so the channel keeps the newest 200 messages of each place it has
+  seen; in a group it sees the messages nobody summons it with only when privacy mode is off.
 - A reply to one of the bot's answers continues the session that answer came from, whoever replies.
 - A message that arrives while the agent works is passed to the running work. If both are answered together, the
   later asker is pointed to the answer (👀 while waiting, 👌 when answered).
@@ -114,8 +115,8 @@ only on a bot for developers.
 ## Data and restarts
 
 - An accepted message is answered after a restart, at least once: a tool may run twice.
-- Group discussion is kept 14 days (then the next turn is told it is gone); folded discussion stays in the session.
-  To make the bot forget a group, delete its files under `<state root>/channels/telegram/buffers/` and the session.
+- The newest 200 messages of each chat and topic are kept under `<state root>/channels/telegram/recent/`. To make the
+  bot forget a chat, delete its file there and the session.
 - One process owns the state: a second `dev` or `start` of the agent is refused.
 
 ## Limits

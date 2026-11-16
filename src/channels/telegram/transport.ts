@@ -1,13 +1,12 @@
 /**
  * A Telegram channel's transport, shared by its turns and its send tool. A message the agent sends itself (a
  * schedule's digest, a post into another chat) never comes back as an update, so once the channel is mounted it is
- * recorded into the target place's discussion, where the channel's context buffer lives, and the chat's next turn
- * knows it was said.
+ * recorded into the target place's history, where the `history` tool reads it.
  */
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { log } from "../../log.ts";
-import { type BufferEntry, ownPostEntry } from "./context-buffer.ts";
+import { type RecordedMessage, ownMessage } from "./recent.ts";
 import { telegramPlaceKey } from "./parse.ts";
 import { callApi, chunkText } from "./telegram-api.ts";
 
@@ -21,7 +20,7 @@ interface TelegramSendTarget {
 interface TelegramSent {
   /** One per message, in order (long text is split at Telegram's length cap). */
   messageIds: number[];
-  /** Why the chat's next turn will NOT see this message, when it will not; undefined when it was recorded. */
+  /** Why the chat's history will NOT show this message, when it will not; undefined when it was recorded. */
   notRecorded?: string;
 }
 
@@ -35,9 +34,9 @@ export interface TelegramTransport {
   ): Promise<TelegramSent>;
 }
 
-const NO_MESSAGE_ID = "Telegram gave the sent message no id, so the chat's next turn will not see it";
+const NO_MESSAGE_ID = "Telegram gave the sent message no id, so the chat's history will not show it";
 
-const NOT_MOUNTED = "the telegram channel is not serving in this process, so the chat's next turn will not see it";
+const NOT_MOUNTED = "the telegram channel is not serving in this process, so the chat's history will not show it";
 
 /**
  * The place a sent message landed in, keyed by the same fields an update is keyed by (`chat.id`,
@@ -52,17 +51,17 @@ function landedPlace(sent: { chat?: { id?: number }; message_thread_id?: number 
 }
 
 /**
- * The transport of the bot `botToken` signs in as. `record` is the mounted channel's buffer write, read at each send:
+ * The transport of the bot `botToken` signs in as. `record` is the mounted channel's history write, read at each send:
  * undefined until the channel is served in this process.
  */
 export function telegramTransport(
   apiBaseUrl: string,
   botToken: string,
-  record: () => ((placeKey: string, entry: BufferEntry) => void) | undefined,
+  record: () => ((place: string, message: RecordedMessage) => void) | undefined,
 ): TelegramTransport {
   /** Record what was delivered. It is already in the chat, so a failure here is reported, never thrown: a thrown send
    *  would read as "not sent" and invite a duplicate. */
-  const remember = (placeKey: string, entry: BufferEntry): string | undefined => {
+  const remember = (placeKey: string, entry: RecordedMessage): string | undefined => {
     const write = record();
     if (!write) return NOT_MOUNTED;
     try {
@@ -90,7 +89,7 @@ export function telegramTransport(
       const first = messageIds[0];
       return {
         messageIds,
-        notRecorded: first === undefined ? NO_MESSAGE_ID : remember(place, ownPostEntry(text, first)),
+        notRecorded: first === undefined ? NO_MESSAGE_ID : remember(place, ownMessage(text, first)),
       };
     },
     async sendFile(target, file) {
@@ -108,7 +107,7 @@ export function telegramTransport(
             ? NO_MESSAGE_ID
             : remember(
                 landedPlace(sent, target),
-                ownPostEntry(file.caption ? `${label} ${file.caption}` : label, sent.message_id),
+                ownMessage(file.caption ? `${label} ${file.caption}` : label, sent.message_id),
               ),
       };
     },

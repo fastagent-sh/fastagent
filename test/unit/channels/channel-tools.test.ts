@@ -30,7 +30,7 @@ function stubFetch(answer: (url: string, body: Record<string, unknown>) => unkno
 }
 
 describe("a channel's send tool", () => {
-  it("telegram: sends with TELEGRAM_BOT_TOKEN, and says the chat's next turn will not see it while not serving", async () => {
+  it("telegram: sends with TELEGRAM_BOT_TOKEN, and says the chat's history will not show it while not serving", async () => {
     const calls = stubFetch((_url, body) => ({ ok: true, result: { message_id: 101, chat: { id: body.chat_id } } }));
     const said = await sendTool(telegram(), { TELEGRAM_BOT_TOKEN: "tok" }).execute(
       { chatId: 42, text: "digest ready" },
@@ -40,7 +40,7 @@ describe("a channel's send tool", () => {
     expect(calls[0]?.body).toMatchObject({ chat_id: 42, text: "digest ready" });
     expect(said).toBe(
       "sent message to chat 42; not recorded: the telegram channel is not serving in this process, so the chat's " +
-        "next turn will not see it",
+        "history will not show it",
     );
   });
 

@@ -32,13 +32,12 @@ export function scopeSatisfied(entry: FeishuScopeRequest, predicate: (name: stri
 export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   {
     request: "im:message.group_msg", // sensitive: some tenants approve it by hand
-    withoutIt: "only @mentions arrive: no bare replies in the agent's threads, no group discussion as context",
+    withoutIt: "only @mentions arrive: no bare replies in the agent's threads",
   },
   {
     request: "im:message:readonly",
     supersets: ["im:message"], // the read/write superset
-    withoutIt:
-      "the discussion before an ask cannot be read (the prompt says so), and a quoted message degrades to a marker",
+    withoutIt: "the history tool cannot read a chat, and a quoted message degrades to a marker",
   },
   {
     request: "im:message.reactions:write_only",
@@ -47,7 +46,7 @@ export const FEISHU_AGENT_SCOPES: FeishuScopeRequest[] = [
   },
   {
     request: "im:chat.members:read",
-    withoutIt: "people in the discussion the agent reads are shown by open_id, not by name",
+    withoutIt: "people in the history the agent reads are shown by open_id, not by name",
   },
 ];
 

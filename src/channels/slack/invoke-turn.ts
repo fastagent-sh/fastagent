@@ -5,16 +5,11 @@ import type { PromiseFailure } from "../../promise-bridge.ts";
 import {
   type ImageAttachment as ImageRef,
   attachedFilesManifest,
-  attributedFileName,
-  backgroundImagesManifest,
-  loadBackground,
-  missingAttachmentsNote,
   type SteeredTurn,
   turnStream,
   type TurnEvent,
   promptContent,
 } from "../kit/invoke.ts";
-import type { SlackBufferedFileRef } from "./history.ts";
 import { type DownloadedSlackFile, type SlackApi, SlackApiError } from "./slack-api.ts";
 
 const MARKDOWN_INSTRUCTION =
@@ -25,11 +20,6 @@ export interface SlackTurnTransport {
   channelId: string;
   filesDir: string;
   label: string;
-}
-
-export interface SlackTurnAttachments {
-  primaryFileIds: string[];
-  buffered: { files: SlackBufferedFileRef[]; skipped: number };
 }
 
 interface ResolvedInputs {
@@ -46,46 +36,16 @@ async function resolveFile(
   return { file: await transport.api.fetchFile(info, transport.channelId, transport.filesDir) };
 }
 
-async function resolveInputs(
-  transport: SlackTurnTransport,
-  attachments: SlackTurnAttachments,
-): Promise<ResolvedInputs> {
+/** The message's own files: images inline, the rest downloaded and listed. Any failure throws. */
+async function resolveInputs(transport: SlackTurnTransport, fileIds: readonly string[]): Promise<ResolvedInputs> {
   const images: ImageRef[] = [];
   const files: DownloadedSlackFile[] = [];
-  for (const id of attachments.primaryFileIds) {
+  for (const id of fileIds) {
     const resolved = await resolveFile(transport, id);
     if (resolved.image) images.push(resolved.image);
     if (resolved.file) files.push(resolved.file);
   }
-
-  const backgroundImages: { image: ImageRef; ref: SlackBufferedFileRef }[] = [];
-  const backgroundFiles: { file: DownloadedSlackFile; ref: SlackBufferedFileRef }[] = [];
-  const background = await loadBackground(attachments.buffered.files, (ref) => resolveFile(transport, ref.id), {
-    label: transport.label,
-    what: "Slack file",
-  });
-  for (const { ref, value } of background.loaded) {
-    if (value.image) backgroundImages.push({ image: value.image, ref });
-    if (value.file) backgroundFiles.push({ file: value.file, ref });
-  }
-
-  const missingNote = missingAttachmentsNote(background.lost + attachments.buffered.skipped);
-  const imageManifest = backgroundImagesManifest(
-    images.length,
-    backgroundImages.map(({ ref }) => ref),
-  );
-  const allFiles = [
-    ...files,
-    ...backgroundFiles.map(({ file, ref }) => ({
-      ...file,
-      name: attributedFileName(file.name, ref.from, ref.messageId),
-    })),
-  ];
-  const allImages = [...images, ...backgroundImages.map(({ image }) => image)];
-  return {
-    images: allImages.length ? allImages : undefined,
-    promptSuffix: `${missingNote}${imageManifest}${attachedFilesManifest(allFiles)}`,
-  };
+  return { images: images.length ? images : undefined, promptSuffix: attachedFilesManifest(files) };
 }
 
 /** One turn: resolve its files, then ask the agent. `key` is the turn's: the message it answers. */
@@ -93,21 +53,21 @@ export function slackTurnStream(
   agent: Agent,
   turn: {
     session: () => Promise<string>;
-    /** While it runs, the room its thread-reading tool reads (a channel turn's channel). */
-    enter?: (sessionId: string) => () => void;
+    /** While it runs, the place its `history` tool reads. */
+    enter: (sessionId: string) => () => void;
     key: string;
     text: string;
     steer: SteeredTurn;
   },
   transport: SlackTurnTransport,
-  attachments: SlackTurnAttachments,
+  fileIds: readonly string[],
 ): Stream.Stream<TurnEvent, PromiseFailure> {
   return turnStream({
     agent,
     label: transport.label,
     session: turn.session,
-    ...(turn.enter === undefined ? {} : { enter: turn.enter }),
-    resolve: () => resolveInputs(transport, attachments),
+    enter: turn.enter,
+    resolve: () => resolveInputs(transport, fileIds),
     turn: (resolved) => ({
       idempotencyKey: turn.key,
       content: promptContent(`${turn.text}${resolved.promptSuffix}${MARKDOWN_INSTRUCTION}`, resolved.images),
