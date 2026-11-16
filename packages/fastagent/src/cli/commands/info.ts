@@ -8,6 +8,7 @@ import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { agentPresentation } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { describeInstanceStorage } from "../../harnesses/pi-durable/serve.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
@@ -111,6 +112,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           workdir,
           stateRoot,
+          storage: describeInstanceStorage({ stateRoot, name, env: process.env }),
           authPath: auth?.path ?? null,
           fallbackAuthPath: auth?.fallback ?? null,
         },
@@ -152,5 +154,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   line("workdir", workdir);
   line("state", stateRoot);
+  line("storage", describeInstanceStorage({ stateRoot, name, env: process.env }));
   if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
 }

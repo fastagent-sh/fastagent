@@ -8,6 +8,7 @@ import { type Agent, AgentError, type Message, hasEnded } from "@fastagent-sh/cl
 import { connectAgent } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
+import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { deploymentAgent } from "../deployment.ts";
@@ -102,8 +103,11 @@ export async function runUnwake(id: string, dirArg: string, opts: ClockOptions):
     served !== undefined
       ? await served.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
       : await (async () => {
-          const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));
-          const held = await holdingInstance(stateRoot, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
+          const agentDir = agentDirOrExit(resolve(dirArg));
+          const stateRoot = resolveStateRoot(agentDir);
+          const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+          const place = { stateRoot, name: instanceName(definition.name, enteredInstanceName()), env: process.env };
+          const held = await holdingInstance(place, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
           if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
           return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };
         })();

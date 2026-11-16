@@ -1,3 +1,5 @@
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,6 +10,7 @@ import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 import { addWakeup } from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
+import { servedPostgres } from "../../doubles/postgres-double.ts";
 
 vi.mock(
   "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
@@ -85,6 +88,41 @@ describe("cli: invoke", () => {
       expect([first.stdout.trim(), fresh.stdout.trim()]).toEqual(["seen 1", "seen 1"]);
       expect(sessionOf(fresh)).not.toBe(sessionOf(first));
     });
+  });
+});
+
+describe("cli: an instance in PostgreSQL", () => {
+  it("keeps its sessions in the database FASTAGENT_DATABASE_URL names, by its name, whatever its state root", async () => {
+    const postgres = await servedPostgres();
+    try {
+      const dir = await agent("fa-invoke-postgres-");
+      const inRoot = (root: string) => ({
+        ...process.env,
+        FASTAGENT_DATABASE_URL: postgres.url,
+        FASTAGENT_NAME: "support",
+        FASTAGENT_ROOT: root,
+      });
+      const [rootA, rootB] = [
+        mkdtempSync(join(tmpdir(), "fa-postgres-root-a-")),
+        mkdtempSync(join(tmpdir(), "fa-postgres-root-b-")),
+      ];
+      const first = await runInProcess(["invoke", "hello", dir], undefined, inRoot(rootA));
+      expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
+      // A new machine's empty state root: the session is in the database.
+      const next = await runInProcess(
+        ["invoke", "--session", sessionOf(first), "again", dir],
+        undefined,
+        inRoot(rootB),
+      );
+      expect([next.code, next.stdout.trim()], next.stderr).toEqual([0, "seen 2"]);
+      expect(existsSync(join(rootA, ".state", "agent.sqlite"))).toBe(false);
+      const info = JSON.parse((await runInProcess(["info", dir, "--json"], undefined, inRoot(rootB))).stdout) as {
+        storage: string;
+      };
+      expect(info.storage).toBe(`PostgreSQL ${new URL(postgres.url).host}/postgres, instance "support"`);
+    } finally {
+      await postgres.close();
+    }
   });
 });
 

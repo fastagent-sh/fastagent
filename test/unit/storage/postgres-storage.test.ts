@@ -1,0 +1,119 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
+import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
+import {
+  InstanceHeld,
+  PostgresStorage,
+  openPostgresStorage,
+} from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
+import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
+
+let postgres: ServedPostgres;
+beforeAll(async () => {
+  postgres = await servedPostgres();
+});
+afterAll(() => postgres.close());
+
+registerStorageConformance({ describe, expect, it }, "pi-durable's storage contract, on PostgreSQL", async (use) => {
+  const storage = await openPostgresStorage(postgres.url, freshInstance());
+  try {
+    await use(storage);
+  } finally {
+    await storage.close(BACKGROUND_CONTEXT);
+  }
+});
+
+/** Commit a new conversation: what a Session's first write is. */
+async function newConversation(storage: Storage): Promise<number> {
+  const id = await storage.mintId();
+  const write = { type: "conversation", value: { id } } as unknown as StorageWrite;
+  const { stored } = await storage.commit([[write]], () => {}, BACKGROUND_CONTEXT);
+  expect(stored).toBe(1);
+  return id;
+}
+
+/** The instance opened with a lease of its own, as a test can stall it. */
+async function leased(instance: string, lease: { leaseMs: number; waitMs: number }, holders?: string) {
+  const db = openPgDatabase(postgres.url);
+  await migrate(db);
+  return PostgresStorage.open(db, instance, { lease, ...(holders === undefined ? {} : { holders }) }).catch(
+    async (error: unknown) => {
+      await db.close();
+      throw error;
+    },
+  );
+}
+
+describe("an instance in a shared database", () => {
+  it("keeps its sessions and ids across a reopen", async () => {
+    const instance = freshInstance();
+    const first = await openPostgresStorage(postgres.url, instance);
+    const id = await newConversation(first);
+    await first.close(BACKGROUND_CONTEXT);
+    const again = await openPostgresStorage(postgres.url, instance);
+    expect(await again.conversation(id as never, BACKGROUND_CONTEXT)).toEqual({ id });
+    expect(await again.mintId()).toBeGreaterThan(id);
+    await again.close(BACKGROUND_CONTEXT);
+  });
+
+  it("is apart from every other instance in it", async () => {
+    const [a, b] = await Promise.all([
+      openPostgresStorage(postgres.url, freshInstance()),
+      openPostgresStorage(postgres.url, freshInstance()),
+    ]);
+    const id = await newConversation(a);
+    expect(await b.conversation(id as never, BACKGROUND_CONTEXT)).toBeUndefined();
+    expect((await b.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items).toEqual([]);
+    await Promise.all([a.close(BACKGROUND_CONTEXT), b.close(BACKGROUND_CONTEXT)]);
+  });
+});
+
+describe("one process writes an instance at a time", () => {
+  it("refuses a second opener while the first holds it, naming what else opens it", async () => {
+    const instance = freshInstance();
+    const first = await leased(instance, { leaseMs: 60_000, waitMs: 0 });
+    await expect(leased(instance, { leaseMs: 60_000, waitMs: 300 }, "another `fastagent start`")).rejects.toThrow(
+      new RegExp(
+        `^the instance "${instance}" is held by another process until .+: another \`fastagent start\` is running`,
+      ),
+    );
+    await expect(leased(instance, { leaseMs: 60_000, waitMs: 0 })).rejects.toBeInstanceOf(InstanceHeld);
+    await first.close(BACKGROUND_CONTEXT);
+  });
+
+  it("hands the instance over at close at once", async () => {
+    const instance = freshInstance();
+    const first = await leased(instance, { leaseMs: 60_000, waitMs: 0 });
+    await first.close(BACKGROUND_CONTEXT);
+    const second = await leased(instance, { leaseMs: 60_000, waitMs: 0 });
+    await second.close(BACKGROUND_CONTEXT);
+  });
+
+  it("refuses the commit of a holder that stalled past its lease once another took the instance over", async () => {
+    const instance = freshInstance();
+    const stalled = await leased(instance, { leaseMs: 60_000, waitMs: 0 });
+    await newConversation(stalled);
+    // The holder stalled: its lease ran out without a renewal.
+    const db = openPgDatabase(postgres.url);
+    await db.query("UPDATE durable_leases SET lease_until = now() - interval '1 second' WHERE instance = $1", [
+      instance,
+    ]);
+    await db.close();
+    const successor = await leased(instance, { leaseMs: 60_000, waitMs: 0 });
+    await expect(newConversation(stalled)).rejects.toThrow(
+      `the instance "${instance}" was taken over by another process`,
+    );
+    await newConversation(successor);
+    await successor.close(BACKGROUND_CONTEXT);
+    await stalled.close(BACKGROUND_CONTEXT);
+  });
+});
+
+it("names an unreachable database without its credentials", async () => {
+  const opening = openPostgresStorage("postgres://agent:s3cret@127.0.0.1:1/agents", freshInstance());
+  await expect(opening).rejects.toThrow(/^the database 127\.0\.0\.1:1\/agents: /);
+  await expect(opening).rejects.not.toThrow(/s3cret/);
+});
