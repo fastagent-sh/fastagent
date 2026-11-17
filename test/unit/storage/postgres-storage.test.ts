@@ -15,6 +15,9 @@ import {
 import { fauxAgent } from "../../doubles/cli-run.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { openSource } from "../../harnesses/open-source.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 
 let postgres: ServedPostgres;
 beforeAll(async () => {
@@ -30,6 +33,22 @@ registerStorageConformance({ describe, expect, it }, "pi-durable's storage contr
     await storage.close(BACKGROUND_CONTEXT);
   }
 });
+
+/** Limits small enough that most records are in parts, and large enough for the suite's largest batch. */
+const TIGHT = { rowsPerTransaction: 600, bytesPerTransaction: 64 * 1024, bytesPerValue: 256 };
+
+registerStorageConformance(
+  { describe, expect, it },
+  "pi-durable's storage contract, on PostgreSQL that caps transactions and values",
+  async (use) => {
+    const storage = await openPostgresStorage(postgres.url, freshInstance(), { limits: TIGHT });
+    try {
+      await use(storage);
+    } finally {
+      await storage.close(BACKGROUND_CONTEXT);
+    }
+  },
+);
 
 /** Commit a new conversation: what a Session's first write is. */
 async function newConversation(storage: Storage): Promise<number> {
@@ -73,6 +92,159 @@ describe("an instance in a shared database", () => {
     expect((await b.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items).toEqual([]);
     await Promise.all([a.close(BACKGROUND_CONTEXT), b.close(BACKGROUND_CONTEXT)]);
   });
+});
+
+describe("a database that caps transactions and values", () => {
+  const conversationWrites = async (storage: Storage, count: number, text = "") => {
+    const batches: StorageWrite[][] = [];
+    for (let i = 0; i < count; i++) {
+      batches.push([{ type: "conversation", value: { id: await storage.mintId(), text } } as unknown as StorageWrite]);
+    }
+    return batches;
+  };
+  /** Rows each transaction wrote into the instance's records and ids, and their bytes: a row's `xmin` is its writer's. */
+  const perTransaction = async (instance: string) => {
+    const db = openPgDatabase(postgres.url);
+    const rows = await db.query<{ rows: number; bytes: number }>(
+      `SELECT count(*)::int AS rows, sum(octet_length(body))::int AS bytes FROM (
+        SELECT xmin::text AS tx, '' AS body FROM durable_record_ids WHERE instance = $1
+        UNION ALL SELECT xmin::text, record FROM durable_conversations WHERE instance = $1
+        UNION ALL SELECT xmin::text, body FROM durable_values WHERE instance = $1) AS written GROUP BY tx`,
+      [instance],
+    );
+    await db.close();
+    return rows;
+  };
+
+  it("commits a call over a transaction's rows in several transactions, none over, all of it stored", async () => {
+    const instance = freshInstance();
+    const storage = await openPostgresStorage(postgres.url, instance, { limits: { rowsPerTransaction: 10 } });
+    const batches = await conversationWrites(storage, 30);
+    const seqs: number[] = [];
+    expect(await storage.commit(batches, (_, seq) => seqs.push(seq), BACKGROUND_CONTEXT)).toEqual({ stored: 30 });
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect((await storage.scanConversations({}, 100, undefined, BACKGROUND_CONTEXT)).items).toHaveLength(30);
+    const transactions = await perTransaction(instance);
+    expect(transactions.length).toBeGreaterThan(1);
+    // The metadata row is the tenth row of each.
+    for (const { rows } of transactions) expect(rows).toBeLessThanOrEqual(9);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("commits a call over a transaction's bytes in several transactions, none over", async () => {
+    const instance = freshInstance();
+    const storage = await openPostgresStorage(postgres.url, instance, { limits: { bytesPerTransaction: 4_000 } });
+    expect(
+      await storage.commit(await conversationWrites(storage, 10, "x".repeat(900)), () => {}, BACKGROUND_CONTEXT),
+    ).toEqual({
+      stored: 10,
+    });
+    const transactions = await perTransaction(instance);
+    expect(transactions.length).toBeGreaterThan(1);
+    for (const { bytes } of transactions) expect(bytes).toBeLessThanOrEqual(4_000);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("refuses a single batch over a transaction's limits, storing nothing, and says by how much", async () => {
+    const storage = await openPostgresStorage(postgres.url, freshInstance(), { limits: { rowsPerTransaction: 3 } });
+    const [first, second] = await conversationWrites(storage, 2);
+    await expect(
+      storage.commit([[...(first as StorageWrite[]), ...(second as StorageWrite[])]], () => {}, BACKGROUND_CONTEXT),
+    ).rejects.toThrow("a batch of 4 rows and ");
+    expect((await storage.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items).toEqual([]);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("keeps a record longer than a value in parts, none over, and reads it back whole", async () => {
+    const instance = freshInstance();
+    const storage = await openPostgresStorage(postgres.url, instance, { limits: { bytesPerValue: 100 } });
+    // Three-byte and four-byte characters across the parts' edges.
+    const text = "汉字🙂".repeat(80);
+    const batch = (await conversationWrites(storage, 1, text))[0] as StorageWrite[];
+    await storage.commit([batch], () => {}, BACKGROUND_CONTEXT);
+    const id = (batch[0] as unknown as { value: { id: number } }).value.id;
+    expect(await storage.conversation(id as never, BACKGROUND_CONTEXT)).toEqual({ id, text });
+    const db = openPgDatabase(postgres.url);
+    const [stored] = await db.query<{ parts: number; longest: number }>(
+      `SELECT c.parts, (SELECT max(octet_length(body)) FROM durable_values WHERE instance = $1) AS longest
+        FROM durable_conversations AS c WHERE c.instance = $1`,
+      [instance],
+    );
+    await db.close();
+    expect(stored?.parts).toBeGreaterThan(1);
+    expect(stored?.longest).toBeLessThanOrEqual(100);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("collects the revisions and parts new bases make unreadable, a transaction's rows at a time", async () => {
+    const instance = freshInstance();
+    const storage = await openPostgresStorage(postgres.url, instance, {
+      limits: { rowsPerTransaction: 20, bytesPerValue: 64 },
+    });
+    const base = (n: number) => ({ version: 1, kind: "base", value: { n, filler: "y".repeat(400) } });
+    const commit = (batches: unknown[][]) => storage.commit(batches as StorageWrite[][], () => {}, BACKGROUND_CONTEXT);
+    const ids: number[] = [];
+    for (const kind of ["test.a", "test.b", "test.c"]) {
+      const id = await storage.mintId();
+      ids.push(id);
+      await commit([[{ type: "document.create", record: { id, kind, scope: { kind: "session" } }, content: base(1) }]]);
+    }
+    // One call replacing all three: its garbage, every part of three bases, is more than one transaction's rows.
+    await commit(ids.map((id) => [{ type: "document.change", id, content: base(2) }]));
+    for (const id of ids) {
+      expect((await storage.document(id as never, "current", BACKGROUND_CONTEXT))?.value).toMatchObject({ n: 2 });
+    }
+    const db = openPgDatabase(postgres.url);
+    const [left] = await db.query<{ revisions: number; parted: number }>(
+      `SELECT (SELECT count(*)::int FROM durable_document_revisions WHERE instance = $1) AS revisions,
+        (SELECT count(DISTINCT (id, seq))::int FROM durable_values WHERE instance = $1 AND kind = 'revision') AS parted`,
+      [instance],
+    );
+    await db.close();
+    expect(left).toEqual({ revisions: 3, parted: 3 });
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("makes each index the way it is given", async () => {
+    const fresh = await servedPostgres();
+    try {
+      const made: string[] = [];
+      const storage = await openPostgresStorage(fresh.url, freshInstance(), {
+        createIndex: async (db, statement) => {
+          made.push(statement.split(/\s+/).slice(0, 6).join(" "));
+          await db.query(statement);
+        },
+      });
+      expect(made.length).toBeGreaterThan(0);
+      expect(made.every((statement) => statement.startsWith("CREATE INDEX IF NOT EXISTS durable_"))).toBe(true);
+      await storage.close(BACKGROUND_CONTEXT);
+    } finally {
+      await fresh.close();
+    }
+  });
+});
+
+it("an agent on a database that caps a transaction refuses a message over four fifths of it, recording nothing", async () => {
+  const dir = await fauxAgent("fa-postgres-capped-");
+  const { agent } = await openServing(await loadSourceDefinition(dir), {
+    name: "capped",
+    secrets: { FASTAGENT_DATABASE_URL: postgres.url },
+    env: {},
+    ownEnv: process.env,
+    runsAs: NOT_HOSTED,
+    database: { limits: { bytesPerTransaction: 10_000 } },
+  });
+  try {
+    const { id: sessionId } = await agent.sessions.create();
+    await expect(agent.messages.send({ sessionId, content: "x".repeat(8_100) })).rejects.toMatchObject({
+      code: "invalid_request",
+      details: { reason: "too_large" },
+    });
+    const answered = await agent.messages.send({ sessionId, content: "x".repeat(7_900) }, { wait: 30 });
+    expect([answered.status, answered.answer?.text]).toEqual(["completed", "seen 1"]);
+  } finally {
+    await agent.close();
+  }
 });
 
 describe("an instance belongs to the agent that made it", () => {

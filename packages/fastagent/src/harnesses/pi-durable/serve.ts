@@ -24,7 +24,7 @@ import type { AgentConfig } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { describeDatabase } from "./postgres/database.ts";
-import { openPostgresStorage } from "./postgres/storage.ts";
+import { type PostgresOptions, messageBytesFor, openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
 import { otlpTraces } from "../telemetry/otlp.ts";
@@ -88,6 +88,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   keeps?: "secrets" | "state";
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
   wakeTicking?: () => boolean;
+  /** How the database `FASTAGENT_DATABASE_URL` names is reached, and what it allows: a platform's own database's. */
+  database?: PostgresOptions;
 }
 
 type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
@@ -128,6 +130,7 @@ export interface InstancePlace {
   name?: string;
   /** The agent it runs (its package's name), which an instance in a database belongs to. */
   agent?: string;
+  database?: PostgresOptions;
 }
 
 /** Where the instance's storage is, as a person reads it: the database (without credentials), or the file. */
@@ -154,6 +157,7 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
       );
     }
     return openPostgresStorage(url, place.name, {
+      ...place.database,
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),
@@ -229,7 +233,10 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     env,
     agent: definition.name,
     ...(options.name === undefined ? {} : { name }),
+    ...(options.database === undefined ? {} : { database: options.database }),
   };
+  // A database that caps a transaction caps a message: one is written in one transaction.
+  const maxMessageBytes = env[DATABASE_URL_ENV] ? messageBytesFor(options.database?.limits) : undefined;
   // Before the agent exists, a lost hold fails its open's first commit instead.
   let stopRuns: ((error: Error) => void) | undefined;
   const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
@@ -254,6 +261,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
       ...(traces === undefined ? {} : { telemetry: traces.context }),
+      ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
     });
   } catch (error) {
     const failures: unknown[] = [error];

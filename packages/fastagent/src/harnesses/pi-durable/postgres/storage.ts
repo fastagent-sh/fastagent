@@ -51,6 +51,7 @@ import {
   type DocumentAction,
   PendingWrites,
   addressParts,
+  batchCost,
   claimOf,
   encodeIndexedString,
   isCurrentOnly,
@@ -59,7 +60,8 @@ import {
   scopeColumns,
 } from "./commit.ts";
 import { type PgDatabase, type PgExecutor, describeDatabase, openPgDatabase } from "./database.ts";
-import { migrate } from "./schema.ts";
+import { type CreateIndex, migrate } from "./schema.ts";
+import { type StoredText, type ValueKind, readTexts } from "./values.ts";
 
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 type StoredEntry = { readonly entry: EntryRecord; readonly commitSeq: Seq };
@@ -125,7 +127,39 @@ const isAliveAt = (record: DocumentRecord, at: DocumentPoint) =>
     ? record.retiredAt === undefined
     : record.createdAt <= at && (record.retiredAt === undefined || at < record.retiredAt);
 
-const records = <T>(rows: readonly { record: string }[]): T[] => rows.map((row) => parseJson<T>(row.record));
+/**
+ * What a database allows one transaction and one value, for one that caps them (Aurora DSQL: 3,000 rows, 10 MiB, 1 MiB
+ * a value). Unset, nothing is capped. A commit takes as many transactions as its batches need; a value longer than
+ * `bytesPerValue` is stored in parts (values.ts).
+ */
+export interface PostgresLimits {
+  rowsPerTransaction?: number;
+  bytesPerTransaction?: number;
+  bytesPerValue?: number;
+}
+
+/**
+ * The longest message an agent takes into a storage of `limits`: a message is written once, in one batch, and four
+ * fifths of a transaction leave the rest of its batch room. Unset with no transaction cap.
+ */
+export function messageBytesFor(limits: PostgresLimits | undefined): number | undefined {
+  const bytes = limits?.bytesPerTransaction;
+  return bytes === undefined ? undefined : Math.floor(bytes * 0.8);
+}
+
+/** How the database is reached and what it allows, past its URL: what a platform's own database needs. */
+export interface PostgresOptions {
+  /** The password of each new connection, when the URL has none that lasts (a signed token). */
+  password?: () => Promise<string>;
+  limits?: PostgresLimits;
+  createIndex?: CreateIndex;
+}
+
+const KINDS: Record<string, ValueKind> = {
+  durable_conversations: "conversation",
+  durable_tasks: "task",
+  durable_submissions: "submission",
+};
 
 /** The refusal of an opener of an instance another process holds. */
 export class InstanceHeld extends Error {}
@@ -136,6 +170,7 @@ export interface OpenOptions {
   /** The agent that opens it (its package's name): an instance belongs to the agent that made it. */
   agent?: string;
   lease?: LeaseOptions;
+  limits?: PostgresLimits;
   onLost?: (error: Error) => void;
 }
 
@@ -155,12 +190,14 @@ export class PostgresStorage implements Storage {
   private nextId: number;
   /** This process's token: what the metadata row carries while it writes the instance. */
   private readonly owner: string;
+  private readonly limits: PostgresLimits;
 
-  private constructor(db: PgDatabase, instance: string, nextId: number, owner: string) {
+  private constructor(db: PgDatabase, instance: string, nextId: number, owner: string, limits: PostgresLimits) {
     this.db = db;
     this.instance = instance;
     this.nextId = nextId;
     this.owner = owner;
+    this.limits = limits;
   }
 
   /**
@@ -182,7 +219,7 @@ export class PostgresStorage implements Storage {
     while (true) {
       const taken = await PostgresStorage.take(db, instance, owner, lease.leaseMs, options.agent);
       if (taken !== undefined) {
-        const storage = new PostgresStorage(db, instance, taken, owner);
+        const storage = new PostgresStorage(db, instance, taken, owner, options.limits ?? {});
         storage.onLost = options.onLost;
         storage.renewEvery(lease.leaseMs);
         return storage;
@@ -284,9 +321,10 @@ export class PostgresStorage implements Storage {
   }
 
   /**
-   * Commit `batches` in one transaction, each with its own seq. Each batch is checked before it writes anything, against
-   * the state the earlier ones left, and the first one refused ends the call: the transaction commits the ones before
-   * it. A batch with a copy reads the copy's source, so the batches before it are written first.
+   * Commit `batches`, each with its own seq, in one transaction, or in as many as the limits make them need. Each batch
+   * is checked before it writes anything, against the state the earlier ones left, and the first one refused ends the
+   * call: the batches before it are stored. A batch with a copy reads the copy's source, so the batches before it are
+   * written first. What the stored batches made unreadable is collected after them.
    */
   async commit(
     batches: readonly (readonly StorageWrite[])[],
@@ -296,8 +334,37 @@ export class PostgresStorage implements Storage {
     this.assertOpen();
     if (this.lost !== undefined) throw this.lost;
     const seqs: Seq[] = [];
+    const garbage = new Map<number, number>();
+    let refused: { error: unknown } | undefined;
+    try {
+      while (refused === undefined && seqs.length < batches.length) {
+        const stored = await this.commitTransaction(batches.slice(seqs.length));
+        seqs.push(...stored.seqs);
+        for (const [id, below] of stored.garbage) garbage.set(id, Math.max(garbage.get(id) ?? 0, below));
+        refused = stored.refused;
+      }
+    } catch (error) {
+      // The transactions that committed stand: their batches are durable, the rest are not.
+      for (const [index, seq] of seqs.entries()) receive(index, seq);
+      throw error;
+    }
+    for (const [index, seq] of seqs.entries()) receive(index, seq);
+    await this.collectGarbage(garbage);
+    return refused === undefined ? { stored: seqs.length } : { stored: seqs.length, refused: refused.error };
+  }
+
+  /** The first of `batches` that fit one transaction's limits (at least one), committed together. */
+  private async commitTransaction(batches: readonly (readonly StorageWrite[])[]): Promise<{
+    seqs: Seq[];
+    garbage: ReadonlyMap<number, number>;
+    refused: { error: unknown } | undefined;
+  }> {
+    const { rowsPerTransaction, bytesPerTransaction, bytesPerValue } = this.limits;
+    const capped = rowsPerTransaction !== undefined || bytesPerTransaction !== undefined;
+    const seqs: Seq[] = [];
     let refused: { error: unknown } | undefined;
     let candidateNextId = this.nextId;
+    const pending = new PendingWrites();
     await this.db
       .transaction(async (tx) => {
         const [metadata] = await tx.query<{ next_id: number; next_seq: number }>(
@@ -307,12 +374,30 @@ export class PostgresStorage implements Storage {
         if (metadata === undefined) throw new Error(`the instance "${this.instance}" has no metadata row`);
         let next = metadata.next_seq;
         const state = await CommitState.read(tx, this.instance, batches);
-        const pending = new PendingWrites();
+        // The metadata row's update is one row.
+        let rows = 1;
+        let bytes = 0;
         for (const writes of batches) {
           const checked = await this.checkBatch(tx, state, pending, writes);
           if ("refused" in checked) {
             refused = { error: checked.refused };
             break;
+          }
+          if (capped) {
+            const cost = batchCost(writes, checked.actions, bytesPerValue);
+            const over =
+              rows + cost.rows > (rowsPerTransaction ?? Number.POSITIVE_INFINITY) ||
+              bytes + cost.bytes > (bytesPerTransaction ?? Number.POSITIVE_INFINITY);
+            if (over && seqs.length === 0) {
+              throw new Error(
+                `a batch of ${cost.rows} rows and ${cost.bytes} bytes is over what the database takes in one ` +
+                  `transaction (${rowsPerTransaction ?? "any"} rows, ${bytesPerTransaction ?? "any"} bytes)`,
+              );
+            }
+            // The next transaction takes it, checked again against what this one stored.
+            if (over) break;
+            rows += cost.rows;
+            bytes += cost.bytes;
           }
           const seq = next++ as Seq;
           state.apply(writes, checked.actions, seq);
@@ -320,7 +405,7 @@ export class PostgresStorage implements Storage {
           seqs.push(seq);
           candidateNextId = Math.max(candidateNextId, this.candidateNextId(writes));
         }
-        await pending.flush(tx, this.instance);
+        await pending.flush(tx, this.instance, bytesPerValue);
         if (seqs.length === 0) return;
         const [fenced] = await tx.query(
           "UPDATE durable_metadata SET next_id = $2, next_seq = $3 WHERE instance = $1 AND owner = $4 RETURNING instance",
@@ -333,10 +418,37 @@ export class PostgresStorage implements Storage {
         if (isConflict(error)) throw this.loseLease();
         throw error;
       });
-    this.nextId = Math.max(this.nextId, candidateNextId);
     // `COMMIT` returned: the stored batches are durable.
-    for (const [index, seq] of seqs.entries()) receive(index, seq);
-    return refused === undefined ? { stored: seqs.length } : { stored: seqs.length, refused: refused.error };
+    this.nextId = Math.max(this.nextId, candidateNextId);
+    return { seqs, garbage: pending.garbage(), refused };
+  }
+
+  /**
+   * Delete the revisions a commit made unreadable (each document's below a seq) and their parts, a transaction's
+   * rows at a time. Nothing reads them, so one left behind by a failure costs space only, and says so.
+   */
+  private async collectGarbage(garbage: ReadonlyMap<number, number>): Promise<void> {
+    if (garbage.size === 0) return;
+    const params = [this.instance, [...garbage.keys()], [...garbage.values()], this.limits.rowsPerTransaction ?? null];
+    const statements = [
+      `DELETE FROM durable_values WHERE instance = $1 AND kind = 'revision' AND (id, seq, part) IN (
+        SELECT v.id, v.seq, v.part FROM durable_values AS v
+          JOIN unnest($2::bigint[], $3::bigint[]) AS g(id, below) ON v.id = g.id AND v.seq < g.below
+          WHERE v.instance = $1 AND v.kind = 'revision' LIMIT $4) RETURNING 1`,
+      `DELETE FROM durable_document_revisions WHERE instance = $1 AND (document_id, seq) IN (
+        SELECT r.document_id, r.seq FROM durable_document_revisions AS r
+          JOIN unnest($2::bigint[], $3::bigint[]) AS g(id, below) ON r.document_id = g.id AND r.seq < g.below
+          WHERE r.instance = $1 LIMIT $4) RETURNING 1`,
+    ];
+    try {
+      for (const statement of statements) {
+        let deleted: number;
+        do deleted = (await this.db.query(statement, params)).length;
+        while (params[3] !== null && deleted === params[3]);
+      }
+    } catch (error) {
+      log.warn(`[fastagent] collecting unreadable revisions of "${this.instance}" failed: ${String(error)}`);
+    }
   }
 
   /**
@@ -357,7 +469,7 @@ export class PostgresStorage implements Storage {
       return { refused: error };
     }
     if (![...actions.values()].some((action) => action.copy !== undefined)) return { actions };
-    await pending.flush(tx, this.instance);
+    await pending.flush(tx, this.instance, this.limits.bytesPerValue);
     let databaseFailed = false;
     const watched: PgExecutor = {
       query: <T extends object>(text: string, params?: readonly unknown[]) =>
@@ -401,12 +513,25 @@ export class PostgresStorage implements Storage {
       clauses.push(`${column} = $${params.length}`);
     }
     params.push(limit + 1);
-    const rows = await this.db.query<{ record: string }>(
-      `SELECT record FROM ${table} WHERE ${clauses.join(" AND ")}
+    const values = await this.select<T>(
+      this.db,
+      KINDS[table] as ValueKind,
+      `SELECT id, record AS body, parts FROM ${table} WHERE ${clauses.join(" AND ")}
         ORDER BY id ${ascending ? "ASC" : "DESC"} LIMIT $${params.length}`,
       params,
     );
-    return page(records<T>(rows), limit, start.order);
+    return page(values, limit, start.order);
+  }
+
+  /** The records `sql` selects as `id, record AS body, parts`, whole and parsed, in its order. */
+  private async select<T>(
+    executor: PgExecutor,
+    kind: ValueKind,
+    sql: string,
+    params: readonly unknown[],
+  ): Promise<T[]> {
+    const rows = await executor.query<StoredText>(sql, params);
+    return (await readTexts(executor, this.instance, kind, rows)).map((text) => parseJson<T>(text));
   }
 
   async scanConversations(
@@ -461,12 +586,13 @@ export class PostgresStorage implements Storage {
       conversation = await this.readConversation(idOrConversationId as ConversationId);
       if (conversation === undefined) throw new StorageRequestError(`Unknown conversation: ${idOrConversationId}`);
     }
-    const [row] = await this.db.query<{ record: string; commit_seq: number }>(
-      "SELECT record, commit_seq FROM durable_entries WHERE instance = $1 AND id = $2",
+    const [row] = await this.db.query<StoredText & { commit_seq: number }>(
+      "SELECT id, record AS body, parts, commit_seq FROM durable_entries WHERE instance = $1 AND id = $2",
       [this.instance, id],
     );
     if (row === undefined) return undefined;
-    const entry = parseJson<EntryRecord>(row.record);
+    const [text] = await readTexts(this.db, this.instance, "entry", [row]);
+    const entry = parseJson<EntryRecord>(text as string);
     if (conversation !== undefined) {
       let upperEntryId = Number.POSITIVE_INFINITY;
       while (conversation.id !== entry.conversationId) {
@@ -487,12 +613,14 @@ export class PostgresStorage implements Storage {
     if (conversation === undefined) throw new StorageRequestError(`Unknown conversation: ${conversationId}`);
     let upper: number | undefined = atOrBeforeEntryId;
     while (true) {
-      const [row] = await this.db.query<{ record: string }>(
-        `SELECT record FROM durable_entries WHERE instance = $1 AND conversation_id = $2 AND head IS NOT NULL
-          AND id <= $3 ORDER BY id DESC LIMIT 1`,
+      const [marker] = await this.select<EntryRecord & { readonly head: EntryId }>(
+        this.db,
+        "entry",
+        `SELECT id, record AS body, parts FROM durable_entries WHERE instance = $1 AND conversation_id = $2
+          AND head IS NOT NULL AND id <= $3 ORDER BY id DESC LIMIT 1`,
         [this.instance, conversation.id, upper ?? Number.MAX_SAFE_INTEGER],
       );
-      if (row !== undefined) return parseJson(row.record);
+      if (marker !== undefined) return marker;
       if (conversation.parent === undefined) return undefined;
       upper = upper === undefined ? conversation.parent.at : Math.min(upper, conversation.parent.at);
       conversation = (await this.readConversation(conversation.parent.conversationId)) as ConversationRecord;
@@ -507,12 +635,13 @@ export class PostgresStorage implements Storage {
     direction: "ASC" | "DESC",
     limit: number,
   ): Promise<EntryRecord[]> {
-    const rows = await this.db.query<{ record: string }>(
-      `SELECT record FROM durable_entries WHERE instance = $1 AND conversation_id = $2 AND id >= $3 AND id <= $4
-        ORDER BY id ${direction} LIMIT $5`,
+    return this.select<EntryRecord>(
+      this.db,
+      "entry",
+      `SELECT id, record AS body, parts FROM durable_entries WHERE instance = $1 AND conversation_id = $2
+        AND id >= $3 AND id <= $4 ORDER BY id ${direction} LIMIT $5`,
       [this.instance, conversationId, lower ?? 0, upper ?? Number.MAX_SAFE_INTEGER, limit],
     );
-    return records(rows);
   }
 
   /** Newest first: each conversation of the fork chain from the requested one back, each up to its fork point. */
@@ -563,11 +692,13 @@ export class PostgresStorage implements Storage {
 
   async task(id: TaskId, _context: Context): Promise<StoredTask | undefined> {
     this.assertOpen();
-    const [row] = await this.db.query<{ record: string }>(
-      "SELECT record FROM durable_tasks WHERE instance = $1 AND id = $2",
+    const [record] = await this.select<StoredTask>(
+      this.db,
+      "task",
+      "SELECT id, record AS body, parts FROM durable_tasks WHERE instance = $1 AND id = $2",
       [this.instance, id],
     );
-    return row === undefined ? undefined : parseJson(row.record);
+    return record;
   }
 
   async scanTasks(
@@ -588,11 +719,13 @@ export class PostgresStorage implements Storage {
 
   async submission(id: SubmissionId, _context: Context): Promise<SubmissionRecord | undefined> {
     this.assertOpen();
-    const [row] = await this.db.query<{ record: string }>(
-      "SELECT record FROM durable_submissions WHERE instance = $1 AND id = $2",
+    const [record] = await this.select<SubmissionRecord>(
+      this.db,
+      "submission",
+      "SELECT id, record AS body, parts FROM durable_submissions WHERE instance = $1 AND id = $2",
       [this.instance, id],
     );
-    return row === undefined ? undefined : parseJson(row.record);
+    return record;
   }
 
   async scanSubmissions(
@@ -614,11 +747,14 @@ export class PostgresStorage implements Storage {
     _context: Context,
   ): Promise<SubmissionRecord | undefined> {
     this.assertOpen();
-    const [row] = await this.db.query<{ record: string }>(
-      "SELECT record FROM durable_submissions WHERE instance = $1 AND conversation_id = $2 AND request_id = $3",
+    const [record] = await this.select<SubmissionRecord>(
+      this.db,
+      "submission",
+      `SELECT id, record AS body, parts FROM durable_submissions
+        WHERE instance = $1 AND conversation_id = $2 AND request_id = $3`,
       [this.instance, conversationId, encodeIndexedString(requestId)],
     );
-    return row === undefined ? undefined : parseJson(row.record);
+    return record;
   }
 
   async findDocument(
@@ -632,12 +768,14 @@ export class PostgresStorage implements Storage {
     if (at !== "current") params.push(at);
     const alive =
       at === "current" ? "retired_at IS NULL" : "created_at <= $7 AND (retired_at IS NULL OR retired_at > $7)";
-    const [row] = await this.db.query<{ record: string }>(
-      `SELECT record FROM durable_documents WHERE instance = $1 AND kind = $2 AND scope_kind = $3 AND owner_id = $4
-        AND family = $5 AND key_value = $6 AND ${alive} ORDER BY created_at DESC LIMIT 1`,
+    const [record] = await this.select<DocumentRecord>(
+      this.db,
+      "document",
+      `SELECT id, record AS body, parts FROM durable_documents WHERE instance = $1 AND kind = $2 AND scope_kind = $3
+        AND owner_id = $4 AND family = $5 AND key_value = $6 AND ${alive} ORDER BY created_at DESC LIMIT 1`,
       params,
     );
-    return row === undefined ? undefined : parseJson(row.record);
+    return record;
   }
 
   async document(id: DocumentId, at: DocumentPoint, _context: Context): Promise<StoredDocument | undefined> {
@@ -667,11 +805,14 @@ export class PostgresStorage implements Storage {
       clauses.push(`created_at <= $${params.length}`, `(retired_at IS NULL OR retired_at > $${params.length})`);
     }
     params.push(limit + 1);
-    const rows = await this.db.query<{ record: string }>(
-      `SELECT record FROM durable_documents WHERE ${clauses.join(" AND ")} ORDER BY id LIMIT $${params.length}`,
+    const records = await this.select<DocumentRecord>(
+      this.db,
+      "document",
+      `SELECT id, record AS body, parts FROM durable_documents WHERE ${clauses.join(" AND ")}
+        ORDER BY id LIMIT $${params.length}`,
       params,
     );
-    return page(records<DocumentRecord>(rows), limit);
+    return page(records, limit);
   }
 
   /** Release the lease, then the connections; the reads admitted before finish first. */
@@ -709,11 +850,13 @@ export class PostgresStorage implements Storage {
   }
 
   private async readConversation(id: ConversationId): Promise<ConversationRecord | undefined> {
-    const [row] = await this.db.query<{ record: string }>(
-      "SELECT record FROM durable_conversations WHERE instance = $1 AND id = $2",
+    const [record] = await this.select<ConversationRecord>(
+      this.db,
+      "conversation",
+      "SELECT id, record AS body, parts FROM durable_conversations WHERE instance = $1 AND id = $2",
       [this.instance, id],
     );
-    return row === undefined ? undefined : parseJson(row.record);
+    return record;
   }
 
   private async materializeDocument(
@@ -721,34 +864,37 @@ export class PostgresStorage implements Storage {
     id: DocumentId,
     at: DocumentPoint,
   ): Promise<StoredDocument | undefined> {
-    const [row] = await tx.query<{ record: string }>(
-      "SELECT record FROM durable_documents WHERE instance = $1 AND id = $2",
+    const [record] = await this.select<DocumentRecord>(
+      tx,
+      "document",
+      "SELECT id, record AS body, parts FROM durable_documents WHERE instance = $1 AND id = $2",
       [this.instance, id],
     );
-    if (row === undefined) return undefined;
-    const record = parseJson<DocumentRecord>(row.record);
+    if (record === undefined) return undefined;
     if (at !== "current" && isCurrentOnly(record)) {
       throw new StorageRequestError(`Document ${id} does not retain historical content`);
     }
     if (!isAliveAt(record, at)) return undefined;
     const upper = at === "current" ? Number.MAX_SAFE_INTEGER : at;
-    const [base] = await tx.query<{ seq: number; version: number; content: string }>(
-      `SELECT seq, version, content FROM durable_document_revisions
+    type Revision = StoredText & { seq: number; kind: string; version: number };
+    const [base] = await tx.query<Revision>(
+      `SELECT document_id AS id, seq, kind, version, content AS body, parts FROM durable_document_revisions
         WHERE instance = $1 AND document_id = $2 AND kind = 'base' AND seq <= $3 ORDER BY seq DESC LIMIT 1`,
       [this.instance, id, upper],
     );
     if (base === undefined) throw new Error(`Document ${id} is missing a required base`);
-    let value = parseJson<JsonObject>(base.content);
-    const tail = await tx.query<{ kind: string; version: number; content: string }>(
-      `SELECT kind, version, content FROM durable_document_revisions
+    const tail = await tx.query<Revision>(
+      `SELECT document_id AS id, seq, kind, version, content AS body, parts FROM durable_document_revisions
         WHERE instance = $1 AND document_id = $2 AND seq > $3 AND seq <= $4 ORDER BY seq`,
       [this.instance, id, base.seq, upper],
     );
-    for (const revision of tail) {
+    const [baseText, ...tailTexts] = await readTexts(tx, this.instance, "revision", [base, ...tail]);
+    let value = parseJson<JsonObject>(baseText as string);
+    for (const [index, revision] of tail.entries()) {
       if (revision.kind !== "delta" || revision.version !== base.version) {
         throw new Error(`Document ${id} crosses a stored version boundary without a base`);
       }
-      value = apply(value, parseJson(revision.content)) as JsonObject;
+      value = apply(value, parseJson(tailTexts[index] as string)) as JsonObject;
     }
     return { record, version: base.version, value, deltasSinceBase: tail.length };
   }
@@ -799,12 +945,13 @@ export class PostgresStorage implements Storage {
 export async function openPostgresStorage(
   connectionString: string,
   instance: string,
-  options: Omit<OpenOptions, "lease"> = {},
+  options: Omit<OpenOptions, "lease" | "limits"> & PostgresOptions = {},
 ): Promise<PostgresStorage> {
-  const db = openPgDatabase(connectionString);
+  const { password, createIndex, ...open } = options;
+  const db = openPgDatabase(connectionString, password === undefined ? {} : { password });
   try {
-    await migrate(db);
-    return await PostgresStorage.open(db, instance, options);
+    await migrate(db, createIndex);
+    return await PostgresStorage.open(db, instance, open);
   } catch (error) {
     await db
       .close()

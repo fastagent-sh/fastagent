@@ -230,6 +230,8 @@ export interface AssembleAgentOptions {
   processEnv: Readonly<Record<string, string>>;
   /** Where the runs' spans go. */
   telemetry?: TelemetryContext;
+  /** The longest message the storage takes, in bytes: a longer one is refused `too_large`. */
+  maxMessageBytes?: number;
 }
 
 /**
@@ -309,6 +311,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.stateRoot === undefined ? {} : { clock: { stateRoot: options.stateRoot, schedules: code.schedules } }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
+    ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),

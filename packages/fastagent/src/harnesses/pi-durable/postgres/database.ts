@@ -4,6 +4,7 @@
  * only while it cannot get a connection, since a statement it sent may have taken effect.
  */
 import pg from "pg";
+import { parseIntoClientConfig } from "pg-connection-string";
 import { log } from "../../../log.ts";
 
 export interface PgExecutor {
@@ -43,10 +44,21 @@ async function retrying<T>(attempt: () => Promise<T>): Promise<T> {
   }
 }
 
-/** A pool on `connectionString` (`postgres://user:password@host:port/database?sslmode=require`). */
-export function openPgDatabase(connectionString: string): PgDatabase {
+/**
+ * A pool on `connectionString` (`postgres://user:password@host:port/database?sslmode=require`); `password`, when given,
+ * makes the password of each new connection (a token that expires).
+ */
+export function openPgDatabase(
+  connectionString: string,
+  options: { password?: () => Promise<string> } = {},
+): PgDatabase {
+  // A connection string's own password, even an empty one, would win over `password`: parsed here, it gives way.
+  const connection =
+    options.password === undefined
+      ? { connectionString }
+      : { ...(parseIntoClientConfig(connectionString) as pg.PoolConfig), password: options.password };
   const pool = new pg.Pool({
-    connectionString,
+    ...connection,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     // Ids and seqs are below 2^53: as numbers, as pi-durable keeps them.
     types: {
