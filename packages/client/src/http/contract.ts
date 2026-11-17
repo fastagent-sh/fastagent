@@ -30,6 +30,7 @@ import {
   Message,
   MessageStreamEvent,
   ScheduleRun,
+  ScheduleState,
   SendRequest,
   Session,
   SessionChanges,
@@ -258,6 +259,14 @@ const AgentGroup = HttpApiGroup.make("agent")
       params: { name: Schema.String },
       query: WaitQuery,
       success: ScheduleRun,
+      error: Refused,
+    }),
+    HttpApiEndpoint.get("listSchedules", "/schedules", {
+      success: Schema.Array(ScheduleState),
+      error: Refused,
+    }),
+    HttpApiEndpoint.get("listWakeups", "/wakeups", {
+      success: Schema.Array(Wakeup),
       error: Refused,
     }),
     HttpApiEndpoint.delete("cancelWakeup", "/wakeups/:id", {

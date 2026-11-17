@@ -1,12 +1,17 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
+import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
+import { withInstanceClock } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { clockStore } from "../../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
+import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { addWakeup } from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -16,6 +21,10 @@ vi.mock(
   "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
   () => import("../../doubles/storage-no-wait.ts"),
 );
+
+/** `work` over the clock of the CLI's instance of `dir`, which no process serves now. */
+const clockOf = <T>(dir: string, work: (clock: ClockStore) => Promise<T>): Promise<T> =>
+  withInstanceClock({ stateRoot: resolveStateRoot(dir), env: process.env }, work);
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
@@ -137,13 +146,15 @@ describe("cli: an instance in PostgreSQL", () => {
   });
 });
 
-async function withServedAgent(during: (dir: string, url: string) => Promise<void>): Promise<void> {
+async function withServedAgent(
+  during: (dir: string, url: string, opened: Awaited<ReturnType<typeof openSource>>) => Promise<void>,
+): Promise<void> {
   const dir = await agent("fa-invoke-url-");
   const opened = await openSource(dir);
   try {
     const service = await opened.serve({ apiKeys: ["the-key", "the-next-key"] });
     const url = `http://127.0.0.1:${await service.listen(0, "127.0.0.1")}`;
-    await during(dir, url);
+    await during(dir, url, opened);
   } finally {
     await opened.close();
   }
@@ -180,6 +191,25 @@ registerHooks({
     });
   });
 
+  it("schedules list reads a deployment's clock through its Agent API with --url", async () => {
+    await withServedAgent(async (dir, url, opened) => {
+      // Set in the served instance only: the instance a run of the CLI here would open is another.
+      const clock = clockStore(opened.harness, BACKGROUND_CONTEXT);
+      const added = await addWakeup(clock, {
+        session: "chat:7",
+        prompt: "ping",
+        fireAt: new Date(Date.now() + 3_600_000),
+      });
+      if (!added.ok) throw new Error(added.error);
+      const listed = await runInProcess(["schedules", "list", "--url", url, "--key", "the-key", "--json", dir]);
+      expect(listed.code, listed.stderr).toBe(0);
+      expect(JSON.parse(listed.stdout)).toEqual({
+        schedules: [],
+        wakeups: [{ id: added.id, sessionId: "chat:7", fireAt: added.fireAt, prompt: "ping" }],
+      });
+    });
+  });
+
   it("refuses a key the served instance does not hold", async () => {
     await withServedAgent(async (dir, url) => {
       const refused = await runInProcess(["invoke", "--url", url, "--key", "not-a-key", "hello", dir]);
@@ -192,53 +222,70 @@ const schedule = (cron: string, extra = "") =>
   `export default { kind: "fastagent.schedule", cron: ${JSON.stringify(cron)}${extra}, prompt: "go" };\n`;
 
 describe("cli: the agent's clock", () => {
-  it("info lists the schedules, each with its next and last run, and the agent's own pending wake-ups", async () => {
-    const dir = await agentWorkspace("fa-clock-info-", {
+  it("info lists the schedules with their next run, read from the directory, beside a serve that holds the instance", async () => {
+    const dir = await agent("fa-clock-info-", {
       "src/schedules/daily.ts": schedule("0 9 * * *"),
       "src/schedules/weekly.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
     });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
-    await mkdir(claims, { recursive: true });
-    await writeFile(
-      join(claims, "2026-01-01T09-00-00-000Z"),
-      JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }),
-    );
-    const added = addWakeup(resolveStateRoot(dir), {
-      session: "chat:42",
-      prompt: "check the deploy",
-      fireAt: new Date(Date.now() + 3_600_000),
+    await whileServed(dir, async () => {
+      const info = JSON.parse((await runInProcess(["info", dir, "--json"])).stdout) as {
+        schedules: { name: string; tz: string | null; next: string | null }[];
+      };
+      expect(info.schedules.map((s) => [s.name, s.tz, typeof s.next])).toEqual([
+        ["daily", null, "string"],
+        ["weekly", "Asia/Shanghai", "string"],
+      ]);
+      expect((await runInProcess(["info", dir])).stdout).toMatch(/daily \(next \S+\), weekly \(next \S+\)/);
+    });
+  });
+
+  it("schedules list says each schedule's next and last run and the pending wake-ups, holding the instance", async () => {
+    const dir = await agentWorkspace("fa-clock-list-", {
+      "src/schedules/daily.ts": schedule("0 9 * * *"),
+      "src/schedules/weekly.ts":
+        'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
+    });
+    const added = await clockOf(dir, async (clock) => {
+      await clock.fires("daily", () => ({
+        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }],
+        result: undefined,
+      }));
+      return addWakeup(clock, {
+        session: "chat:42",
+        prompt: "check the deploy",
+        fireAt: new Date(Date.now() + 3_600_000),
+      });
     });
     if (!added.ok) throw new Error(added.error);
 
-    const info = JSON.parse((await runInProcess(["info", dir, "--json"])).stdout) as {
-      schedules: { name: string; tz: string | null; next: string | null; last: { outcome: string | null } | null }[];
+    const listed = await runInProcess(["schedules", "list", dir, "--json"]);
+    expect(listed.code, listed.stderr).toBe(0);
+    const clock = JSON.parse(listed.stdout) as {
+      schedules: { name: string; tz?: string; next?: string; last?: { outcome?: string } }[];
       wakeups: { id: string; sessionId: string; prompt: string }[];
     };
-    expect(info.schedules.map((s) => [s.name, s.tz, typeof s.next, s.last])).toEqual([
-      ["daily", null, "string", { slot: "2026-01-01T09:00:00.000Z", outcome: "failed" }],
-      ["weekly", "Asia/Shanghai", "string", null],
+    expect(clock.schedules.map((s) => [s.name, s.tz, typeof s.next, s.last?.outcome])).toEqual([
+      ["daily", undefined, "string", "failed"],
+      ["weekly", "Asia/Shanghai", "string", undefined],
     ]);
-    expect(info.wakeups).toEqual([
+    expect(clock.wakeups).toEqual([
       expect.objectContaining({ id: added.id, sessionId: "chat:42", prompt: "check the deploy" }),
     ]);
-    const text = await runInProcess(["info", dir]);
-    expect(text.stdout).toMatch(/daily \(next \S+, last failed\)/);
-    expect(text.stdout).toContain(`${added.id} at ${added.fireAt}: check the deploy`);
+    const text = await runInProcess(["schedules", "list", dir]);
+    expect(text.stdout).toMatch(/daily {2}"0 9 \* \* \*" {2}next \S+ {2}last failed at 2026-01-01T09:00:00\.000Z/);
+    expect(text.stdout).toContain(`${added.id}  ${added.fireAt}  session=chat:42  check the deploy`);
   });
 
-  it.skipIf(process.getuid?.() === 0)("info says which schedule's last run it cannot read, in one line", async () => {
-    const dir = await agentWorkspace("fa-clock-unreadable-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
-    await mkdir(claims, { recursive: true });
-    const claim = join(claims, "2026-01-01T09-00-00-000Z");
-    await writeFile(claim, JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "completed" }));
-    await chmod(claim, 0o000);
+  it("schedules list refuses an instance another process holds, naming it, exit 1", async () => {
+    const dir = await agentWorkspace("fa-clock-held-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
+    const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"));
     try {
-      const info = await runInProcess(["info", dir]);
-      expect([info.code, info.stderr]).toEqual([1, expect.stringContaining('the last run of "daily" is unreadable')]);
+      const listed = await runInProcess(["schedules", "list", dir]);
+      expect([listed.code, listed.stdout]).toEqual([1, ""]);
+      expect(listed.stderr).toMatch(/the storage \S+agent\.sqlite is held by another process/);
     } finally {
-      await chmod(claim, 0o600);
+      await held.close(BACKGROUND_CONTEXT);
     }
   });
 
@@ -247,15 +294,19 @@ describe("cli: the agent's clock", () => {
       "src/schedules/digest.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
     });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "digest");
-    await mkdir(claims, { recursive: true });
-    await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
+    // A claim a stopped process left unsettled.
+    await clockOf(dir, (clock) =>
+      clock.fires("digest", () => ({
+        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z" }],
+        result: undefined,
+      })),
+    );
 
     const first = await runInProcess(["schedules", "run", "digest", dir]);
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
     const second = await runInProcess(["schedules", "run", "digest", dir]);
     expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
-    expect(readFires(resolveStateRoot(dir), "digest").map((fire) => fire.outcome)).toEqual([
+    expect((await clockOf(dir, (clock) => readFires(clock, "digest"))).map((fire) => fire.outcome)).toEqual([
       "interrupted",
       "completed",
       "completed",
@@ -267,15 +318,21 @@ describe("cli: the agent's clock", () => {
       "src/schedules/digest.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
     });
+    const added = await clockOf(dir, (clock) =>
+      addWakeup(clock, { session: "chat:42", prompt: "check the deploy", fireAt: new Date(Date.now() + 3_600_000) }),
+    );
+    if (!added.ok) throw new Error(added.error);
     await whileServed(dir, async () => {
       const fired = await runInProcess(["schedules", "run", "digest", dir]);
       expect([fired.code, fired.stdout.trim()], fired.stderr).toEqual([0, "seen 1"]);
-      const added = addWakeup(resolveStateRoot(dir), {
-        session: "chat:42",
-        prompt: "check the deploy",
-        fireAt: new Date(Date.now() + 3_600_000),
-      });
-      if (!added.ok) throw new Error(added.error);
+      const clock = JSON.parse((await runInProcess(["schedules", "list", dir, "--json"])).stdout) as {
+        schedules: { name: string; last?: { outcome?: string } }[];
+        wakeups: { id: string }[];
+      };
+      expect(clock.schedules).toEqual([
+        expect.objectContaining({ name: "digest", last: expect.objectContaining({ outcome: "completed" }) }),
+      ]);
+      expect(clock.wakeups.map(({ id }) => id)).toEqual([added.id]);
       const unwoken = await runInProcess(["schedules", "unwake", added.id, dir]);
       expect([unwoken.code, unwoken.stdout], unwoken.stderr).toEqual([0, expect.stringContaining(added.id)]);
       const gone = await runInProcess(["schedules", "unwake", added.id, dir]);

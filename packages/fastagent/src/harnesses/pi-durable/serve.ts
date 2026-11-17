@@ -6,7 +6,10 @@
  */
 import { dirname, isAbsolute, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { createModels } from "@earendil-works/pi-ai";
+import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
+import type { ClockStore } from "../../schedule/clock.ts";
+import { clockStore } from "./clock.ts";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
@@ -167,15 +170,22 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
 }
 
 /**
- * Run `work` holding the instance's storage, so no serve of the instance runs meanwhile: how a command changes the
- * instance's state outside a serve without losing a write to a serve's own.
+ * Run `work` over the clock of an instance no process serves, holding its storage meanwhile, so no serve of it starts
+ * until it is done: how a command reads or changes the clock without one. Its Session is opened and never resumed, so
+ * nothing of the instance runs.
  */
-export async function holdingInstance<T>(place: InstancePlace, work: () => T): Promise<T> {
+export async function withInstanceClock<T>(place: InstancePlace, work: (clock: ClockStore) => Promise<T>): Promise<T> {
   const storage = await openInstanceStorage(place);
+  // The Session closes its storage with it, also when it fails to open.
+  const harness = await Harness.open(
+    storage,
+    { models: createModels(), registry: createRegistry() },
+    BACKGROUND_CONTEXT,
+  );
   try {
-    return await work();
+    return await work(clockStore(harness, BACKGROUND_CONTEXT));
   } finally {
-    await storage.close(BACKGROUND_CONTEXT);
+    await harness.close(BACKGROUND_CONTEXT);
   }
 }
 
@@ -256,7 +266,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(chosen === "instance" ? { stateRoot } : {}),
+      ...(chosen === "instance" ? { clocked: true } : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),

@@ -235,11 +235,13 @@ export function scriptedAgent(
       run: async (name) => {
         throw agentError("not_found", `no schedule "${name}"`);
       },
+      list: async () => [],
     },
     wakeups: {
       cancel: async (id) => {
         throw agentError("not_found", `no pending wake-up ${id}`);
       },
+      list: async () => [],
     },
     sessions: {
       async create(createOptions = {}) {

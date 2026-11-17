@@ -12,15 +12,23 @@ import { text } from "./http/respond.ts";
 import { log } from "./log.ts";
 import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
+import type { ClockStore } from "./schedule/clock.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 
 /** The port a serve binds when neither a flag nor `PORT` (start only) names one. */
 export const DEFAULT_HTTP_PORT = 8787;
 
 /** Start the clock: the definition's schedules, and the wake-ups the agent sets for itself, on every serve. */
-function startSchedules(agent: Agent, stateRoot: string, schedules: readonly Schedule[]): Pick<Scheduler, "stop"> {
-  const scheduler = Effect.runSync(createScheduler({ agent, stateRoot, schedules }));
-  scheduler.start();
+async function startSchedules(
+  agent: Agent,
+  clock: ClockStore,
+  schedules: readonly Schedule[],
+): Promise<Pick<Scheduler, "stop">> {
+  const scheduler = Effect.runSync(createScheduler({ agent, clock, schedules }));
+  await scheduler.start().catch((error: unknown) => {
+    scheduler.stop();
+    throw error;
+  });
   if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
   return scheduler;
 }
@@ -107,8 +115,8 @@ export interface ServableAgent {
   agent: Agent;
   /** The project directory the instance's `.secrets/` belong to. */
   agentDir: string;
-  /** Where durable state lives (schedule fires, wake-ups). */
-  stateRoot: string;
+  /** Where its clock keeps its state (fires, wake-ups): without one, nothing fires. */
+  clock?: ClockStore;
   schedules: readonly Schedule[];
 }
 
@@ -126,7 +134,7 @@ function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
 
 /** The assembly itself: the schedules, and the Agent API with a key, composed into one handler. */
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
-  const { agent, agentDir, stateRoot, schedules } = opened;
+  const { agent, agentDir, clock, schedules } = opened;
   const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -143,13 +151,15 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
       );
       return yield* Effect.gen(function* () {
         if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
-        yield* Effect.acquireRelease(
-          Effect.try({
-            try: () => startSchedules(agent, stateRoot, schedules),
-            catch: (error) => error,
-          }),
-          (scheduled) => Effect.sync(scheduled.stop),
-        );
+        if (clock !== undefined) {
+          yield* Effect.acquireRelease(
+            Effect.tryPromise({
+              try: () => startSchedules(agent, clock, schedules),
+              catch: (error) => error,
+            }),
+            (scheduled) => Effect.sync(scheduled.stop),
+          );
+        }
         return {
           ...serviceOver(
             surface(api),

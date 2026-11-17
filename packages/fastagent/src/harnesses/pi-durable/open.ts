@@ -221,8 +221,8 @@ export interface AssembleAgentOptions {
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   settings?: HarnessSettings;
-  /** Where the instance's state is: given by a serve, whose scheduler fires the wake-ups `wake` keeps there. */
-  stateRoot?: string;
+  /** Whether the instance has a clock: a serve's, which fires its schedules and the wake-ups `wake` sets. */
+  clocked?: boolean;
   /** Whether that scheduler runs now: an app's `openAgent` runs one only while it serves. Default always. */
   wakeTicking?: () => boolean;
   unfinished?: Unfinished;
@@ -283,7 +283,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     defineExtension({
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, {
-        wake: ownWake || options.stateRoot !== undefined,
+        wake: ownWake || options.clocked === true,
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         source: definition.source === true,
@@ -292,10 +292,8 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     }),
   );
   for (const extension of code.extensions) registry.install(extension);
-  if (options.stateRoot !== undefined && !ownWake) {
-    registry.install(
-      wakeExtension(options.stateRoot, options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }),
-    );
+  if (options.clocked === true && !ownWake) {
+    registry.install(wakeExtension(options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }));
   }
   const { thinkingLevel } = config;
   return openDurableAgent({
@@ -309,7 +307,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-    ...(options.stateRoot === undefined ? {} : { clock: { stateRoot: options.stateRoot, schedules: code.schedules } }),
+    ...(options.clocked === true ? { clock: { schedules: code.schedules } } : {}),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.

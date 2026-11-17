@@ -24,6 +24,7 @@ import {
   type SessionEvent,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
+import type { ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
 import { addWakeup, listWakeups } from "../../packages/fastagent/src/schedule/wakeups.ts";
 
 export interface AgentApiSubject {
@@ -40,8 +41,8 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
-  /** The instance's state, where its clock keeps its wake-ups; its schedules are `digest` and `long` (a `hold`). */
-  stateRoot(): string;
+  /** Where the instance's clock keeps its fires and wake-ups; its schedules are `digest` and `long` (a `hold`). */
+  clock(): ClockStore;
   /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
   keysSends?: boolean;
   stop(): Promise<void>;
@@ -352,6 +353,40 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
     });
 
     describe("Clock", () => {
+      it("lists its schedules, with when each fires next and its last occurrence once one ran", async () => {
+        const before = await agent.schedules.list();
+        expect(before.map(({ name }) => name).sort()).toEqual(["digest", "long"]);
+        expect(before.find(({ name }) => name === "digest")).toEqual({
+          name: "digest",
+          cron: "0 9 * * *",
+          next: expect.stringMatching(/T09:00:00\.000Z$/),
+        });
+        const fired = await agent.schedules.run("digest", { wait: WAIT });
+        if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
+        // Its outcome is written once its message has ended, a moment after the answer: until then it has none.
+        await vi.waitFor(async () => {
+          const digest = (await agent.schedules.list()).find(({ name }) => name === "digest");
+          expect(digest?.last).toEqual({
+            slot: expect.any(String),
+            firedAt: expect.any(String),
+            outcome: "completed",
+            ms: expect.any(Number),
+          });
+        });
+      });
+
+      it("lists the pending wake-ups of every session, in the order they were set", async () => {
+        const [one, two] = [await newSession(agent), await newSession(agent)];
+        const at = new Date(Date.now() + 3_600_000);
+        const first = await addWakeup(subject.clock(), { session: two, prompt: "later", fireAt: at });
+        const second = await addWakeup(subject.clock(), { session: one, prompt: "recur", cron: "0 9 * * *" });
+        if (!first.ok || !second.ok) throw new Error("not set");
+        expect(await agent.wakeups.list()).toEqual([
+          { id: first.id, sessionId: two, fireAt: first.fireAt, prompt: "later" },
+          { id: second.id, sessionId: one, fireAt: second.fireAt, prompt: "recur", cron: "0 9 * * *" },
+        ]);
+      });
+
       it("fires a schedule now in its own session, answering once recorded or, with wait, once ended", async () => {
         const fired = await agent.schedules.run("digest");
         if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
@@ -375,7 +410,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
       it("cancels a pending wake-up whichever session set it, answering what it was, and not_found once gone", async () => {
         const sessionId = await newSession(agent);
-        const set = addWakeup(subject.stateRoot(), {
+        const set = await addWakeup(subject.clock(), {
           session: sessionId,
           prompt: "check in",
           fireAt: new Date(Date.now() + 3_600_000),
@@ -387,7 +422,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           fireAt: set.fireAt,
           prompt: "check in",
         });
-        expect(listWakeups(subject.stateRoot())).toEqual([]);
+        expect(await listWakeups(subject.clock())).toEqual([]);
         await expect(agent.wakeups.cancel(set.id)).rejects.toMatchObject({ code: "not_found" });
       });
     });

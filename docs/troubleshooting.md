@@ -62,7 +62,7 @@ restart. After a broken edit, fix it and save again.
 ### A schedule did not fire
 
 Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A container
-that was stopped or scaled to zero sleeps through it. `fastagent info` shows the next and last runs.
+that was stopped or scaled to zero sleeps through it. `fastagent schedules list` shows the next and last runs.
 
 ### `busy`
 

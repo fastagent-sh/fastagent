@@ -2,7 +2,7 @@
  * A definition assembled onto pi-durable: the definition as a value, its declared secrets, the text read per request
  * (SYSTEM.md, AGENTS.md, skills loaded as pi loads them, prompt templates), and the code built with its secrets.
  */
-import { mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -162,10 +162,9 @@ describe("an agent definition on pi-durable", () => {
       return (await conversation.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
     };
 
-    it("offers wake and unwake when a serve gives its state, and neither when the definition defines one", async () => {
-      const stateRoot = mkdtempSync(join(tmpdir(), "fastagent-wake-"));
+    it("offers wake and unwake when a serve gives it a clock, and neither when the definition defines one", async () => {
       expect(await offered((await open()).agent)).not.toContain("wake");
-      expect(await offered((await open(FILES, { stateRoot })).agent)).toEqual(
+      expect(await offered((await open(FILES, { clocked: true })).agent)).toEqual(
         expect.arrayContaining(["wake", "unwake"]),
       );
       const ownWake = {
@@ -180,7 +179,7 @@ export default defineTool({
 });
 `,
       };
-      const tools = await offered((await open(ownWake, { stateRoot })).agent);
+      const tools = await offered((await open(ownWake, { clocked: true })).agent);
       expect(tools).toContain("wake");
       expect(tools).not.toContain("unwake");
     });

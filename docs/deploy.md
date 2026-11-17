@@ -64,10 +64,11 @@ environment variables.
 
 ```text
 /data/
-├── .state/           # sessions and schedule state
+├── .state/           # sessions, schedule runs and wake-ups
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 
 A new image replaces the program; the volume stays. To keep the sessions in a managed PostgreSQL database instead of
 the volume, give the container `FASTAGENT_DATABASE_URL`
-([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)); the volume still holds the schedule state.
+([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), which keeps the schedule runs and wake-ups too;
+the volume then holds only the agent's working files.

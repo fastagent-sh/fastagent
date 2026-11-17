@@ -1,4 +1,8 @@
-/** `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent. */
+/**
+ * `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent: it
+ * reads the directory and the environment, never the instance's storage, so it answers beside a running serve. What
+ * the instance's clock did is `fastagent schedules list`'s.
+ */
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
@@ -13,8 +17,6 @@ import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { latestFire } from "../../schedule/state.ts";
-import { listWakeups } from "../../schedule/wakeups.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 
 export interface InfoOptions {
@@ -60,30 +62,11 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const stateRoot = resolveStateRoot(agentDir);
   const entered = enteredInstanceName();
   const storagePlace = { stateRoot, env: process.env, ...(entered === undefined ? {} : { name: entered }) };
-  // What the instance's clock wrote, read as it is: a serve that owns the instance writes it whole, and nothing is
-  // created here.
-  const schedules = (code?.schedules ?? []).map((s) => {
-    let last: ReturnType<typeof latestFire>;
-    try {
-      last = latestFire(stateRoot, s.name);
-    } catch (error) {
-      failStartup(new Error(`the last run of "${s.name}" is unreadable (state: ${stateRoot}): ${String(error)}`));
-    }
-    return {
-      name: s.name,
-      cron: s.cron,
-      tz: s.tz ?? null,
-      next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
-      last: last === undefined ? null : { slot: last.slot, outcome: last.outcome ?? null },
-    };
-  });
-  const wakeups = listWakeups(stateRoot).map(({ id, session, fireAt, prompt, cron, tz }) => ({
-    id,
-    sessionId: session,
-    fireAt,
-    prompt,
-    cron: cron ?? null,
-    tz: tz ?? null,
+  const schedules = (code?.schedules ?? []).map((s) => ({
+    name: s.name,
+    cron: s.cron,
+    tz: s.tz ?? null,
+    next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const auth = models.auth;
@@ -108,7 +91,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
           schedules: code === undefined ? null : schedules,
-          wakeups,
           commands,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
@@ -142,13 +124,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");
   line(
     "schedules",
-    code
-      ? schedules
-          .map((s) => `${s.name} (next ${s.next ?? "never"}${s.last ? `, last ${s.last.outcome ?? "running"}` : ""})`)
-          .join(", ") || "(none)"
-      : unbuilt,
+    code ? schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)" : unbuilt,
   );
-  line("wake-ups", wakeups.map((w) => `${w.id} at ${w.fireAt}: ${w.prompt.slice(0, 40)}`).join(", ") || "(none)");
   line("commands", commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   line("secrets", declared.length > 0 ? describeSecrets(declared) : "(none declared)");
   if (unsetSecrets.length > 0) {

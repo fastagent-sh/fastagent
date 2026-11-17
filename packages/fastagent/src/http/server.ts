@@ -262,6 +262,8 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       .handle("runSchedule", ({ params, query }) =>
         call("schedules.run", (signal) => agent.schedules.run(params.name, { wait: capped(query.wait), signal })),
       )
+      .handle("listSchedules", () => call("schedules.list", () => agent.schedules.list()))
+      .handle("listWakeups", () => call("wakeups.list", () => agent.wakeups.list()))
       .handle("cancelWakeup", ({ params }) => call("wakeups.cancel", () => agent.wakeups.cancel(params.id))),
   );
 

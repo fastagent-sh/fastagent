@@ -1,15 +1,24 @@
 /**
- * `fastagent schedules` — the agent's clock, operated: `run` fires a schedule now, `unwake` cancels a wake-up. Each goes
- * through the process that owns the instance (owner.ts): a deployment's (`--url`), the local serve's, or, with neither,
- * this process holding the instance itself. What will fire, and when, is `info`'s.
+ * `fastagent schedules` — the agent's clock, read and operated: `list` says what fires next, how each schedule last ran
+ * and which wake-ups are pending; `run` fires a schedule now; `unwake` cancels a wake-up. Each goes through the process
+ * that owns the instance (owner.ts): a deployment's (`--url`), the local serve's, or, with neither, this process
+ * holding the instance itself.
  */
 import { resolve } from "node:path";
-import { type Agent, AgentError, type Message, hasEnded } from "@fastagent-sh/client/agent-api";
+import {
+  type Agent,
+  AgentError,
+  type Message,
+  type ScheduleState,
+  type Wakeup,
+  hasEnded,
+} from "@fastagent-sh/client/agent-api";
 import { connectAgent } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
-import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
+import { openServing, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
+import { pendingWakeups, scheduleStates } from "../../schedule/operations.ts";
 import { removeAnyWakeup } from "../../schedule/wakeups.ts";
 import { deploymentAgent } from "../deployment.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
@@ -37,6 +46,55 @@ async function servedAgent(dirArg: string, opts: ClockOptions): Promise<Agent | 
   enterInstance(target, opts.instance);
   const owner: Owner | undefined = await reachOwner(resolveStateRoot(target)).catch(failStartup);
   return owner === undefined ? undefined : connectAgent(owner.url, { apiKey: owner.key });
+}
+
+/** The clock as the Agent API says it, through whatever owns the instance. */
+async function readClock(
+  dirArg: string,
+  opts: ClockOptions,
+): Promise<{ schedules: ScheduleState[]; wakeups: Wakeup[] }> {
+  const served = await servedAgent(dirArg, opts);
+  if (served !== undefined) {
+    const [schedules, wakeups] = await Promise.all([served.schedules.list(), served.wakeups.list()]).catch(
+      (error: unknown) => failStartup(refusal(error)),
+    );
+    return { schedules, wakeups };
+  }
+  refuseUnnamedDatabaseInstance();
+  const agentDir = agentDirOrExit(resolve(dirArg));
+  const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+  const { schedules } = buildDefinitionShape(definition, process.env);
+  const name = enteredInstanceName();
+  const place = {
+    stateRoot: resolveStateRoot(agentDir),
+    env: process.env,
+    agent: definition.name,
+    ...(name === undefined ? {} : { name }),
+  };
+  return withInstanceClock(place, async (clock) => ({
+    schedules: await scheduleStates(clock, schedules),
+    wakeups: await pendingWakeups(clock),
+  })).catch(failStartup);
+}
+
+/** List what fires next, how each schedule last ran, and the pending wake-ups. */
+export async function runList(dirArg: string, opts: ClockOptions & { json?: boolean }): Promise<void> {
+  const clock = await readClock(dirArg, opts);
+  if (opts.json) {
+    console.log(JSON.stringify(clock, null, 2));
+    return;
+  }
+  console.log(clock.schedules.length === 0 ? "schedules: (none)" : "schedules:");
+  for (const s of clock.schedules) {
+    const last = s.last === undefined ? "never run" : `last ${s.last.outcome ?? "running"} at ${s.last.firedAt}`;
+    console.log(`  ${s.name}  "${s.cron}"${s.tz ? ` ${s.tz}` : ""}  next ${s.next ?? "never"}  ${last}`);
+  }
+  console.log(clock.wakeups.length === 0 ? "wake-ups: (none)" : "wake-ups:");
+  for (const w of clock.wakeups) {
+    console.log(
+      `  ${w.id}  ${w.fireAt}${w.cron ? ` "${w.cron}"` : ""}  session=${w.sessionId}  ${w.prompt.slice(0, 60)}`,
+    );
+  }
 }
 
 /** Wait for the fire's message to end, print its answer, and exit as `invoke` does: 0 only for `completed`. */
@@ -107,7 +165,7 @@ export async function runUnwake(id: string, dirArg: string, opts: ClockOptions):
           const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));
           const name = enteredInstanceName();
           const place = { stateRoot, env: process.env, ...(name === undefined ? {} : { name }) };
-          const held = await holdingInstance(place, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
+          const held = await withInstanceClock(place, (clock) => removeAnyWakeup(clock, id)).catch(failStartup);
           if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
           return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };
         })();

@@ -295,6 +295,32 @@ export const ScheduleRun = Schema.Union([
 ]);
 export type ScheduleRun = typeof ScheduleRun.Type;
 
+/**
+ * A schedule of the agent's and its clock: when it fires next, and its last occurrence. An occurrence `skipped` ran into
+ * the schedule's previous one still running; `interrupted` was claimed by a process that stopped before it sent its
+ * message. An occurrence without an `outcome` is running, or its process stopped and the next start settles it.
+ */
+export class ScheduleState extends Schema.Opaque<ScheduleState>()(
+  Schema.Struct({
+    name: Schema.String,
+    cron: Schema.String,
+    tz: Schema.optionalKey(Schema.String),
+    /** When it fires next (ISO 8601); absent when its cron never fires again. */
+    next: Schema.optionalKey(Schema.String),
+    last: Schema.optionalKey(
+      Schema.Struct({
+        /** The instant the occurrence was for (ISO 8601). */
+        slot: Schema.String,
+        /** When it was fired (ISO 8601). */
+        firedAt: Schema.String,
+        outcome: Schema.optionalKey(Schema.Literals(["completed", "failed", "skipped", "interrupted"])),
+        /** How long its turn took, when it was timed. */
+        ms: Schema.optionalKey(Schema.Number),
+      }),
+    ),
+  }),
+) {}
+
 /** A wake-up the agent set for itself (`wake`): the session it fires into, when, and with what. */
 export class Wakeup extends Schema.Opaque<Wakeup>()(
   Schema.Struct({
@@ -344,10 +370,14 @@ export interface Agent {
      * session.
      */
     run(name: string, options?: WaitOptions): Promise<ScheduleRun>;
+    /** Every schedule the agent defines, with when it fires next and its last occurrence. */
+    list(): Promise<ScheduleState[]>;
   };
   wakeups: {
     /** Cancel a pending wake-up, whichever session set it, and answer what it was. */
     cancel(id: string): Promise<Wakeup>;
+    /** Every pending wake-up, of every session, in the order they were set. */
+    list(): Promise<Wakeup[]>;
   };
 }
 

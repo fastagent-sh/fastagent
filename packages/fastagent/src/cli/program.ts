@@ -82,7 +82,9 @@ const dev: CommandSpec = {
 const info: CommandSpec = {
   name: "info",
   summary: "print what the directory builds into, without serving",
-  description: "Inspect model, tools, extensions, schedules, commands and secrets read-only.",
+  description:
+    "Inspect model, tools, extensions, schedules, commands and secrets read-only, from the directory: never the " +
+    "instance's storage, so it answers beside a running serve.",
   args: [AGENT_ARG],
   flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
@@ -192,8 +194,24 @@ const deploy: CommandSpec = {
 
 const schedules: CommandSpec = {
   name: "schedules",
-  summary: "run a schedule now, or cancel a wake-up",
+  summary: "list the schedules and wake-ups, run a schedule now, or cancel a wake-up",
   subcommands: [
+    {
+      name: "list",
+      summary: "what fires next, how each schedule last ran, and the pending wake-ups, from the instance",
+      args: [AGENT_ARG],
+      flags: [JSON_FLAG, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+      examples: [
+        { cmd: "fastagent schedules list" },
+        { cmd: "fastagent schedules list --url https://agent.example.com --json", note: "a deployment" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/schedules.ts")).runList(args[0] as string, {
+          json: f.json === true,
+          ...urlOptions(f),
+          instance: instanceFlags(f),
+        }),
+    },
     {
       name: "run",
       summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
@@ -214,7 +232,7 @@ const schedules: CommandSpec = {
     {
       name: "unwake",
       summary: "cancel a pending wake-up, through the serve that owns the instance if one runs",
-      args: [{ name: "<id>", description: "wake-up id (fastagent info lists them)" }, AGENT_ARG],
+      args: [{ name: "<id>", description: "wake-up id (fastagent schedules list lists them)" }, AGENT_ARG],
       flags: [...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
       run: async (args, f) =>

@@ -166,7 +166,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | Sessions (`agent.sqlite`, unless they are [in PostgreSQL](#sessions-in-postgresql)) and schedule state. One process at a time |
+| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions, schedule runs and wake-ups. One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
@@ -200,8 +200,8 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 - **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
   saying who holds it. A process that dies frees its instance within 30 seconds.
 - **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
-- **Still under `<root>/.state/`:** schedule state, wake-ups and `auth.json`. Keep the root on persistent storage when
-  the agent has schedules or uses `wake`.
+- **Schedule runs and wake-ups** are in the database too. Under the root stay only the agent's working files and
+  what `fastagent login` writes (`auth.json`).
 - `fastagent info` shows where the sessions are (`storage:`), without the password.
 
 ## Code: `src/`
@@ -246,8 +246,9 @@ export default defineSchedule({
   `skipped`.
 - `dev` and `start` run the clock.
 
-`fastagent info` shows the next runs and the last outcome; `fastagent schedules run <name>` runs one now, through the
-running `dev` when there is one (`--url` for a deployment).
+`fastagent schedules list` shows the next runs, each schedule's last outcome and the pending wake-ups, kept in the
+instance's storage; `fastagent schedules run <name>` runs one now. Both go through the running `dev` when there is one
+(`--url` for a deployment).
 
 ### Self-scheduling
 
@@ -256,7 +257,7 @@ Every opened instance gives the agent `wake` and `unwake`; only a serve's clock 
 - `wake({ in: "30m", prompt })` or `wake({ cron: "0 9 * * *", tz?, prompt })` fires back into the same session, and
   survives restarts.
 - At most 20 pending per session, at least 10 minutes between recurring runs.
-- `unwake({ id })` cancels one; `fastagent schedules unwake <id>` cancels any (`fastagent info` lists them).
+- `unwake({ id })` cancels one; `fastagent schedules unwake <id>` cancels any (`fastagent schedules list` lists them).
 
 ## Logging
 

@@ -1,15 +1,13 @@
 /**
  * Which Agent session each of a Caller's conversations talks in (a schedule's runs). The Agent names sessions, so a
- * Caller keeps this map, in its own state (the schedules' `schedule/sessions.json`), and creates a conversation's
- * session in one order: the session, then the record, then the message. The map takes one conversation's calls
+ * Caller keeps this map, in its own state (the schedules': the clock's store), and creates a conversation's session in
+ * one order: the session, then the record, then the message. The map takes one conversation's calls
  * one at a time, so two messages for one new conversation meet it one after the other and get one session. A crash
  * between the session and the record leaves a session nothing refers to, which the retry does not reuse; no message is
  * answered twice, since a message is sent only once its session is recorded.
  */
-import { dirname } from "node:path";
 import { type Agent, AgentError } from "@fastagent-sh/client/agent-api";
 import { log } from "./log.ts";
-import { ensureStateHome, loadStateFile, saveStateFile } from "./state-file.ts";
 
 /** What the map asks of the Agent: whether a recorded session is still there, and a new one when it is not. */
 type SessionsAgent = { sessions: Pick<Agent["sessions"], "get" | "create"> };
@@ -23,9 +21,17 @@ async function newSession(agent: SessionsAgent): Promise<string> {
   return created.id;
 }
 
+/** Where the map is kept: read whole, and one conversation's session recorded. */
+export interface SessionRecords {
+  read(): Promise<Readonly<Record<string, string>>>;
+  record(conversation: string, sessionId: string): Promise<void>;
+  /** Where it is, as a log line says. */
+  where: string;
+}
+
 export interface ConversationSessions {
   /** The session `conversation` was recorded with, when it has one, as recorded. */
-  get(conversation: string): string | undefined;
+  get(conversation: string): Promise<string | undefined>;
   /**
    * The session `conversation` talks in: the one it has, or the one `create` makes (an empty one by default), recorded
    * before it is returned. A recorded session the Agent no longer holds (its storage was reset, or restored from an
@@ -35,17 +41,13 @@ export interface ConversationSessions {
 }
 
 /**
- * The map kept in `file`, read once and kept in memory: one process owns an instance's state, so nothing else writes
- * it while this process runs, and a turn costs no read of a file that grows with every conversation. Written whole,
- * synchronously, when a conversation gets a session.
+ * The map kept in `records`, read once and kept in memory: one process owns an instance's state, so nothing else
+ * writes it while this process runs. A conversation's session is recorded before it is used.
  */
-export function conversationSessions(file: string): ConversationSessions {
-  let recorded: Map<string, string> | undefined;
-  const map = (): Map<string, string> => {
-    if (recorded === undefined) {
-      const stored = loadStateFile(file);
-      recorded = new Map(stored !== null && typeof stored === "object" ? Object.entries(stored) : []);
-    }
+export function conversationSessions(records: SessionRecords): ConversationSessions {
+  let recorded: Promise<Map<string, string>> | undefined;
+  const map = (): Promise<Map<string, string>> => {
+    recorded ??= records.read().then((stored) => new Map(Object.entries(stored)));
     return recorded;
   };
   // A session asked about once is the Agent's for as long as this process runs: sessions are never deleted.
@@ -63,25 +65,24 @@ export function conversationSessions(file: string): ConversationSessions {
     return held;
   };
   const resolve = async (conversation: string, agent: SessionsAgent, create: () => Promise<string>) => {
-    const known = map().get(conversation);
+    const known = (await map()).get(conversation);
     if (known !== undefined && (await held(agent, known))) return known;
     if (known !== undefined) {
       log.warn(
         `[fastagent] ${conversation}: its session ${known} is not in the agent's storage (reset, or restored from ` +
-          `an older copy) — starting it a new one, recorded in ${file}`,
+          `an older copy) — starting it a new one, recorded in ${records.where}`,
       );
     }
     const sessionId = await create();
-    map().set(conversation, sessionId);
-    ensureStateHome(dirname(file));
-    saveStateFile(file, Object.fromEntries(map()));
+    await records.record(conversation, sessionId);
+    (await map()).set(conversation, sessionId);
     confirmed.add(sessionId);
     return sessionId;
   };
   /** Each conversation's last call: the next one waits for it, whatever it ended with. */
   const calls = new Map<string, Promise<string>>();
   return {
-    get: (conversation) => map().get(conversation),
+    get: async (conversation) => (await map()).get(conversation),
     of(conversation, agent, create = () => newSession(agent)) {
       const previous = calls.get(conversation);
       // Without one before it, the call starts now, as an unqueued one would: its Caller reads no turn of the loop.

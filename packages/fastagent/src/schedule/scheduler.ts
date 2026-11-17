@@ -5,7 +5,6 @@ import * as Deferred from "effect/Deferred";
 import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
-import { join } from "node:path";
 import { type Agent, AgentError, type Message, type SendRequest } from "@fastagent-sh/client/agent-api";
 import { conversationSessions } from "../conversation-sessions.ts";
 import { PromiseFailure } from "../promise-bridge.ts";
@@ -13,12 +12,16 @@ import { beginWork } from "../busy.ts";
 import { log } from "../log.ts";
 import { nextRun } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";
+import type { ClockStore } from "./clock.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
 import { requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 export interface Scheduler {
-  /** Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. */
-  start(): void;
+  /**
+   * Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. Rejects when a
+   * schedule's newest fire cannot be read: a schedule is not run blind.
+   */
+  start(): Promise<void>;
   /** Cancel pending waits. */
   stop(): void;
 }
@@ -31,7 +34,8 @@ export type ScheduledAgent = {
 
 export interface SchedulerOptions {
   agent: ScheduledAgent;
-  stateRoot: string;
+  /** Where the instance's clock keeps what it decided. */
+  clock: ClockStore;
   /** The definition's schedules. */
   schedules: readonly Schedule[];
   /** Override wall-clock dates; elapsed time and waits use the Effect clock. */
@@ -183,13 +187,21 @@ export interface ScheduleFireOutcome {
  * The claims this process is firing now. A newest claim with no outcome is a dead process's to account for only when no
  * fire of this one holds it: the resident clock and a fire on demand (`schedules.run`) share a process.
  */
-const firing = new Set<string>();
-const firingKey = (stateRoot: string, name: string, slot: Date) => `${stateRoot}\0${name}\0${slot.toISOString()}`;
+const firing = new WeakMap<ClockStore, Set<string>>();
+const firingOf = (clock: ClockStore): Set<string> => {
+  let held = firing.get(clock);
+  if (held === undefined) {
+    held = new Set();
+    firing.set(clock, held);
+  }
+  return held;
+};
+const firingKey = (name: string, slot: Date) => `${name}\0${slot.toISOString()}`;
 
 /** Claim → run → settle one occurrence. */
 function fireScheduleOnce(opts: {
   agent: ScheduledAgent;
-  stateRoot: string;
+  clock: ClockStore;
   schedule: Schedule;
   /** The instant this fire is FOR. Two schedulers agree on it, which is what makes the claim exclude. */
   slot: Date;
@@ -199,15 +211,14 @@ function fireScheduleOnce(opts: {
 }): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
-    const { stateRoot, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
+    const { clock: store, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
     const firedAt = now();
-    const skippedReason = yield* Effect.try({
-      try: () => {
-        // The DECISION to fire is the claim, and it is atomic: several schedulers over one state root — two
-        // `start`s, a restart overlapping its predecessor, an external clock racing the resident one — take the
-        // same slot, and exactly one of them runs it. It is also the ONLY state write on this path, so a state
-        // failure cannot burn a slot that was already claimed.
-        const claim = claimSlot(stateRoot, s.name, slot, firedAt);
+    const skippedReason = yield* Effect.tryPromise({
+      try: async () => {
+        // The DECISION to fire is the claim, and it is atomic: the resident clock and a fire on demand take the same
+        // slot, and exactly one of them runs it. It is also the ONLY state write on this path, so a state failure
+        // cannot burn a slot that was already claimed.
+        const claim = await claimSlot(store, s.name, slot, firedAt);
         if (claim.taken) return undefined;
         if (claim.why === "duplicate") {
           // Ordinary: the same delivery arrived twice, or another scheduler has this slot and is running it.
@@ -225,26 +236,26 @@ function fireScheduleOnce(opts: {
       catch: (cause) => new PromiseFailure(cause),
     });
     if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const held = firingKey(stateRoot, s.name, slot);
-    firing.add(held);
-    return yield* firedClaim(opts).pipe(Effect.ensuring(Effect.sync(() => firing.delete(held))));
+    const held = firingKey(s.name, slot);
+    firingOf(store).add(held);
+    return yield* firedClaim(opts).pipe(Effect.ensuring(Effect.sync(() => firingOf(store).delete(held))));
   }).pipe(Effect.uninterruptible);
 }
 
 /** A claimed occurrence, run: its session and prompt, its message, and its outcome written back into the claim. */
 function firedClaim(opts: {
   agent: ScheduledAgent;
-  stateRoot: string;
+  clock: ClockStore;
   schedule: Schedule;
   slot: Date;
   accepted?: (message: Message) => void;
 }): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
   return Effect.gen(function* () {
-    const { agent, stateRoot, schedule: s, slot } = opts;
+    const { agent, clock, schedule: s, slot } = opts;
     // Before anything is sent: the session it continues (created and recorded the first time), and its prompt.
     const prepared = yield* Effect.tryPromise({
       try: async () => ({
-        sessionId: await scheduleSessions(stateRoot).of(s.name, agent),
+        sessionId: await scheduleSessions(clock).of(s.name, agent),
         text: typeof s.prompt === "string" ? s.prompt : await s.prompt({ at: slot }),
       }),
       catch: (cause) => new PromiseFailure(cause),
@@ -252,7 +263,7 @@ function firedClaim(opts: {
     if (Result.isFailure(prepared)) {
       const failed = `could not prepare the fire: ${String(prepared.failure.cause)}`;
       log.error(`[schedule] ${s.name} failed${oneLine(failed)}`);
-      settleClaim(stateRoot, s.name, slot, "failed", 0);
+      yield* Effect.promise(() => settleClaim(clock, s.name, slot, "failed", 0));
       return { fired: true, failed, ms: 0 };
     }
     // An occurrence on a busy session is refused, and so skipped; its key is the instant, so one occurrence is one run.
@@ -271,7 +282,7 @@ function firedClaim(opts: {
     // what decided it was the previous turn still holding the schedule's session, which is the policy every scheduler
     // names (k8s `concurrencyPolicy: Forbid`, Temporal's `Skip`) and none of them reports as an error.
     if (r.busy) {
-      settleClaim(stateRoot, s.name, slot, "skipped", r.ms);
+      yield* Effect.promise(() => settleClaim(clock, s.name, slot, "skipped", r.ms));
       return {
         fired: false,
         skippedReason: `the previous turn of "${s.name}" is still running — this occurrence is skipped, the next fires per cron`,
@@ -279,7 +290,7 @@ function firedClaim(opts: {
         ms: r.ms,
       };
     }
-    settleClaim(stateRoot, s.name, slot, r.fire, r.ms);
+    yield* Effect.promise(() => settleClaim(clock, s.name, slot, r.fire, r.ms));
     return { fired: true, ...(r.failed === undefined ? {} : { failed: r.failed }), ms: r.ms };
   }).pipe(Effect.uninterruptible);
 }
@@ -290,28 +301,28 @@ function firedClaim(opts: {
  */
 export function fireScheduleNow(opts: {
   agent: ScheduledAgent;
-  stateRoot: string;
+  clock: ClockStore;
   schedule: Schedule;
   /** Hears the fire's message once it is recorded. */
   accepted?: (message: Message) => void;
 }): Effect.Effect<ScheduleFireOutcome & { slot: Date }, PromiseFailure> {
   return Effect.gen(function* () {
-    const { agent, stateRoot, schedule, accepted } = opts;
-    const fire = yield* Effect.try({
-      try: () => latestFire(stateRoot, schedule.name),
+    const { agent, clock, schedule, accepted } = opts;
+    const fire = yield* Effect.tryPromise({
+      try: () => latestFire(clock, schedule.name),
       catch: (cause) => new PromiseFailure(cause),
     });
     if (
       fire !== undefined &&
       fire.outcome === undefined &&
-      !firing.has(firingKey(stateRoot, schedule.name, new Date(fire.slot)))
+      !firingOf(clock).has(firingKey(schedule.name, new Date(fire.slot)))
     ) {
-      yield* accountForUnreportedFire(agent, stateRoot, schedule.name, fire);
+      yield* accountForUnreportedFire(agent, clock, schedule.name, fire);
     }
     const slot = new Date((yield* Clock.Clock).currentTimeMillisUnsafe());
     return {
       slot,
-      ...(yield* fireScheduleOnce({ agent, stateRoot, schedule, slot, ...(accepted ? { accepted } : {}) })),
+      ...(yield* fireScheduleOnce({ agent, clock, schedule, slot, ...(accepted ? { accepted } : {}) })),
     };
   });
 }
@@ -332,16 +343,18 @@ export function fireScheduleNow(opts: {
  */
 function accountForUnreportedFire(
   agent: ScheduledAgent,
-  stateRoot: string,
+  clock: ClockStore,
   name: string,
   fire: Fire,
 ): Effect.Effect<void, PromiseFailure> {
   return Effect.gen(function* () {
-    // `fire.slot` came from a claim file name, which `listClaims` admits only when it round-trips through this same
-    // conversion — so the Date is valid and `settleClaim` writes back the file it was read from.
+    // `fire.slot` is what `claimSlot` stored, from `toISOString`: the same key back.
     const slot = new Date(fire.slot);
     const key = slot.toISOString();
-    const sessionId = scheduleSessions(stateRoot).get(name);
+    const sessionId = yield* Effect.tryPromise({
+      try: () => scheduleSessions(clock).get(name),
+      catch: (cause) => new PromiseFailure(cause),
+    });
     const taken =
       sessionId === undefined
         ? undefined
@@ -359,7 +372,7 @@ function accountForUnreportedFire(
           `before it, and that slot stays skipped (see \`fastagent info\`)`,
       );
       // No duration: this fire was never timed, and the process that could have timed it is gone.
-      settleClaim(stateRoot, name, slot, "interrupted");
+      yield* Effect.promise(() => settleClaim(clock, name, slot, "interrupted"));
       return;
     }
     log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} was taken before a restart — reading its end`);
@@ -378,13 +391,18 @@ function accountForUnreportedFire(
     if (outcome === "completed") log.info(`[schedule] ${name}: the fire claimed at ${fire.firedAt} completed`);
     else log.error(`[schedule] ${name}: the fire claimed at ${fire.firedAt} ${outcome}${oneLine(detail ?? "")}`);
     // No duration either: only its end was seen here.
-    settleClaim(stateRoot, name, slot, outcome);
+    yield* Effect.promise(() => settleClaim(clock, name, slot, outcome));
   });
 }
 
 /** Which session each schedule continues: one per schedule, so the agent sees what its earlier runs did. */
-export function scheduleSessions(stateRoot: string) {
-  return conversationSessions(join(stateRoot, "schedule", "sessions.json"));
+export function scheduleSessions(clock: ClockStore) {
+  return conversationSessions({
+    read: () => clock.stored.sessions(),
+    record: (name, sessionId) =>
+      clock.sessions((current) => ({ next: { ...current, [name]: sessionId }, result: undefined })),
+    where: "the instance's storage",
+  });
 }
 
 /** Wakes re-enter a chat session; identify the agent's own instruction and its cancellation handle. */
@@ -399,7 +417,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
     const fork = Effect.runForkWith(yield* Effect.context<never>());
-    const { agent, stateRoot, schedules, now = () => new Date(clock.currentTimeMillisUnsafe()) } = options;
+    const { agent, clock: store, schedules, now = () => new Date(clock.currentTimeMillisUnsafe()) } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
 
@@ -436,7 +454,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           }
           // `slot: due` is what two schedulers have in common: both compute the same cron instant, so both try to
           // claim the same name and exactly one wins. Claiming `now()` would give them different names.
-          yield* fireScheduleOnce({ agent, stateRoot, schedule: s, slot: due, now }).pipe(
+          yield* fireScheduleOnce({ agent, clock: store, schedule: s, slot: due, now }).pipe(
             Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() => {
                 // Nothing to record: this fault happens BEFORE the claim exists (that is what keeps the slot
@@ -458,8 +476,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
      * apart.
      */
     const wakeOnce = Effect.gen(function* () {
-      const w = yield* Effect.try({
-        try: () => takeFirstDueWakeup(stateRoot, now()),
+      const w = yield* Effect.tryPromise({
+        try: () => takeFirstDueWakeup(store, now()),
         catch: (cause) => new PromiseFailure(cause),
       });
       if (!w) return false;
@@ -482,9 +500,9 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
                 // Queued, it is refused only while the process or its session's queue is full: for now. A recurring
                 // wake-up has its next occurrence; a one-shot one goes back in the store, for the next poll.
                 r.busy && w.cron === undefined
-                  ? Effect.try({
-                      try: () => {
-                        requeueWakeup(stateRoot, w, new Date(now().getTime() + WAKEUP_POLL_MS));
+                  ? Effect.tryPromise({
+                      try: async () => {
+                        await requeueWakeup(store, w, new Date(now().getTime() + WAKEUP_POLL_MS));
                         log.info(`[schedule] ${label}: refused for now — retrying next poll (${r.failed})`);
                       },
                       catch: (cause) => new PromiseFailure(cause),
@@ -536,7 +554,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     };
 
     return {
-      start() {
+      async start() {
         stopped = false;
         // ONE claim read per schedule — the newest — for the two planes that must agree about it: the reconciler
         // (was that fire ever reported?) and catch-up (where does the next run resume?). A read fault on it stays
@@ -545,11 +563,11 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         // boot (`latestFire`).
         const lastFires = new Map<string, string>();
         for (const s of schedules) {
-          const fire = latestFire(stateRoot, s.name);
+          const fire = await latestFire(store, s.name);
           if (fire === undefined) continue;
           lastFires.set(s.name, fire.firedAt);
           if (fire.outcome !== undefined) continue;
-          const accounted = accountForUnreportedFire(agent, stateRoot, s.name, fire).pipe(
+          const accounted = accountForUnreportedFire(agent, store, s.name, fire).pipe(
             Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() =>
                 // Unsettled still, so the next boot reads it again.
