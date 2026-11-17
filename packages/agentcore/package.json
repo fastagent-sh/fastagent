@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/agentcore",
   "version": "0.31.0",
-  "description": "Run a FastAgent agent on Amazon Bedrock AgentCore, with its sessions in Aurora DSQL.",
+  "description": "Run a FastAgent agent on Amazon Bedrock AgentCore: the runtime, its Caller, and Aurora DSQL as its database.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -30,7 +30,15 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./client": {
+      "@fastagent-sh/source": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
     "./package.json": "./package.json"
+  },
+  "bin": {
+    "fastagent-agentcore": "./dist/bin.js"
   },
   "files": [
     "dist",
@@ -50,7 +58,18 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
     "@aws-sdk/dsql-signer": "^3.1170.0",
+    "@effect/platform-node": "^4.0.7",
+    "@fastagent-sh/client": "0.31.0",
+    "effect": "^4.0.7"
+  },
+  "peerDependencies": {
     "@fastagent-sh/fastagent": "0.31.0"
+  },
+  "peerDependenciesMeta": {
+    "@fastagent-sh/fastagent": {
+      "optional": true
+    }
   }
 }

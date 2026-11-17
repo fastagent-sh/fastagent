@@ -17,6 +17,7 @@ FastAgent serves an agent directory as a live service. Pick what you want to do.
 | Give it MCP tools | [MCP servers](mcp.md) |
 | Call it from my app | [Embedding](embedding.md) |
 | Run it on a server | [Deploy](deploy.md) |
+| Run it on Amazon Bedrock AgentCore, an instance per user | [AgentCore](agentcore.md) |
 | Look up a command | [CLI](cli.md) |
 | Look up the API | [Agent API](agent-api.md), [TypeScript exports](api-reference.md) |
 | Fix something | [Troubleshooting](troubleshooting.md) |

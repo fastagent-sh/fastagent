@@ -97,6 +97,11 @@ describe("package lines", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("@fastagent-sh/agentcore/client, a Caller's, loads no runtime", () => {
+    const reached = [...staticPackageGraph(resolve(srcOf("agentcore"), "client.ts"))].map(packageOf);
+    expect(reached).not.toContain("@fastagent-sh/fastagent");
+  });
+
   it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
     const entry = resolve(srcOf("client"), "index.ts");
     const reached = [...staticPackageGraph(entry), ...staticPackageGraph(entry, true)];

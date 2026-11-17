@@ -33,8 +33,13 @@ import {
 import { AgentHttpApi, MESSAGE_STREAM_EVENT_TYPES, Refusal, SESSION_EVENT_TYPES } from "./contract.ts";
 
 export interface ConnectOptions {
-  /** One of the keys the instance holds (`FASTAGENT_API_KEY` where it runs). */
-  apiKey: string;
+  /**
+   * One of the keys the instance holds (`FASTAGENT_API_KEY` where it runs). Without one no `Authorization` is sent: for
+   * a `fetch` that authenticates each request itself.
+   */
+  apiKey?: string;
+  /** What sends each request. Default: the global `fetch`. A platform's own signs and routes it (AgentCore's). */
+  fetch?: typeof globalThis.fetch;
 }
 
 /**
@@ -135,12 +140,20 @@ function sendFailure(baseUrl: string, stage: SendStage, error: unknown): AgentEr
 }
 
 export function connectAgent(url: string, options: ConnectOptions): Agent {
+  const { apiKey, fetch } = options;
   const client = Effect.runSync(
     HttpApiClient.make(AgentHttpApi, {
       baseUrl: url,
-      transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(options.apiKey)),
+      ...(apiKey === undefined
+        ? {}
+        : { transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(apiKey)) }),
     }).pipe(Effect.provide(FetchHttpClient.layer)),
   ).agent;
+  /** What every request runs with: no trace headers of Effect's own, and the Caller's `fetch`. */
+  const sending = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> => {
+    const quiet = effect.pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
+    return fetch === undefined ? quiet : quiet.pipe(Effect.provideService(FetchHttpClient.Fetch, fetch));
+  };
   const read = (error: unknown) => readFailure(url, error);
   const sent = (stage: SendStage) => (error: unknown) => sendFailure(url, stage, error);
 
@@ -156,9 +169,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     if (signal?.aborted) throw signal.reason;
     const answered = effect.pipe(Effect.catch(refusalIn));
     const exit = await Effect.runPromiseExit(
-      (signal === undefined ? answered : Effect.raceFirst(answered, rejected(signal))).pipe(
-        Effect.provideService(HttpClient.TracerPropagationEnabled, false),
-      ),
+      sending(signal === undefined ? answered : Effect.raceFirst(answered, rejected(signal))),
     );
     if (Exit.isSuccess(exit)) return exit.value;
     if (signal?.aborted) throw signal.reason;
@@ -209,9 +220,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
       ({ type: "stream_error", error: errorData(agentError("unavailable", why)) }) as unknown as E;
     let delivered = false;
     let ended = false;
-    const events = Stream.unwrap(
-      opened.pipe(Effect.catch(refusalIn), Effect.provideService(HttpClient.TracerPropagationEnabled, false)),
-    ).pipe(
+    const events = Stream.unwrap(sending(opened.pipe(Effect.catch(refusalIn)))).pipe(
       // A type a later server sends is not one this Caller can be handed.
       Stream.filter((event): event is E => known.has(event.type)),
       Stream.tap(() =>

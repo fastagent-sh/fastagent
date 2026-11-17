@@ -25,6 +25,7 @@ Key facts:
 - [Embedding](https://fastagent.sh/docs/embedding/): use FastAgent as a library inside your own app.
 - [MCP servers](https://fastagent.sh/docs/mcp/): connect MCP tool servers.
 - [Deploy](https://fastagent.sh/docs/deploy/): run the agent in a container on any host.
+- [AgentCore](https://fastagent.sh/docs/agentcore/): run it on Amazon Bedrock AgentCore, one instance per user, with sessions in Aurora DSQL.
 - [Troubleshooting](https://fastagent.sh/docs/troubleshooting/): common setup and runtime issues.
 
 ## Reference

@@ -19,6 +19,7 @@ import { mcpTools } from "./mcp.ts";
 import { processEnvironment } from "../../child-env.ts";
 import { definedValues } from "../../declared-secrets.ts";
 import { log } from "../../log.ts";
+import { activeWork } from "../../busy.ts";
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
@@ -338,6 +339,11 @@ export interface LocalAgent extends Agent {
   serve(options?: ServeAgentOptions): Promise<Service>;
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
+  /**
+   * Whether the process has work in flight: a message not yet ended, or a schedule's fire before its message is taken.
+   * For a platform that reclaims an idle machine (AgentCore's `HealthyBusy`).
+   */
+  busy(): boolean;
   /** Close what `serve` started, then release the instance's storage. */
   close(): Promise<void>;
 }
@@ -418,6 +424,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     schedules: agent.schedules,
     wakeups: agent.wakeups,
     harness: agent.harness,
+    busy: () => activeWork() > 0,
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
