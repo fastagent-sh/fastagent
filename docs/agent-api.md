@@ -189,6 +189,9 @@ A send's body is `{ content, whenBusy?, metadata?, wait?, stream? }`, and its ke
 An event stream sends each event as `event: <type>` with its JSON as `data`, and a comment at least every 15 seconds so
 proxies keep it open. A refusal answers the status above with `{ "error": AgentError }`.
 
+`connectAgent(url, { apiKey, fetch })` sends each request with `fetch` when you give one, which may authenticate it
+itself (then leave out `apiKey`): `connectAgentCore` is `connectAgent` with AgentCore's ([AgentCore](agentcore.md)).
+
 ```bash
 SEND=$(uuidgen)   # one key per message: running this again is the same message
 curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorization: Bearer $KEY" \

@@ -50,7 +50,9 @@ function setVersion(version) {
 	for (const dir of WORKSPACES) {
 		const pkg = readPackage(dir);
 		pkg.version = version;
-		for (const name of Object.keys(pkg.dependencies ?? {})) if (names.has(name)) pkg.dependencies[name] = version;
+		for (const field of ["dependencies", "peerDependencies"]) {
+			for (const name of Object.keys(pkg[field] ?? {})) if (names.has(name)) pkg[field][name] = version;
+		}
 		writeFileSync(`${dir}/package.json`, `${JSON.stringify(pkg, null, 2)}\n`);
 	}
 	run("npm", ["install", "--package-lock-only", "--no-audit", "--no-fund"]);

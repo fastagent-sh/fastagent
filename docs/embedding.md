@@ -99,6 +99,8 @@ await agent.close(); // closes the service, then releases the storage
 - `service.fetch` answers `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
   `@fastagent-sh/client`.
+- `agent.busy()` says whether a message or a schedule's fire is in flight in the process: for a platform that stops an
+  idle machine, as AgentCore does.
 
 ### Mounting `fetch`
 

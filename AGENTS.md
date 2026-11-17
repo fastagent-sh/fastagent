@@ -11,7 +11,8 @@ that API from outside the runtime: channels are not part of it.
   from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
 - **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API and `connectAgent`;
-  it imports no runtime) and `@fastagent-sh/fastagent` (the runtime and the CLI). A package reaches another only by
+  it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI) and `@fastagent-sh/agentcore` (Amazon
+  Bedrock AgentCore: its runtime, its Caller under `/client`, Aurora DSQL). A package reaches another only by
   name, and in the repository reads its source through the `@fastagent-sh/source` export condition;
   `test/guards/package-boundary.test.ts` holds the lines.
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
