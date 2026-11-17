@@ -162,7 +162,7 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
     if (place.name === undefined) {
       return Promise.reject(
         new Error(
-          `${DATABASE_URL_ENV}: an instance in a database is opened by its name, and none was given: ` +
+          "an instance in a database is opened by its name, and none was given: " +
             `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
         ),
       );

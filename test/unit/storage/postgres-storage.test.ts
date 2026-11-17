@@ -264,7 +264,7 @@ describe("an instance belongs to the agent that made it", () => {
     await expect(
       openSource(dir, { secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url } }),
     ).rejects.toThrow(
-      "FASTAGENT_DATABASE_URL: an instance in a database is opened by its name, and none was given: set FASTAGENT_NAME (an app: openAgent's name)",
+      "an instance in a database is opened by its name, and none was given: set FASTAGENT_NAME (an app: openAgent's name)",
     );
   });
 });

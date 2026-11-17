@@ -25,14 +25,17 @@ describe("Aurora DSQL as an instance's database", () => {
     );
   });
 
+  /** DSQL as it answers an index: `started` for `CREATE INDEX ASYNC`, `succeeded` for the wait on its job. */
+  const sent: unknown[][] = [];
+  const db = (started: Record<string, unknown>[], succeeded = true) => ({
+    query: async <T extends object>(text: string, params?: readonly unknown[]) => {
+      sent.push([text, ...(params ?? [])]);
+      return (text.startsWith("CREATE") ? started : [{ succeeded }]) as T[];
+    },
+  });
+
   it("builds an index as a job and waits for it, and starts none for one that exists", async () => {
-    const sent: unknown[][] = [];
-    const db = (answer: Record<string, unknown>[]) => ({
-      query: async <T extends object>(text: string, params?: readonly unknown[]) => {
-        sent.push([text, ...(params ?? [])]);
-        return (text.startsWith("CREATE") ? answer : []) as T[];
-      },
-    });
+    sent.length = 0;
     await createIndexAsync(db([{ job_id: "j1" }]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
     await createIndexAsync(db([]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
     expect(sent).toEqual([
@@ -40,5 +43,13 @@ describe("Aurora DSQL as an instance's database", () => {
       ["CALL sys.wait_for_job($1)", "j1"],
       ["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"],
     ]);
+  });
+
+  it("fails the migration when the index job does not succeed, naming the job and the index", async () => {
+    await expect(
+      createIndexAsync(db([{ job_id: "j2" }], false), "CREATE INDEX IF NOT EXISTS i ON t (a)"),
+    ).rejects.toThrow(
+      "the index job j2 did not succeed (CREATE INDEX IF NOT EXISTS i ON t (a)): see sys.jobs, then drop the INVALID index",
+    );
   });
 });

@@ -17,12 +17,22 @@ export const DSQL_LIMITS: PostgresLimits = {
   bytesPerValue: 1_000_000,
 };
 
-/** DSQL builds an index as a job: started with `ASYNC`, and waited for, so the storage opens on the index it made. */
+/**
+ * DSQL builds an index as a job: started with `ASYNC`, and waited for, so the storage opens on the index it made. A job
+ * that fails leaves the index `INVALID`, so it fails the migration, which then records no version and is run again.
+ */
 export const createIndexAsync: CreateIndex = async (db, statement) => {
   if (!statement.startsWith("CREATE INDEX ")) throw new Error(`not an index: ${statement.slice(0, 60)}`);
   const [job] = await db.query<{ job_id?: string }>(statement.replace("CREATE INDEX ", "CREATE INDEX ASYNC "));
   // An index that exists starts no job.
-  if (job?.job_id !== undefined) await db.query("CALL sys.wait_for_job($1)", [job.job_id]);
+  if (job?.job_id === undefined) return;
+  const [waited] = await db.query<{ succeeded?: boolean }>("CALL sys.wait_for_job($1)", [job.job_id]);
+  if (waited?.succeeded !== true) {
+    const index = statement.replace(/\s+/g, " ").slice(0, 80);
+    throw new Error(
+      `the index job ${job.job_id} did not succeed (${index}): see sys.jobs, then drop the INVALID index`,
+    );
+  }
 };
 
 export interface DsqlOptions {
