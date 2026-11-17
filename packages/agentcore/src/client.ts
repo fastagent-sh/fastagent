@@ -1,17 +1,18 @@
 /**
- * An agent on AgentCore, from wherever the AWS SDK runs: the Agent API, as `connectAgent` gives it, through the session's
- * endpoint. AgentCore invokes a runtime only at one path and turns any refusal into its own 424, so the Agent API goes
- * through the endpoint it gives each session, which passes every route, status, header and stream as they are.
- *
- * An invocation is what hands out that endpoint, so the first request binds with one (`{}`). A request through it is
- * signed (SigV4, the SDK's credentials) and names the session, since a microVM AgentCore starts again behind the same
- * endpoint is told nothing else. AgentCore's own refusals of a request it did not deliver come back as the Agent API's.
+ * An agent on AgentCore, from wherever the AWS SDK runs: the Agent API, as `connectAgent` gives it, each request one
+ * `InvokeAgentRuntime` on the session (signed with the SDK's credentials), wrapped as the runtime unwraps it
+ * (`envelope.ts`). AgentCore's refusals of an invocation it did not deliver come back as the Agent API's.
  */
-import { BedrockAgentCoreClient, InvokeAgentRuntimeCommand } from "@aws-sdk/client-bedrock-agentcore";
-import { SignatureV4 } from "@smithy/signature-v4";
+import {
+  BedrockAgentCoreClient,
+  BedrockAgentCoreServiceException,
+  InvokeAgentRuntimeCommand,
+  type InvokeAgentRuntimeCommandOutput,
+} from "@aws-sdk/client-bedrock-agentcore";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
 import { statusOf } from "@fastagent-sh/client/http/contract";
+import { type EnvelopedResponse, envelopeRequest, isEventStream, unwrapResponse } from "./envelope.ts";
 
 export interface AgentCoreConnection {
   /** The runtime: `arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>`. */
@@ -23,22 +24,19 @@ export interface AgentCoreConnection {
   sessionId: string;
 }
 
-const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
-const PLATFORM_ERROR = "x-amzn-bedrock-agentcore-runtime-error";
 const RUNTIME_ARN = /^arn:aws[a-z-]*:bedrock-agentcore:([a-z0-9-]+):\d{12}:runtime\/[A-Za-z0-9_-]+$/;
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;
-/** How often a request meets a session AgentCore is still starting or stopping before it gives up. */
-const CONFLICT_TRIES = 5;
 
-/** AgentCore's refusals of a request it did not deliver to the container, as the Agent API's. */
+/**
+ * AgentCore's refusals of an invocation it did not deliver, as the Agent API's. Any other (`RuntimeClientError`, its
+ * own failure) may have reached the agent, and fails the request as one that got no answer.
+ */
 const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
-  AuthenticationRequired: "unauthorized",
-  AccessDenied: "unauthorized",
-  Throttled: "unavailable",
-  SessionConflict: "unavailable",
-  SessionNotFound: "unavailable",
-  MalformedRequest: "internal",
-  ProtocolError: "internal",
+  AccessDeniedException: "unauthorized",
+  UnauthorizedException: "unauthorized",
+  ThrottlingException: "unavailable",
+  ServiceQuotaExceededException: "unavailable",
+  RetryableConflictException: "unavailable",
 };
 
 /** The Agent of the session `sessionId` on the runtime `runtimeArn`. */
@@ -53,83 +51,39 @@ export function connectAgentCore({ runtimeArn, sessionId }: AgentCoreConnection)
     throw new Error(`the session id "${sessionId}" must be 33 to 256 letters, digits, "-" and "_" (AgentCore's rule)`);
   }
   const aws = new BedrockAgentCoreClient({ region });
-  const signer = new SignatureV4({
-    service: "bedrock-agentcore",
-    region,
-    credentials: aws.config.credentials,
-    sha256: aws.config.sha256,
-  });
-
-  let endpoint: Promise<string> | undefined;
-  const bind = async (): Promise<string> => {
-    const invoked = await aws.send(
-      new InvokeAgentRuntimeCommand({
-        agentRuntimeArn: runtimeArn,
-        runtimeSessionId: sessionId,
-        contentType: "application/json",
-        accept: "application/json",
-        payload: new TextEncoder().encode("{}"),
-      }),
-    );
-    await invoked.response?.transformToString();
-    if (!invoked.sessionEndpointUrl) {
-      throw new Error(
-        `the runtime ${runtimeArn} gives no session endpoint: create it with allowedPorts [{ port: 8080 }]`,
-      );
-    }
-    return invoked.sessionEndpointUrl;
-  };
-  const sessionEndpoint = () =>
-    (endpoint ??= bind().catch((error: unknown) => {
-      endpoint = undefined;
-      throw error;
-    }));
-
-  const send = async (request: Request, body: ArrayBuffer | undefined, base: string): Promise<Response> => {
-    const asked = new URL(request.url);
-    const url = new URL(asked.pathname + asked.search, base);
-    const headers: Record<string, string> = { host: url.host, [SESSION_HEADER]: sessionId };
-    for (const [name, value] of request.headers) {
-      if (name !== "authorization" && name !== "host" && name !== "content-length") headers[name] = value;
-    }
-    if (body !== undefined) headers["content-length"] = String(body.byteLength);
-    const query: Record<string, string[]> = {};
-    for (const [name, value] of url.searchParams) query[name] = [...(query[name] ?? []), value];
-    // Without x-amz-content-sha256 the endpoint takes a signature over no body, and the body is sent beside it.
-    const signed = await signer.sign({
-      method: request.method,
-      protocol: url.protocol,
-      hostname: url.hostname,
-      path: url.pathname,
-      query,
-      headers,
-    });
-    return fetch(url, { method: request.method, headers: signed.headers, body, signal: request.signal });
-  };
 
   const agentCoreFetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);
-    const body = request.body === null ? undefined : await request.arrayBuffer();
-    for (let attempt = 1; ; attempt++) {
-      const response = await send(request, body, await sessionEndpoint());
-      const platform = response.headers.get(PLATFORM_ERROR);
-      if (platform === null) return response;
-      // The session ended (its lifetime is 8 hours at most): an invocation starts it again, with its endpoint.
-      if (platform === "SessionNotFound" && attempt === 1) {
-        endpoint = undefined;
-        continue;
-      }
-      if (platform === "SessionConflict" && attempt < CONFLICT_TRIES) {
-        await new Promise((resolve) => setTimeout(resolve, 200 * 2 ** attempt));
-        continue;
-      }
-      const code = PLATFORM_REFUSALS[platform];
-      // Any other (a timeout, AgentCore's own failure) may have reached the agent: left as it came, for the Caller to say.
-      if (code === undefined) return response;
-      await response.body?.cancel();
-      const error = errorData(agentError(code, `AgentCore refused the request: ${platform} (HTTP ${response.status})`));
-      return Response.json({ error }, { status: statusOf(error) });
+    const payload = JSON.stringify({ request: await envelopeRequest(request) });
+    let invoked: InvokeAgentRuntimeCommandOutput;
+    try {
+      invoked = await aws.send(
+        new InvokeAgentRuntimeCommand({
+          agentRuntimeArn: runtimeArn,
+          runtimeSessionId: sessionId,
+          contentType: "application/json",
+          accept: "application/json, text/event-stream",
+          payload: new TextEncoder().encode(payload),
+        }),
+        { abortSignal: request.signal },
+      );
+    } catch (error) {
+      if (!(error instanceof BedrockAgentCoreServiceException)) throw error;
+      const code = PLATFORM_REFUSALS[error.name];
+      if (code === undefined) throw error;
+      const refusal = errorData(agentError(code, `AgentCore refused the request: ${error.name}: ${error.message}`));
+      return Response.json({ error: refusal }, { status: statusOf(refusal) });
     }
+    if (invoked.response === undefined) throw new Error("AgentCore answered the invocation with no body");
+    if (isEventStream(invoked.contentType)) {
+      return new Response(invoked.response.transformToWebStream(), {
+        headers: { "content-type": invoked.contentType ?? "" },
+      });
+    }
+    const answer = JSON.parse(await invoked.response.transformToString()) as { response?: EnvelopedResponse };
+    if (answer.response === undefined)
+      throw new Error("the runtime answered what is not an Agent API answer: is it fastagent-agentcore?");
+    return unwrapResponse(answer.response);
   };
-  return connectAgent(`https://bedrock-agentcore.${region}.amazonaws.com`, { fetch: agentCoreFetch });
+  return connectAgent(`https://${sessionId}.agentcore`, { fetch: agentCoreFetch });
 }

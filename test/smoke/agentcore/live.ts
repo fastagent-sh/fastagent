@@ -1,9 +1,9 @@
 /**
  * An agent on a live AgentCore runtime, called as a Caller calls it (`connectAgentCore`, this machine's AWS
  * credentials): what no test on this machine can show. The runtime serves `fastagent-agentcore` with its instances in
- * Aurora DSQL, and was made with `allowedPorts [{ port: 8080 }]` and a short idle timeout. A session answers through its
- * endpoint, streams, goes on after AgentCore reclaims its microVM (the conversation is in the database, not the
- * microVM), and keeps to itself. Outside the test suite, which leaves no test a way off the machine: run by hand when the
+ * Aurora DSQL, and was made with a short idle timeout. A session answers through invocations, streams, keeps a refusal's
+ * code, goes on after AgentCore reclaims its microVM (the conversation is in the database, not the microVM), and keeps
+ * to itself. Outside the test suite, which leaves no test a way off the machine: run by hand when the
  * runtime or its Caller changes.
  *
  *   node --conditions=@fastagent-sh/source test/smoke/agentcore/live.ts <runtime ARN> <idle timeout seconds>
@@ -33,7 +33,7 @@ await step("a new session answers, as the instance it names", async () => {
   assert.deepEqual([answered.status, answered.answer?.text], ["completed", "seen 1"]);
 });
 
-await step("an answer streams through the session's endpoint", async () => {
+await step("an answer streams", async () => {
   const events: string[] = [];
   for await (const event of agent.messages.stream({ sessionId: conversation, content: "two" })) events.push(event.type);
   assert.equal(events.at(-1), "done");

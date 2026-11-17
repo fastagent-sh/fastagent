@@ -40,8 +40,7 @@ docker push <account>.dkr.ecr.<region>.amazonaws.com/my-agent:1
 1. Create an Aurora DSQL cluster for the agent, in the runtime's region. Every instance of the agent is kept there,
    under its session id.
 2. Create the AgentCore runtime from the image, with:
-   - the HTTP protocol and `allowedPorts: [{ port: 8080 }]`, which gives each session the endpoint the Agent API is
-     reached through;
+   - the HTTP protocol;
    - the environment variable `FASTAGENT_DSQL_ENDPOINT=<cluster id>.dsql.<region>.on.aws`, and the agent's values (the
      model's API key, what its tools declare with `needs`), as `fastagent start` takes them;
    - an execution role that may pull the image, write logs, and `dsql:DbConnectAdmin` on the cluster.
@@ -60,8 +59,8 @@ const message = await agent.messages.send({ sessionId: session.id, content: "hi"
 ```
 
 `agent` is the [Agent API](agent-api.md), as `connectAgent` gives it. `@fastagent-sh/agentcore/client` loads no
-runtime: a backend needs only it and AWS credentials that may `bedrock-agentcore:InvokeAgentRuntime` and
-`bedrock-agentcore:InvokeAgentRuntimeProxy` on the runtime.
+runtime: a backend needs only it and AWS credentials that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime.
+Each request is one invocation of the session; an answer streams as it is written.
 
 - **The session id is the instance.** Keep the mapping from your users to session ids, and give a user who must not
   see another's work a session id of their own. AgentCore authenticates every request: `connectAgentCore` signs each

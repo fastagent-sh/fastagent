@@ -3,7 +3,6 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { connectAgent } from "../../../packages/client/src/index.ts";
 import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
@@ -86,43 +85,121 @@ async function runtimeOf(prefix: string, database: PostgresDatabase = { url: pos
   return { dir, handler };
 }
 
-/** A request as AgentCore delivers it to the container, naming `session`. */
-const delivered = (path: string, session?: string, init: RequestInit = {}) =>
-  new Request(`http://runtime${path}`, {
-    ...init,
-    headers: { ...(session === undefined ? {} : { [SESSION_HEADER]: session }), ...(init.headers ?? {}) },
+/** An invocation as AgentCore delivers it to the container: `body` under the session `session` names. */
+const invocation = (session: string | undefined, body: unknown) =>
+  new Request("http://runtime/invocations", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(session === undefined ? {} : { [SESSION_HEADER]: session }) },
+    body: JSON.stringify(body),
   });
 
-describe("the AgentCore runtime", () => {
-  it("is the instance its session names: the Agent API through it, kept in the database, and no other session's", async () => {
-    const { dir, handler } = await runtimeOf("fa-agentcore-runtime-");
-    const session = freshInstance();
-    try {
-      const bound = await handler.fetch(delivered("/invocations", session, { method: "POST", body: "{}" }));
-      expect(await bound.json()).toEqual({ instance: session });
-      const agent = connectAgent("http://runtime", {
-        fetch: async (input, init) => {
-          const request = new Request(input, init);
-          request.headers.set(SESSION_HEADER, session);
-          return handler.fetch(request);
-        },
-      });
-      expect((await agent.info()).name).toBe(session);
-      const { id: sessionId } = await agent.sessions.create();
-      const answered = await agent.messages.send({ sessionId, content: "hello" }, { wait: 30 });
-      expect([answered.status, answered.answer?.text]).toEqual(["completed", "seen 1"]);
-      expect(existsSync(join(dir, ".state", "agent.sqlite"))).toBe(false);
+/** What the runtime answers an enveloped request with, unwrapped. */
+async function answered(response: Response) {
+  const { response: inner } = (await response.json()) as {
+    response: { status: number; headers: Record<string, string>; body: string };
+  };
+  return {
+    status: inner.status,
+    headers: inner.headers,
+    body: JSON.parse(Buffer.from(inner.body, "base64").toString()) as Refused,
+  };
+}
 
-      const other = await handler.fetch(delivered("/v1/agent", "another-session-0123456789abcdef0123"));
-      expect([other.status, ((await other.json()) as Refused).error.message]).toEqual([
+const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
+
+/**
+ * AgentCore as far as a Caller meets it, on loopback: `InvokeAgentRuntime` delivers to the runtime's handler, and an
+ * answer that is not a 2xx comes back as AgentCore's own 424, as it does. `refuse` makes it refuse the next invocation
+ * itself, before delivering it.
+ */
+async function agentCore(handler: { fetch(request: Request): Promise<Response> }) {
+  const signatures: string[] = [];
+  const refusals: Array<{ status: number; type: string }> = [];
+  const server = createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    signatures.push(String(req.headers.authorization));
+    const refusal = refusals.shift();
+    if (refusal !== undefined) {
+      res.writeHead(refusal.status, { "content-type": "application/json", "x-amzn-errortype": refusal.type });
+      res.end(JSON.stringify({ message: "refused here" }));
+      return;
+    }
+    const session = String(req.headers[SESSION_HEADER] ?? "");
+    const delivered = await handler.fetch(invocation(session, JSON.parse(Buffer.concat(chunks).toString())));
+    if (delivered.status >= 300) {
+      res.writeHead(424, { "content-type": "application/json", "x-amzn-errortype": "RuntimeClientError" });
+      res.end(JSON.stringify({ message: `Received error (${delivered.status}) from runtime.` }));
+      return;
+    }
+    res.writeHead(delivered.status, { "content-type": delivered.headers.get("content-type") ?? "" });
+    for await (const chunk of delivered.body ?? []) res.write(chunk);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_AGENTCORE", `http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+  vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
+  vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+  return {
+    signatures,
+    refuse: (status: number, type: string) => refusals.push({ status, type }),
+    close: async () => {
+      vi.unstubAllEnvs();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+describe("an agent on AgentCore", () => {
+  it("is the instance its session names: the Agent API through invocations, each signed, kept in the database", async () => {
+    const { dir, handler } = await runtimeOf("fa-agentcore-runtime-");
+    const aws = await agentCore(handler);
+    const sessionId = freshInstance();
+    try {
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
+      expect((await agent.info()).name).toBe(sessionId);
+      const { id } = await agent.sessions.create();
+      const sent = await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 });
+      expect([sent.status, sent.answer?.text]).toEqual(["completed", "seen 1"]);
+      // The answer streams as it is written: its first event arrives while the message still runs.
+      const stream = agent.messages.stream({ sessionId: id, content: "linger" })[Symbol.asyncIterator]();
+      const first = await stream.next();
+      expect(first.value).toMatchObject({
+        type: "message",
+        message: { status: expect.stringMatching(/queued|running/) },
+      });
+      const messageId = (first.value as { message: { id: string } }).message.id;
+      expect((await agent.messages.get({ sessionId: id, messageId })).status).not.toBe("completed");
+      let last = first;
+      for (let next = await stream.next(); !next.done; next = await stream.next()) last = next;
+      expect(last.value).toMatchObject({ type: "done" });
+      // A refusal keeps its code through AgentCore, which would have made a 404 its own 424.
+      await expect(agent.sessions.get("no-such-session")).rejects.toMatchObject({ code: "not_found" });
+      expect(existsSync(join(dir, ".state", "agent.sqlite"))).toBe(false);
+      expect(
+        aws.signatures.every((signature) => signature.includes("/ap-southeast-1/bedrock-agentcore/aws4_request")),
+      ).toBe(true);
+    } finally {
+      await aws.close();
+      await handler.close();
+    }
+  });
+
+  it("refuses an invocation of another session, one that names none, and one that is not a request", async () => {
+    const { handler } = await runtimeOf("fa-agentcore-refusals-");
+    const session = freshInstance();
+    const request = { request: { method: "GET", path: "/v1/agent", headers: {} } };
+    try {
+      expect((await answered(await handler.fetch(invocation(session, request)))).status).toBe(200);
+      const other = await answered(await handler.fetch(invocation("another-session-0123456789abcdef0123", request)));
+      expect([other.status, other.body.error.message]).toEqual([
         400,
         `this AgentCore session is the instance "${session}", not "another-session-0123456789abcdef0123"`,
       ]);
-      const unnamed = await handler.fetch(delivered("/v1/agent"));
-      expect([unnamed.status, ((await unnamed.json()) as Refused).error.message]).toEqual([
-        400,
-        `a request names its AgentCore session in ${SESSION_HEADER}`,
-      ]);
+      const unnamed = await answered(await handler.fetch(invocation(undefined, request)));
+      expect(unnamed.body.error.message).toBe(`an invocation names its AgentCore session in ${SESSION_HEADER}`);
+      const bare = await answered(await handler.fetch(invocation(session, { prompt: "hi" })));
+      expect(bare.body.error.message).toBe("an invocation is { request: { method, path, headers, body } }");
     } finally {
       await handler.close();
     }
@@ -130,28 +207,24 @@ describe("the AgentCore runtime", () => {
 
   it("answers /ping busy while a message runs, so AgentCore does not reclaim the microVM under it", async () => {
     const { handler } = await runtimeOf("fa-agentcore-busy-");
-    const session = freshInstance();
-    const ping = async () => ((await (await handler.fetch(delivered("/ping"))).json()) as { status: string }).status;
+    const aws = await agentCore(handler);
+    const ping = async () =>
+      ((await (await handler.fetch(new Request("http://runtime/ping"))).json()) as { status: string }).status;
     try {
       expect(await ping()).toBe("Healthy");
-      const agent = connectAgent("http://runtime", {
-        fetch: async (input, init) => {
-          const request = new Request(input, init);
-          request.headers.set(SESSION_HEADER, session);
-          return handler.fetch(request);
-        },
-      });
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: freshInstance() });
       const { id: sessionId } = await agent.sessions.create();
       const message = await agent.messages.send({ sessionId, content: "linger" });
       await vi.waitFor(async () => expect(await ping()).toBe("HealthyBusy"), { timeout: 3_000 });
       await agent.messages.get({ sessionId, messageId: message.id }, { wait: 15 });
       await vi.waitFor(async () => expect(await ping()).toBe("Healthy"), { timeout: 3_000 });
     } finally {
+      await aws.close();
       await handler.close();
     }
   });
 
-  it("opens the instance again on the next request after an open that failed, saying why it failed", async () => {
+  it("opens the instance again on the next invocation after an open that failed, saying why it failed", async () => {
     // A database never opened makes its tables, and the first index it builds fails, as a DSQL index job can.
     const fresh = await servedPostgres();
     let builds = 0;
@@ -162,117 +235,30 @@ describe("the AgentCore runtime", () => {
     };
     const { handler } = await runtimeOf("fa-agentcore-reopen-", { url: fresh.url, createIndex });
     const session = freshInstance();
+    const request = { request: { method: "GET", path: "/v1/agent", headers: {} } };
     try {
-      const failed = await handler.fetch(delivered("/v1/agent", session));
-      expect([failed.status, failed.headers.get("retry-after")]).toEqual([503, "1"]);
-      expect(((await failed.json()) as Refused).error).toMatchObject({
+      const failed = await answered(await handler.fetch(invocation(session, request)));
+      expect([failed.status, failed.headers["retry-after"]]).toEqual([503, "1"]);
+      expect(failed.body.error).toMatchObject({
         code: "unavailable",
         message: expect.stringContaining("the index job failed"),
       });
-      const opened = await handler.fetch(delivered("/invocations", session, { method: "POST", body: "{}" }));
-      expect(await opened.json()).toEqual({ instance: session });
+      expect((await answered(await handler.fetch(invocation(session, request)))).status).toBe(200);
     } finally {
       await handler.close();
       await fresh.close();
     }
   });
-});
-
-describe("connectAgentCore", () => {
-  const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
-
-  /**
-   * AgentCore as far as a Caller meets it, on loopback: an invocation hands out the session's endpoint (this server),
-   * which takes a signed request and delivers it to the runtime, or answers with what `refuse` says first.
-   */
-  async function agentCore(handler: { fetch(request: Request): Promise<Response> }) {
-    const seen = { invocations: 0, signatures: [] as string[] };
-    const refusals: Array<{ status: number; error: string }> = [];
-    const server = createServer(async (req, res) => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
-      const headers = new Headers(req.headers as Record<string, string>);
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : Buffer.concat(chunks);
-      let response: Response;
-      if (req.url?.startsWith("/runtimes/")) {
-        seen.invocations += 1;
-        const delivered = await handler.fetch(
-          new Request("http://runtime/invocations", {
-            method: "POST",
-            headers: { [SESSION_HEADER]: headers.get(SESSION_HEADER) ?? "" },
-            body,
-          }),
-        );
-        response = new Response(delivered.body, {
-          status: delivered.status,
-          headers: {
-            "content-type": "application/json",
-            "x-amzn-bedrock-agentcore-runtime-session-endpoint-url": `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-          },
-        });
-      } else {
-        seen.signatures.push(headers.get("authorization") ?? "");
-        const refusal = refusals.shift();
-        response = refusal
-          ? new Response(null, {
-              status: refusal.status,
-              headers: { "x-amzn-bedrock-agentcore-runtime-error": refusal.error },
-            })
-          : await handler.fetch(new Request(`http://runtime${req.url}`, { method: req.method, headers, body }));
-      }
-      res.writeHead(response.status, Object.fromEntries(response.headers));
-      res.end(Buffer.from(await response.arrayBuffer()));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_AGENTCORE", `http://127.0.0.1:${(server.address() as AddressInfo).port}`);
-    vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
-    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
-    return {
-      seen,
-      refuse: (status: number, error: string) => refusals.push({ status, error }),
-      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-    };
-  }
-
-  it("reaches the session's instance through its endpoint, signed, and binds again when AgentCore ended the session", async () => {
-    const { handler } = await runtimeOf("fa-agentcore-client-");
-    const fake = await agentCore(handler);
-    const sessionId = freshInstance();
-    try {
-      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
-      const { id } = await agent.sessions.create();
-      const events: string[] = [];
-      for await (const event of agent.messages.stream({ sessionId: id, content: "hello" })) events.push(event.type);
-      expect(events.at(-1)).toBe("done");
-      expect((await agent.info()).name).toBe(sessionId);
-      expect(
-        fake.seen.signatures.every((signature) =>
-          /^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/ap-southeast-1\/bedrock-agentcore\/aws4_request, SignedHeaders=.*x-amzn-bedrock-agentcore-runtime-session-id/.test(
-            signature,
-          ),
-        ),
-      ).toBe(true);
-      expect(fake.seen.invocations).toBe(1);
-
-      fake.refuse(404, "SessionNotFound");
-      expect((await agent.sessions.get(id)).id).toBe(id);
-      expect(fake.seen.invocations).toBe(2);
-    } finally {
-      await fake.close();
-      await handler.close();
-      vi.unstubAllEnvs();
-    }
-  });
 
   it("refuses as the Agent API what AgentCore refused, and a session id or ARN AgentCore would not take", async () => {
     const { handler } = await runtimeOf("fa-agentcore-refused-");
-    const fake = await agentCore(handler);
+    const aws = await agentCore(handler);
     try {
       const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: freshInstance() });
-      fake.refuse(403, "AccessDenied");
+      aws.refuse(403, "AccessDeniedException");
       await expect(agent.info()).rejects.toMatchObject({
         code: "unauthorized",
-        message: "AgentCore refused the request: AccessDenied (HTTP 403)",
+        message: "AgentCore refused the request: AccessDeniedException: refused here",
       });
       expect(() => connectAgentCore({ runtimeArn: RUNTIME, sessionId: "user-42" })).toThrow(
         'the session id "user-42" must be 33 to 256 letters, digits, "-" and "_" (AgentCore\'s rule)',
@@ -281,9 +267,8 @@ describe("connectAgentCore", () => {
         "support is not an AgentCore runtime's ARN (arn:aws:bedrock-agentcore:<region>:…:runtime/<id>)",
       );
     } finally {
-      await fake.close();
+      await aws.close();
       await handler.close();
-      vi.unstubAllEnvs();
     }
   });
 });

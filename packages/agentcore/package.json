@@ -62,7 +62,6 @@
     "@aws-sdk/dsql-signer": "^3.1170.0",
     "@effect/platform-node": "^4.0.7",
     "@fastagent-sh/client": "0.31.0",
-    "@smithy/signature-v4": "^5.7.5",
     "effect": "^4.0.7"
   },
   "peerDependencies": {
