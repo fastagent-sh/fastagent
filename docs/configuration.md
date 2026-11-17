@@ -246,9 +246,9 @@ export default defineSchedule({
   `skipped`.
 - `dev` and `start` run the clock.
 
-`fastagent info` shows the next runs and the last outcome, kept in the instance's storage (through the running `dev`
-when there is one; while another process holds the instance, it says it did not read them); `fastagent schedules run <name>` runs one now, through the
-running `dev` when there is one (`--url` for a deployment).
+`fastagent schedules list` shows the next runs, each schedule's last outcome and the pending wake-ups, kept in the
+instance's storage; `fastagent schedules run <name>` runs one now. Both go through the running `dev` when there is one
+(`--url` for a deployment).
 
 ### Self-scheduling
 
@@ -257,7 +257,7 @@ Every opened instance gives the agent `wake` and `unwake`; only a serve's clock 
 - `wake({ in: "30m", prompt })` or `wake({ cron: "0 9 * * *", tz?, prompt })` fires back into the same session, and
   survives restarts.
 - At most 20 pending per session, at least 10 minutes between recurring runs.
-- `unwake({ id })` cancels one; `fastagent schedules unwake <id>` cancels any (`fastagent info` lists them).
+- `unwake({ id })` cancels one; `fastagent schedules unwake <id>` cancels any (`fastagent schedules list` lists them).
 
 ## Logging
 

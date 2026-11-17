@@ -36,7 +36,7 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `models [search]` | list model specs |
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
-| `schedules run\|unwake` | fire a schedule now, or cancel a wake-up (`info` lists both, with each schedule's next and last run) |
+| `schedules list\|run\|unwake` | the schedules' next and last runs and the pending wake-ups; fire a schedule now; cancel a wake-up |
 | `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
 
 ## Global options
@@ -49,7 +49,7 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `login` | Machine-readable output. |
+| `--json` | `info`, `models`, `invoke`, `login`, `schedules list` | Machine-readable output. |
 | `--url <base>`, `--key <key>` | `invoke`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. |
 
 ## Exit codes

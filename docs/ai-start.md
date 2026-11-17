@@ -216,7 +216,7 @@ A schedule's plain reply reaches no one, so its prompt names the tool that deliv
 schedule's own session.
 
 ```bash
-fastagent info                         # next run, last outcome
+fastagent schedules list               # next run, last outcome, pending wake-ups
 fastagent schedules run daily-review   # a real run now, through dev when it runs
 ```
 
