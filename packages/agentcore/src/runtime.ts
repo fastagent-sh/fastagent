@@ -80,15 +80,25 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
 
   const open = async (name: string): Promise<Opened> => {
     const agent = await openAgent(definition, { ...given, root, name, database });
+    let opened: Opened;
     try {
       const key = randomBytes(32).toString("base64url");
-      const service = await agent.serve({ apiKeys: [key] });
-      ready = { agent, service, key };
-      return ready;
+      opened = { agent, service: await agent.serve({ apiKeys: [key] }), key };
     } catch (error) {
       await agent.close().catch(() => undefined);
       throw error;
     }
+    ready = opened;
+    // Its runs stopped under it (the lease went to another process, or went unrenewed): nothing answers in it any
+    // more, and while requests arrive AgentCore keeps this microVM. The next invocation opens the instance again.
+    const reopen = () => {
+      if (ready !== opened) return;
+      ready = undefined;
+      instance = undefined;
+      agent.close().catch((error: unknown) => console.error(`[fastagent] closing "${name}" failed: ${String(error)}`));
+    };
+    agent.harness.closed.then(reopen, reopen);
+    return opened;
   };
 
   const invocation = async (request: Request): Promise<Response> => {
@@ -133,6 +143,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
     /** Stop serving, then release the instance. */
     async close(): Promise<void> {
       const opened = await instance?.opened.catch(() => undefined);
+      ready = undefined;
       await opened?.agent.close();
     },
   };

@@ -28,8 +28,9 @@ const RUNTIME_ARN = /^arn:aws[a-z-]*:bedrock-agentcore:([a-z0-9-]+):\d{12}:runti
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;
 
 /**
- * AgentCore's refusals of an invocation it did not deliver, as the Agent API's. Any other (`RuntimeClientError`, its
- * own failure) may have reached the agent, and fails the request as one that got no answer.
+ * AgentCore's refusals of an invocation it did not deliver, as the Agent API's: no runtime of that ARN, or a request it
+ * does not take, is not one to send again. Any other (`RuntimeClientError`, its own failure) may have reached the agent,
+ * and fails the request as one that got no answer.
  */
 const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
   AccessDeniedException: "unauthorized",
@@ -37,6 +38,19 @@ const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
   ThrottlingException: "unavailable",
   ServiceQuotaExceededException: "unavailable",
   RetryableConflictException: "unavailable",
+  ResourceNotFoundException: "internal",
+  ValidationException: "internal",
+};
+
+/** One client a region, for every connection: a backend connects a session a user, and each would resolve credentials. */
+const clients = new Map<string, BedrockAgentCoreClient>();
+const clientIn = (region: string): BedrockAgentCoreClient => {
+  let client = clients.get(region);
+  if (client === undefined) {
+    client = new BedrockAgentCoreClient({ region });
+    clients.set(region, client);
+  }
+  return client;
 };
 
 /** The Agent of the session `sessionId` on the runtime `runtimeArn`. */
@@ -50,7 +64,7 @@ export function connectAgentCore({ runtimeArn, sessionId }: AgentCoreConnection)
   if (!SESSION_ID.test(sessionId)) {
     throw new Error(`the session id "${sessionId}" must be 33 to 256 letters, digits, "-" and "_" (AgentCore's rule)`);
   }
-  const aws = new BedrockAgentCoreClient({ region });
+  const aws = clientIn(region);
 
   const agentCoreFetch: typeof fetch = async (input, init) => {
     const request = new Request(input, init);

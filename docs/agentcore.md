@@ -62,11 +62,16 @@ const message = await agent.messages.send({ sessionId: session.id, content: "hi"
 runtime: a backend needs only it and AWS credentials that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime.
 Each request is one invocation of the session; an answer streams as it is written.
 
-- **The session id is the instance.** Keep the mapping from your users to session ids, and give a user who must not
-  see another's work a session id of their own. AgentCore authenticates every request: `connectAgentCore` signs each
-  with your AWS credentials, and there is no `FASTAGENT_API_KEY`.
+- **The session id is the instance.** Keep the mapping from your users to session ids. Through the Agent API, a
+  session id reaches only its own instance, and each runs in a microVM of its own: its files and processes are apart
+  from every other's. AgentCore authenticates every request: `connectAgentCore` signs each with your AWS credentials,
+  and there is no `FASTAGENT_API_KEY`.
+- **The database is the agent's, not the instance's.** Every instance signs in to the cluster with the runtime's
+  execution role, and an agent that runs commands or code (`bash`, a tool of yours) can use that role too: it can read
+  any instance's sessions. Users kept apart from each other are kept apart only from an agent whose tools run neither.
 - **AgentCore's refusals are the Agent API's:** a request AgentCore refuses before it reaches the agent rejects with an
-  `AgentError`, `unauthorized` for `AccessDenied` and `unavailable` (retryable) for throttling.
+  `AgentError`: `unauthorized` for `AccessDenied`, `unavailable` (retryable) for throttling, and `internal` for a
+  runtime that does not exist or a request it does not take.
 
 ## Limits
 

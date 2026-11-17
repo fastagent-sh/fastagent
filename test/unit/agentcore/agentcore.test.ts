@@ -7,6 +7,7 @@ import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import type { CreateIndex } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import type { PostgresDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
@@ -108,44 +109,62 @@ async function answered(response: Response) {
 const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
 
 /**
- * AgentCore as far as a Caller meets it, on loopback: `InvokeAgentRuntime` delivers to the runtime's handler, and an
- * answer that is not a 2xx comes back as AgentCore's own 424, as it does. `refuse` makes it refuse the next invocation
- * itself, before delivering it.
+ * AgentCore as far as a Caller meets it, on loopback: `InvokeAgentRuntime` delivers to the runtime's handler (`serving`),
+ * and an answer that is not a 2xx comes back as AgentCore's own 424, as it does. `refuse` makes it refuse the next
+ * invocation itself, before delivering it. One for the file: `connectAgentCore` keeps one AWS client a region, which
+ * reads its endpoint once.
  */
-async function agentCore(handler: { fetch(request: Request): Promise<Response> }) {
-  const signatures: string[] = [];
-  const refusals: Array<{ status: number; type: string }> = [];
-  const server = createServer(async (req, res) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk as Buffer);
-    signatures.push(String(req.headers.authorization));
-    const refusal = refusals.shift();
-    if (refusal !== undefined) {
-      res.writeHead(refusal.status, { "content-type": "application/json", "x-amzn-errortype": refusal.type });
-      res.end(JSON.stringify({ message: "refused here" }));
-      return;
-    }
-    const session = String(req.headers[SESSION_HEADER] ?? "");
-    const delivered = await handler.fetch(invocation(session, JSON.parse(Buffer.concat(chunks).toString())));
-    if (delivered.status >= 300) {
-      res.writeHead(424, { "content-type": "application/json", "x-amzn-errortype": "RuntimeClientError" });
-      res.end(JSON.stringify({ message: `Received error (${delivered.status}) from runtime.` }));
-      return;
-    }
-    res.writeHead(delivered.status, { "content-type": delivered.headers.get("content-type") ?? "" });
-    for await (const chunk of delivered.body ?? []) res.write(chunk);
-    res.end();
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_AGENTCORE", `http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+const fake = {
+  serving: undefined as { fetch(request: Request): Promise<Response> } | undefined,
+  signatures: [] as string[],
+  refusals: [] as Array<{ status: number; type: string }>,
+  refuse(status: number, type: string) {
+    this.refusals.push({ status, type });
+  },
+};
+const fakeAgentCore = createServer(async (req, res) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  fake.signatures.push(String(req.headers.authorization));
+  const refusal = fake.refusals.shift();
+  if (refusal !== undefined || fake.serving === undefined) {
+    const { status, type } = refusal ?? { status: 404, type: "ResourceNotFoundException" };
+    res.writeHead(status, { "content-type": "application/json", "x-amzn-errortype": type });
+    res.end(JSON.stringify({ message: "refused here" }));
+    return;
+  }
+  const session = String(req.headers[SESSION_HEADER] ?? "");
+  const delivered = await fake.serving.fetch(invocation(session, JSON.parse(Buffer.concat(chunks).toString())));
+  if (delivered.status >= 300) {
+    res.writeHead(424, { "content-type": "application/json", "x-amzn-errortype": "RuntimeClientError" });
+    res.end(JSON.stringify({ message: `Received error (${delivered.status}) from runtime.` }));
+    return;
+  }
+  res.writeHead(delivered.status, { "content-type": delivered.headers.get("content-type") ?? "" });
+  for await (const chunk of delivered.body ?? []) res.write(chunk);
+  res.end();
+});
+beforeAll(async () => {
+  await new Promise<void>((resolve) => fakeAgentCore.listen(0, "127.0.0.1", resolve));
+  vi.stubEnv("AWS_ENDPOINT_URL_BEDROCK_AGENTCORE", `http://127.0.0.1:${(fakeAgentCore.address() as AddressInfo).port}`);
   vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
   vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+});
+afterAll(async () => {
+  vi.unstubAllEnvs();
+  await new Promise<void>((resolve) => fakeAgentCore.close(() => resolve()));
+});
+
+/** AgentCore delivering to `handler` for the length of one test. */
+function agentCore(handler: { fetch(request: Request): Promise<Response> }) {
+  fake.serving = handler;
+  fake.signatures.length = 0;
+  fake.refusals.length = 0;
   return {
-    signatures,
-    refuse: (status: number, type: string) => refusals.push({ status, type }),
+    signatures: fake.signatures,
+    refuse: (status: number, type: string) => fake.refuse(status, type),
     close: async () => {
-      vi.unstubAllEnvs();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fake.serving = undefined;
     },
   };
 }
@@ -153,7 +172,7 @@ async function agentCore(handler: { fetch(request: Request): Promise<Response> }
 describe("an agent on AgentCore", () => {
   it("is the instance its session names: the Agent API through invocations, each signed, kept in the database", async () => {
     const { dir, handler } = await runtimeOf("fa-agentcore-runtime-");
-    const aws = await agentCore(handler);
+    const aws = agentCore(handler);
     const sessionId = freshInstance();
     try {
       const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
@@ -207,7 +226,7 @@ describe("an agent on AgentCore", () => {
 
   it("answers /ping busy while a message runs, so AgentCore does not reclaim the microVM under it", async () => {
     const { handler } = await runtimeOf("fa-agentcore-busy-");
-    const aws = await agentCore(handler);
+    const aws = agentCore(handler);
     const ping = async () =>
       ((await (await handler.fetch(new Request("http://runtime/ping"))).json()) as { status: string }).status;
     try {
@@ -250,15 +269,51 @@ describe("an agent on AgentCore", () => {
     }
   });
 
+  it("opens the instance again when another process took it over, rather than answer from the runs it stopped", async () => {
+    // The lease is renewed on an interval: faked, so the renewal that finds the lease gone runs when told.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { handler } = await runtimeOf("fa-agentcore-taken-");
+    const db = openPgDatabase(postgres.url);
+    const session = freshInstance();
+    const create = {
+      request: { method: "POST", path: "/v1/sessions", headers: { "content-type": "application/json" }, body: "{}" },
+    };
+    try {
+      expect((await answered(await handler.fetch(invocation(session, create)))).status).toBe(201);
+      await db.query(
+        "UPDATE durable_leases SET owner = 'another', lease_until = now() - interval '1 second' WHERE instance = $1",
+        [session],
+      );
+      vi.advanceTimersByTime(10_000);
+      await vi.waitFor(
+        async () => expect((await answered(await handler.fetch(invocation(session, create)))).status).toBe(201),
+        {
+          timeout: 10_000,
+          interval: 200,
+        },
+      );
+    } finally {
+      vi.useRealTimers();
+      await db.close();
+      await handler.close();
+    }
+  });
+
   it("refuses as the Agent API what AgentCore refused, and a session id or ARN AgentCore would not take", async () => {
     const { handler } = await runtimeOf("fa-agentcore-refused-");
-    const aws = await agentCore(handler);
+    const aws = agentCore(handler);
     try {
       const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: freshInstance() });
       aws.refuse(403, "AccessDeniedException");
       await expect(agent.info()).rejects.toMatchObject({
         code: "unauthorized",
         message: "AgentCore refused the request: AccessDeniedException: refused here",
+      });
+      aws.refuse(404, "ResourceNotFoundException");
+      await expect(agent.info()).rejects.toMatchObject({
+        code: "internal",
+        retryable: false,
+        message: "AgentCore refused the request: ResourceNotFoundException: refused here",
       });
       expect(() => connectAgentCore({ runtimeArn: RUNTIME, sessionId: "user-42" })).toThrow(
         'the session id "user-42" must be 33 to 256 letters, digits, "-" and "_" (AgentCore\'s rule)',
