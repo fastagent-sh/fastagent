@@ -146,9 +146,9 @@ export function describeInstanceStorage(place: InstancePlace): string {
 
 /**
  * The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's,
- * whose hold can end while open (`onLost`). `wait: false` refuses at once an instance another process holds.
+ * whose hold can end while open (`onLost`).
  */
-function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void, wait = true): Promise<Storage> {
+function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
   const url = place.env[DATABASE_URL_ENV];
   if (url) {
     if (place.name === undefined) {
@@ -164,23 +164,18 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),
-      ...(wait ? {} : { waitMs: 0 }),
     });
   }
-  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS, wait ? undefined : 0);
+  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
 }
 
 /**
  * Run `work` over the clock of an instance no process serves, holding its storage meanwhile, so no serve of it starts
  * until it is done: how a command reads or changes the clock without one. Its Session is opened and never resumed, so
- * nothing of the instance runs. `wait: false` refuses at once an instance another process holds.
+ * nothing of the instance runs.
  */
-export async function withInstanceClock<T>(
-  place: InstancePlace,
-  work: (clock: ClockStore) => Promise<T>,
-  options: { wait?: boolean } = {},
-): Promise<T> {
-  const storage = await openInstanceStorage(place, undefined, options.wait ?? true);
+export async function withInstanceClock<T>(place: InstancePlace, work: (clock: ClockStore) => Promise<T>): Promise<T> {
+  const storage = await openInstanceStorage(place);
   // The Session closes its storage with it, also when it fails to open.
   const harness = await Harness.open(
     storage,
