@@ -1,4 +1,8 @@
-/** `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent. */
+/**
+ * `fastagent info [agent] [--json]`: print what the directory builds into, without serving the agent. Its clock (each
+ * schedule's last run, the pending wake-ups) is read from the instance's storage: through the serve that owns it, or by
+ * holding the instance for the read when none does.
+ */
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
@@ -8,13 +12,16 @@ import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { agentPresentation } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
-import { describeInstanceStorage } from "../../harnesses/pi-durable/serve.ts";
+import { type InstancePlace, describeInstanceStorage, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { latestFire } from "../../schedule/state.ts";
-import { listWakeups } from "../../schedule/wakeups.ts";
+import { pendingWakeups, scheduleStates } from "../../schedule/operations.ts";
+import type { Schedule } from "../../schedule/schedule.ts";
+import type { ScheduleState, Wakeup } from "@fastagent-sh/client/agent-api";
+import { connectAgent } from "@fastagent-sh/client";
+import { reachOwner } from "../owner.ts";
 import { agentDirOrExit, failStartup } from "../fail.ts";
 
 export interface InfoOptions {
@@ -60,15 +67,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const stateRoot = resolveStateRoot(agentDir);
   const entered = enteredInstanceName();
   const storagePlace = { stateRoot, env: process.env, ...(entered === undefined ? {} : { name: entered }) };
-  // What the instance's clock wrote, read as it is: a serve that owns the instance writes it whole, and nothing is
-  // created here.
-  const schedules = (code?.schedules ?? []).map((s) => {
-    let last: ReturnType<typeof latestFire>;
-    try {
-      last = latestFire(stateRoot, s.name);
-    } catch (error) {
-      failStartup(new Error(`the last run of "${s.name}" is unreadable (state: ${stateRoot}): ${String(error)}`));
-    }
+  // The clock, read where it is: through the serve that owns the instance, or holding the instance when none does.
+  // One another process holds (a `start` here, or elsewhere on its database) is said as unread, never waited for.
+  const definedSchedules = code?.schedules ?? [];
+  const clock = await readClock(stateRoot, { ...storagePlace, agent: definition.name }, definedSchedules);
+  const schedules = definedSchedules.map((s) => {
+    const state = "error" in clock ? undefined : clock.schedules.find((known) => known.name === s.name);
+    const last = state?.last;
     return {
       name: s.name,
       cron: s.cron,
@@ -77,14 +82,18 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       last: last === undefined ? null : { slot: last.slot, outcome: last.outcome ?? null },
     };
   });
-  const wakeups = listWakeups(stateRoot).map(({ id, session, fireAt, prompt, cron, tz }) => ({
-    id,
-    sessionId: session,
-    fireAt,
-    prompt,
-    cron: cron ?? null,
-    tz: tz ?? null,
-  }));
+  const wakeups =
+    "error" in clock
+      ? null
+      : clock.wakeups.map(({ id, sessionId, fireAt, prompt, cron, tz }) => ({
+          id,
+          sessionId,
+          fireAt,
+          prompt,
+          cron: cron ?? null,
+          tz: tz ?? null,
+        }));
+  const clockError = "error" in clock ? clock.error : null;
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const auth = models.auth;
   const mcp = declareMcp(config.mcpServers, definition.dir).map(({ name, server }) => ({
@@ -109,6 +118,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           extensions: code?.extensions.map(({ name }) => name) ?? null,
           schedules: code === undefined ? null : schedules,
           wakeups,
+          clockError,
           commands,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
@@ -148,7 +158,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           .join(", ") || "(none)"
       : unbuilt,
   );
-  line("wake-ups", wakeups.map((w) => `${w.id} at ${w.fireAt}: ${w.prompt.slice(0, 40)}`).join(", ") || "(none)");
+  line(
+    "wake-ups",
+    wakeups === null
+      ? `(not read: ${clockError})`
+      : wakeups.map((w) => `${w.id} at ${w.fireAt}: ${w.prompt.slice(0, 40)}`).join(", ") || "(none)",
+  );
   line("commands", commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   line("secrets", declared.length > 0 ? describeSecrets(declared) : "(none declared)");
   if (unsetSecrets.length > 0) {
@@ -158,4 +173,26 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("state", stateRoot);
   line("storage", describeInstanceStorage(storagePlace));
   if (auth) line("auth", auth.fallback === undefined ? auth.path : `${auth.path} (then ${auth.fallback})`);
+}
+
+/**
+ * The instance's clock as the Agent API says it: through the serve that owns the instance when one does, else read
+ * holding the instance, by the functions its serve reads it with. Unread, with why, when another process holds it.
+ */
+async function readClock(
+  stateRoot: string,
+  place: InstancePlace,
+  schedules: readonly Schedule[],
+): Promise<{ schedules: ScheduleState[]; wakeups: Wakeup[] } | { error: string }> {
+  const owner = await reachOwner(stateRoot).catch(failStartup);
+  if (owner !== undefined) {
+    const served = connectAgent(owner.url, { apiKey: owner.key });
+    const [states, wakeups] = await Promise.all([served.schedules.list(), served.wakeups.list()]).catch(failStartup);
+    return { schedules: states, wakeups };
+  }
+  return withInstanceClock(
+    place,
+    async (clock) => ({ schedules: await scheduleStates(clock, schedules), wakeups: await pendingWakeups(clock) }),
+    { wait: false },
+  ).catch((error: unknown) => ({ error: error instanceof Error ? error.message : String(error) }));
 }

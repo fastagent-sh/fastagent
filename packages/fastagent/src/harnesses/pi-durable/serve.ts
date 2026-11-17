@@ -6,7 +6,10 @@
  */
 import { dirname, isAbsolute, join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Harness, MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { createModels } from "@earendil-works/pi-ai";
+import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
+import type { ClockStore } from "../../schedule/clock.ts";
+import { clockStore } from "./clock.ts";
 import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
@@ -143,9 +146,9 @@ export function describeInstanceStorage(place: InstancePlace): string {
 
 /**
  * The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's,
- * whose hold can end while open (`onLost`).
+ * whose hold can end while open (`onLost`). `wait: false` refuses at once an instance another process holds.
  */
-function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
+function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void, wait = true): Promise<Storage> {
   const url = place.env[DATABASE_URL_ENV];
   if (url) {
     if (place.name === undefined) {
@@ -161,21 +164,33 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),
+      ...(wait ? {} : { waitMs: 0 }),
     });
   }
-  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
+  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS, wait ? undefined : 0);
 }
 
 /**
- * Run `work` holding the instance's storage, so no serve of the instance runs meanwhile: how a command changes the
- * instance's state outside a serve without losing a write to a serve's own.
+ * Run `work` over the clock of an instance no process serves, holding its storage meanwhile, so no serve of it starts
+ * until it is done: how a command reads or changes the clock without one. Its Session is opened and never resumed, so
+ * nothing of the instance runs. `wait: false` refuses at once an instance another process holds.
  */
-export async function holdingInstance<T>(place: InstancePlace, work: () => T): Promise<T> {
-  const storage = await openInstanceStorage(place);
+export async function withInstanceClock<T>(
+  place: InstancePlace,
+  work: (clock: ClockStore) => Promise<T>,
+  options: { wait?: boolean } = {},
+): Promise<T> {
+  const storage = await openInstanceStorage(place, undefined, options.wait ?? true);
+  // The Session closes its storage with it, also when it fails to open.
+  const harness = await Harness.open(
+    storage,
+    { models: createModels(), registry: createRegistry() },
+    BACKGROUND_CONTEXT,
+  );
   try {
-    return await work();
+    return await work(clockStore((change) => harness.commit(change, BACKGROUND_CONTEXT)));
   } finally {
-    await storage.close(BACKGROUND_CONTEXT);
+    await harness.close(BACKGROUND_CONTEXT);
   }
 }
 
@@ -256,7 +271,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(chosen === "instance" ? { stateRoot } : {}),
+      ...(chosen === "instance" ? { clocked: true } : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),

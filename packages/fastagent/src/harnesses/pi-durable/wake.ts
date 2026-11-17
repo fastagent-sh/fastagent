@@ -1,11 +1,12 @@
 /**
  * `wake` and `unwake`: the agent schedules itself back into the conversation it is in, one-shot or recurring, kept in
- * the instance's state (schedule/wakeups.ts), which the scheduler fires. A pair over one store: a definition that
+ * the instance's clock (clock.ts), which the scheduler fires. A pair over one store: a definition that
  * defines either name gets neither.
  */
 import { num, obj, opt, str, union } from "@earendil-works/pi-schema";
 import { type Extension, type ToolExecutionResult, defineExtension, defineTool } from "@earendil-works/pi-durable";
 import { addWakeup, parseDelayMs, removeWakeup } from "../../schedule/wakeups.ts";
+import { clockStore } from "./clock.ts";
 import { sessionIdOf } from "./ids.ts";
 
 export const WAKE_EXTENSION = "fastagent.wake";
@@ -20,13 +21,10 @@ const NO_CLOCK =
   "work now, or say it cannot be scheduled.";
 
 /**
- * `ticking` says whether a clock fires the wake-ups kept in `stateRoot` now; a wake-up nothing would fire is refused.
- * Without it, one always does: `dev` and `start` serve whatever they open.
+ * `ticking` says whether a clock fires the instance's wake-ups now; a wake-up nothing would fire is refused. Without
+ * it, one always does: `dev` and `start` serve whatever they open. A wake-up is stored in its tool call's own commit.
  */
-export function wakeExtension(
-  stateRoot: string,
-  options: { now?: () => Date; ticking?: () => boolean } = {},
-): Extension {
+export function wakeExtension(options: { now?: () => Date; ticking?: () => boolean } = {}): Extension {
   const now = options.now ?? (() => new Date());
   return defineExtension({
     name: WAKE_EXTENSION,
@@ -63,8 +61,9 @@ export function wakeExtension(
           const session = await sessionIdOf(api, context);
           if (session === undefined) return refused(NOT_A_SESSION);
           const at = now();
+          const clock = clockStore((change) => api.commit(change, context));
           if (args.cron !== undefined) {
-            const added = addWakeup(stateRoot, { session, prompt: args.prompt, cron: args.cron, tz: args.tz }, at);
+            const added = await addWakeup(clock, { session, prompt: args.prompt, cron: args.cron, tz: args.tz }, at);
             if (!added.ok) return refused(added.error);
             return said(
               `OK — recurring wake ${added.id} (cron "${args.cron}"${args.tz ? ` ${args.tz}` : ""}), first at ${added.fireAt}: ${args.prompt}. Use unwake({ id: "${added.id}" }) to stop it.`,
@@ -76,7 +75,11 @@ export function wakeExtension(
               `couldn't parse "in" (${JSON.stringify(args.in)}): use a unit like "30m" / "2h" / "1d", or a number of seconds (a bare number as text like "120" is rejected).`,
             );
           }
-          const added = addWakeup(stateRoot, { session, prompt: args.prompt, fireAt: new Date(at.getTime() + ms) }, at);
+          const added = await addWakeup(
+            clock,
+            { session, prompt: args.prompt, fireAt: new Date(at.getTime() + ms) },
+            at,
+          );
           if (!added.ok) return refused(added.error);
           return said(
             `OK — I'll wake up at ${added.fireAt} (id ${added.id}) to: ${args.prompt}. Use unwake({ id: "${added.id}" }) if it becomes unnecessary.`,
@@ -94,7 +97,8 @@ export function wakeExtension(
         execute: async (args, api, context) => {
           const session = await sessionIdOf(api, context);
           if (session === undefined) return refused(NOT_A_SESSION);
-          return removeWakeup(stateRoot, args.id, session)
+          const clock = clockStore((change) => api.commit(change, context));
+          return (await removeWakeup(clock, args.id, session))
             ? said(`OK — wake-up ${args.id} cancelled.`)
             : refused(`no pending wake-up ${args.id} in this conversation (already fired, or not yours).`);
         },

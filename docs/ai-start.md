@@ -252,7 +252,7 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions and schedule state | on the container's volume at `/data` |
+| Sessions, schedule runs and wake-ups | on the container's volume at `/data`, or in PostgreSQL (`FASTAGENT_DATABASE_URL`) |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
 An accepted message is answered at least once across a restart, so tools with side effects must tolerate a repeat.

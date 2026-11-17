@@ -384,9 +384,11 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         if (run.status === "skipped" || runOptions?.wait === undefined) return run;
         return { status: "sent", message: await waited(async () => run.message, runOptions) };
       },
+      list: async () => [...(await request(client.listSchedules()))],
     },
     wakeups: {
       cancel: (id) => request(client.cancelWakeup({ params: { id } })),
+      list: async () => [...(await request(client.listWakeups()))],
     },
   };
 }

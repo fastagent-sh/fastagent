@@ -170,6 +170,8 @@ export interface OpenOptions {
   /** The agent that opens it (its package's name): an instance belongs to the agent that made it. */
   agent?: string;
   lease?: LeaseOptions;
+  /** How long to wait for an instance another process holds, over the lease's own: `0` refuses at once. */
+  waitMs?: number;
   limits?: PostgresLimits;
   onLost?: (error: Error) => void;
 }
@@ -207,7 +209,10 @@ export class PostgresStorage implements Storage {
    * database was out of reach for most of the lease. An instance another `agent` made is refused.
    */
   static async open(db: PgDatabase, instance: string, options: OpenOptions = {}): Promise<PostgresStorage> {
-    const lease = options.lease ?? DEFAULT_LEASE;
+    const lease = {
+      ...(options.lease ?? DEFAULT_LEASE),
+      ...(options.waitMs === undefined ? {} : { waitMs: options.waitMs }),
+    };
     const owner = crypto.randomUUID();
     await db.query(
       "INSERT INTO durable_metadata (instance, next_id, next_seq) VALUES ($1, 2, 1) ON CONFLICT (instance) DO NOTHING",

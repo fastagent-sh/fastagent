@@ -1,12 +1,16 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
+import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
+import { withInstanceClock } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { addWakeup } from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -16,6 +20,10 @@ vi.mock(
   "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
   () => import("../../doubles/storage-no-wait.ts"),
 );
+
+/** `work` over the clock of the CLI's instance of `dir`, which no process serves now. */
+const clockOf = <T>(dir: string, work: (clock: ClockStore) => Promise<T>): Promise<T> =>
+  withInstanceClock({ stateRoot: resolveStateRoot(dir), env: process.env }, work);
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
@@ -198,16 +206,16 @@ describe("cli: the agent's clock", () => {
       "src/schedules/weekly.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
     });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
-    await mkdir(claims, { recursive: true });
-    await writeFile(
-      join(claims, "2026-01-01T09-00-00-000Z"),
-      JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }),
-    );
-    const added = addWakeup(resolveStateRoot(dir), {
-      session: "chat:42",
-      prompt: "check the deploy",
-      fireAt: new Date(Date.now() + 3_600_000),
+    const added = await clockOf(dir, async (clock) => {
+      await clock.fires("daily", () => ({
+        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }],
+        result: undefined,
+      }));
+      return addWakeup(clock, {
+        session: "chat:42",
+        prompt: "check the deploy",
+        fireAt: new Date(Date.now() + 3_600_000),
+      });
     });
     if (!added.ok) throw new Error(added.error);
 
@@ -227,18 +235,16 @@ describe("cli: the agent's clock", () => {
     expect(text.stdout).toContain(`${added.id} at ${added.fireAt}: check the deploy`);
   });
 
-  it.skipIf(process.getuid?.() === 0)("info says which schedule's last run it cannot read, in one line", async () => {
-    const dir = await agentWorkspace("fa-clock-unreadable-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "daily");
-    await mkdir(claims, { recursive: true });
-    const claim = join(claims, "2026-01-01T09-00-00-000Z");
-    await writeFile(claim, JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z", outcome: "completed" }));
-    await chmod(claim, 0o000);
+  it("info says the clock is not read while another process holds the instance, at once, and the rest as ever", async () => {
+    const dir = await agentWorkspace("fa-clock-held-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
+    const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"));
     try {
       const info = await runInProcess(["info", dir]);
-      expect([info.code, info.stderr]).toEqual([1, expect.stringContaining('the last run of "daily" is unreadable')]);
+      expect(info.code, info.stderr).toBe(0);
+      expect(info.stdout).toMatch(/wake-ups: +\(not read: the storage \S+agent\.sqlite is held by another process/);
+      expect(info.stdout).toMatch(/daily \(next \S+\)/);
     } finally {
-      await chmod(claim, 0o600);
+      await held.close(BACKGROUND_CONTEXT);
     }
   });
 
@@ -247,15 +253,19 @@ describe("cli: the agent's clock", () => {
       "src/schedules/digest.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
     });
-    const claims = join(resolveStateRoot(dir), "schedule", "claims", "digest");
-    await mkdir(claims, { recursive: true });
-    await writeFile(join(claims, "2026-01-01T09-00-00-000Z"), JSON.stringify({ firedAt: "2026-01-01T09:00:00.000Z" }));
+    // A claim a stopped process left unsettled.
+    await clockOf(dir, (clock) =>
+      clock.fires("digest", () => ({
+        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z" }],
+        result: undefined,
+      })),
+    );
 
     const first = await runInProcess(["schedules", "run", "digest", dir]);
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
     const second = await runInProcess(["schedules", "run", "digest", dir]);
     expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
-    expect(readFires(resolveStateRoot(dir), "digest").map((fire) => fire.outcome)).toEqual([
+    expect((await clockOf(dir, (clock) => readFires(clock, "digest"))).map((fire) => fire.outcome)).toEqual([
       "interrupted",
       "completed",
       "completed",
@@ -267,15 +277,21 @@ describe("cli: the agent's clock", () => {
       "src/schedules/digest.ts":
         'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
     });
+    const added = await clockOf(dir, (clock) =>
+      addWakeup(clock, { session: "chat:42", prompt: "check the deploy", fireAt: new Date(Date.now() + 3_600_000) }),
+    );
+    if (!added.ok) throw new Error(added.error);
     await whileServed(dir, async () => {
       const fired = await runInProcess(["schedules", "run", "digest", dir]);
       expect([fired.code, fired.stdout.trim()], fired.stderr).toEqual([0, "seen 1"]);
-      const added = addWakeup(resolveStateRoot(dir), {
-        session: "chat:42",
-        prompt: "check the deploy",
-        fireAt: new Date(Date.now() + 3_600_000),
-      });
-      if (!added.ok) throw new Error(added.error);
+      const info = JSON.parse((await runInProcess(["info", dir, "--json"])).stdout) as {
+        schedules: { name: string; last: { outcome: string | null } | null }[];
+        wakeups: { id: string }[];
+      };
+      expect(info.schedules).toEqual([
+        expect.objectContaining({ name: "digest", last: expect.objectContaining({ outcome: "completed" }) }),
+      ]);
+      expect(info.wakeups.map(({ id }) => id)).toEqual([added.id]);
       const unwoken = await runInProcess(["schedules", "unwake", added.id, dir]);
       expect([unwoken.code, unwoken.stdout], unwoken.stderr).toEqual([0, expect.stringContaining(added.id)]);
       const gone = await runInProcess(["schedules", "unwake", added.id, dir]);

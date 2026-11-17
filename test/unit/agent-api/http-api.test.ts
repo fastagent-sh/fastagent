@@ -55,6 +55,7 @@ describe("the Agent API over HTTP", () => {
     expect(Object.keys(document.paths).sort()).toEqual([
       "/v1/agent",
       "/v1/openapi.json",
+      "/v1/schedules",
       "/v1/schedules/{name}/run",
       "/v1/sessions",
       "/v1/sessions/{sessionId}",
@@ -67,6 +68,7 @@ describe("the Agent API over HTTP", () => {
       "/v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}",
       "/v1/sessions/{sessionId}/messages/{messageId}",
       "/v1/usage",
+      "/v1/wakeups",
       "/v1/wakeups/{id}",
     ]);
   });

@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { type Agent, AgentError, type Message, hasEnded } from "@fastagent-sh/client/agent-api";
 import { connectAgent } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
-import { holdingInstance, openServing } from "../../harnesses/pi-durable/serve.ts";
+import { openServing, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { removeAnyWakeup } from "../../schedule/wakeups.ts";
@@ -107,7 +107,7 @@ export async function runUnwake(id: string, dirArg: string, opts: ClockOptions):
           const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));
           const name = enteredInstanceName();
           const place = { stateRoot, env: process.env, ...(name === undefined ? {} : { name }) };
-          const held = await holdingInstance(place, () => removeAnyWakeup(stateRoot, id)).catch(failStartup);
+          const held = await withInstanceClock(place, (clock) => removeAnyWakeup(clock, id)).catch(failStartup);
           if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
           return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };
         })();

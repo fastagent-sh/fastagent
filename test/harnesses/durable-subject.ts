@@ -268,7 +268,6 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       // Its clock: `digest` answers at once, `long` holds until released.
       clock: {
-        stateRoot: directory,
         schedules: [
           { name: "digest", cron: "0 9 * * *", prompt: "the digest" },
           { name: "long", cron: "0 9 * * *", prompt: "hold" },
@@ -310,7 +309,10 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     signalled: () => signalled,
     effects: () => effects,
     failStorage: () => fail(),
-    stateRoot: () => directory,
+    clock: () => {
+      if (current?.clock === undefined) throw new Error("the subject is not open");
+      return current.clock;
+    },
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);

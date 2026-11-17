@@ -23,6 +23,7 @@ export type {
   ModelRef,
   Page,
   ScheduleRun,
+  ScheduleState,
   SendRequest,
   Session,
   SessionChanges,
