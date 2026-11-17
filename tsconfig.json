@@ -16,7 +16,8 @@
     // `@fastagent-sh/source` (test/setup.ts). A published package has no `src/`, and its consumers never name either.
     "paths": {
       "@fastagent-sh/client": ["./packages/client/src/index.ts"],
-      "@fastagent-sh/client/*": ["./packages/client/src/*.ts"]
+      "@fastagent-sh/client/*": ["./packages/client/src/*.ts"],
+      "@fastagent-sh/fastagent": ["./packages/fastagent/src/index.ts"]
     }
   },
   "include": ["packages/*/src", "test"],

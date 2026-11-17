@@ -6,12 +6,13 @@ status: current
 
 # API reference
 
-A compact reference for `@fastagent-sh/fastagent` and `@fastagent-sh/client`, one entry per kind of user:
+A compact reference for the packages, one entry per kind of user:
 
 | Import | Holds |
 |---|---|
 | `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `McpError`, and what an author writes: `defineAgent`, `defineSchedule`, `needs`, `sessionIdOf` |
 | `@fastagent-sh/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers). It does not install the runtime |
+| `@fastagent-sh/agentcore` | What running on Amazon Bedrock AgentCore needs of AWS: `dsqlDatabase`, an Aurora DSQL cluster as `openAgent`'s `database` |
 
 Each export's signature and its documentation are its declaration: the package ships them (`dist/*.d.ts`), and an
 editor shows them. Each entry names every export.

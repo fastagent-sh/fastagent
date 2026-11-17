@@ -203,6 +203,9 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 - **Schedule runs and wake-ups** are in the database too. Under the root stay only the agent's working files and
   what `fastagent login` writes (`auth.json`).
 - `fastagent info` shows where the sessions are (`storage:`), without the password.
+- An app gives `openAgent` its database as `database: { url }` ([Embedding](embedding.md#1-open-it)). On Aurora DSQL,
+  `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` signs each connection in with the process's AWS
+  credentials and keeps a commit within DSQL's limits; a message over 6.4 MiB is refused there (`too_large`).
 
 ## Code: `src/`
 
