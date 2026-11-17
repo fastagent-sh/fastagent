@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { log } from "../log.ts";
 import { cronError, nextRun, recurringCronError } from "./cron.ts";
-import { type ClockStore, reading } from "./clock.ts";
+import type { ClockStore } from "./clock.ts";
 
 export interface Wakeup {
   id: string;
@@ -79,8 +79,8 @@ const stored = (w: Wakeup): Wakeup => ({
 });
 
 /** The current pending wake-ups. */
-export function listWakeups(clock: ClockStore): Promise<Wakeup[]> {
-  return clock.wakeups(reading(valid));
+export async function listWakeups(clock: ClockStore): Promise<Wakeup[]> {
+  return valid(await clock.stored.wakeups());
 }
 
 export type AddWakeupResult = { ok: true; id: string; fireAt: string } | { ok: false; error: string };
@@ -152,7 +152,9 @@ export function removeAnyWakeup(clock: ClockStore, id: string): Promise<Wakeup |
   return removeWhere(clock, (w) => w.id === id);
 }
 
-function removeWhere(clock: ClockStore, match: (w: Wakeup) => boolean): Promise<Wakeup | undefined> {
+async function removeWhere(clock: ClockStore, match: (w: Wakeup) => boolean): Promise<Wakeup | undefined> {
+  // Nothing to remove is answered from what is stored, committing nothing.
+  if (!(await clock.stored.wakeups()).some(match)) return undefined;
   return clock.wakeups((current) => {
     const all = valid(current);
     const index = all.findIndex(match);
@@ -165,10 +167,13 @@ function removeWhere(clock: ClockStore, match: (w: Wakeup) => boolean): Promise<
 /**
  * CLAIM the FIRST due wake-up (at or before `now`) in stored order, remove + return it, or undefined if none is due.
  */
-export function takeFirstDueWakeup(clock: ClockStore, now: Date = new Date()): Promise<Wakeup | undefined> {
+export async function takeFirstDueWakeup(clock: ClockStore, now: Date = new Date()): Promise<Wakeup | undefined> {
+  const due = (w: Wakeup) => new Date(w.fireAt).getTime() <= now.getTime();
+  // Every poll asks; a poll with nothing due commits nothing.
+  if (!(await clock.stored.wakeups()).some(due)) return undefined;
   return clock.wakeups((current) => {
     const all = valid(current);
-    const idx = all.findIndex((w) => new Date(w.fireAt).getTime() <= now.getTime());
+    const idx = all.findIndex(due);
     if (idx === -1) return { result: undefined };
     const w = all[idx] as Wakeup;
     if (w.cron !== undefined) {

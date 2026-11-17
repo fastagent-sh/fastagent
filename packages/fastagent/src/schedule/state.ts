@@ -3,7 +3,7 @@
  * ended once it did. The claims are also the history `fastagent info` and `schedules.list` read.
  */
 import { log } from "../log.ts";
-import { type ClockStore, reading } from "./clock.ts";
+import type { ClockStore } from "./clock.ts";
 
 /**
  * How many fires to keep per schedule, and so how far back its history reaches: at 512 a minute cron keeps ~8.5 hours,
@@ -82,16 +82,10 @@ export async function settleClaim(
 
 /** Every fire kept for `name`, oldest first. */
 export function readFires(clock: ClockStore, name: string): Promise<readonly Fire[]> {
-  return clock.fires(
-    name,
-    reading((fires) => fires),
-  );
+  return clock.stored.fires(name);
 }
 
 /** The newest fire of `name`: where catch-up resumes, and whether that fire ever reported. */
-export function latestFire(clock: ClockStore, name: string): Promise<Fire | undefined> {
-  return clock.fires(
-    name,
-    reading((fires) => fires.at(-1)),
-  );
+export async function latestFire(clock: ClockStore, name: string): Promise<Fire | undefined> {
+  return (await clock.stored.fires(name)).at(-1);
 }

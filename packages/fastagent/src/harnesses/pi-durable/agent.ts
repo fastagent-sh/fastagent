@@ -760,7 +760,7 @@ function durableAgent(
   const clock =
     options.clock === undefined
       ? undefined
-      : { store: clockStore((change) => harness.commit(change, context)), schedules: options.clock.schedules };
+      : { store: clockStore(harness, context), schedules: options.clock.schedules };
   return {
     harness,
     ...(clock === undefined ? {} : { clock: clock.store }),

@@ -398,7 +398,7 @@ function accountForUnreportedFire(
 /** Which session each schedule continues: one per schedule, so the agent sees what its earlier runs did. */
 export function scheduleSessions(clock: ClockStore) {
   return conversationSessions({
-    read: () => clock.sessions((current) => ({ result: current })),
+    read: () => clock.stored.sessions(),
     record: (name, sessionId) =>
       clock.sessions((current) => ({ next: { ...current, [name]: sessionId }, result: undefined })),
     where: "the instance's storage",

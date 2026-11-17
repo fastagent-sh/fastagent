@@ -183,7 +183,7 @@ export async function withInstanceClock<T>(place: InstancePlace, work: (clock: C
     BACKGROUND_CONTEXT,
   );
   try {
-    return await work(clockStore((change) => harness.commit(change, BACKGROUND_CONTEXT)));
+    return await work(clockStore(harness, BACKGROUND_CONTEXT));
   } finally {
     await harness.close(BACKGROUND_CONTEXT);
   }

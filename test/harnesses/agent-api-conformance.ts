@@ -363,12 +363,15 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
         const fired = await agent.schedules.run("digest", { wait: WAIT });
         if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
-        const digest = (await agent.schedules.list()).find(({ name }) => name === "digest");
-        expect(digest?.last).toEqual({
-          slot: expect.any(String),
-          firedAt: expect.any(String),
-          outcome: "completed",
-          ms: expect.any(Number),
+        // Its outcome is written once its message has ended, a moment after the answer: until then it has none.
+        await vi.waitFor(async () => {
+          const digest = (await agent.schedules.list()).find(({ name }) => name === "digest");
+          expect(digest?.last).toEqual({
+            slot: expect.any(String),
+            firedAt: expect.any(String),
+            outcome: "completed",
+            ms: expect.any(Number),
+          });
         });
       });
 

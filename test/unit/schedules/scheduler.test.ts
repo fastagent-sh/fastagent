@@ -20,7 +20,12 @@ const createScheduler = (options: Parameters<typeof scheduler>[0]) => {
   return { ...created, start: () => void created.start() };
 };
 const fireScheduleNow = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
-import { addWakeup, listWakeups } from "../../../packages/fastagent/src/schedule/wakeups.ts";
+import {
+  addWakeup,
+  listWakeups,
+  removeAnyWakeup,
+  takeFirstDueWakeup,
+} from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { claimSlot, readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
@@ -55,7 +60,7 @@ const freshRoot = async (): Promise<ClockStore> => {
     BACKGROUND_CONTEXT,
   );
   opened.push(harness);
-  return clockStore((change) => harness.commit(change, BACKGROUND_CONTEXT));
+  return clockStore(harness, BACKGROUND_CONTEXT);
 };
 
 /**
@@ -154,6 +159,32 @@ describe("schedule/claims: the decision to fire", () => {
       newest: slot.toISOString(),
     });
     expect(await claimed(root, "job")).toEqual([slot.toISOString()]);
+  });
+});
+
+describe("schedule/clock: reading it", () => {
+  it("writes nothing: reads, a poll with nothing due and a cancel of a missing wake-up create no document", async () => {
+    const storage = new MemoryStorage();
+    const harness = await Harnesses.open(
+      storage,
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    opened.push(harness);
+    const clock = clockStore(harness, BACKGROUND_CONTEXT);
+    expect(await readFires(clock, "job")).toEqual([]);
+    expect(await listWakeups(clock)).toEqual([]);
+    expect(await takeFirstDueWakeup(clock, new Date("2026-07-07T12:00:00Z"))).toBeUndefined();
+    expect(await removeAnyWakeup(clock, "none")).toBeUndefined();
+    expect(await scheduleSessions(clock).get("job")).toBeUndefined();
+    const session = { kind: "session" } as const;
+    for (const address of [
+      { kind: "fastagent.schedule-fires", scope: session, key: "job" },
+      { kind: "fastagent.wakeups", scope: session },
+      { kind: "fastagent.schedule-sessions", scope: session },
+    ]) {
+      expect(await storage.findDocument(address, "current", BACKGROUND_CONTEXT)).toBeUndefined();
+    }
   });
 });
 

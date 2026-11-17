@@ -61,7 +61,7 @@ export function wakeExtension(options: { now?: () => Date; ticking?: () => boole
           const session = await sessionIdOf(api, context);
           if (session === undefined) return refused(NOT_A_SESSION);
           const at = now();
-          const clock = clockStore((change) => api.commit(change, context));
+          const clock = clockStore(api, context);
           if (args.cron !== undefined) {
             const added = await addWakeup(clock, { session, prompt: args.prompt, cron: args.cron, tz: args.tz }, at);
             if (!added.ok) return refused(added.error);
@@ -97,7 +97,7 @@ export function wakeExtension(options: { now?: () => Date; ticking?: () => boole
         execute: async (args, api, context) => {
           const session = await sessionIdOf(api, context);
           if (session === undefined) return refused(NOT_A_SESSION);
-          const clock = clockStore((change) => api.commit(change, context));
+          const clock = clockStore(api, context);
           return (await removeWakeup(clock, args.id, session))
             ? said(`OK — wake-up ${args.id} cancelled.`)
             : refused(`no pending wake-up ${args.id} in this conversation (already fired, or not yours).`);

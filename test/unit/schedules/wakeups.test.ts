@@ -42,7 +42,7 @@ describe("schedule/wake-tool", () => {
         harness.commit(change, context),
     };
     await tool.execute({ in: "30m", prompt: "resume the check" } as never, api as never, BACKGROUND_CONTEXT);
-    const wakeups = await listWakeups(clockStore((change) => harness.commit(change, BACKGROUND_CONTEXT)));
+    const wakeups = await listWakeups(clockStore(harness, BACKGROUND_CONTEXT));
     expect(wakeups).toEqual([
       expect.objectContaining({ session: `inc.${conversationId}`, prompt: "resume the check" }),
     ]);
