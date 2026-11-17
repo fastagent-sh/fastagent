@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * (`@fastagent-sh/client`) imports no runtime, so its root entry loads where only `fetch` is.
  */
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PACKAGES = ["client", "fastagent"] as const;
+const PACKAGES = ["client", "fastagent", "agentcore"] as const;
 const srcOf = (name: string) => resolve(repo, "packages", name, "src");
 const manifestOf = (name: string) =>
   JSON.parse(readFileSync(resolve(repo, "packages", name, "package.json"), "utf8")) as {

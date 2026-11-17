@@ -131,7 +131,7 @@ jobs:
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP"/tarballs/*.tgz --ignore-scripts
-          node --input-type=module -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/fastagent")'
+          node --input-type=module -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/agentcore")'
           ./node_modules/.bin/fastagent --version
 
       # An agent made by `init` from the packed packages answers through `invoke`, builds, and its build answers in an app.

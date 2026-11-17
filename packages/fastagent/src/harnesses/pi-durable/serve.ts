@@ -27,7 +27,7 @@ import type { AgentConfig } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { describeDatabase } from "./postgres/database.ts";
-import { type PostgresOptions, messageBytesFor, openPostgresStorage } from "./postgres/storage.ts";
+import { type PostgresDatabase, messageBytesFor, openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
 import { otlpTraces } from "../telemetry/otlp.ts";
@@ -91,8 +91,8 @@ export interface OpenServingOptions extends CredentialSourceOptions {
   keeps?: "secrets" | "state";
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
   wakeTicking?: () => boolean;
-  /** How the database `FASTAGENT_DATABASE_URL` names is reached, and what it allows: a platform's own database's. */
-  database?: PostgresOptions;
+  /** The PostgreSQL database the instance's storage is in, over the one `FASTAGENT_DATABASE_URL` names. */
+  database?: PostgresDatabase;
 }
 
 type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
@@ -133,12 +133,20 @@ export interface InstancePlace {
   name?: string;
   /** The agent it runs (its package's name), which an instance in a database belongs to. */
   agent?: string;
-  database?: PostgresOptions;
+  /** Its database, given: over the one `FASTAGENT_DATABASE_URL` names. */
+  database?: PostgresDatabase;
+}
+
+/** The database the instance's storage is in: the one given, or the one `FASTAGENT_DATABASE_URL` names, or none. */
+function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
+  if (place.database !== undefined) return place.database;
+  const url = place.env[DATABASE_URL_ENV];
+  return url ? { url } : undefined;
 }
 
 /** Where the instance's storage is, as a person reads it: the database (without credentials), or the file. */
 export function describeInstanceStorage(place: InstancePlace): string {
-  const url = place.env[DATABASE_URL_ENV];
+  const url = databaseOf(place)?.url;
   if (!url) return join(place.stateRoot, "agent.sqlite");
   const instance = place.name === undefined ? `no instance: set ${INSTANCE_NAME_ENV}` : `instance "${place.name}"`;
   return `PostgreSQL ${describeDatabase(url)}, ${instance}`;
@@ -149,8 +157,8 @@ export function describeInstanceStorage(place: InstancePlace): string {
  * whose hold can end while open (`onLost`).
  */
 function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
-  const url = place.env[DATABASE_URL_ENV];
-  if (url) {
+  const database = databaseOf(place);
+  if (database !== undefined) {
     if (place.name === undefined) {
       return Promise.reject(
         new Error(
@@ -159,8 +167,9 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
         ),
       );
     }
+    const { url, ...reached } = database;
     return openPostgresStorage(url, place.name, {
-      ...place.database,
+      ...reached,
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),
@@ -246,12 +255,12 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     ...(options.database === undefined ? {} : { database: options.database }),
   };
   // A database that caps a transaction caps a message: one is written in one transaction.
-  const maxMessageBytes = env[DATABASE_URL_ENV] ? messageBytesFor(options.database?.limits) : undefined;
+  const database = chosen === "instance" ? databaseOf(place) : undefined;
+  const maxMessageBytes = messageBytesFor(database?.limits);
   // Before the agent exists, a lost hold fails its open's first commit instead.
   let stopRuns: ((error: Error) => void) | undefined;
   const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
-  if (chosen === "instance" && env[DATABASE_URL_ENV])
-    log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
+  if (database !== undefined) log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
   let mcp: McpClients | undefined;
   let agent: DurableAgent;
   try {
@@ -359,6 +368,12 @@ export interface OpenAgentOptions {
   model?: string;
   /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
   offline?: boolean;
+  /**
+   * The PostgreSQL database the instance's sessions and clock are in, instead of `<root>/.state/agent.sqlite`: its URL,
+   * and for a platform's own database how a connection signs in and what a transaction may hold. Over
+   * `secrets.FASTAGENT_DATABASE_URL`. An instance in a database is opened by its `name`, which is then required.
+   */
+  database?: PostgresDatabase;
 }
 
 /** The instance root, which must be absolute: a relative one would be an input the process's cwd chooses. */
@@ -390,6 +405,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     wakeTicking: () => ticking,
     keeps: "state",
     ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.database === undefined ? {} : { database: options.database }),
   });
   const { agent } = opened;
   let served: Promise<Service> | undefined;

@@ -155,6 +155,11 @@ export interface PostgresOptions {
   createIndex?: CreateIndex;
 }
 
+/** A PostgreSQL database an instance's storage is in: its URL (`postgres://…`), and how it is reached. */
+export interface PostgresDatabase extends PostgresOptions {
+  url: string;
+}
+
 const KINDS: Record<string, ValueKind> = {
   durable_conversations: "conversation",
   durable_tasks: "task",

@@ -4,7 +4,7 @@
   // bin's source.
   "workspaces": {
     ".": {
-      "entry": ["test/**/*.test.ts", "test/smoke/e2e/*.ts", "scripts/*.mjs"],
+      "entry": ["test/**/*.test.ts", "test/smoke/*/*.ts", "scripts/*.mjs"],
       "project": ["test/**/*.ts", "scripts/*.mjs"],
       // The tests exercise the packages through these, the packages' own dependencies, installed at the root.
       "ignoreDependencies": ["@earendil-works/.+", "effect", "ignore"]
@@ -14,6 +14,9 @@
       // `/agent-api` and `/http/contract` are entries only FastAgent's runtime imports: an export no package uses is
       // dead, not public. The root entry's exports are public (`@public`).
       "includeEntryExports": true
+    },
+    "packages/agentcore": {
+      "project": ["src/**/*.ts"]
     },
     "packages/fastagent": {
       "entry": ["src/cli.ts"],

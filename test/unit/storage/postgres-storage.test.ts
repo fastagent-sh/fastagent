@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
@@ -15,9 +17,6 @@ import {
 import { fauxAgent } from "../../doubles/cli-run.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { openSource } from "../../harnesses/open-source.ts";
-import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import { openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
-import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 
 let postgres: ServedPostgres;
 beforeAll(async () => {
@@ -224,17 +223,15 @@ describe("a database that caps transactions and values", () => {
   });
 });
 
-it("an agent on a database that caps a transaction refuses a message over four fifths of it, recording nothing", async () => {
+it("an app's agent on a database it gives, which caps a transaction, refuses a message over four fifths of it", async () => {
   const dir = await fauxAgent("fa-postgres-capped-");
-  const { agent } = await openServing(await loadSourceDefinition(dir), {
+  const agent = await openSource(dir, {
     name: "capped",
-    secrets: { FASTAGENT_DATABASE_URL: postgres.url },
-    env: {},
-    ownEnv: process.env,
-    runsAs: NOT_HOSTED,
-    database: { limits: { bytesPerTransaction: 10_000 } },
+    database: { url: postgres.url, limits: { bytesPerTransaction: 10_000 } },
   });
   try {
+    // Its sessions are in the database it was given, not beside it.
+    expect(existsSync(join(dir, ".state", "agent.sqlite"))).toBe(false);
     const { id: sessionId } = await agent.sessions.create();
     await expect(agent.messages.send({ sessionId, content: "x".repeat(8_100) })).rejects.toMatchObject({
       code: "invalid_request",

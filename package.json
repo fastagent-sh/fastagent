@@ -4,7 +4,8 @@
   "type": "module",
   "workspaces": [
     "packages/client",
-    "packages/fastagent"
+    "packages/fastagent",
+    "packages/agentcore"
   ],
   "engines": {
     "node": ">=24.15.0"
