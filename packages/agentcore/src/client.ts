@@ -13,6 +13,7 @@ import { type Agent, connectAgent } from "@fastagent-sh/client";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
 import { statusOf } from "@fastagent-sh/client/http/contract";
 import { type EnvelopedResponse, envelopeRequest, isEventStream, unwrapResponse } from "./envelope.ts";
+import { SESSION_ID_PATTERN } from "./variables.ts";
 
 export interface AgentCoreConnection {
   /** The runtime: `arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>`. */
@@ -27,7 +28,6 @@ export interface AgentCoreConnection {
 }
 
 const RUNTIME_ARN = /^arn:aws[a-z-]*:bedrock-agentcore:([a-z0-9-]+):\d{12}:runtime\/[A-Za-z0-9_-]+$/;
-const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;
 
 /**
  * AgentCore's refusals of an invocation it did not deliver, as the Agent API's: no runtime of that ARN, or a request it
@@ -67,7 +67,7 @@ export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCore
       `${runtimeArn} is not an AgentCore runtime's ARN (arn:aws:bedrock-agentcore:<region>:…:runtime/<id>)`,
     );
   }
-  if (!SESSION_ID.test(sessionId)) {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error(`the session id "${sessionId}" must be 33 to 256 letters, digits, "-" and "_" (AgentCore's rule)`);
   }
   const aws = clientIn(region);

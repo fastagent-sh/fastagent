@@ -24,6 +24,7 @@ import type { Agent } from "@fastagent-sh/client/agent-api";
 import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
+import { watchInstanceAlarm } from "./alarm.ts";
 import type { AgentConfig } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
@@ -122,6 +123,8 @@ export interface OpenedServing {
   workdir: string;
   /** Where the instance's state is: its storage, its schedules' state, its wake-ups. */
   stateRoot: string;
+  /** Where its clock keeps its state, when it has one (`storage: "instance"`). */
+  clock?: ClockStore;
   /** The definition's schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   schedules: BuiltDefinition["schedules"];
 }
@@ -326,6 +329,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     agentDir: projectDir,
     workdir,
     stateRoot,
+    ...(agent.clock === undefined ? {} : { clock: agent.clock }),
     schedules: code.schedules,
   };
 }
@@ -351,6 +355,13 @@ export interface LocalAgent extends Agent {
 export interface ServeAgentOptions {
   /** The keys a Caller of the Agent API may present. */
   apiKeys?: readonly string[];
+  /**
+   * Keep an external alarm armed for when this instance next needs a running process (`at`), or disarmed (`undefined`)
+   * when nothing is scheduled: how a platform that stops an idle machine wakes it again.
+   */
+  alarm?: (at: Date | undefined) => void | Promise<void>;
+  /** Stamps schedules seen for the first time, when a cold open was woken by an external alarm. */
+  since?: Date;
 }
 
 export interface OpenAgentOptions {
@@ -424,34 +435,57 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     schedules: agent.schedules,
     wakeups: agent.wakeups,
     harness: agent.harness,
-    busy: () => activeWork() > 0,
+    busy: () => activeWork() > 0 || agent.harness.wake().active,
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      const serving = serveAgent(opened, serveOptions).then(
-        (service): Service => ({
+      ticking = true;
+      const serving = serveAgent(opened, serveOptions).then(async (service): Promise<Service> => {
+        const watcher =
+          serveOptions.alarm === undefined
+            ? undefined
+            : watchInstanceAlarm({
+                harness: agent.harness,
+                nextClockDue: service.nextClockDue,
+                setAlarm: serveOptions.alarm,
+              });
+        if (watcher !== undefined) {
+          try {
+            await watcher.sync();
+          } catch (error) {
+            watcher.stop();
+            await service.close().catch(() => undefined);
+            throw error;
+          }
+        }
+        return {
           ...service,
+          tick: async (tickOptions) => {
+            agent.harness.resume();
+            await service.tick(tickOptions);
+            await watcher?.sync({ forceClear: true });
+          },
           close: () => {
             // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
             ticking = false;
+            watcher?.stop();
             return service.close();
           },
-        }),
-      );
+        };
+      });
       served = serving;
-      serving.then(
-        () => {
-          if (served === serving && closing === undefined) ticking = true;
-        },
+      serving.catch(() => {
         // A serve that failed to start rolled itself back, so the agent may be served again.
-        () => {
-          if (served === serving) served = undefined;
-        },
-      );
+        if (served === serving) {
+          ticking = false;
+          served = undefined;
+        }
+      });
       return serving;
     },
     close() {
+      ticking = false;
       closing ??= (async () => {
         // A serve that never started has nothing to close; its failure reached the caller of `serve`.
         const service = await served?.catch(() => undefined);

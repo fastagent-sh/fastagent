@@ -17,8 +17,12 @@ const whole = () => true;
 /** A fire or a wake-up, as JSON: the clock's own types are its readers'. */
 type Stored = JsonObject;
 
+const FIRES_KIND = "fastagent.schedule-fires";
+const WAKEUPS_KIND = "fastagent.wakeups";
+const ARMED_KIND = "fastagent.schedule-armed";
+
 const FiresDoc = defineDocFamily<{ fires: Stored[] }, null>({
-  kind: "fastagent.schedule-fires",
+  kind: FIRES_KIND,
   version: 1,
   scope: "session",
   family: true,
@@ -27,7 +31,7 @@ const FiresDoc = defineDocFamily<{ fires: Stored[] }, null>({
 });
 
 const WakeupsDoc = defineDoc<{ wakeups: Stored[] }>({
-  kind: "fastagent.wakeups",
+  kind: WAKEUPS_KIND,
   version: 1,
   scope: "session",
   initial: () => ({ wakeups: [] }),
@@ -41,6 +45,17 @@ const ScheduleSessionsDoc = defineDoc<{ sessions: Record<string, string> }>({
   initial: () => ({ sessions: {} }),
   checkpointWhen: whole,
 });
+
+const ArmedDoc = defineDoc<{ armed: Record<string, string> }>({
+  kind: ARMED_KIND,
+  version: 1,
+  scope: "session",
+  initial: () => ({ armed: {} }),
+  checkpointWhen: whole,
+});
+
+/** The document kinds whose commits can move when the clock next fires. */
+export const CLOCK_DOC_KINDS: ReadonlySet<string> = new Set([FIRES_KIND, WAKEUPS_KIND, ARMED_KIND]);
 
 /** A detached copy: what a change reads is not the draft it may replace. */
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -61,14 +76,17 @@ export function clockStore(session: ClockSession, context: Context): ClockStore 
       }, context);
   const wakeups = over((tx) => tx.doc(WakeupsDoc), "wakeups");
   const sessions = over((tx) => tx.doc(ScheduleSessionsDoc), "sessions");
+  const armed = over((tx) => tx.doc(ArmedDoc), "armed");
   return {
     fires: (name, change) => over((tx) => tx.doc(FiresDoc, name, null), "fires")(change),
     wakeups: (change) => wakeups(change),
     sessions: (change) => sessions(change),
+    armed: (change) => armed(change),
     stored: {
       fires: async (name) => copy((await session.snapshot(FiresDoc, name, context))?.fires ?? []) as never,
       wakeups: async () => copy((await session.snapshot(WakeupsDoc, context))?.wakeups ?? []) as never,
       sessions: async () => copy((await session.snapshot(ScheduleSessionsDoc, context))?.sessions ?? {}),
+      armed: async () => copy((await session.snapshot(ArmedDoc, context))?.armed ?? {}),
     },
   };
 }

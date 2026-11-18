@@ -80,11 +80,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
+    "@aws-sdk/client-scheduler": "^3.1171.0",
+    "@aws-sdk/client-secrets-manager": "^3.1170.0",
     "@aws-sdk/dsql-signer": "^3.1170.0",
     "@effect/platform-node": "^4.0.7",
     "@fastagent-sh/client": "0.31.0",
-    "effect": "^4.0.7",
-    "@aws-sdk/client-secrets-manager": "^3.1170.0"
+    "effect": "^4.0.7"
   },
   "peerDependencies": {
     "@fastagent-sh/fastagent": "0.31.0",

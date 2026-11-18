@@ -18,10 +18,13 @@ export interface ClockStore {
   wakeups<T>(change: Change<readonly Wakeup[], T>): Promise<T>;
   /** The session each schedule continues, by its name. */
   sessions<T>(change: Change<Readonly<Record<string, string>>, T>): Promise<T>;
+  /** When each schedule with no recorded fire was first armed, by its name. */
+  armed<T>(change: Change<Readonly<Record<string, string>>, T>): Promise<T>;
   /** The same state as stored now, read without a commit. */
   stored: {
     fires(name: string): Promise<readonly Fire[]>;
     wakeups(): Promise<readonly Wakeup[]>;
     sessions(): Promise<Readonly<Record<string, string>>>;
+    armed(): Promise<Readonly<Record<string, string>>>;
   };
 }

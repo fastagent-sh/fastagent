@@ -100,7 +100,8 @@ await agent.close(); // closes the service, then releases the storage
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
   `@fastagent-sh/client`.
 - `agent.busy()` says whether a message or a schedule's fire is in flight in the process: for a platform that stops an
-  idle machine, as AgentCore does.
+  idle machine, as AgentCore does. `serve({ alarm })` keeps one external alarm set for when the instance next needs a
+  process, and `service.tick()` claims and runs what is due when that alarm wakes it.
 
 ### Mounting `fetch`
 
