@@ -440,6 +440,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
       // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
+      ticking = true;
       const serving = serveAgent(opened, serveOptions).then(async (service): Promise<Service> => {
         const watcher =
           serveOptions.alarm === undefined
@@ -474,18 +475,17 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
         };
       });
       served = serving;
-      serving.then(
-        () => {
-          if (served === serving && closing === undefined) ticking = true;
-        },
+      serving.catch(() => {
         // A serve that failed to start rolled itself back, so the agent may be served again.
-        () => {
-          if (served === serving) served = undefined;
-        },
-      );
+        if (served === serving) {
+          ticking = false;
+          served = undefined;
+        }
+      });
       return serving;
     },
     close() {
+      ticking = false;
       closing ??= (async () => {
         // A serve that never started has nothing to close; its failure reached the caller of `serve`.
         const service = await served?.catch(() => undefined);

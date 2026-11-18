@@ -970,4 +970,56 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
     await closePromise;
     expect(fencedWrites).toEqual([]);
   });
+
+  it("lets a caught-up schedule call `wake` while the cold open's initial alarm write is still in flight", async () => {
+    const dir = await fauxAgent("fa-agentcore-boot-wake-", {
+      "fastagent.config.ts": `import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+faux.setResponses(Array.from({ length: 10 }, () => (context) => {
+  const last = context.messages.at(-1);
+  if (last?.role === "toolResult") return fauxAssistantMessage("done");
+  if (JSON.stringify(last?.content ?? "").includes("set-followup")) {
+    return fauxAssistantMessage([fauxToolCall("wake", { in: "10m", prompt: "followup" })], { stopReason: "toolUse" });
+  }
+  return fauxAssistantMessage("ok");
+}));
+export default { model: "gw/m1", providers: [faux.provider] };
+`,
+      "src/schedules/hourly.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
+export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "set-followup" });
+`,
+    });
+    const definition = await loadSourceDefinition(dir);
+    const sched = fakeScheduler("alarms-group", "ENABLED");
+    const sessionId = freshInstance();
+    let delayFirstWrite = true;
+    sched.onWritten(async (name) => {
+      if (delayFirstWrite && name === alarmNameOf(sessionId)) {
+        delayFirstWrite = false;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    });
+    const alarms = createAlarmGroup({ group: "alarms-group", client: sched.client as never });
+    const handler = agentCoreHandler(definition, {
+      database: { url: postgres.url },
+      root: dir,
+      secrets: process.env,
+      offline: true,
+      alarms,
+    });
+    const aws = agentCore(handler);
+    try {
+      // `since` an hour ago guarantees `hourly` catches up immediately inside `serve()`, while `onWritten` holds
+      // `serve()`'s initial `watcher.sync()` open for 150ms.
+      const since = new Date(Date.now() - 65 * 60_000).toISOString();
+      const res = await handler.fetch(invocation(sessionId, { alarm: true, since }));
+      expect(res.status).toBe(200);
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
+      await vi.waitFor(async () => expect(await agent.wakeups.list()).toHaveLength(1));
+    } finally {
+      sched.onWritten(undefined);
+      await aws.close();
+      await handler.close();
+    }
+  });
 });
