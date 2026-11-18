@@ -37,6 +37,10 @@ const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;
 const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
   AccessDeniedException: "unauthorized",
   UnauthorizedException: "unauthorized",
+  // Credentials AWS took for none: expired, or not a key it knows. Refreshing them is the Caller's.
+  ExpiredTokenException: "unauthorized",
+  UnrecognizedClientException: "unauthorized",
+  InvalidSignatureException: "unauthorized",
   ThrottlingException: "unavailable",
   ServiceQuotaExceededException: "unavailable",
   RetryableConflictException: "unavailable",
@@ -85,6 +89,13 @@ export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCore
         { abortSignal: request.signal },
       );
     } catch (error) {
+      // No credentials to sign with, or a session to sign in again (`aws login`): no retry finds others.
+      if ((error as Error).name === "CredentialsProviderError") {
+        const refusal = errorData(
+          agentError("unauthorized", `no AWS credentials to call AgentCore with: ${(error as Error).message}`),
+        );
+        return Response.json({ error: refusal }, { status: statusOf(refusal) });
+      }
       if (!(error instanceof BedrockAgentCoreServiceException)) throw error;
       const code = PLATFORM_REFUSALS[error.name];
       if (code === undefined) throw error;

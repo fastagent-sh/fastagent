@@ -73,10 +73,16 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
     if (installed.status !== 0) throw new Error("npm install in agentcore/cdk failed: run it there, then deploy");
   }
   const names = [...new Set(facts.secrets.filter((s) => !s.optional).map((s) => s.name))];
+  const model =
+    facts.model === undefined
+      ? "and what its model signs in with"
+      : `and what ${facts.model} signs in with: its provider's API key, as anywhere ` +
+        `(\`fastagent login --check ${facts.model}\` says whether one is there)`;
   console.log(
     [
       `# In each AWS account you deploy to, create the secret ${facts.name}: a JSON object of the agent's values,`,
-      `# ${["the model's API key", ...names].join(", ")}${facts.model === undefined ? "" : ` (model ${facts.model})`}.`,
+      `# ${names.length === 0 ? "none declared by its code" : `${names.join(", ")}, which its code declares`},`,
+      `# ${model}.`,
       `aws secretsmanager create-secret --name ${facts.name} --secret-string file://<values.json>`,
       "# Then deploy, here or in CI:",
       `npx -y ${AGENTCORE_CLI} deploy`,
@@ -96,10 +102,9 @@ function databaseOf(environment: NodeJS.ProcessEnv): PostgresDatabase {
 }
 
 async function start(agentDir: string): Promise<void> {
-  const database = databaseOf(process.env);
   const secretName = process.env[SECRETS_ENV];
   const served = await serveAgentCore(await loadAgentBuild(agentDir), {
-    database,
+    database: () => databaseOf(process.env),
     secrets: process.env,
     ...(secretName ? { values: () => secretValues(secretName, process.env) } : {}),
     env: baseEnv(process.env),

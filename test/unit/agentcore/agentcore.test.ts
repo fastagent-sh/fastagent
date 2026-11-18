@@ -8,6 +8,7 @@ import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
+import { Unavailable } from "../../../packages/fastagent/src/unavailable.ts";
 import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
@@ -76,10 +77,13 @@ beforeAll(async () => {
 });
 afterAll(() => postgres.close());
 
-type Refused = { error: { code: string; message: string } };
+type Refused = { error: { code: string; message: string; retryable: boolean } };
 
 /** The container's handler over an agent in a fresh directory, with its instances in the test database. */
-async function runtimeOf(prefix: string, database: PostgresDatabase = { url: postgres.url }) {
+async function runtimeOf(
+  prefix: string,
+  database: PostgresDatabase | (() => PostgresDatabase) = { url: postgres.url },
+) {
   const dir = await fauxAgent(prefix);
   const handler = agentCoreHandler(await loadSourceDefinition(dir), {
     database,
@@ -284,8 +288,9 @@ describe("an agent on AgentCore", () => {
     const session = freshInstance();
     const request = { request: { method: "GET", path: "/v1/agent", headers: {} } };
     try {
+      // A secret not created yet needs a person to create it: not one for a Caller to retry.
       const unread = await answered(await handler.fetch(invocation(session, request)));
-      expect([unread.status, unread.body.error.code]).toEqual([503, "unavailable"]);
+      expect([unread.status, unread.body.error.code]).toEqual([500, "internal"]);
       expect(unread.body.error.message).toContain("the secret support cannot be read: ResourceNotFoundException");
       const opened = await answered(await handler.fetch(invocation(session, request)));
       expect([opened.status, reads]).toEqual([200, 2]);
@@ -294,8 +299,9 @@ describe("an agent on AgentCore", () => {
     }
   });
 
-  it("opens the instance again on the next invocation after an open that failed, saying why it failed", async () => {
-    // A database never opened makes its tables, and the first index it builds fails, as a DSQL index job can.
+  it("answers an open that failed retryable only when it passes by itself, and opens again on the next invocation", async () => {
+    // A database never opened makes its tables, and the first index it builds fails, as a DSQL index job can: a
+    // person drops the INVALID index, so it is internal, not retryable.
     const fresh = await servedPostgres();
     let builds = 0;
     const createIndex: CreateIndex = async (db, statement) => {
@@ -304,18 +310,40 @@ describe("an agent on AgentCore", () => {
       await db.query(statement);
     };
     const { handler } = await runtimeOf("fa-agentcore-reopen-", { url: fresh.url, createIndex });
+    // A database out of reach for a moment passes by itself: unavailable, retryable.
+    const { handler: unreached } = await runtimeOf("fa-agentcore-unreached-", {
+      url: "postgres://postgres@127.0.0.1:1/postgres",
+    });
+    // A runtime given no database says so to each invocation, as an instance that cannot open.
+    const { handler: unplaced } = await runtimeOf("fa-agentcore-unplaced-", () => {
+      throw new Error("FASTAGENT_DSQL_ENDPOINT is required: the Aurora DSQL cluster's endpoint");
+    });
     const session = freshInstance();
     const request = { request: { method: "GET", path: "/v1/agent", headers: {} } };
     try {
       const failed = await answered(await handler.fetch(invocation(session, request)));
-      expect([failed.status, failed.headers["retry-after"]]).toEqual([503, "1"]);
+      expect([failed.status, failed.headers["retry-after"]]).toEqual([500, undefined]);
       expect(failed.body.error).toMatchObject({
-        code: "unavailable",
+        code: "internal",
+        retryable: false,
         message: expect.stringContaining("the index job failed"),
       });
       expect((await answered(await handler.fetch(invocation(session, request)))).status).toBe(200);
+
+      const passing = await answered(await unreached.fetch(invocation(freshInstance(), request)));
+      expect([passing.status, passing.headers["retry-after"], passing.body.error.code]).toEqual([
+        503,
+        "1",
+        "unavailable",
+      ]);
+
+      const placeless = await answered(await unplaced.fetch(invocation(freshInstance(), request)));
+      expect([placeless.status, placeless.body.error.code]).toEqual([500, "internal"]);
+      expect(placeless.body.error.message).toContain("FASTAGENT_DSQL_ENDPOINT is required");
     } finally {
       await handler.close();
+      await unreached.close();
+      await unplaced.close();
       await fresh.close();
     }
   });
@@ -366,6 +394,8 @@ describe("an agent on AgentCore", () => {
         retryable: false,
         message: "AgentCore refused the request: ResourceNotFoundException: refused here",
       });
+      aws.refuse(400, "ExpiredTokenException");
+      await expect(agent.info()).rejects.toMatchObject({ code: "unauthorized", retryable: false });
       expect(() => connectAgentCore({ runtimeArn: RUNTIME, sessionId: "user-42" })).toThrow(
         'the session id "user-42" must be 33 to 256 letters, digits, "-" and "_" (AgentCore\'s rule)',
       );
@@ -412,6 +442,20 @@ describe("the agent's values from its secret", () => {
       await expect(secretValues("support", {}, holding(answer) as never)).rejects.toThrow(said);
     }
   });
+
+  it("calls a refusal that passes by itself (throttled, Secrets Manager's own fault) unavailable, and no other", async () => {
+    const failing = (name: string, fault: "client" | "server") =>
+      holding(Object.assign(new Error(`${name}: refused`), { name, $fault: fault }));
+    for (const [name, fault, passes] of [
+      ["ThrottlingException", "client", true],
+      ["InternalServiceError", "server", true],
+      ["ResourceNotFoundException", "client", false],
+      ["AccessDeniedException", "client", false],
+    ] as const) {
+      const error = await secretValues("support", {}, failing(name, fault) as never).catch((e: unknown) => e);
+      expect([name, error instanceof Unavailable]).toEqual([name, passes]);
+    }
+  });
 });
 
 describe("fastagent agentcore init", () => {
@@ -431,7 +475,7 @@ describe("fastagent agentcore init", () => {
       `aws secretsmanager create-secret --name ${name} --secret-string file://<values.json>`,
     );
     expect(first.stdout).toContain("npx -y @aws/agentcore@1.0.3 deploy");
-    expect(first.stdout).toContain("the model's API key, ZENDESK_TOKEN");
+    expect(first.stdout).toContain("ZENDESK_TOKEN, which its code declares");
 
     const dockerfile = await readFile(join(dir, "Dockerfile"), "utf8");
     expect(dockerfile).toMatch(/^# Generated by `fastagent agentcore init`/);
@@ -458,12 +502,37 @@ describe("fastagent agentcore init", () => {
     expect(await readFile(join(dir, "agentcore", "agentcore.json"), "utf8")).toBe('{ "mine": true }\n');
   });
 
-  it("refuses a flag of init's on another command, and a start with no database to keep the instances in", async () => {
+  it("refuses a flag of init's on another command, and a start with no build to serve", async () => {
     const dir = await fauxAgent("fa-agentcore-usage-");
     const flag = await runInProcess(["agentcore", "start", "--force"], dir);
     expect([flag.code, flag.stderr.split("\n")[0]]).toEqual([2, "Error: --force and --no-install are init's"]);
-    const unplaced = await runInProcess(["agentcore", "start"], dir);
-    expect(unplaced.code).toBe(1);
-    expect(unplaced.stderr).toContain("FASTAGENT_DSQL_ENDPOINT is required: the Aurora DSQL cluster's endpoint");
+    // The one thing the container cannot serve without: the build it runs.
+    const unbuilt = await runInProcess(["agentcore", "start"], dir);
+    expect(unbuilt.code).toBe(1);
+    expect(unbuilt.stderr).toContain("holds no build");
+  });
+});
+
+describe("connectAgentCore without AWS credentials", () => {
+  it("refuses unauthorized, not retryable, when there are none to sign with", async () => {
+    // Another region: a client of its own, made with no credentials to find.
+    vi.stubEnv("AWS_ACCESS_KEY_ID", undefined);
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", undefined);
+    vi.stubEnv("AWS_EC2_METADATA_DISABLED", "true");
+    try {
+      const agent = connectAgentCore({
+        runtimeArn: "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/support-a1b2c3d4e5",
+        sessionId: freshInstance(),
+      });
+      await expect(agent.info()).rejects.toMatchObject({
+        code: "unauthorized",
+        retryable: false,
+        message: expect.stringMatching(/^no AWS credentials to call AgentCore with: /),
+      });
+    } finally {
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "secret");
+      vi.stubEnv("AWS_EC2_METADATA_DISABLED", undefined);
+    }
   });
 });

@@ -42,8 +42,8 @@ aws secretsmanager create-secret --name support --secret-string file://values.js
 ```
 
 Each session reads it when its instance opens, on its first request after AgentCore starts its microVM. A secret that
-cannot be read (not created yet, no access, not a JSON object of strings) refuses that request with `unavailable`,
-naming why, and the next request reads it again: create it after the deploy and nothing needs redeploying. A changed
+cannot be read (not created yet, no access, not a JSON object of strings) refuses that request with `internal`, naming
+why, and the next request reads it again: create it after the deploy and nothing needs redeploying. A changed
 value reaches a session as AgentCore starts it again. A name the secret lacks refuses the instance's open, naming it. A
 name both the secret and the runtime's environment set is refused too: keep it in one. To use another secret, change `secretName` in `agentcore/cdk/lib/cdk-stack.ts`.
 
@@ -120,9 +120,12 @@ endpoint (`prod`), and with it the version that answers.
   inside the microVM can access execution role credentials." An agent that runs commands or code (`bash`, a tool of
   yours) can use the role too: it can read any instance's sessions, and the secret. Users are kept apart from each
   other only from an agent whose tools run neither.
-- **AgentCore's refusals are the Agent API's:** a request AgentCore refuses before it reaches the agent rejects with an
-  `AgentError`: `unauthorized` for `AccessDenied`, `unavailable` (retryable) for throttling, and `internal` for a
-  runtime that does not exist or a request it does not take.
+- **Retryable means it passes by itself.** A request is refused `unavailable` (retryable) only when sending it again,
+  with nothing changed, can succeed: AgentCore throttling or starting the session, the instance held by the microVM
+  AgentCore is replacing, the database or Secrets Manager out of reach for a moment. What needs a person is not
+  retryable, and says what: `unauthorized` for credentials AWS refuses or none to sign with (sign in again, `aws
+  login`), `internal` for an instance that cannot open (a secret not created or not readable, a value it lacks, no
+  database configured, a runtime that does not exist).
 
 ## Limits
 

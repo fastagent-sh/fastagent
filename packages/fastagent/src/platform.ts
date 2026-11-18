@@ -15,6 +15,7 @@ import { instanceName } from "./instance-name.ts";
 import { selectAgentEnvironment } from "./paths.ts";
 
 export { DATABASE_URL_ENV } from "./paths.ts";
+export { Unavailable } from "./unavailable.ts";
 import type { DeclaredSecret } from "./declared-secrets.ts";
 
 export type { ExtensionCli } from "./cli/extension.ts";

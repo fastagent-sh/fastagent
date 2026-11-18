@@ -128,14 +128,16 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
 const IGNORE_FILES = [".dockerignore", "Dockerfile.dockerignore"];
 
 /**
- * What the image would carry of this machine's secrets and state when the context has no ignore file at all, so leaves
- * out nothing; undefined when it has one, or nothing to leave out.
+ * What would leave the machine of its secrets and state when the context has no `.dockerignore`, so leaves out nothing;
+ * undefined when it has one, or nothing to leave out. Only `.dockerignore` counts: it is what every uploader of a
+ * context reads (AgentCore's CDK packs a context for CodeBuild by it), while `Dockerfile.dockerignore` only keeps a
+ * path out of the image Docker builds, not out of the upload.
  */
 export async function shippedWithoutIgnoreFile(
   agentDir: string,
   paths: BuildContextPaths,
 ): Promise<string | undefined> {
-  for (const rel of IGNORE_FILES) if (await exists(join(agentDir, rel))) return undefined;
+  if (await exists(join(agentDir, ".dockerignore"))) return undefined;
   const shipped = [
     ...paths.leakCandidates,
     ...(paths.stateShips === undefined ? [] : [paths.stateShips]),
@@ -143,7 +145,7 @@ export async function shippedWithoutIgnoreFile(
   ];
   if (shipped.length === 0) return undefined;
   return (
-    `there is no .dockerignore, so the image would carry ${shipped.map((p) => `\`${p}\``).join(", ")}: this ` +
+    `there is no .dockerignore, so the build would upload ${shipped.map((p) => `\`${p}\``).join(", ")}: this ` +
     `machine's secrets and state. Add one that leaves them out, as the generated .dockerignore does.`
   );
 }

@@ -77,7 +77,19 @@ describe("FastAgentResources", () => {
     const stack = new Stack(new App(), "Agent");
     const { runtime } = runtimeIn(stack);
     expect(() => new FastAgentResources(stack, "FastAgent", { runtime, agentDir: dir })).toThrow(
-      /there is no \.dockerignore, so the image would carry .*`\.secrets\/\.env`.*: this machine's secrets and state/,
+      /there is no \.dockerignore, so the build would upload .*`\.secrets\/\.env`.*: this machine.s secrets and state/,
+    );
+  });
+
+  it("stops the synthesis for a Dockerfile.dockerignore alone, which the upload to CodeBuild does not read", async () => {
+    const dir = await fauxAgent("fa-agentcore-cdk-beside-");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "ANTHROPIC_API_KEY=sk-1\n");
+    await writeFile(join(dir, "Dockerfile.dockerignore"), "**/.secrets/**\n");
+    const stack = new Stack(new App(), "Agent");
+    const { runtime } = runtimeIn(stack);
+    expect(() => new FastAgentResources(stack, "FastAgent", { runtime, agentDir: dir })).toThrow(
+      /there is no \.dockerignore, so the build would upload .*`\.secrets\/\.env`/,
     );
   });
 });
