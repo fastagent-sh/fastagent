@@ -23,7 +23,7 @@ async function startSchedules(
   agent: Agent,
   clock: ClockStore,
   schedules: readonly Schedule[],
-): Promise<Pick<Scheduler, "stop">> {
+): Promise<Pick<Scheduler, "stop" | "tick" | "nextDue">> {
   const scheduler = Effect.runSync(createScheduler({ agent, clock, schedules }));
   await scheduler.start().catch((error: unknown) => {
     scheduler.stop();
@@ -40,6 +40,11 @@ export interface Service {
   /** Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
   /**
+   * Claim and start whatever is due on the clock right now (`since` stamps schedules seen for the first time, as a
+   * deploy's alarm carries), resume due sleeps, and re-arm any external alarm: what a platform alarm calls.
+   */
+  tick(options?: { since?: Date }): Promise<void>;
+  /**
    * Stop the server, giving the requests in flight a moment before ending them, then the schedules. It does NOT drain
    * the agent's messages: one takes seconds to minutes, and the deployment wants the old process gone in under a
    * second. What makes that safe is that they are durable: an accepted message is answered after the restart. A
@@ -55,6 +60,8 @@ export interface ServedAgent extends Service {
   schedules: readonly Schedule[];
   /** Whether the Agent API is served, under `/v1`: only with a key. */
   api: boolean;
+  /** The earliest instant a schedule or pending wake-up is next due, when the serve has a clock. */
+  nextClockDue(at?: Date): Promise<Date | undefined>;
 }
 
 /**
@@ -71,6 +78,7 @@ export function serviceOver(
   const fetch = totalFetch(handler);
   return {
     fetch,
+    tick: async () => {},
     listen(port, host) {
       if (closing !== undefined) return Promise.reject(new Error("the service is closed"));
       if (listener !== undefined) return Promise.reject(new Error("the service is already listening"));
@@ -151,21 +159,24 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
       );
       return yield* Effect.gen(function* () {
         if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
-        if (clock !== undefined) {
-          yield* Effect.acquireRelease(
-            Effect.tryPromise({
-              try: () => startSchedules(agent, clock, schedules),
-              catch: (error) => error,
-            }),
-            (scheduled) => Effect.sync(scheduled.stop),
-          );
-        }
+        const scheduled =
+          clock === undefined
+            ? undefined
+            : yield* Effect.acquireRelease(
+                Effect.tryPromise({
+                  try: () => startSchedules(agent, clock, schedules),
+                  catch: (error) => error,
+                }),
+                (started) => Effect.sync(started.stop),
+              );
         return {
           ...serviceOver(
             surface(api),
             () => Effect.runPromise(shutdown),
             async () => api?.endStreams(),
           ),
+          tick: (tickOptions?: { since?: Date }) => scheduled?.tick(tickOptions) ?? Promise.resolve(),
+          nextClockDue: (at?: Date) => scheduled?.nextDue(at) ?? Promise.resolve(undefined),
           agentDir,
           schedules,
           api: api !== undefined,

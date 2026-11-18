@@ -27,7 +27,9 @@ import {
   openAgent,
 } from "@fastagent-sh/fastagent";
 import { Unavailable } from "@fastagent-sh/fastagent/platform";
+import type { AlarmGroup } from "./alarms.ts";
 import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./envelope.ts";
+import { DEPLOY_SESSION_ID } from "./variables.ts";
 
 /** The header AgentCore names an invocation's session in. */
 export const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
@@ -48,6 +50,8 @@ export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "en
    * opens, so one that cannot be read is said to the invocation, and one fixed after the deploy is read at the next.
    */
   values?: () => Promise<Readonly<Record<string, string>>>;
+  /** The runtime's EventBridge Scheduler group (`createAlarmGroup`), which wakes idle sessions when work is due. */
+  alarms?: AlarmGroup;
 }
 
 interface Opened {
@@ -72,29 +76,53 @@ async function enveloped(response: Response): Promise<Response> {
   return Response.json({ response: await envelopeResponse(response) });
 }
 
-function requestIn(body: unknown): EnvelopedRequest | undefined {
-  const request = (body as { request?: Partial<EnvelopedRequest> } | null)?.request;
+type ParsedInvocation =
+  | { kind: "request"; request: EnvelopedRequest }
+  | { kind: "alarm"; since?: Date }
+  | { kind: "rearm" };
+
+function parseInvocation(body: unknown): ParsedInvocation | undefined {
+  if (typeof body !== "object" || body === null) return undefined;
+  const record = body as { request?: Partial<EnvelopedRequest>; alarm?: unknown; since?: unknown; rearm?: unknown };
+  if (record.alarm === true) {
+    if (record.since === undefined) return { kind: "alarm" };
+    if (typeof record.since !== "string" || Number.isNaN(Date.parse(record.since))) return undefined;
+    return { kind: "alarm", since: new Date(record.since) };
+  }
+  if (record.rearm === true) return { kind: "rearm" };
+  const request = record.request;
   if (typeof request?.method !== "string" || typeof request.path !== "string" || !request.path.startsWith("/")) {
     return undefined;
   }
   if (request.body !== undefined && typeof request.body !== "string") return undefined;
-  return { method: request.method, path: request.path, headers: request.headers ?? {}, body: request.body };
+  return {
+    kind: "request",
+    request: { method: request.method, path: request.path, headers: request.headers ?? {}, body: request.body },
+  };
 }
 
 /** What the container answers, as a Fetch handler: `/ping` and `POST /invocations`. */
 export function agentCoreHandler(definition: AgentDefinition, options: AgentCoreOptions) {
-  const { database, root = "/tmp/fastagent", values, ...given } = options;
+  const { database, root = "/tmp/fastagent", values, alarms, ...given } = options;
   let instance: { name: string; opened: Promise<Opened> } | undefined;
   let ready: Opened | undefined;
+  let rearmInFlight: Promise<void> | undefined;
+
+  const placedDatabase = (): PostgresDatabase => (typeof database === "function" ? database() : database);
 
   const open = async (name: string): Promise<Opened> => {
     const secrets = { ...given.secrets, ...(values === undefined ? {} : await values()) };
-    const placed = typeof database === "function" ? database() : database;
+    const placed = placedDatabase();
     const agent = await openAgent(definition, { ...given, secrets, root, name, database: placed });
     let opened: Opened;
     try {
       const key = randomBytes(32).toString("base64url");
-      opened = { agent, service: await agent.serve({ apiKeys: [key] }), key };
+      const alarm = alarms?.forSession(name);
+      opened = {
+        agent,
+        service: await agent.serve({ apiKeys: [key], ...(alarm === undefined ? {} : { alarm }) }),
+        key,
+      };
     } catch (error) {
       await agent.close().catch(() => undefined);
       throw error;
@@ -112,24 +140,66 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
     return opened;
   };
 
-  const invocation = async (request: Request): Promise<Response> => {
-    const name = request.headers.get(SESSION_HEADER);
-    if (!name) return refused("invalid_request", `an invocation names its AgentCore session in ${SESSION_HEADER}`);
-    if (instance !== undefined && instance.name !== name) {
-      return refused("invalid_request", `this AgentCore session is the instance "${instance.name}", not "${name}"`);
-    }
-    const asked = requestIn(await request.json().catch(() => undefined));
-    if (asked === undefined) {
-      return refused("invalid_request", "an invocation is { request: { method, path, headers, body } }");
-    }
+  const openSession = async (name: string): Promise<Opened> => {
     instance ??= { name, opened: open(name) };
     const current = instance;
-    let opened: Opened;
     try {
-      opened = await current.opened;
+      return await current.opened;
     } catch (error) {
       // The next invocation opens it again: what failed (a lease another microVM still holds) may have passed by then.
       if (instance === current) instance = undefined;
+      throw error;
+    }
+  };
+
+  const alarmInvocation = async (name: string, since: Date | undefined): Promise<Response> => {
+    try {
+      const opened = await openSession(name);
+      await opened.service.tick(since === undefined ? undefined : { since });
+      return Response.json({ ok: true });
+    } catch (error) {
+      const message = (error as Error)?.message ?? String(error);
+      console.error(`[fastagent] alarm for "${name}" failed: ${String(error)}`);
+      // EventBridge Scheduler retries a non-2xx answer (AgentCore's 424), and stops on 200.
+      return Response.json({ ok: false, error: message }, { status: error instanceof Unavailable ? 503 : 200 });
+    }
+  };
+
+  const rearmInvocation = async (name: string): Promise<Response> => {
+    if (name !== DEPLOY_SESSION_ID) {
+      return refused("invalid_request", `rearm runs only in ${DEPLOY_SESSION_ID}, not "${name}"`);
+    }
+    if (alarms === undefined) return Response.json({ ok: true });
+    try {
+      rearmInFlight ??= alarms.rearm(definition, placedDatabase()).finally(() => {
+        rearmInFlight = undefined;
+      });
+      await rearmInFlight;
+      return Response.json({ ok: true });
+    } catch (error) {
+      const message = (error as Error)?.message ?? String(error);
+      console.error(`[fastagent] re-arming instance alarms failed: ${String(error)}`);
+      return Response.json({ ok: false, error: message }, { status: error instanceof Unavailable ? 503 : 200 });
+    }
+  };
+
+  const invocation = async (request: Request): Promise<Response> => {
+    const name = request.headers.get(SESSION_HEADER);
+    if (!name) return refused("invalid_request", `an invocation names its AgentCore session in ${SESSION_HEADER}`);
+    const parsed = parseInvocation(await request.json().catch(() => undefined));
+    if (parsed === undefined) {
+      return refused("invalid_request", "an invocation is { request: { method, path, headers, body } }");
+    }
+    if (parsed.kind === "rearm") return rearmInvocation(name);
+    if (instance !== undefined && instance.name !== name) {
+      return refused("invalid_request", `this AgentCore session is the instance "${instance.name}", not "${name}"`);
+    }
+    if (parsed.kind === "alarm") return alarmInvocation(name, parsed.since);
+    const asked = parsed.request;
+    let opened: Opened;
+    try {
+      opened = await openSession(name);
+    } catch (error) {
       console.error(`[fastagent] the instance "${name}" did not open: ${String(error)}`);
       // Retryable only when it passes by itself: one that needs a person (a value, a permission) is not retried for ever.
       const code = error instanceof Unavailable ? "unavailable" : "internal";
@@ -149,12 +219,16 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
   return {
     async fetch(request: Request): Promise<Response> {
       const path = new URL(request.url).pathname;
-      if (path === "/ping") return Response.json({ status: ready?.agent.busy() ? "HealthyBusy" : "Healthy" });
+      if (path === "/ping") {
+        const busy = ready?.agent.busy() === true || rearmInFlight !== undefined;
+        return Response.json({ status: busy ? "HealthyBusy" : "Healthy" });
+      }
       if (path === "/invocations" && request.method === "POST") return invocation(request);
       return new Response("not found\n", { status: 404 });
     },
     /** Stop serving, then release the instance. */
     async close(): Promise<void> {
+      await rearmInFlight?.catch(() => undefined);
       const opened = await instance?.opened.catch(() => undefined);
       ready = undefined;
       await opened?.agent.close();

@@ -14,7 +14,7 @@ import { nextRun } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";
 import type { ClockStore } from "./clock.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
-import { requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
+import { listWakeups, requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 export interface Scheduler {
   /**
@@ -22,6 +22,10 @@ export interface Scheduler {
    * schedule's newest fire cannot be read: a schedule is not run blind.
    */
   start(): Promise<void>;
+  /** Claim and start every cron occurrence and wake-up due now (`since` stamps schedules seen for the first time). */
+  tick(options?: { since?: Date }): Promise<void>;
+  /** The earliest instant a schedule or pending wake-up in `clock` is next due, or `undefined` when nothing is. */
+  nextDue(at?: Date): Promise<Date | undefined>;
   /** Cancel pending waits. */
   stop(): void;
 }
@@ -209,37 +213,50 @@ function fireScheduleOnce(opts: {
   /** Hears the fire's message once it is recorded. */
   accepted?: (message: Message) => void;
 }): Effect.Effect<ScheduleFireOutcome, PromiseFailure> {
-  return Effect.gen(function* () {
-    const clock = yield* Clock.Clock;
-    const { clock: store, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
-    const firedAt = now();
-    const skippedReason = yield* Effect.tryPromise({
-      try: async () => {
-        // The DECISION to fire is the claim, and it is atomic: the resident clock and a fire on demand take the same
-        // slot, and exactly one of them runs it. It is also the ONLY state write on this path, so a state failure
-        // cannot burn a slot that was already claimed.
-        const claim = await claimSlot(store, s.name, slot, firedAt);
-        if (claim.taken) return undefined;
-        if (claim.why === "duplicate") {
-          // Ordinary: the same delivery arrived twice, or another scheduler has this slot and is running it.
-          const reason = `slot ${slot.toISOString()} is already claimed — a duplicate delivery, or another scheduler has it`;
-          log.info(`[schedule] ${s.name}: skipping — ${reason}`);
-          return reason;
-        }
-        // Not ordinary: this instant will never run. The common way in is a wall clock that moved backwards (a VM
-        // resume, a host clock correction), which keeps producing slots behind the newest claim. No claim was taken,
-        // so there is nothing to record: it is a WARN where the benign duplicate is an info line.
-        const reason = `slot ${slot.toISOString()} is stale: ${claim.newest} was already claimed, so this instant is skipped`;
-        log.warn(`[schedule] ${s.name}: skipping — ${reason}`);
-        return reason;
-      },
-      catch: (cause) => new PromiseFailure(cause),
-    });
-    if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
-    const held = firingKey(s.name, slot);
-    firingOf(store).add(held);
-    return yield* firedClaim(opts).pipe(Effect.ensuring(Effect.sync(() => firingOf(store).delete(held))));
-  }).pipe(Effect.uninterruptible);
+  return Effect.acquireUseRelease(
+    // Counted until its message is accepted (or this fire exits without sending one), so `busy()` has no gap.
+    Effect.sync(beginWork),
+    (done) =>
+      Effect.gen(function* () {
+        const clock = yield* Clock.Clock;
+        const { clock: store, schedule: s, slot, now = () => new Date(clock.currentTimeMillisUnsafe()) } = opts;
+        const firedAt = now();
+        const skippedReason = yield* Effect.tryPromise({
+          try: async () => {
+            // The DECISION to fire is the claim, and it is atomic: the resident clock and a fire on demand take the same
+            // slot, and exactly one of them runs it. It is also the ONLY state write on this path, so a state failure
+            // cannot burn a slot that was already claimed.
+            const claim = await claimSlot(store, s.name, slot, firedAt);
+            if (claim.taken) return undefined;
+            if (claim.why === "duplicate") {
+              // Ordinary: the same delivery arrived twice, or another scheduler has this slot and is running it.
+              const reason = `slot ${slot.toISOString()} is already claimed — a duplicate delivery, or another scheduler has it`;
+              log.info(`[schedule] ${s.name}: skipping — ${reason}`);
+              return reason;
+            }
+            // Not ordinary: this instant will never run. The common way in is a wall clock that moved backwards (a VM
+            // resume, a host clock correction), which keeps producing slots behind the newest claim. No claim was taken,
+            // so there is nothing to record: it is a WARN where the benign duplicate is an info line.
+            const reason = `slot ${slot.toISOString()} is stale: ${claim.newest} was already claimed, so this instant is skipped`;
+            log.warn(`[schedule] ${s.name}: skipping — ${reason}`);
+            return reason;
+          },
+          catch: (cause) => new PromiseFailure(cause),
+        });
+        if (skippedReason !== undefined) return { fired: false, skippedReason, ms: 0 };
+        const held = firingKey(s.name, slot);
+        firingOf(store).add(held);
+        const withHandoff = {
+          ...opts,
+          accepted: (message: Message) => {
+            done();
+            opts.accepted?.(message);
+          },
+        };
+        return yield* firedClaim(withHandoff).pipe(Effect.ensuring(Effect.sync(() => firingOf(store).delete(held))));
+      }),
+    (done) => Effect.sync(done),
+  ).pipe(Effect.uninterruptible);
 }
 
 /** A claimed occurrence, run: its session and prompt, its message, and its outcome written back into the claim. */
@@ -413,10 +430,64 @@ function wakeEnvelope(w: Wakeup): string {
   return `${tag} ${w.prompt}`;
 }
 
+/**
+ * Stamp when each schedule with no recorded fire was first armed (`since`), and drop names no longer in `schedules`.
+ * Writes nothing when nothing changed, so an instance with no schedules creates no document.
+ */
+async function recordArmed(
+  store: ClockStore,
+  schedules: readonly Schedule[],
+  lastFires: ReadonlyMap<string, string>,
+  since: Date,
+): Promise<Readonly<Record<string, string>>> {
+  const current = await store.stored.armed();
+  const names = new Set(schedules.map((s) => s.name));
+  const at = since.toISOString();
+  const plan = (armed: Readonly<Record<string, string>>): Record<string, string> | undefined => {
+    let changed = false;
+    const next: Record<string, string> = {};
+    for (const [name, when] of Object.entries(armed)) {
+      if (!names.has(name) || lastFires.has(name)) {
+        changed = true;
+        continue;
+      }
+      if (at < when) {
+        next[name] = at;
+        changed = true;
+      } else {
+        next[name] = when;
+      }
+    }
+    for (const s of schedules) {
+      if (lastFires.has(s.name) || next[s.name] !== undefined) continue;
+      next[s.name] = at;
+      changed = true;
+    }
+    return changed ? next : undefined;
+  };
+  if (plan(current) === undefined) return current;
+  return store.armed((armed) => {
+    const next = plan(armed);
+    return next === undefined ? { result: armed } : { next, result: next };
+  });
+}
+
+function dueFor(
+  schedule: Schedule,
+  lastFireAt: string | undefined,
+  armedAt: string | undefined,
+  fallback: Date,
+): Date | undefined {
+  const anchor = lastFireAt ?? armedAt;
+  return nextRun(schedule.cron, schedule.tz, anchor === undefined ? fallback : new Date(anchor));
+}
+
 export function createScheduler(options: SchedulerOptions): Effect.Effect<Scheduler> {
   return Effect.gen(function* () {
     const clock = yield* Clock.Clock;
-    const fork = Effect.runForkWith(yield* Effect.context<never>());
+    const context = yield* Effect.context<never>();
+    const fork = Effect.runForkWith(context);
+    const run = Effect.runPromiseWith(context);
     const { agent, clock: store, schedules, now = () => new Date(clock.currentTimeMillisUnsafe()) } = options;
     const loops = new Set<Fiber.Fiber<unknown, unknown>>();
     let stopped = false;
@@ -544,6 +615,38 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       }
     });
 
+    /** Claim `slot` and admit its message before resolving, while its turn runs to completion in the background. */
+    const startDueFire = (s: Schedule, slot: Date) =>
+      Effect.acquireUseRelease(
+        Effect.sync(beginWork),
+        () =>
+          Effect.gen(function* () {
+            const admitted = yield* Deferred.make<void>();
+            const release = () => void Deferred.doneUnsafe(admitted, Effect.void);
+            const fire = fireScheduleOnce({
+              agent,
+              clock: store,
+              schedule: s,
+              slot,
+              now,
+              accepted: () => release(),
+            }).pipe(
+              Effect.catchTag("PromiseFailure", (error) =>
+                Effect.sync(() => {
+                  log.error(
+                    `[schedule] ${s.name}: fire failed (skipping this run, schedule stays armed): ${String(error.cause)}`,
+                  );
+                }),
+              ),
+              Effect.ensuring(Effect.sync(release)),
+              Effect.uninterruptible,
+            );
+            launch(s.name, Effect.asVoid(fire));
+            yield* Deferred.await(admitted);
+          }),
+        (done) => Effect.sync(done),
+      );
+
     /** Arm `s` to fire next at `due`, or say it never will. */
     const arm = (s: Schedule, due: Date | undefined): void => {
       if (!due) {
@@ -580,19 +683,61 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           launch(s.name, accounted);
         }
         const current = now();
+        const armed = await recordArmed(store, schedules, lastFires, current);
         for (const s of schedules) {
           if (stopped) break;
-          // FROM THE LAST FIRE, or from now when there was none. A schedule that has never fired does not catch
-          // up the occurrence it missed while the process was down: nothing recorded that it was ever armed then,
-          // so "missed" is not a fact this process has. Every boot after the first resumes from the claim.
-          const last = lastFires.get(s.name);
-          const due = nextRun(s.cron, s.tz, last ? new Date(last) : current);
+          // FROM THE LAST FIRE, or from when this schedule was first armed (`armed`), or from now on its very first
+          // open: an idle machine woken a few seconds past its first cron slot catches it up instead of skipping a day.
+          const due = dueFor(s, lastFires.get(s.name), armed[s.name], current);
           if (due && due.getTime() <= current.getTime()) {
             log.info(`[schedule] ${s.name}: catching up a missed run`);
+            await run(startDueFire(s, due));
+            if (!stopped) arm(s, nextRun(s.cron, s.tz, new Date(Math.max(now().getTime(), due.getTime()))));
+            continue;
           }
           arm(s, due);
         }
+        while (!stopped && (await run(wakeOnce))) {}
         if (!stopped) launch("wake-up poll", wakeLoop);
+      },
+      async tick(tickOptions) {
+        if (stopped) return;
+        const lastFires = new Map<string, string>();
+        for (const s of schedules) {
+          const fire = await latestFire(store, s.name);
+          if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
+        }
+        const current = now();
+        const since =
+          tickOptions?.since !== undefined && tickOptions.since.getTime() < current.getTime()
+            ? tickOptions.since
+            : current;
+        const armed = await recordArmed(store, schedules, lastFires, since);
+        for (const s of schedules) {
+          if (stopped) break;
+          const due = dueFor(s, lastFires.get(s.name), armed[s.name], current);
+          if (due && due.getTime() <= current.getTime()) {
+            log.info(`[schedule] ${s.name}: catching up a missed run`);
+            await run(startDueFire(s, due));
+          }
+        }
+        while (!stopped && (await run(wakeOnce))) {}
+      },
+      async nextDue(at = now()) {
+        const [armed, wakeups, fires] = await Promise.all([
+          store.stored.armed(),
+          listWakeups(store),
+          Promise.all(schedules.map((s) => latestFire(store, s.name))),
+        ]);
+        let earliest: number | undefined;
+        const consider = (ms: number | undefined) => {
+          if (ms !== undefined && (earliest === undefined || ms < earliest)) earliest = ms;
+        };
+        for (const [i, s] of schedules.entries()) {
+          consider(dueFor(s, fires[i]?.firedAt, armed[s.name], at)?.getTime());
+        }
+        for (const w of wakeups) consider(new Date(w.fireAt).getTime());
+        return earliest === undefined ? undefined : new Date(earliest);
       },
       stop() {
         stopped = true;

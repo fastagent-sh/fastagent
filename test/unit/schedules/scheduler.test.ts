@@ -207,3 +207,61 @@ describe("schedule/fireScheduleNow: a fire on demand", () => {
     expect(await readFires(root, "job")).toMatchObject([{ outcome: "skipped" }]);
   });
 });
+
+describe("schedule/scheduler: scale-to-zero arming, tick and nextDue", () => {
+  it("catches up a schedule's very first slot when the machine stopped after arming and reopened past the slot", async () => {
+    const root = await freshRoot();
+    const { agent: firstAgent, calls: firstCalls } = recordingAgent();
+    // Opened at 10:30 before the 11:00 hourly slot, then stopped while idle at 10:45.
+    const first = Effect.runSync(
+      scheduler({ agent: firstAgent, clock: root, schedules: [hourly()], now: () => new Date("2026-07-07T10:30:00Z") }),
+    );
+    await first.start();
+    expect(firstCalls).toHaveLength(0);
+    expect((await first.nextDue(new Date("2026-07-07T10:30:00Z")))?.toISOString()).toBe("2026-07-07T11:00:00.000Z");
+    first.stop();
+
+    // Woken by an external alarm 4 seconds past 11:00: `armed` remembers 10:30, so 11:00 catches up instead of
+    // skipping to 12:00, and `nextDue` moves to 12:00 as soon as `start` resolves.
+    const { agent: secondAgent, calls: secondCalls } = recordingAgent();
+    const second = Effect.runSync(
+      scheduler({
+        agent: secondAgent,
+        clock: root,
+        schedules: [hourly()],
+        now: () => new Date("2026-07-07T11:00:04Z"),
+      }),
+    );
+    await second.start();
+    expect(secondCalls).toHaveLength(1);
+    expect(await claimed(root, "job")).toEqual(["2026-07-07T11:00:00.000Z"]);
+    expect((await second.nextDue(new Date("2026-07-07T11:00:04Z")))?.toISOString()).toBe("2026-07-07T12:00:00.000Z");
+    second.stop();
+  });
+
+  it("tick drains due wake-ups and schedules stamped with `since`, and nextDue picks the earliest remaining", async () => {
+    const root = await freshRoot();
+    await addWakeup(
+      root,
+      { session: "conv-1", prompt: "due now", fireAt: new Date("2026-07-07T10:55:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    await addWakeup(
+      root,
+      { session: "conv-1", prompt: "later", fireAt: new Date("2026-07-07T11:20:00Z") },
+      new Date("2026-07-07T10:00:00Z"),
+    );
+    const { agent, calls } = recordingAgent();
+    const s = Effect.runSync(
+      scheduler({ agent, clock: root, schedules: [hourly()], now: () => new Date("2026-07-07T11:00:05Z") }),
+    );
+    // Deployed at 10:40 (`since`): never opened before 11:00:05, yet `tick` catches up the 11:00 slot and the 10:55
+    // wake-up, leaving the 11:20 wake-up ahead of the 12:00 cron.
+    await s.tick({ since: new Date("2026-07-07T10:40:00Z") });
+    expect(calls).toHaveLength(2);
+    expect((await s.nextDue(new Date("2026-07-07T11:00:05Z")))?.toISOString()).toBe("2026-07-07T11:20:00.000Z");
+    await removeAnyWakeup(root, (await listWakeups(root))[0]!.id);
+    expect((await s.nextDue(new Date("2026-07-07T11:00:05Z")))?.toISOString()).toBe("2026-07-07T12:00:00.000Z");
+    s.stop();
+  });
+});
