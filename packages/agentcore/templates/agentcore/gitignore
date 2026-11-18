@@ -1,0 +1,5 @@
+# AgentCore CLI state: commit the deployed-state binding, so a target's stack is shared; ignore local scratch.
+.cli/*
+!.cli/deployed-state.json
+.cache/
+.env.local

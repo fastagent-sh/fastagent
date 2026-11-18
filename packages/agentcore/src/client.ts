@@ -22,6 +22,8 @@ export interface AgentCoreConnection {
    * digits, `-` and `_`, starting with a letter or digit.
    */
   sessionId: string;
+  /** The runtime endpoint, which picks the version that answers: `prod`, a release's. Default: `DEFAULT`. */
+  qualifier?: string;
 }
 
 const RUNTIME_ARN = /^arn:aws[a-z-]*:bedrock-agentcore:([a-z0-9-]+):\d{12}:runtime\/[A-Za-z0-9_-]+$/;
@@ -54,7 +56,7 @@ const clientIn = (region: string): BedrockAgentCoreClient => {
 };
 
 /** The Agent of the session `sessionId` on the runtime `runtimeArn`. */
-export function connectAgentCore({ runtimeArn, sessionId }: AgentCoreConnection): Agent {
+export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCoreConnection): Agent {
   const region = RUNTIME_ARN.exec(runtimeArn)?.[1];
   if (region === undefined) {
     throw new Error(
@@ -75,6 +77,7 @@ export function connectAgentCore({ runtimeArn, sessionId }: AgentCoreConnection)
         new InvokeAgentRuntimeCommand({
           agentRuntimeArn: runtimeArn,
           runtimeSessionId: sessionId,
+          ...(qualifier === undefined ? {} : { qualifier }),
           contentType: "application/json",
           accept: "application/json, text/event-stream",
           payload: new TextEncoder().encode(payload),

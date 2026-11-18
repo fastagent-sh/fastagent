@@ -1,16 +1,19 @@
 import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
+import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
+import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import type { CreateIndex } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import type { PostgresDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
-import { fauxAgent } from "../../doubles/cli-run.ts";
+import { fauxAgent, runInProcess } from "../../doubles/cli-run.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 
 const ENDPOINT = "abcdefghij.dsql.ap-southeast-1.on.aws";
@@ -46,10 +49,12 @@ describe("Aurora DSQL as an instance's database", () => {
     },
   });
 
-  it("builds an index as a job and waits for it, and starts none for one that exists", async () => {
+  it("starts an index as a job and answers how to wait for it, and starts none for one that exists", async () => {
     sent.length = 0;
-    await createIndexAsync(db([{ job_id: "j1" }]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
-    await createIndexAsync(db([]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
+    const job = await createIndexAsync(db([{ job_id: "j1" }]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
+    expect(sent).toEqual([["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"]]);
+    await job?.();
+    expect(await createIndexAsync(db([]), "CREATE INDEX IF NOT EXISTS i ON t (a)")).toBeUndefined();
     expect(sent).toEqual([
       ["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"],
       ["CALL sys.wait_for_job($1)", "j1"],
@@ -58,9 +63,8 @@ describe("Aurora DSQL as an instance's database", () => {
   });
 
   it("fails the migration when the index job does not succeed, naming the job and the index", async () => {
-    await expect(
-      createIndexAsync(db([{ job_id: "j2" }], false), "CREATE INDEX IF NOT EXISTS i ON t (a)"),
-    ).rejects.toThrow(
+    const job = await createIndexAsync(db([{ job_id: "j2" }], false), "CREATE INDEX IF NOT EXISTS i ON t (a)");
+    await expect(job?.() ?? Promise.resolve()).rejects.toThrow(
       "the index job j2 did not succeed (CREATE INDEX IF NOT EXISTS i ON t (a)): see sys.jobs, then drop the INVALID index",
     );
   });
@@ -106,6 +110,8 @@ async function answered(response: Response) {
   };
 }
 
+const agentcoreVersion = agentcorePackage.version;
+
 const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
 
 /**
@@ -117,6 +123,7 @@ const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/s
 const fake = {
   serving: undefined as { fetch(request: Request): Promise<Response> } | undefined,
   signatures: [] as string[],
+  urls: [] as string[],
   refusals: [] as Array<{ status: number; type: string }>,
   refuse(status: number, type: string) {
     this.refusals.push({ status, type });
@@ -126,6 +133,7 @@ const fakeAgentCore = createServer(async (req, res) => {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   fake.signatures.push(String(req.headers.authorization));
+  fake.urls.push(String(req.url));
   const refusal = fake.refusals.shift();
   if (refusal !== undefined || fake.serving === undefined) {
     const { status, type } = refusal ?? { status: 404, type: "ResourceNotFoundException" };
@@ -159,9 +167,11 @@ afterAll(async () => {
 function agentCore(handler: { fetch(request: Request): Promise<Response> }) {
   fake.serving = handler;
   fake.signatures.length = 0;
+  fake.urls.length = 0;
   fake.refusals.length = 0;
   return {
     signatures: fake.signatures,
+    urls: fake.urls,
     refuse: (status: number, type: string) => fake.refuse(status, type),
     close: async () => {
       fake.serving = undefined;
@@ -198,6 +208,11 @@ describe("an agent on AgentCore", () => {
       expect(
         aws.signatures.every((signature) => signature.includes("/ap-southeast-1/bedrock-agentcore/aws4_request")),
       ).toBe(true);
+      // A runtime endpoint picks the version that answers.
+      expect(aws.urls.every((url) => !url.includes("qualifier="))).toBe(true);
+      const released = connectAgentCore({ runtimeArn: RUNTIME, sessionId, qualifier: "prod" });
+      expect((await released.info()).name).toBe(sessionId);
+      expect(aws.urls.at(-1)).toContain("qualifier=prod");
     } finally {
       await aws.close();
       await handler.close();
@@ -325,5 +340,94 @@ describe("an agent on AgentCore", () => {
       await aws.close();
       await handler.close();
     }
+  });
+});
+
+describe("the agent's values from its secret", () => {
+  /** Secrets Manager as `secretValues` asks it: the secret's string, or the failure it answers with. */
+  const holding = (answer: string | Error) => ({
+    send: async () => {
+      if (answer instanceof Error) throw answer;
+      return { SecretString: answer };
+    },
+  });
+
+  it("reads the secret's names and values, and refuses one the runtime's environment also sets", async () => {
+    const secret = holding(JSON.stringify({ ANTHROPIC_API_KEY: "sk-1", ZENDESK_TOKEN: "zd" }));
+    expect(await secretValues("support", {}, secret as never)).toEqual({
+      ANTHROPIC_API_KEY: "sk-1",
+      ZENDESK_TOKEN: "zd",
+    });
+    await expect(secretValues("support", { ZENDESK_TOKEN: "other" }, secret as never)).rejects.toThrow(
+      "ZENDESK_TOKEN is both in the secret support and in the runtime's environment: keep it in one",
+    );
+  });
+
+  it("refuses a secret that is not a JSON object of strings, and says why one cannot be read", async () => {
+    for (const [answer, said] of [
+      ["not json", "the secret support is not a JSON object of names to values"],
+      ["[1]", "the secret support is not a JSON object of names to values"],
+      [JSON.stringify({ PORT: 8080 }), "the secret support has PORT as a number, not a string"],
+      [
+        new Error("AccessDeniedException: not allowed"),
+        "the secret support cannot be read: AccessDeniedException: not allowed",
+      ],
+    ] as const) {
+      await expect(secretValues("support", {}, holding(answer) as never)).rejects.toThrow(said);
+    }
+  });
+});
+
+describe("fastagent agentcore init", () => {
+  it("writes the container and the AgentCore project, says what to create and how to deploy, and keeps the project after", async () => {
+    const dir = await fauxAgent("fa-agentcore-init-", {
+      "src/tools/ticket.ts": [
+        `import { defineTool } from "@earendil-works/pi-durable";`,
+        `import { obj } from "@earendil-works/pi-schema";`,
+        `import { needs } from "@fastagent-sh/fastagent";`,
+        `export default needs(["ZENDESK_TOKEN"], () => defineTool({ name: "ticket", description: "File a ticket.", parameters: obj({}), execute: async () => ({ output: [] }) }));`,
+      ].join("\n"),
+    });
+    const first = await runInProcess(["agentcore", "init", "--no-install"], dir);
+    expect(first.code, first.stderr).toBe(0);
+    const name = basename(dir);
+    expect(first.stdout).toContain(
+      `aws secretsmanager create-secret --name ${name} --secret-string file://<values.json>`,
+    );
+    expect(first.stdout).toContain("npx -y @aws/agentcore@1.0.3 deploy");
+    expect(first.stdout).toContain("the model's API key, ZENDESK_TOKEN");
+
+    const dockerfile = await readFile(join(dir, "Dockerfile"), "utf8");
+    expect(dockerfile).toMatch(/^# Generated by `fastagent agentcore init`/);
+    expect(dockerfile).toContain('CMD ["./node_modules/.bin/fastagent", "agentcore", "start", "/app"]');
+    // The state is in the platform's database: no volume taken, no name for one.
+    expect(dockerfile).not.toMatch(/FASTAGENT_DEPLOYED|FASTAGENT_NAME|FASTAGENT_ROOT/);
+    expect(await readFile(join(dir, ".dockerignore"), "utf8")).toMatch(/^\/agentcore$/m);
+
+    const project = JSON.parse(await readFile(join(dir, "agentcore", "agentcore.json"), "utf8"));
+    expect(project.runtimes).toEqual([
+      expect.objectContaining({ build: "Container", codeLocation: ".", dockerfile: "Dockerfile" }),
+    ]);
+    expect(project.name).toMatch(/^[A-Za-z][A-Za-z0-9]{0,22}$/);
+    expect(await readFile(join(dir, "agentcore", "cdk", "lib", "cdk-stack.ts"), "utf8")).toContain(
+      `secretName: '${name}'`,
+    );
+    const cdkPackage = JSON.parse(await readFile(join(dir, "agentcore", "cdk", "package.json"), "utf8"));
+    expect(cdkPackage.dependencies["@fastagent-sh/agentcore"]).toBe(agentcoreVersion);
+
+    await writeFile(join(dir, "agentcore", "agentcore.json"), '{ "mine": true }\n');
+    const again = await runInProcess(["agentcore", "init", "--no-install"], dir);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stderr).toContain("kept agentcore/ (yours once written)");
+    expect(await readFile(join(dir, "agentcore", "agentcore.json"), "utf8")).toBe('{ "mine": true }\n');
+  });
+
+  it("refuses a flag of init's on another command, and a start with no database to keep the instances in", async () => {
+    const dir = await fauxAgent("fa-agentcore-usage-");
+    const flag = await runInProcess(["agentcore", "start", "--force"], dir);
+    expect([flag.code, flag.stderr.split("\n")[0]]).toEqual([2, "Error: --force and --no-install are init's"]);
+    const unplaced = await runInProcess(["agentcore", "start"], dir);
+    expect(unplaced.code).toBe(1);
+    expect(unplaced.stderr).toContain("FASTAGENT_DSQL_ENDPOINT is required: the Aurora DSQL cluster's endpoint");
   });
 });

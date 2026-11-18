@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { DOCKER_TARGET } from "../../../packages/fastagent/src/deploy/container.ts";
 import { checkContainer } from "../../../packages/fastagent/src/deploy/preflight.ts";
 import { agent } from "./deploy-preflight-fixtures.ts";
 
 vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 const warnings = async (agentDir: string) => {
-  const checked = await checkContainer({ agentDir, force: false });
+  const checked = await checkContainer({ agentDir, force: false, target: DOCKER_TARGET });
   if (!checked.ok) throw new Error(checked.gate);
   return checked.messages.filter((m) => m.level === "warn").map((m) => m.text);
 };
@@ -15,7 +16,7 @@ const warnings = async (agentDir: string) => {
 describe("deploy/preflight: what the container is checked for", () => {
   it("names the container after the program and warns when no model is set", async () => {
     const dir = await agent();
-    const checked = await checkContainer({ agentDir: dir, force: false });
+    const checked = await checkContainer({ agentDir: dir, force: false, target: DOCKER_TARGET });
     expect(checked.ok).toBe(true);
     if (checked.ok) expect(checked.container.name).toBe("agent");
     expect(await warnings(dir)).toContainEqual(expect.stringMatching(/no model is set in fastagent\.config\.ts/));
@@ -32,7 +33,7 @@ describe("deploy/preflight: what the container is checked for", () => {
 
   it("stops when the definition does not load: the container would crash-loop", async () => {
     const dir = await agent({ "src/tools/x.ts": "throw new Error('broken tool');\n" });
-    const checked = await checkContainer({ agentDir: dir, force: false });
+    const checked = await checkContainer({ agentDir: dir, force: false, target: DOCKER_TARGET });
     expect(checked.ok).toBe(false);
     if (!checked.ok) expect(checked.gate).toMatch(/definition does not load.*broken tool/s);
   });

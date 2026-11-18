@@ -24,15 +24,16 @@ export const DSQL_LIMITS: PostgresLimits = {
 export const createIndexAsync: CreateIndex = async (db, statement) => {
   if (!statement.startsWith("CREATE INDEX ")) throw new Error(`not an index: ${statement.slice(0, 60)}`);
   const [job] = await db.query<{ job_id?: string }>(statement.replace("CREATE INDEX ", "CREATE INDEX ASYNC "));
+  const jobId = job?.job_id;
   // An index that exists starts no job.
-  if (job?.job_id === undefined) return;
-  const [waited] = await db.query<{ succeeded?: boolean }>("CALL sys.wait_for_job($1)", [job.job_id]);
-  if (waited?.succeeded !== true) {
-    const index = statement.replace(/\s+/g, " ").slice(0, 80);
-    throw new Error(
-      `the index job ${job.job_id} did not succeed (${index}): see sys.jobs, then drop the INVALID index`,
-    );
-  }
+  if (jobId === undefined) return;
+  return async () => {
+    const [waited] = await db.query<{ succeeded?: boolean }>("CALL sys.wait_for_job($1)", [jobId]);
+    if (waited?.succeeded !== true) {
+      const index = statement.replace(/\s+/g, " ").slice(0, 80);
+      throw new Error(`the index job ${jobId} did not succeed (${index}): see sys.jobs, then drop the INVALID index`);
+    }
+  };
 };
 
 export interface DsqlOptions {

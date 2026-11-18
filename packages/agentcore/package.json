@@ -24,6 +24,19 @@
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "cdk": [
+        "./dist/cdk.d.ts"
+      ],
+      "client": [
+        "./dist/client.d.ts"
+      ],
+      "cli": [
+        "./dist/cli.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "@fastagent-sh/source": "./src/index.ts",
@@ -40,10 +53,16 @@
       "types": "./dist/cli.d.ts",
       "default": "./dist/cli.js"
     },
+    "./cdk": {
+      "@fastagent-sh/source": "./src/cdk.ts",
+      "types": "./dist/cdk.d.ts",
+      "default": "./dist/cdk.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "templates",
     "LICENSE",
     "README.md"
   ],
@@ -64,13 +83,22 @@
     "@aws-sdk/dsql-signer": "^3.1170.0",
     "@effect/platform-node": "^4.0.7",
     "@fastagent-sh/client": "0.31.0",
-    "effect": "^4.0.7"
+    "effect": "^4.0.7",
+    "@aws-sdk/client-secrets-manager": "^3.1170.0"
   },
   "peerDependencies": {
-    "@fastagent-sh/fastagent": "0.31.0"
+    "@fastagent-sh/fastagent": "0.31.0",
+    "aws-cdk-lib": "^2.269.0",
+    "constructs": "^10.7.0"
   },
   "peerDependenciesMeta": {
     "@fastagent-sh/fastagent": {
+      "optional": true
+    },
+    "aws-cdk-lib": {
+      "optional": true
+    },
+    "constructs": {
       "optional": true
     }
   }

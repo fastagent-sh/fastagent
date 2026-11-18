@@ -17,7 +17,8 @@
     "paths": {
       "@fastagent-sh/client": ["./packages/client/src/index.ts"],
       "@fastagent-sh/client/*": ["./packages/client/src/*.ts"],
-      "@fastagent-sh/fastagent": ["./packages/fastagent/src/index.ts"]
+      "@fastagent-sh/fastagent": ["./packages/fastagent/src/index.ts"],
+      "@fastagent-sh/fastagent/*": ["./packages/fastagent/src/*.ts"]
     }
   },
   "include": ["packages/*/src", "test"],

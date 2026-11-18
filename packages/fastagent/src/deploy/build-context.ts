@@ -156,15 +156,15 @@ export async function checkKeptIgnoreFiles(
       const text =
         `your ${rel} (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
         `context would BAKE SECRETS INTO THE IMAGE. ${remedy(leaks.map((p) => `/${p}`))}`;
-      report.warn(text);
+      report.leak(text);
     }
     if (stateShips && !excluded(`${stateShips}/sessions`)) {
-      report.warn(
+      report.leak(
         `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${stateShips}`])}`,
       );
     }
     if (instancesShip && !excluded(`${instancesShip}/dev/.state/x`)) {
-      report.warn(
+      report.leak(
         `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${instancesShip}`])}`,
       );
     }

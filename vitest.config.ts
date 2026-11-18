@@ -16,7 +16,7 @@ export default defineConfig({
     alias: [
       { find: /^@fastagent-sh\/client\/(.+)$/, replacement: `${source("client")}/$1.ts` },
       { find: /^@fastagent-sh\/client$/, replacement: `${source("client")}/index.ts` },
-      { find: /^@fastagent-sh\/fastagent\/(telegram|slack|feishu)$/, replacement: `${source("fastagent")}/$1.ts` },
+      { find: /^@fastagent-sh\/fastagent\/(.+)$/, replacement: `${source("fastagent")}/$1.ts` },
       { find: /^@fastagent-sh\/fastagent$/, replacement: `${source("fastagent")}/index.ts` },
     ],
   },
