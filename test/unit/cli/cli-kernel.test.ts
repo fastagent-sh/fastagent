@@ -86,6 +86,15 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 // ---------------------------------------------------------------------------------------------
 // End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
 
+/** An extension's `./cli` entry: it says what it was given, or fails as its `fixture.json` says. */
+const EXTENSION_CLI = `import { readFileSync } from "node:fs";
+const { name, fails } = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
+export async function run(args) {
+  if (fails) throw new Error(fails);
+  console.log(JSON.stringify({ from: name, args }));
+}
+`;
+
 describe("cli: a command an installed extension adds", () => {
   /** A project with `packages` installed: each a `./cli` entry that says what it was given, or fails with `fails`. */
   async function project(packages: Record<string, { fails?: string }>): Promise<string> {
@@ -98,10 +107,8 @@ describe("cli: a command an installed extension adds", () => {
         join(at, "package.json"),
         JSON.stringify({ name, type: "module", exports: { "./cli": "./cli.js" } }),
       );
-      const body = fails
-        ? `throw new Error(${JSON.stringify(fails)});`
-        : `console.log(JSON.stringify({ from: ${JSON.stringify(name)}, args }));`;
-      await writeFile(join(at, "cli.js"), `export async function run(args) { ${body} }\n`);
+      await writeFile(join(at, "fixture.json"), JSON.stringify({ name, fails }));
+      await writeFile(join(at, "cli.js"), EXTENSION_CLI);
     }
     return dir;
   }
