@@ -17,6 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer } from "effect/http";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
+import { type EnvelopedRequest, envelopeResponse, isEventStream } from "@fastagent-sh/client/agentcore/contract";
 import { statusOf } from "@fastagent-sh/client/http/contract";
 import {
   type AgentDefinition,
@@ -28,7 +29,6 @@ import {
 } from "@fastagent-sh/fastagent";
 import { Unavailable } from "@fastagent-sh/fastagent/platform";
 import type { AlarmGroup } from "./alarms.ts";
-import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./envelope.ts";
 import { DEPLOY_SESSION_ID } from "./variables.ts";
 
 /** The header AgentCore names an invocation's session in. */

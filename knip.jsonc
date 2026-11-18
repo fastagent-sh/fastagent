@@ -6,19 +6,21 @@
     ".": {
       "entry": ["test/**/*.test.ts", "test/smoke/*/*.ts", "scripts/*.mjs"],
       "project": ["test/**/*.ts", "scripts/*.mjs"],
-      // The tests exercise the packages through these, the packages' own dependencies, installed at the root.
-      "ignoreDependencies": ["@earendil-works/.+", "effect", "ignore"]
+      // The tests exercise the packages through these, the packages' own dependencies and optional peers, installed at
+      // the root.
+      "ignoreDependencies": ["@aws-sdk/client-bedrock-agentcore", "@earendil-works/.+", "effect", "ignore"]
     },
     "packages/client": {
       "project": ["src/**/*.ts"],
-      // `/agent-api` and `/http/contract` are entries only FastAgent's runtime imports: an export no package uses is
-      // dead, not public. The root entry's exports are public (`@public`).
-      "includeEntryExports": true
+      // `/agent-api`, `/http/contract` and `/agentcore/contract` are entries only FastAgent's runtime imports: an
+      // export no package uses is dead, not public. The Caller entries (`.` and `/agentcore`) are public (`@public`).
+      "includeEntryExports": true,
+      "ignoreDependencies": ["@aws-sdk/client-bedrock-agentcore"]
     },
     "packages/agentcore": {
       "project": ["src/**/*.ts"],
-      // Optional peers: the runtime's entry needs the agent's own FastAgent, the construct (`/cdk`) its CDK app's
-      // aws-cdk-lib, and a Caller's entry (`/client`) installs none of them.
+      // Optional peers: the runtime's entry needs the agent's own FastAgent, and the construct (`/cdk`) its CDK app's
+      // aws-cdk-lib.
       "ignoreDependencies": ["@fastagent-sh/fastagent", "aws-cdk-lib", "constructs"]
     },
     "packages/fastagent": {

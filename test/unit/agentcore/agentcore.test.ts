@@ -10,7 +10,9 @@ import {
   createAlarmGroup,
   universalTargetArn,
 } from "../../../packages/agentcore/src/alarms.ts";
-import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
+import { AgentError as RootAgentError } from "@fastagent-sh/client";
+import { AgentError, connectAgentCore } from "@fastagent-sh/client/agentcore";
+import { envelopeResponse, unwrapResponse } from "@fastagent-sh/client/agentcore/contract";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
@@ -218,8 +220,21 @@ describe("an agent on AgentCore", () => {
       let last = first;
       for (let next = await stream.next(); !next.done; next = await stream.next()) last = next;
       expect(last.value).toMatchObject({ type: "done" });
-      // A refusal keeps its code through AgentCore, which would have made a 404 its own 424.
-      await expect(agent.sessions.get("no-such-session")).rejects.toMatchObject({ code: "not_found" });
+      // A refusal keeps its code through AgentCore, which would have made a 404 its own 424, and rejects with the
+      // same AgentError class both `@fastagent-sh/client` and `@fastagent-sh/client/agentcore` export.
+      expect(AgentError).toBe(RootAgentError);
+      const missing = await agent.sessions.get("no-such-session").catch((e: unknown) => e);
+      expect(missing).toBeInstanceOf(AgentError);
+      expect(missing).toMatchObject({ code: "not_found" });
+
+      // Binary attachments (>32 KiB, all byte values 0..255) and null-body responses round-trip without Node's Buffer.
+      const binary = new Uint8Array(70_000);
+      for (let i = 0; i < binary.length; i += 1) binary[i] = i & 0xff;
+      const unwrappedBinary = unwrapResponse(
+        await envelopeResponse(new Response(binary, { status: 200, headers: { "content-type": "image/png" } })),
+      );
+      expect(new Uint8Array(await unwrappedBinary.arrayBuffer())).toEqual(binary);
+      expect(unwrapResponse(await envelopeResponse(new Response(null, { status: 204 }))).status).toBe(204);
       expect(existsSync(join(dir, ".state", "agent.sqlite"))).toBe(false);
       expect(
         aws.signatures.every((signature) => signature.includes("/ap-southeast-1/bedrock-agentcore/aws4_request")),

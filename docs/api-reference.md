@@ -12,8 +12,8 @@ A compact reference for the packages, one entry per kind of user:
 |---|---|
 | `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `McpError`, and what an author writes: `defineAgent`, `defineSchedule`, `needs`, `sessionIdOf` |
 | `@fastagent-sh/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers). It does not install the runtime |
-| `@fastagent-sh/agentcore` | Running on Amazon Bedrock AgentCore: `serveAgentCore`, and `dsqlDatabase`, an Aurora DSQL cluster as `openAgent`'s `database`. Installed in an agent, it adds `fastagent agentcore` |
-| `@fastagent-sh/agentcore/client` | `connectAgentCore`, the Agent API of one AgentCore session, for a backend: it loads no runtime |
+| `@fastagent-sh/client/agentcore` | `connectAgentCore` (plus `connectAgent`, `AgentError` and the types), the Agent API of one AgentCore session, for a backend with `@aws-sdk/client-bedrock-agentcore` installed |
+| `@fastagent-sh/agentcore` | Running on Amazon Bedrock AgentCore: `serveAgentCore`, `createAlarmGroup`, and `dsqlDatabase`, an Aurora DSQL cluster as `openAgent`'s `database`. Installed in an agent, it adds `fastagent agentcore` |
 | `@fastagent-sh/agentcore/cdk` | `FastAgentResources`, the AWS resources an agent on AgentCore needs beside its runtime, for a CDK stack |
 | `@fastagent-sh/fastagent/platform` | What a platform extension builds on: the command it adds (`ExtensionCli`), the container it writes (`writeContainer`), the check of what an image would carry, the agent's build and the values it declares |
 
