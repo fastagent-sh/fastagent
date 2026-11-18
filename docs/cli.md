@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, models, login, logout, dev, invoke, build, start, schedules and deploy, with their flags."
+description: "The fastagent CLI reference: init, info, models, login, logout, dev, invoke, build, start, schedules and docker, with their flags, and the commands an extension adds."
 status: current
 ---
 
@@ -37,7 +37,11 @@ for: from a subdirectory, a command names the agent's root and stops.
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
 | `schedules list\|run\|unwake` | the schedules' next and last runs and the pending wake-ups; fire a schedule now; cancel a wake-up |
-| `deploy docker` | write the `Dockerfile` and `.dockerignore`, and print how to run them ([Deploy](deploy.md)) |
+| `docker init` | write the `Dockerfile` and `.dockerignore`, and print how to build and run them ([Deploy](deploy.md)) |
+
+An extension the agent installs adds a command of its own: `npm i @fastagent-sh/agentcore` in the agent adds
+`fastagent agentcore` ([AgentCore](agentcore.md)). Every argument after its name is the extension's, and
+`fastagent <name> --help` is its own. A command no installed extension adds exits 2, naming the package to install.
 
 ## Global options
 
@@ -47,8 +51,8 @@ Flags come after the command: `fastagent info --json`. `-h`/`--help` works on ev
 | Option | Commands | Meaning |
 |---|---|---|
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout`, `deploy` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
-| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
+| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
+| `--model <provider/modelId>` | assembly commands (not `docker init`) | Model for this run. `docker init` has none: the model is the configuration's. |
 | `--json` | `info`, `models`, `invoke`, `login`, `schedules list` | Machine-readable output. |
 | `--url <base>`, `--key <key>` | `invoke`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. |
 

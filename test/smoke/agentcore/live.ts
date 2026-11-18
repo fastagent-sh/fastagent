@@ -1,6 +1,6 @@
 /**
  * An agent on a live AgentCore runtime, called as a Caller calls it (`connectAgentCore`, this machine's AWS
- * credentials): what no test on this machine can show. The runtime serves `fastagent-agentcore` with its instances in
+ * credentials): what no test on this machine can show. The runtime serves `fastagent agentcore serve` with its instances in
  * Aurora DSQL, and was made with a short idle timeout. A session answers through invocations, streams, keeps a refusal's
  * code, goes on after AgentCore reclaims its microVM (the conversation is in the database, not the microVM), and keeps
  * to itself. Outside the test suite, which leaves no test a way off the machine: run by hand when the

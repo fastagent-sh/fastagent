@@ -7,6 +7,7 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup, failUsage } from "./fail.ts";
 import { ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
+import { extensionEntry, extensionPackage, runExtension } from "./extension.ts";
 
 const AGENT_ARG = {
   name: "[agent]",
@@ -181,15 +182,21 @@ const start: CommandSpec = {
     }),
 };
 
-const deploy: CommandSpec = {
-  name: "deploy",
-  summary: "write the portable container (Dockerfile, .dockerignore) and print how to run it",
-  description: "Writes the Dockerfile and .dockerignore into the agent directory; a file you own is kept.",
-  args: [{ name: "<target>", description: "what to deploy as", choices: ["docker"] }, AGENT_ARG],
-  flags: [{ flags: "--force", description: "regenerate the files fastagent generated" }],
-  examples: [{ cmd: "fastagent deploy docker", note: "Dockerfile + .dockerignore, and the docker commands" }],
-  run: async (args, f) =>
-    (await import("./commands/deploy.ts")).runDeploy(args[1] as string, { force: f.force === true }),
+const docker: CommandSpec = {
+  name: "docker",
+  summary: "run the agent in a container on any host",
+  subcommands: [
+    {
+      name: "init",
+      summary: "write the portable container (Dockerfile, .dockerignore) and print how to build and run it",
+      description: "Writes the Dockerfile and .dockerignore into the agent directory; a file you own is kept.",
+      args: [AGENT_ARG],
+      flags: [{ flags: "--force", description: "regenerate the files fastagent generated" }],
+      examples: [{ cmd: "fastagent docker init", note: "Dockerfile + .dockerignore, and the docker commands" }],
+      run: async (args, f) =>
+        (await import("./commands/docker.ts")).runDockerInit(args[0] as string, { force: f.force === true }),
+    },
+  ],
 };
 
 const schedules: CommandSpec = {
@@ -296,7 +303,7 @@ const logout: CommandSpec = {
     }),
 };
 
-const specs: readonly CommandSpec[] = [init, models, info, build, invoke, schedules, dev, start, deploy, login, logout];
+const specs: readonly CommandSpec[] = [init, models, info, build, invoke, schedules, dev, start, docker, login, logout];
 
 /** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {
@@ -304,16 +311,29 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
     examples: [
       { cmd: "fastagent init my-agent && cd my-agent", note: "scaffold an agent" },
       { cmd: "fastagent dev", note: "serve locally and iterate" },
-      { cmd: "fastagent deploy docker", note: "a container for any host" },
+      { cmd: "fastagent docker init", note: "a container for any host" },
     ],
-    notes: "Docs: https://github.com/fastagent-sh/fastagent",
+    notes:
+      "An extension adds a command of its own once the agent installs it: `npm i @fastagent-sh/agentcore` adds " +
+      "`fastagent agentcore`.\nDocs: https://github.com/fastagent-sh/fastagent",
     ...overrides,
   });
 }
 
-/** Parse and run one CLI invocation (`argv` = process.argv). */
+/** Parse and run one CLI invocation (`argv` = process.argv): a command of its own, or an installed extension's. */
 export async function runCli(argv: readonly string[]): Promise<void> {
   const unsupported = unsupportedRuntime();
   if (unsupported !== undefined) failStartup(new Error(unsupported));
-  await buildCliProgram({ version: await fastagentVersion() }).parseAsync([...argv]);
+  const [name, ...rest] = argv.slice(2);
+  if (name !== undefined && !specs.some((spec) => spec.name === name)) {
+    const entry = extensionEntry(process.cwd(), name);
+    if (entry !== undefined) return runExtension(entry, rest).catch(failStartup);
+  }
+  await buildCliProgram({
+    version: await fastagentVersion(),
+    unknownCommandNote: (unknown) =>
+      unknown === name && /^[a-z][a-z0-9-]*$/.test(unknown)
+        ? `(an extension adds it: install ${extensionPackage(unknown)} in the agent, with npm i ${extensionPackage(unknown)})`
+        : undefined,
+  }).parseAsync([...argv]);
 }

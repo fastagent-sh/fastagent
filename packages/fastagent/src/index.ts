@@ -48,6 +48,8 @@ export type { PostgresDatabase, PostgresLimits } from "./harnesses/pi-durable/po
 export type { CreateIndex } from "./harnesses/pi-durable/postgres/schema.ts";
 export type { PgExecutor } from "./harnesses/pi-durable/postgres/database.ts";
 export { McpError, type McpErrorCode } from "./mcp-api.ts";
+// What an extension's `./cli` entry exports, for the command `fastagent <name>` it adds.
+export type { ExtensionCli } from "./cli/extension.ts";
 export { baseEnv } from "./child-env.ts";
 
 export { defineAgent, defineSchedule, type AgentConfig } from "./harnesses/pi-durable/define.ts";

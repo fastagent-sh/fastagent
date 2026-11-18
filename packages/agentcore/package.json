@@ -35,10 +35,12 @@
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
+    "./cli": {
+      "@fastagent-sh/source": "./src/cli.ts",
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    },
     "./package.json": "./package.json"
-  },
-  "bin": {
-    "fastagent-agentcore": "./dist/bin.js"
   },
   "files": [
     "dist",

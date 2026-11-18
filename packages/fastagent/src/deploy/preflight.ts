@@ -1,5 +1,5 @@
 /**
- * What `fastagent deploy docker` checks before it writes the container: that the agent directory builds into an image
+ * What `fastagent docker init` checks before it writes the container: that the agent directory builds into an image
  * that starts, and that the image would carry none of this machine's secrets or state. A finding the image cannot run
  * with stops the command; everything else is a warning or a note.
  */

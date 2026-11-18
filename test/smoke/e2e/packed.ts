@@ -1,7 +1,7 @@
 /**
  * The packages as a user gets them, end to end (AGENTS.md, "Tests"): the packed tarballs installed, an agent made
- * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, and the build opened by
- * an app through the package's own entry. The model is pi-ai's faux provider, so only npm's install leaves the machine.
+ * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, an extension's command
+ * run through it (`fastagent agentcore`), and the build opened by an app through the package's own entry. The model is pi-ai's faux provider, so only npm's install leaves the machine.
  * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/smoke/e2e/packed.ts <tarball>...`, every
  * package's, since one package depends on another's version before it is published.
  */
@@ -51,6 +51,12 @@ const fastagent = join(agent, "node_modules", ".bin", "fastagent");
 expectEqual("invoke's answer", sh(fastagent, ["invoke", "ping", "--no-input"], agent).trim(), "pong");
 
 sh(fastagent, ["build"], agent);
+// An installed extension's command, through the agent's own CLI.
+expectEqual(
+  "fastagent agentcore's usage",
+  sh(fastagent, ["agentcore", "--help"], agent).split("\n")[0],
+  "Usage: fastagent agentcore <command>",
+);
 
 // In the agent directory, where `@fastagent-sh/fastagent` is installed, as in an app that depends on it.
 const app = join(agent, "app.mjs");
