@@ -1,6 +1,7 @@
 /**
- * What `fastagent docker init` checks before it writes the container: that the agent directory builds into an image
- * that starts, and that the image would carry none of this machine's secrets or state. A finding the image cannot run
+ * What a command that writes the container (`fastagent docker init`, a platform's `init`) checks before it writes it:
+ * that the agent directory builds into an image that starts, and that the image would carry none of this machine's
+ * secrets or state. A finding the image cannot run
  * with stops the command; everything else is a warning or a note.
  */
 import { readFile } from "node:fs/promises";
@@ -14,7 +15,7 @@ import { loadRawProgramConfig } from "../program-config.ts";
 import { hasLockfile as lockfileIn, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { type ContainerInput, isGeneratedDockerfile } from "./container.ts";
+import { type ContainerInput, type ContainerTarget, isGeneratedDockerfile } from "./container.ts";
 
 /** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
 interface DeployMessage {
@@ -26,6 +27,8 @@ interface DeployMessage {
 export interface DeployReport {
   note(text: string): void;
   warn(text: string): void;
+  /** A warning that the image would carry this machine's secrets or state. */
+  leak(text: string): void;
 }
 
 /** The container to write, or why the agent directory cannot become one that starts. */
@@ -34,14 +37,22 @@ export type ContainerCheck =
   | { ok: true; messages: DeployMessage[]; container: ContainerInput; port: number };
 
 class DeployGate {
-  constructor(readonly text: string) {}
+  readonly text: string;
+  constructor(text: string) {
+    this.text = text;
+  }
 }
 
-export async function checkContainer(input: { agentDir: string; force: boolean }): Promise<ContainerCheck> {
+export async function checkContainer(input: {
+  agentDir: string;
+  force: boolean;
+  target: ContainerTarget;
+}): Promise<ContainerCheck> {
   const messages: DeployMessage[] = [];
   const report: DeployReport = {
     note: (text) => void messages.push({ level: "note", text }),
     warn: (text) => void messages.push({ level: "warn", text }),
+    leak: (text) => void messages.push({ level: "warn", text }),
   };
   try {
     return { ok: true, messages, ...(await gatherFacts(input, report)) };
@@ -52,10 +63,10 @@ export async function checkContainer(input: { agentDir: string; force: boolean }
 }
 
 async function gatherFacts(
-  input: { agentDir: string; force: boolean },
+  input: { agentDir: string; force: boolean; target: ContainerTarget },
   report: DeployReport,
 ): Promise<{ container: ContainerInput; port: number }> {
-  const { agentDir, force } = input;
+  const { agentDir, force, target } = input;
   // The image builds the agent (`start` opens `dist/`), and a build needs the project's own manifest and TypeScript.
   if (!(await exists(join(agentDir, "package.json")))) {
     throw new DeployGate(
@@ -108,8 +119,9 @@ async function gatherFacts(
   // A shipped .git needs git in the image.
   const needsGit = await exists(join(agentDir, ".git"));
   const name = instanceName(definition.name);
-  if (kept !== undefined) checkKeptDockerfile(kept, name, report);
+  if (kept !== undefined) checkKeptDockerfile(kept, name, target, report);
   const container: ContainerInput = {
+    target,
     name,
     hasLockfile,
     apt: needsGit ? ["git"] : [],
@@ -146,18 +158,29 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
 }
 
 /**
- * What a KEPT hand-written Dockerfile drops: the build `start` opens, the marker that makes the box a deployed one, and
- * the name its storage belongs to.
+ * What a KEPT hand-written Dockerfile drops: the build `start` opens and, on a volume, the marker that makes the box a
+ * deployed one and the name its storage belongs to.
  */
-function checkKeptDockerfile(dockerfileText: string, name: string, report: DeployReport): void {
+function checkKeptDockerfile(
+  dockerfileText: string,
+  name: string,
+  target: ContainerTarget,
+  report: DeployReport,
+): void {
   // Without the marker `start` takes no storage (no mount check, no lease, no owner), so a box that lost it runs as a
   // local instance on a disk that is gone at the next restart. Anywhere in an `ENV` instruction, not just first.
-  if (!new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText)) {
+  if (
+    target.storage === "volume" &&
+    !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText)
+  ) {
     report.warn(
       `your Dockerfile does not set ${DEPLOYED_ENV}, and without it the container starts as a local instance: no ` +
         `mount check, no lease, no storage owner. Add \`ENV ${DEPLOYED_ENV}=1\` (see a generated Dockerfile).`,
     );
-  } else if (!new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText)) {
+  } else if (
+    target.storage === "volume" &&
+    !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText)
+  ) {
     report.warn(
       `your Dockerfile does not set ${INSTANCE_NAME_ENV}, and a deployed container refuses to start without it. Add ` +
         `\`ENV ${INSTANCE_NAME_ENV}=${name}\`, or set it on the container.`,

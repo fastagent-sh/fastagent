@@ -17,8 +17,9 @@
     },
     "packages/agentcore": {
       "project": ["src/**/*.ts"],
-      // An optional peer: the runtime's entry needs the agent's own FastAgent, and a Caller's (`/client`) installs none.
-      "ignoreDependencies": ["@fastagent-sh/fastagent"]
+      // Optional peers: the runtime's entry needs the agent's own FastAgent, the construct (`/cdk`) its CDK app's
+      // aws-cdk-lib, and a Caller's entry (`/client`) installs none of them.
+      "ignoreDependencies": ["@fastagent-sh/fastagent", "aws-cdk-lib", "constructs"]
     },
     "packages/fastagent": {
       "entry": ["src/cli.ts"],

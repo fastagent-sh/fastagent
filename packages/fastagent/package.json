@@ -36,6 +36,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./platform": {
+      "@fastagent-sh/source": "./src/platform.ts",
+      "types": "./dist/platform.d.ts",
+      "default": "./dist/platform.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

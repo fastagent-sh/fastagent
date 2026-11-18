@@ -61,8 +61,11 @@ const TABLES = [
  */
 const MADE_CONCURRENTLY = new Set(["42P07", "42710", "23505"]);
 
-/** How an index is made: by default its statement as written; a database with its own way (Aurora DSQL's `ASYNC`) is given one. */
-export type CreateIndex = (db: PgExecutor, statement: string) => Promise<void>;
+/**
+ * How an index is made: by default its statement as written. A database that builds one as a job (Aurora DSQL's
+ * `ASYNC`) starts it and answers how to wait for it.
+ */
+export type CreateIndex = (db: PgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
 
 const createIndexAsWritten: CreateIndex = async (db, statement) => {
   await db.query(statement);
@@ -71,7 +74,9 @@ const createIndexAsWritten: CreateIndex = async (db, statement) => {
 /**
  * Make the tables, unless the database has them: two instances opening a new database at once both make them, and the
  * one that loses a race finds them made. Each statement is its own transaction, as a database that allows one DDL
- * statement in a transaction needs.
+ * statement in a transaction needs. An index that is a job to wait for (DSQL's) is waited for with the others, once all
+ * are started: in turn, a new database's first open takes minutes. They are started one at a time, since such a
+ * database refuses two schema changes at once (DSQL's `OC001`).
  */
 export async function migrate(db: PgDatabase, createIndex: CreateIndex = createIndexAsWritten): Promise<void> {
   const current = await db
@@ -85,11 +90,20 @@ export async function migrate(db: PgDatabase, createIndex: CreateIndex = createI
     throw new Error(`the database holds storage of version ${current}, newer than this FastAgent's ${VERSION}`);
   }
   if (current === VERSION) return;
-  for (const statement of TABLES) {
-    const made = statement.startsWith("CREATE INDEX") ? createIndex(db, statement) : db.query(statement);
-    await made.catch((error: { code?: string }) => {
+  const madeOrFound = <T>(made: Promise<T>): Promise<T | undefined> =>
+    made.catch((error: { code?: string }) => {
       if (!MADE_CONCURRENTLY.has(error.code ?? "")) throw error;
+      return undefined;
     });
+  const isIndex = (statement: string) => statement.startsWith("CREATE INDEX");
+  for (const statement of TABLES.filter((s) => !isIndex(s))) await madeOrFound(db.query(statement));
+  const jobs: (() => Promise<void>)[] = [];
+  for (const statement of TABLES.filter(isIndex)) {
+    const job = await madeOrFound(createIndex(db, statement));
+    if (job) jobs.push(job);
   }
+  const built = await Promise.allSettled(jobs.map((job) => job()));
+  const failed = built.find((result) => result.status === "rejected");
+  if (failed !== undefined) throw failed.reason;
   await db.query("INSERT INTO durable_schema (version) VALUES ($1) ON CONFLICT (version) DO NOTHING", [VERSION]);
 }

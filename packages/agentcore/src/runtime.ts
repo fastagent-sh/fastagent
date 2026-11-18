@@ -26,6 +26,7 @@ import {
   type Service,
   openAgent,
 } from "@fastagent-sh/fastagent";
+import { Unavailable } from "@fastagent-sh/fastagent/platform";
 import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./envelope.ts";
 
 /** The header AgentCore names an invocation's session in. */
@@ -35,10 +36,18 @@ export const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
 const PORT = 8080;
 
 export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model" | "offline"> {
-  /** Where the instances are: on AWS, `dsqlDatabase(...)`. */
-  database: PostgresDatabase;
+  /**
+   * Where the instances are: on AWS, `dsqlDatabase(...)`. Or how to find it as an instance opens, so a runtime without
+   * one says so to every invocation rather than exiting where only its log tells.
+   */
+  database: PostgresDatabase | (() => PostgresDatabase);
   /** The agent's working directory, on the microVM's disk: gone with it. Default `/tmp/fastagent`. */
   root?: string;
+  /**
+   * The agent's values read where they are kept (its Secrets Manager secret), over `secrets`: read as the instance
+   * opens, so one that cannot be read is said to the invocation, and one fixed after the deploy is read at the next.
+   */
+  values?: () => Promise<Readonly<Record<string, string>>>;
 }
 
 interface Opened {
@@ -74,12 +83,14 @@ function requestIn(body: unknown): EnvelopedRequest | undefined {
 
 /** What the container answers, as a Fetch handler: `/ping` and `POST /invocations`. */
 export function agentCoreHandler(definition: AgentDefinition, options: AgentCoreOptions) {
-  const { database, root = "/tmp/fastagent", ...given } = options;
+  const { database, root = "/tmp/fastagent", values, ...given } = options;
   let instance: { name: string; opened: Promise<Opened> } | undefined;
   let ready: Opened | undefined;
 
   const open = async (name: string): Promise<Opened> => {
-    const agent = await openAgent(definition, { ...given, root, name, database });
+    const secrets = { ...given.secrets, ...(values === undefined ? {} : await values()) };
+    const placed = typeof database === "function" ? database() : database;
+    const agent = await openAgent(definition, { ...given, secrets, root, name, database: placed });
     let opened: Opened;
     try {
       const key = randomBytes(32).toString("base64url");
@@ -120,7 +131,9 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       // The next invocation opens it again: what failed (a lease another microVM still holds) may have passed by then.
       if (instance === current) instance = undefined;
       console.error(`[fastagent] the instance "${name}" did not open: ${String(error)}`);
-      return refused("unavailable", `the instance "${name}" did not open: ${(error as Error)?.message ?? error}`);
+      // Retryable only when it passes by itself: one that needs a person (a value, a permission) is not retried for ever.
+      const code = error instanceof Unavailable ? "unavailable" : "internal";
+      return refused(code, `the instance "${name}" did not open: ${(error as Error)?.message ?? error}`);
     }
     const headers = new Headers(asked.headers);
     headers.set("authorization", `Bearer ${opened.key}`);

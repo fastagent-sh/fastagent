@@ -14,6 +14,8 @@ A compact reference for the packages, one entry per kind of user:
 | `@fastagent-sh/client` | `connectAgent`, the Agent API over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers). It does not install the runtime |
 | `@fastagent-sh/agentcore` | Running on Amazon Bedrock AgentCore: `serveAgentCore`, and `dsqlDatabase`, an Aurora DSQL cluster as `openAgent`'s `database`. Installed in an agent, it adds `fastagent agentcore` |
 | `@fastagent-sh/agentcore/client` | `connectAgentCore`, the Agent API of one AgentCore session, for a backend: it loads no runtime |
+| `@fastagent-sh/agentcore/cdk` | `FastAgentResources`, the AWS resources an agent on AgentCore needs beside its runtime, for a CDK stack |
+| `@fastagent-sh/fastagent/platform` | What a platform extension builds on: the command it adds (`ExtensionCli`), the container it writes (`writeContainer`), the check of what an image would carry, the agent's build and the values it declares |
 
 Each export's signature and its documentation are its declaration: the package ships them (`dist/*.d.ts`), and an
 editor shows them. Each entry names every export.

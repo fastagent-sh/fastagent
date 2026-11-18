@@ -1,8 +1,8 @@
 import ignore from "ignore";
 import { describe, expect, it } from "vitest";
-import { containerArtifacts } from "../../../packages/fastagent/src/deploy/container.ts";
+import { DOCKER_TARGET, containerArtifacts } from "../../../packages/fastagent/src/deploy/container.ts";
 
-const input = { name: "reviewer", runtime: "node", hasLockfile: true } as const;
+const input = { target: DOCKER_TARGET, name: "reviewer", hasLockfile: true };
 
 describe("deploy/container: the portable image", () => {
   it("keeps tracked secrets scaffolds without shipping credentials, value files or state", () => {

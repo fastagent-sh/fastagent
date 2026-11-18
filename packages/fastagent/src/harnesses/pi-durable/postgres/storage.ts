@@ -13,6 +13,7 @@
  * before its lease can lapse (`GIVE_UP_AFTER`), and says so (`onLost`), for its runs to be stopped before a successor
  * may resume them.
  */
+import { Unavailable } from "../../../unavailable.ts";
 import type { Context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -166,8 +167,33 @@ const KINDS: Record<string, ValueKind> = {
   durable_submissions: "submission",
 };
 
-/** The refusal of an opener of an instance another process holds. */
-export class InstanceHeld extends Error {}
+/** The refusal of an opener of an instance another process holds: one that passes once that process lets it go. */
+export class InstanceHeld extends Unavailable {}
+
+/**
+ * What says a database is out of reach for a moment rather than refusing: a connection that could not be made or was
+ * lost (Node's socket errors, SQLSTATE class 08), a server short of resources (53) or shutting down (57P01-57P03), and
+ * a transaction that lost a race (40001, 40P01; Aurora DSQL's OC000 and OC001).
+ */
+const PASSING_SOCKET = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
+const PASSING_SQLSTATE = /^(08|53|57P0[1-3]$|40001$|40P01$|OC00[01]$)/;
+
+function passes(error: unknown): boolean {
+  for (let at = error; at instanceof Error; at = at.cause) {
+    const code = (at as { code?: unknown }).code;
+    if (typeof code === "string" && (PASSING_SOCKET.has(code) || PASSING_SQLSTATE.test(code))) return true;
+    if (/Connection terminated unexpectedly|timeout exceeded when trying to connect/.test(at.message)) return true;
+  }
+  return false;
+}
 
 export interface OpenOptions {
   /** What else opens the instance, for the refusal of a second opener. */
@@ -962,7 +988,8 @@ export async function openPostgresStorage(
       .close()
       .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
     if (error instanceof InstanceHeld) throw error;
-    throw new Error(`the database ${describeDatabase(connectionString)}: ${(error as Error).message}`, {
+    const failed = passes(error) ? Unavailable : Error;
+    throw new failed(`the database ${describeDatabase(connectionString)}: ${(error as Error).message}`, {
       cause: error,
     });
   }

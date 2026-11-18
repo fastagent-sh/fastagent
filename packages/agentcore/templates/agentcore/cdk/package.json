@@ -1,0 +1,25 @@
+{
+  "name": "agentcore-cdk-app",
+  "version": "0.1.0",
+  "private": true,
+  "bin": {
+    "cdk": "dist/bin/cdk.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "npm run build && cdk",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "~24.13.3",
+    "aws-cdk": "~2.1126.0",
+    "typescript": "~5.9.3"
+  },
+  "dependencies": {
+    "@aws/agentcore-cdk": "1.0.3",
+    "@fastagent-sh/agentcore": "{{version}}",
+    "aws-cdk-lib": "~2.269.0",
+    "constructs": "~10.7.0"
+  }
+}

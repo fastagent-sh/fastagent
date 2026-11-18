@@ -204,17 +204,32 @@ describe("a database that caps transactions and values", () => {
     await storage.close(BACKGROUND_CONTEXT);
   });
 
-  it("makes each index the way it is given", async () => {
+  it("makes each index the way it is given: started one at a time, and the jobs waited for together", async () => {
     const fresh = await servedPostgres();
     try {
       const made: string[] = [];
+      // Each index a job that takes a while, as a database that builds them as jobs makes it. Its statements one at a
+      // time, as such a database refuses two schema changes at once; its jobs waited for together.
+      let starting = 0;
+      let mostStarting = 0;
+      let waiting = 0;
+      let mostWaiting = 0;
       const storage = await openPostgresStorage(fresh.url, freshInstance(), {
         createIndex: async (db, statement) => {
           made.push(statement.split(/\s+/).slice(0, 6).join(" "));
+          starting += 1;
+          mostStarting = Math.max(mostStarting, starting);
           await db.query(statement);
+          starting -= 1;
+          return async () => {
+            waiting += 1;
+            mostWaiting = Math.max(mostWaiting, waiting);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            waiting -= 1;
+          };
         },
       });
-      expect(made.length).toBeGreaterThan(0);
+      expect([made.length > 1, mostStarting, mostWaiting]).toEqual([true, 1, made.length]);
       expect(made.every((statement) => statement.startsWith("CREATE INDEX IF NOT EXISTS durable_"))).toBe(true);
       await storage.close(BACKGROUND_CONTEXT);
     } finally {

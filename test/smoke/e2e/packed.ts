@@ -55,7 +55,7 @@ sh(fastagent, ["build"], agent);
 expectEqual(
   "fastagent agentcore's usage",
   sh(fastagent, ["agentcore", "--help"], agent).split("\n")[0],
-  "Usage: fastagent agentcore <command>",
+  "Usage: fastagent agentcore <command> [agent]",
 );
 
 // In the agent directory, where `@fastagent-sh/fastagent` is installed, as in an app that depends on it.
