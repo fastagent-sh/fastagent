@@ -10,6 +10,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { describe, expect, it } from "vitest";
 import { FastAgentResources } from "../../../packages/agentcore/src/cdk.ts";
+import { DOCKER_TARGET, containerArtifacts } from "../../../packages/fastagent/src/deploy/container.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
 
 /** A runtime as the AgentCore CLI's stack hands one over: a role, and the variables it was given. */
@@ -30,6 +31,9 @@ function runtimeIn(stack: Stack) {
 describe("FastAgentResources", () => {
   it("adds the instances' database, kept with the sessions, and read access to the agent's secret, by name", async () => {
     const dir = await fauxAgent("fa-agentcore-cdk-");
+    // The ignore file a generated container has: it leaves out the agent's `.secrets/`.
+    const generated = containerArtifacts({ target: DOCKER_TARGET, name: "support", hasLockfile: true });
+    await writeFile(join(dir, ".dockerignore"), generated.find((a) => a.path === ".dockerignore")?.content ?? "");
     const stack = new Stack(new App(), "Agent", { env: { account: "123456789012", region: "ap-southeast-1" } });
     const { runtime, variables } = runtimeIn(stack);
     new FastAgentResources(stack, "FastAgent", { runtime, agentDir: dir, secretName: "support" });
@@ -63,6 +67,17 @@ describe("FastAgentResources", () => {
     const { runtime } = runtimeIn(stack);
     expect(() => new FastAgentResources(stack, "FastAgent", { runtime, agentDir: dir })).toThrow(
       /\.dockerignore \(kept\) does not exclude `\.secrets\/\.env`.* — the build context would BAKE SECRETS INTO THE IMAGE/,
+    );
+  });
+
+  it("stops the synthesis when there is no .dockerignore at all, which leaves out nothing", async () => {
+    const dir = await fauxAgent("fa-agentcore-cdk-unignored-");
+    await mkdir(join(dir, ".secrets"), { recursive: true });
+    await writeFile(join(dir, ".secrets", ".env"), "ANTHROPIC_API_KEY=sk-1\n");
+    const stack = new Stack(new App(), "Agent");
+    const { runtime } = runtimeIn(stack);
+    expect(() => new FastAgentResources(stack, "FastAgent", { runtime, agentDir: dir })).toThrow(
+      /there is no \.dockerignore, so the image would carry .*`\.secrets\/\.env`.*: this machine's secrets and state/,
     );
   });
 });

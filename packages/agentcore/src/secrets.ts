@@ -1,6 +1,6 @@
 /**
  * The agent's values from the Secrets Manager secret its runtime names (`FASTAGENT_SECRETS`): one JSON object of names
- * to strings, read with the runtime's role when the container starts. A name the container's environment also sets is
+ * to strings, read with the runtime's role as an instance opens. A name the container's environment also sets is
  * refused, since which of the two the agent would read is not a choice to make silently.
  */
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";

@@ -4,7 +4,7 @@
  * the check that an image ships none of this machine's secrets, and the build its container opens.
  */
 import { applyArtifactPlan, planArtifacts } from "./deploy/artifacts.ts";
-import { buildContextPaths, checkKeptIgnoreFiles } from "./deploy/build-context.ts";
+import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } from "./deploy/build-context.ts";
 import { type ContainerTarget, containerArtifacts } from "./deploy/container.ts";
 import { checkContainer } from "./deploy/preflight.ts";
 import { resolveAuthPath } from "./harnesses/models/credentials.ts";
@@ -13,6 +13,8 @@ import { loadProjectBuild } from "./harnesses/pi-durable/built.ts";
 import { loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
 import { instanceName } from "./instance-name.ts";
 import { selectAgentEnvironment } from "./paths.ts";
+
+export { DATABASE_URL_ENV } from "./paths.ts";
 import type { DeclaredSecret } from "./declared-secrets.ts";
 
 export type { ExtensionCli } from "./cli/extension.ts";
@@ -63,12 +65,14 @@ export async function writeContainer(
 
 /**
  * What the image built from `agentDir` would carry that it must not: this machine's secrets, value files and state,
- * through an ignore file that does not leave them out. Empty when it carries none.
+ * through an ignore file that does not leave them out, or no ignore file at all. Empty when it carries none.
  */
 export async function buildContextLeaks(agentDir: string): Promise<string[]> {
   selectAgentEnvironment("production");
-  const leaks: string[] = [];
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
+  const unignored = await shippedWithoutIgnoreFile(agentDir, paths);
+  if (unignored !== undefined) return [unignored];
+  const leaks: string[] = [];
   await checkKeptIgnoreFiles(
     { agentDir, force: false, paths },
     { note: () => {}, warn: () => {}, leak: (text) => void leaks.push(text) },

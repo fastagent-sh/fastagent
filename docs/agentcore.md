@@ -41,9 +41,11 @@ of the names `init` printed (the model's API key, what the agent's code declares
 aws secretsmanager create-secret --name support --secret-string file://values.json
 ```
 
-The runtime reads it when a microVM starts. A new value reaches each session as AgentCore starts it again. A name the
-secret lacks refuses the instance's open, naming it. A name both the secret and the runtime's environment set is
-refused too: keep it in one. To use another secret, change `secretName` in `agentcore/cdk/lib/cdk-stack.ts`.
+Each session reads it when its instance opens, on its first request after AgentCore starts its microVM. A secret that
+cannot be read (not created yet, no access, not a JSON object of strings) refuses that request with `unavailable`,
+naming why, and the next request reads it again: create it after the deploy and nothing needs redeploying. A changed
+value reaches a session as AgentCore starts it again. A name the secret lacks refuses the instance's open, naming it. A
+name both the secret and the runtime's environment set is refused too: keep it in one. To use another secret, change `secretName` in `agentcore/cdk/lib/cdk-stack.ts`.
 
 A model on Amazon Bedrock takes a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) in the secret, like any provider's key.
 
@@ -58,8 +60,9 @@ ARM64 machine), and creates or updates the runtime, the database and the roles. 
 other commands are yours too: `agentcore status`, `agentcore logs`, and `agentcore.json`'s targets for more accounts
 or regions.
 
-Every deploy first checks what the image would carry. One that would ship this machine's secrets or state stops,
-before anything in AWS changes, naming the file.
+Every deploy first checks what the image would carry. One that would ship this machine's secrets or state, through a
+`.dockerignore` that lets them through or no `.dockerignore` at all, stops before anything in AWS changes, naming the
+files.
 
 ### In CI
 

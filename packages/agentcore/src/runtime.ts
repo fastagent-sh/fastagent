@@ -39,6 +39,11 @@ export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "en
   database: PostgresDatabase;
   /** The agent's working directory, on the microVM's disk: gone with it. Default `/tmp/fastagent`. */
   root?: string;
+  /**
+   * The agent's values read where they are kept (its Secrets Manager secret), over `secrets`: read as the instance
+   * opens, so one that cannot be read is said to the invocation, and one fixed after the deploy is read at the next.
+   */
+  values?: () => Promise<Readonly<Record<string, string>>>;
 }
 
 interface Opened {
@@ -74,12 +79,13 @@ function requestIn(body: unknown): EnvelopedRequest | undefined {
 
 /** What the container answers, as a Fetch handler: `/ping` and `POST /invocations`. */
 export function agentCoreHandler(definition: AgentDefinition, options: AgentCoreOptions) {
-  const { database, root = "/tmp/fastagent", ...given } = options;
+  const { database, root = "/tmp/fastagent", values, ...given } = options;
   let instance: { name: string; opened: Promise<Opened> } | undefined;
   let ready: Opened | undefined;
 
   const open = async (name: string): Promise<Opened> => {
-    const agent = await openAgent(definition, { ...given, root, name, database });
+    const secrets = { ...given.secrets, ...(values === undefined ? {} : await values()) };
+    const agent = await openAgent(definition, { ...given, secrets, root, name, database });
     let opened: Opened;
     try {
       const key = randomBytes(32).toString("base64url");

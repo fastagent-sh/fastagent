@@ -3,7 +3,7 @@
  *   - `init` writes what `agentcore deploy` deploys: the agent's container and the AgentCore project (project.ts).
  *   - `start` is the container's command on AgentCore, as `fastagent start` is a container's elsewhere: it serves the
  *     build in `<agent>/dist`, with its instances in the Aurora DSQL cluster and its values in the Secrets Manager
- *     secret the runtime names (cdk.ts), over the runtime's own environment.
+ *     secret the runtime names (cdk.ts), read as each instance opens, over the runtime's own environment.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -13,6 +13,7 @@ import { baseEnv } from "@fastagent-sh/fastagent";
 import {
   type ContainerTarget,
   type ExtensionCli,
+  DATABASE_URL_ENV,
   agentFacts,
   loadAgentBuild,
   writeContainer,
@@ -22,7 +23,7 @@ import { dsqlDatabase } from "./dsql.ts";
 import { AGENTCORE_CLI, projectName, writeProject } from "./project.ts";
 import { serveAgentCore } from "./runtime.ts";
 import { secretValues } from "./secrets.ts";
-import { DATABASE_URL_ENV, DSQL_ENDPOINT_ENV, SECRETS_ENV } from "./variables.ts";
+import { DSQL_ENDPOINT_ENV, SECRETS_ENV } from "./variables.ts";
 
 const USAGE = `Usage: fastagent agentcore <command> [agent]
 
@@ -97,10 +98,10 @@ function databaseOf(environment: NodeJS.ProcessEnv): PostgresDatabase {
 async function start(agentDir: string): Promise<void> {
   const database = databaseOf(process.env);
   const secretName = process.env[SECRETS_ENV];
-  const values = secretName ? await secretValues(secretName, process.env) : {};
   const served = await serveAgentCore(await loadAgentBuild(agentDir), {
     database,
-    secrets: { ...process.env, ...values },
+    secrets: process.env,
+    ...(secretName ? { values: () => secretValues(secretName, process.env) } : {}),
     env: baseEnv(process.env),
   });
   for (const signal of ["SIGTERM", "SIGINT"] as const) {

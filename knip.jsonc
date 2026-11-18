@@ -7,8 +7,7 @@
       "entry": ["test/**/*.test.ts", "test/smoke/*/*.ts", "scripts/*.mjs"],
       "project": ["test/**/*.ts", "scripts/*.mjs"],
       // The tests exercise the packages through these, the packages' own dependencies, installed at the root.
-      // aws-cdk-lib and constructs: @fastagent-sh/agentcore's optional peers, installed here for its typecheck and tests.
-      "ignoreDependencies": ["@earendil-works/.+", "effect", "ignore", "aws-cdk-lib", "constructs"]
+      "ignoreDependencies": ["@earendil-works/.+", "effect", "ignore"]
     },
     "packages/client": {
       "project": ["src/**/*.ts"],

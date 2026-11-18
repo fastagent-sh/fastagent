@@ -258,6 +258,42 @@ describe("an agent on AgentCore", () => {
     }
   });
 
+  it("reads the agent's values as the instance opens: one that cannot be read is said, and read at the next invocation", async () => {
+    // A value the agent's code requires, which only the secret holds: without it the instance does not open.
+    const dir = await fauxAgent("fa-agentcore-values-", {
+      "src/tools/ticket.ts": [
+        `import { defineTool } from "@earendil-works/pi-durable";`,
+        `import { obj } from "@earendil-works/pi-schema";`,
+        `import { needs } from "@fastagent-sh/fastagent";`,
+        `export default needs(["ZENDESK_TOKEN"], () => defineTool({ name: "ticket", description: "File a ticket.", parameters: obj({}), execute: async () => ({ output: [] }) }));`,
+      ].join("\n"),
+    });
+    let reads = 0;
+    const handler = agentCoreHandler(await loadSourceDefinition(dir), {
+      database: { url: postgres.url },
+      root: dir,
+      secrets: process.env,
+      offline: true,
+      values: async () => {
+        reads += 1;
+        if (reads === 1)
+          throw new Error("the secret support cannot be read: ResourceNotFoundException: not created yet");
+        return { ZENDESK_TOKEN: "zd" };
+      },
+    });
+    const session = freshInstance();
+    const request = { request: { method: "GET", path: "/v1/agent", headers: {} } };
+    try {
+      const unread = await answered(await handler.fetch(invocation(session, request)));
+      expect([unread.status, unread.body.error.code]).toEqual([503, "unavailable"]);
+      expect(unread.body.error.message).toContain("the secret support cannot be read: ResourceNotFoundException");
+      const opened = await answered(await handler.fetch(invocation(session, request)));
+      expect([opened.status, reads]).toEqual([200, 2]);
+    } finally {
+      await handler.close();
+    }
+  });
+
   it("opens the instance again on the next invocation after an open that failed, saying why it failed", async () => {
     // A database never opened makes its tables, and the first index it builds fails, as a DSQL index job can.
     const fresh = await servedPostgres();
