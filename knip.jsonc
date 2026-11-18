@@ -16,7 +16,6 @@
       "includeEntryExports": true
     },
     "packages/agentcore": {
-      "entry": ["src/bin.ts"],
       "project": ["src/**/*.ts"],
       // An optional peer: the runtime's entry needs the agent's own FastAgent, and a Caller's (`/client`) installs none.
       "ignoreDependencies": ["@fastagent-sh/fastagent"]

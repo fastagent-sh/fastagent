@@ -54,6 +54,6 @@
   <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">digest sent to #ops </tspan><tspan class="dim">(3.2s)</tspan></text>
 
   <text class="l a14" x="20" y="454"><tspan class="cm"># ships anywhere</tspan></text>
-  <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent deploy docker</tspan></text>
+  <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent docker init</tspan></text>
   <text class="l a16" x="20" y="506"><tspan class="ok">✓ </tspan><tspan class="txt">wrote Dockerfile · .dockerignore — runs on any container host</tspan></text>
 </svg>

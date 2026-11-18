@@ -1,5 +1,9 @@
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCliProgram } from "../../../packages/fastagent/src/cli/program.ts";
+import { runInProcess } from "../../doubles/cli-run.ts";
 
 /**
  * The commander kernel: specs-as-data rendered through buildProgram. In-process tests drive the
@@ -69,10 +73,6 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
     const retired = await parse(["init", "--embedded"]);
     expect(retired.code).toBe(2);
     expect(retired.err).toMatch(/unknown option '--embedded'/);
-    // An out-of-set argument is the parser's too, and names the set.
-    const host = await parse(["deploy", "heroku"]);
-    expect(host.code).toBe(2);
-    expect(host.err).toMatch(/Allowed choices are docker\./);
   });
 
   it("a mistyped subcommand suggests the real one and never runs it", async () => {
@@ -85,3 +85,63 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
 
 // ---------------------------------------------------------------------------------------------
 // End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
+
+/** An extension's `./cli` entry: it says what it was given, or fails as its `fixture.json` says. */
+const EXTENSION_CLI = `import { readFileSync } from "node:fs";
+const { name, fails } = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
+export async function run(args) {
+  if (fails) throw new Error(fails);
+  console.log(JSON.stringify({ from: name, args }));
+}
+`;
+
+describe("cli: a command an installed extension adds", () => {
+  /** A project with `packages` installed: each a `./cli` entry that says what it was given, or fails with `fails`. */
+  async function project(packages: Record<string, { fails?: string }>): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "fa-extension-"));
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "agent", type: "module" }));
+    for (const [name, { fails }] of Object.entries(packages)) {
+      const at = join(dir, "node_modules", name);
+      await mkdir(at, { recursive: true });
+      await writeFile(
+        join(at, "package.json"),
+        JSON.stringify({ name, type: "module", exports: { "./cli": "./cli.js" } }),
+      );
+      await writeFile(join(at, "fixture.json"), JSON.stringify({ name, fails }));
+      await writeFile(join(at, "cli.js"), EXTENSION_CLI);
+    }
+    return dir;
+  }
+
+  it("runs the agent's own @fastagent-sh/<name>, given every argument after its name, and says why it failed", async () => {
+    const dir = await project({ "@fastagent-sh/demo": {}, "@fastagent-sh/broken": { fails: "no cluster here" } });
+    const ran = await runInProcess(["demo", "init", "--target", "prod"], dir);
+    expect([ran.code, JSON.parse(ran.stdout)]).toEqual([
+      0,
+      { from: "@fastagent-sh/demo", args: ["init", "--target", "prod"] },
+    ]);
+    const failed = await runInProcess(["broken", "deploy"], dir);
+    expect([failed.code, failed.stderr.trim()]).toEqual([1, "Error: no cluster here"]);
+  });
+
+  it("names the package to install for a command none adds, and a typo stays a typo", async () => {
+    const dir = await project({});
+    const missing = await runInProcess(["agentcore", "init"], dir);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("unknown command 'agentcore'");
+    expect(missing.stderr).toContain(
+      "install @fastagent-sh/agentcore in the agent, with npm i @fastagent-sh/agentcore",
+    );
+    const typo = await runInProcess(["dve"], dir);
+    expect(typo.stderr).toMatch(/Did you mean dev\?/);
+    expect(typo.stderr).not.toContain("npm i");
+  });
+
+  it("never runs a package outside the @fastagent-sh scope, however the name is spelled", async () => {
+    const dir = await project({ demo: {}, "@other/demo": {} });
+    for (const name of ["../demo", "../../demo", "..%2fdemo", "@other/demo"]) {
+      const refused = await runInProcess([name], dir);
+      expect([name, refused.code, refused.stdout]).toEqual([name, 2, ""]);
+    }
+  });
+});

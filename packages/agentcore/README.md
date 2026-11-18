@@ -3,7 +3,7 @@
 Run a [FastAgent](https://fastagent.sh) agent on Amazon Bedrock AgentCore: one instance per AgentCore session, each in
 a microVM of its own, with what it keeps in Aurora DSQL.
 
-In the container, `fastagent-agentcore /app` serves the agent's build, with its instances in the cluster
+In the container, `fastagent agentcore serve /app` serves the agent's build, with its instances in the cluster
 `FASTAGENT_DSQL_ENDPOINT` names. From a backend:
 
 ```ts

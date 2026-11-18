@@ -96,7 +96,9 @@ export function connectAgentCore({ runtimeArn, sessionId }: AgentCoreConnection)
     }
     const answer = JSON.parse(await invoked.response.transformToString()) as { response?: EnvelopedResponse };
     if (answer.response === undefined)
-      throw new Error("the runtime answered what is not an Agent API answer: is it fastagent-agentcore?");
+      throw new Error(
+        "the runtime answered what is not an Agent API answer: does it serve `fastagent agentcore serve`?",
+      );
     return unwrapResponse(answer.response);
   };
   return connectAgent(`https://${sessionId}.agentcore`, { fetch: agentCoreFetch });

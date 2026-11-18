@@ -12,13 +12,13 @@ files and commands. What an instance keeps lives in Aurora DSQL, so it survives 
 one after its timeout, and the next request opens the instance where it left off.
 
 ```bash
-npm i @fastagent-sh/agentcore       # in the agent directory, beside @fastagent-sh/fastagent
+npm i @fastagent-sh/agentcore       # in the agent directory: adds `fastagent agentcore`
 ```
 
 ## 1. The image
 
-AgentCore runs an ARM64 container that serves port 8080. `fastagent-agentcore` is its command: it serves the build in
-`/app/dist`.
+AgentCore runs an ARM64 container that serves port 8080. `fastagent agentcore serve` is its command: it serves the
+build in `/app/dist`.
 
 ```dockerfile
 FROM node:24-slim
@@ -27,7 +27,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN ./node_modules/.bin/fastagent build
-CMD ["./node_modules/.bin/fastagent-agentcore", "/app"]
+CMD ["./node_modules/.bin/fastagent", "agentcore", "serve", "/app"]
 ```
 
 ```bash

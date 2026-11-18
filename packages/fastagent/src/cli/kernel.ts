@@ -10,8 +10,6 @@ interface ArgSpec {
   name: string;
   description: string;
   default?: string;
-  /** Closed value set — the parser rejects anything else as a usage error (exit 2). */
-  choices?: string[];
   /** Passed on as given, an empty value included: another program's arguments (`env exec`). */
   verbatim?: boolean;
 }
@@ -59,6 +57,8 @@ export interface ProgramOptions {
   examples?: ExampleSpec[];
   /** Top-level closing prose (the docs link) — reflowed like any notes. */
   notes?: string;
+  /** Said after the parser's refusal of an unknown command: how the command could exist. */
+  unknownCommandNote?: (name: string) => string | undefined;
   /** Fixed help width — a TEST seam. */
   helpWidth?: number;
   /** Force help colors on/off — a TEST seam. */
@@ -98,8 +98,14 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
       ? { getOutHasColors: () => options.colors as boolean, getErrHasColors: () => options.colors as boolean }
       : {}),
     // Every parse-level error carries the ONE unified prefix: bold-red `Error:` (plain when stderr has no colors).
-    outputError: (str, write) =>
-      write(str.startsWith("error:") ? `${errorPrefix(options.colors)}${str.slice("error:".length)}` : str),
+    outputError: (str, write) => {
+      const unknown = /^error: unknown command '([^']+)'/.exec(str)?.[1];
+      // A near miss is a typo, and the parser's "did you mean" is the answer.
+      const note =
+        unknown === undefined || str.includes("Did you mean") ? undefined : options.unknownCommandNote?.(unknown);
+      const said = note === undefined ? str : `${str.trimEnd()}\n${note}\n`;
+      write(said.startsWith("error:") ? `${errorPrefix(options.colors)}${said.slice("error:".length)}` : said);
+    },
   });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
@@ -120,9 +126,8 @@ function register(parent: Command, spec: CommandSpec): void {
   for (const a of spec.args ?? []) {
     const arg = new Argument(a.name, a.description);
     if (a.default !== undefined) arg.default(a.default);
-    if (a.choices) arg.choices(a.choices);
     // A required argument means a non-empty VALUE, not just a present token.
-    if (a.name.startsWith("<") && !a.choices && !a.verbatim) {
+    if (a.name.startsWith("<") && !a.verbatim) {
       const nonEmpty = (value: string): string => {
         if (value.trim() === "") throw new InvalidArgumentError("must not be empty.");
         return value;
