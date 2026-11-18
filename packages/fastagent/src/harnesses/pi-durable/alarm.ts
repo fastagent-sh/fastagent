@@ -52,7 +52,7 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
   } = options;
   let closed = false;
   let dirty = false;
-  let forceClear = false;
+  let needClear = false;
   let everArmed = false;
   let includeHeartbeat = false;
   let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -106,8 +106,6 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
     try {
       while (dirty && !closed) {
         dirty = false;
-        const clear = forceClear;
-        forceClear = false;
         const current = now();
         const clockAt = await nextClockDue(current);
         if (closed) return;
@@ -121,9 +119,11 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
         consider(clockAt?.getTime());
         consider(wake.at);
         if (active && includeHeartbeat) consider(current.getTime() + activeRecoveryMs);
-        if (earliest === undefined && !everArmed && !clear) continue;
+        if (earliest === undefined && !everArmed && !needClear) continue;
+        if (closed) return;
         await setAlarm(earliest === undefined ? undefined : new Date(earliest));
         everArmed = earliest !== undefined;
+        if (earliest === undefined) needClear = false;
       }
     } finally {
       ownBusy -= 1;
@@ -134,9 +134,10 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
   const sync = (syncOptions?: { forceClear?: boolean }): Promise<void> => {
     if (closed) return Promise.resolve();
     dirty = true;
-    if (syncOptions?.forceClear) forceClear = true;
+    if (syncOptions?.forceClear) needClear = true;
     inFlight ??= runLoop().finally(() => {
       inFlight = undefined;
+      if (dirty && !closed) scheduleBackground();
     });
     return inFlight;
   };
@@ -155,12 +156,19 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
     },
   });
 
+  const unsubscribeClose = harness.subscribeClose(() => {
+    closed = true;
+    clearHeartbeat();
+    commits.detach();
+  });
+
   return {
     sync,
     stop() {
       closed = true;
       clearHeartbeat();
       commits.detach();
+      unsubscribeClose();
     },
   };
 }

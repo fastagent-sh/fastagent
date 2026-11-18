@@ -360,6 +360,8 @@ export interface ServeAgentOptions {
    * when nothing is scheduled: how a platform that stops an idle machine wakes it again.
    */
   alarm?: (at: Date | undefined) => void | Promise<void>;
+  /** Stamps schedules seen for the first time, when a cold open was woken by an external alarm. */
+  since?: Date;
 }
 
 export interface OpenAgentOptions {
@@ -448,10 +450,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
                 setAlarm: serveOptions.alarm,
               });
         if (watcher !== undefined) {
-          agent.harness.closed.then(
-            () => watcher.stop(),
-            () => watcher.stop(),
-          );
           try {
             await watcher.sync();
           } catch (error) {

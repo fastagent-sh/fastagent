@@ -17,6 +17,11 @@ import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
 import { DEPLOY_SCHEDULE_NAME, DEPLOY_SESSION_ID } from "../../../packages/agentcore/src/variables.ts";
 import { Unavailable } from "../../../packages/fastagent/src/unavailable.ts";
 import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai";
+import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
+import { watchInstanceAlarm } from "../../../packages/fastagent/src/harnesses/pi-durable/alarm.ts";
+import { clockStore } from "../../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import type { CreateIndex } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
@@ -582,6 +587,7 @@ function fakeScheduler(group = "alarms-group", state: "ENABLED" | "DISABLED" = "
   ]);
   const calls: string[] = [];
   let nextError: Error | undefined;
+  let afterWrite: ((name: string) => void | Promise<void>) | undefined;
   const notFound = (name: string) =>
     Object.assign(new Error(`Schedule ${name} not found`), { name: "ResourceNotFoundException" });
   return {
@@ -589,6 +595,9 @@ function fakeScheduler(group = "alarms-group", state: "ENABLED" | "DISABLED" = "
     calls,
     failNext(error: Error) {
       nextError = error;
+    },
+    onWritten(hook: ((name: string) => void | Promise<void>) | undefined) {
+      afterWrite = hook;
     },
     client: {
       async send(command: unknown): Promise<unknown> {
@@ -612,12 +621,14 @@ function fakeScheduler(group = "alarms-group", state: "ENABLED" | "DISABLED" = "
           calls.push(`Create:${name}`);
           if (schedules.has(name)) throw Object.assign(new Error("exists"), { name: "ConflictException" });
           schedules.set(name, structuredClone(input) as StoredSchedule);
+          await afterWrite?.(name);
           return { ScheduleArn: `arn:aws:scheduler:ap-southeast-1:123456789012:schedule/${group}/${name}` };
         }
         if (kind.name === "UpdateScheduleCommand") {
           calls.push(`Update:${name}`);
           if (!schedules.has(name)) throw notFound(name);
           schedules.set(name, structuredClone(input) as StoredSchedule);
+          await afterWrite?.(name);
           return { ScheduleArn: `arn:aws:scheduler:ap-southeast-1:123456789012:schedule/${group}/${name}` };
         }
         if (kind.name === "DeleteScheduleCommand") {
@@ -838,7 +849,7 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
       const payload = JSON.parse(
         (JSON.parse(sched.schedules.get(alarmNameOf(preconfigured))!.Target.Input) as { Payload: string }).Payload,
       ) as { alarm: boolean; since: string };
-      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.useFakeTimers({ toFake: ["Date", "performance"] });
       clockNow = new Date("2026-11-18T11:00:04.000Z");
       vi.setSystemTime(clockNow);
       const coldSession = agentCoreHandler(definition, {
@@ -848,11 +859,29 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
         offline: true,
         alarms,
       });
-      const aws = agentCore(coldSession);
+      // Simulate the process failing right after EventBridge records `at(12:00:00)`: `start({ since })` must have
+      // ALREADY claimed the `11:00:00` slot before `setAlarm` ran, so moving the alarm forward never skips 11:00.
+      let cutOffOnce = true;
+      sched.onWritten((writtenName) => {
+        if (cutOffOnce && writtenName === alarmNameOf(preconfigured)) {
+          cutOffOnce = false;
+          throw new Error("cut off after EventBridge stored 12:00:00");
+        }
+      });
+      await coldSession.fetch(invocation(preconfigured, payload));
+      sched.onWritten(undefined);
+      await coldSession.close();
+      expect(sched.schedules.get(alarmNameOf(preconfigured))?.ScheduleExpression).toBe("at(2026-11-18T12:00:00)");
+
+      const checkSession = agentCoreHandler(definition, {
+        database: { url: postgres.url },
+        root: dir,
+        secrets: process.env,
+        offline: true,
+        alarms,
+      });
+      const aws = agentCore(checkSession);
       try {
-        const fired = await coldSession.fetch(invocation(preconfigured, payload));
-        expect([fired.status, await fired.json()]).toEqual([200, { ok: true }]);
-        expect(sched.schedules.get(alarmNameOf(preconfigured))?.ScheduleExpression).toBe("at(2026-11-18T12:00:00)");
         const preAgent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: preconfigured });
         await vi.waitFor(async () => {
           const states = await preAgent.schedules.list();
@@ -860,11 +889,85 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
         });
       } finally {
         await aws.close();
-        await coldSession.close();
+        await checkSession.close();
       }
     } finally {
       vi.useRealTimers();
       await handler.close();
     }
+  });
+
+  it("drains a newer clock commit after a failed alarm write, and stops writing as soon as the harness begins closing", async () => {
+    const harness = await Harness.open(
+      new MemoryStorage(),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    const clock = clockStore(harness, BACKGROUND_CONTEXT);
+    let desired: Date | undefined = new Date("2026-11-18T10:00:00.000Z");
+    const seen: Array<string | undefined> = [];
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let attempts = 0;
+    const alarm = watchInstanceAlarm({
+      harness,
+      nextClockDue: async () => desired,
+      setAlarm: async (at) => {
+        attempts += 1;
+        seen.push(at?.toISOString());
+        if (attempts === 1) {
+          await firstBlocked;
+          throw new Error("ThrottlingException");
+        }
+      },
+    });
+    try {
+      const first = alarm.sync();
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      // While the first `setAlarm` is in flight, a clock commit clears `desired` (setting `dirty = true`), then the
+      // first `setAlarm` fails: the queued `dirty` pass must still run and disarm (with `forceClear` preserved too).
+      desired = undefined;
+      void alarm.sync({ forceClear: true });
+      await clock.wakeups(() => ({ next: [], result: undefined }));
+      releaseFirst();
+      await expect(first).rejects.toThrow("ThrottlingException");
+      await vi.waitFor(() => expect(seen).toEqual(["2026-11-18T10:00:00.000Z", undefined]));
+    } finally {
+      alarm.stop();
+      await harness.close(BACKGROUND_CONTEXT);
+    }
+
+    // Second half: `subscribeClose` fences an in-flight read synchronously when `harness.close()` begins.
+    const closingHarness = await Harness.open(
+      new MemoryStorage(),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    let releaseRead!: () => void;
+    const readBlocked = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    let readingStarted = false;
+    const fencedWrites: Array<Date | undefined> = [];
+    const fencedAlarm = watchInstanceAlarm({
+      harness: closingHarness,
+      nextClockDue: async () => {
+        readingStarted = true;
+        await readBlocked;
+        return new Date("2026-11-18T18:00:00.000Z");
+      },
+      setAlarm: async (at) => {
+        fencedWrites.push(at);
+      },
+    });
+    const inFlightSync = fencedAlarm.sync();
+    await vi.waitFor(() => expect(readingStarted).toBe(true));
+    const closePromise = closingHarness.close(BACKGROUND_CONTEXT);
+    releaseRead();
+    await inFlightSync;
+    await closePromise;
+    expect(fencedWrites).toEqual([]);
   });
 });

@@ -5,9 +5,10 @@
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { App, Stack } from "aws-cdk-lib";
+import { App, CfnResource, Stack } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
-import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { type IPrincipal, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { Construct } from "constructs";
 import { describe, expect, it } from "vitest";
 import { FastAgentResources } from "../../../packages/agentcore/src/cdk.ts";
 import { DOCKER_TARGET, containerArtifacts } from "../../../packages/fastagent/src/deploy/container.ts";
@@ -15,20 +16,27 @@ import { fauxAgent } from "../../doubles/cli-run.ts";
 
 const RUNTIME_ARN = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
 
-/** A runtime as the AgentCore CLI's stack hands one over: an ARN, a role, and the variables it was given. */
+class FakeRuntime extends Construct {
+  readonly runtimeArn = RUNTIME_ARN;
+  readonly grantPrincipal: IPrincipal;
+  readonly variables: Record<string, string> = {};
+  constructor(scope: Construct, id: string) {
+    super(scope, id);
+    const role = new Role(this, "ExecutionRole", {
+      assumedBy: new ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+    });
+    new CfnResource(this, "Resource", { type: "AWS::BedrockAgentCore::Runtime" });
+    this.grantPrincipal = role.grantPrincipal;
+  }
+  addEnvironmentVariable(name: string, value: string): void {
+    this.variables[name] = value;
+  }
+}
+
+/** A runtime as the AgentCore CLI's stack hands one over: a Construct with an ARN, a role, and environment variables. */
 function runtimeIn(stack: Stack) {
-  const variables: Record<string, string> = {};
-  const role = new Role(stack, "Runtime", { assumedBy: new ServicePrincipal("bedrock-agentcore.amazonaws.com") });
-  return {
-    variables,
-    runtime: {
-      runtimeArn: RUNTIME_ARN,
-      grantPrincipal: role.grantPrincipal,
-      addEnvironmentVariable: (name: string, value: string) => {
-        variables[name] = value;
-      },
-    },
-  };
+  const runtime = new FakeRuntime(stack, "Runtime");
+  return { variables: runtime.variables, runtime };
 }
 
 describe("FastAgentResources", () => {
@@ -135,6 +143,43 @@ export default defineSchedule({ cron: "0 * * * *", prompt: "go" });
       State: "ENABLED",
     });
     expect(variables.FASTAGENT_ALARM_INSTANCES).toBe(preconfigured);
+    const deployResource = Object.values(template.findResources("AWS::Scheduler::Schedule"))[0] as {
+      Properties: { Description: string };
+      DependsOn?: string[];
+    };
+    // Waits for the runtime construct's resource before enabling `.deploy`.
+    expect(deployResource.DependsOn).toEqual(expect.arrayContaining([expect.stringMatching(/^Runtime[0-9A-F]/)]));
+
+    // Synthesizing unchanged schedules produces the exact same description; changing a schedule's cron changes it.
+    const repeatStack = new Stack(new App(), "Agent", { env: { account: "123456789012", region: "ap-southeast-1" } });
+    new FastAgentResources(repeatStack, "FastAgent", {
+      runtime: runtimeIn(repeatStack).runtime,
+      agentDir: dir,
+      instances: [preconfigured],
+    });
+    const repeatDesc = (
+      Object.values(Template.fromStack(repeatStack).findResources("AWS::Scheduler::Schedule"))[0] as {
+        Properties: { Description: string };
+      }
+    ).Properties.Description;
+    expect(repeatDesc).toBe(deployResource.Properties.Description);
+
+    await writeFile(
+      join(dir, "src", "schedules", "hourly.ts"),
+      `import { defineSchedule } from "@fastagent-sh/fastagent";\nexport default defineSchedule({ cron: "30 * * * *", prompt: "go" });\n`,
+    );
+    const changedStack = new Stack(new App(), "Agent", { env: { account: "123456789012", region: "ap-southeast-1" } });
+    new FastAgentResources(changedStack, "FastAgent", {
+      runtime: runtimeIn(changedStack).runtime,
+      agentDir: dir,
+      instances: [preconfigured],
+    });
+    const changedDesc = (
+      Object.values(Template.fromStack(changedStack).findResources("AWS::Scheduler::Schedule"))[0] as {
+        Properties: { Description: string };
+      }
+    ).Properties.Description;
+    expect(changedDesc).not.toBe(deployResource.Properties.Description);
 
     const badStack = new Stack(new App(), "Bad");
     expect(

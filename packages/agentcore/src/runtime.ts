@@ -110,7 +110,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
 
   const placedDatabase = (): PostgresDatabase => (typeof database === "function" ? database() : database);
 
-  const open = async (name: string): Promise<Opened> => {
+  const open = async (name: string, since?: Date): Promise<Opened> => {
     const secrets = { ...given.secrets, ...(values === undefined ? {} : await values()) };
     const placed = placedDatabase();
     const agent = await openAgent(definition, { ...given, secrets, root, name, database: placed });
@@ -120,7 +120,11 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       const alarm = alarms?.forSession(name);
       opened = {
         agent,
-        service: await agent.serve({ apiKeys: [key], ...(alarm === undefined ? {} : { alarm }) }),
+        service: await agent.serve({
+          apiKeys: [key],
+          ...(alarm === undefined ? {} : { alarm }),
+          ...(since === undefined ? {} : { since }),
+        }),
         key,
       };
     } catch (error) {
@@ -140,8 +144,8 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
     return opened;
   };
 
-  const openSession = async (name: string): Promise<Opened> => {
-    instance ??= { name, opened: open(name) };
+  const openSession = async (name: string, since?: Date): Promise<Opened> => {
+    instance ??= { name, opened: open(name, since) };
     const current = instance;
     try {
       return await current.opened;
@@ -154,7 +158,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
 
   const alarmInvocation = async (name: string, since: Date | undefined): Promise<Response> => {
     try {
-      const opened = await openSession(name);
+      const opened = await openSession(name, since);
       await opened.service.tick(since === undefined ? undefined : { since });
       return Response.json({ ok: true });
     } catch (error) {

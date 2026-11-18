@@ -23,9 +23,10 @@ async function startSchedules(
   agent: Agent,
   clock: ClockStore,
   schedules: readonly Schedule[],
+  since?: Date,
 ): Promise<Pick<Scheduler, "stop" | "tick" | "nextDue">> {
   const scheduler = Effect.runSync(createScheduler({ agent, clock, schedules }));
-  await scheduler.start().catch((error: unknown) => {
+  await scheduler.start(since === undefined ? undefined : { since }).catch((error: unknown) => {
     scheduler.stop();
     throw error;
   });
@@ -116,6 +117,8 @@ export function serviceOver(
 export interface ServeOptions {
   /** The keys the Agent API takes; without one it is not served. */
   apiKeys?: readonly string[];
+  /** Stamps schedules seen for the first time, when a cold open was woken by an external alarm. */
+  since?: Date;
 }
 
 /** What the assembly serves. */
@@ -164,7 +167,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
             ? undefined
             : yield* Effect.acquireRelease(
                 Effect.tryPromise({
-                  try: () => startSchedules(agent, clock, schedules),
+                  try: () => startSchedules(agent, clock, schedules, options.since),
                   catch: (error) => error,
                 }),
                 (started) => Effect.sync(started.stop),

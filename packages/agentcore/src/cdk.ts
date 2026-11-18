@@ -10,6 +10,8 @@
  * its own, since a construct is synchronous and the agent's FastAgent is its own installation, not this CDK app's.
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import type { ScheduleFact } from "@fastagent-sh/fastagent/platform";
 import { Names, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { CfnCluster } from "aws-cdk-lib/aws-dsql";
 import { type IGrantable, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
@@ -95,7 +97,11 @@ export class FastAgentResources extends Construct {
       }),
     );
 
-    const rearmActive = inspected.hasSchedules || instances.length > 0;
+    const rearmActive = inspected.schedules.length > 0 || instances.length > 0;
+    const rearmDigest = createHash("sha256")
+      .update(JSON.stringify({ schedules: inspected.schedules, instances }))
+      .digest("hex")
+      .slice(0, 16);
     const deploySchedule = new CfnSchedule(this, "DeployAlarm", {
       groupName,
       name: DEPLOY_SCHEDULE_NAME,
@@ -103,7 +109,7 @@ export class FastAgentResources extends Construct {
       scheduleExpressionTimezone: "UTC",
       flexibleTimeWindow: { mode: "OFF" },
       state: rearmActive ? "ENABLED" : "DISABLED",
-      description: rearmActive ? `fastagent rearm ${new Date().toISOString()}` : "fastagent alarm target",
+      description: rearmActive ? `fastagent rearm ${rearmDigest}` : "fastagent alarm target",
       target: {
         arn: universalTargetArn(stack.partition),
         roleArn: this.alarmRole.roleArn,
@@ -117,6 +123,7 @@ export class FastAgentResources extends Construct {
     });
     deploySchedule.addDependency(this.alarms);
     deploySchedule.node.addDependency(this.alarmRole);
+    if (runtime instanceof Construct) deploySchedule.node.addDependency(runtime);
 
     runtime.grantPrincipal.addToPrincipalPolicy(
       new PolicyStatement({
@@ -177,18 +184,18 @@ if (leaks.length > 0) {
   process.exit(1);
 }
 const facts = await platform.agentFacts(process.argv[1]);
-process.stdout.write(JSON.stringify({ hasSchedules: facts.schedules.length > 0 }));
+process.stdout.write(JSON.stringify({ schedules: facts.schedules }));
 `;
 
 /** Stop the synthesis when the agent's FastAgent finds the image would carry what it must not, and read its shape. */
-function inspectAgent(agentDir: string): { hasSchedules: boolean } {
+function inspectAgent(agentDir: string): { schedules: ScheduleFact[] } {
   try {
     const stdout = execFileSync(process.execPath, ["--input-type=module", "--eval", INSPECT_AGENT, agentDir], {
       cwd: agentDir,
       stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
     });
-    return JSON.parse(stdout) as { hasSchedules: boolean };
+    return JSON.parse(stdout) as { schedules: ScheduleFact[] };
   } catch (error) {
     const said = String((error as { stderr?: Buffer | string }).stderr ?? "").trim();
     throw new Error(said || `checking what the image would carry failed: ${(error as Error).message}`);

@@ -18,10 +18,11 @@ import { listWakeups, requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./w
 
 export interface Scheduler {
   /**
-   * Arm schedules, account for a fire the previous run was killed in, and catch up overdue work once. Rejects when a
-   * schedule's newest fire cannot be read: a schedule is not run blind.
+   * Arm schedules (`since` stamps schedules seen for the first time, as a deploy's alarm carries), account for a fire
+   * the previous run was killed in, and catch up overdue work once. Rejects when a schedule's newest fire cannot be
+   * read: a schedule is not run blind.
    */
-  start(): Promise<void>;
+  start(options?: { since?: Date }): Promise<void>;
   /** Claim and start every cron occurrence and wake-up due now (`since` stamps schedules seen for the first time). */
   tick(options?: { since?: Date }): Promise<void>;
   /** The earliest instant a schedule or pending wake-up in `clock` is next due, or `undefined` when nothing is. */
@@ -657,7 +658,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
     };
 
     return {
-      async start() {
+      async start(startOptions) {
         stopped = false;
         // ONE claim read per schedule — the newest — for the two planes that must agree about it: the reconciler
         // (was that fire ever reported?) and catch-up (where does the next run resume?). A read fault on it stays
@@ -683,7 +684,11 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           launch(s.name, accounted);
         }
         const current = now();
-        const armed = await recordArmed(store, schedules, lastFires, current);
+        const since =
+          startOptions?.since !== undefined && startOptions.since.getTime() < current.getTime()
+            ? startOptions.since
+            : current;
+        const armed = await recordArmed(store, schedules, lastFires, since);
         for (const s of schedules) {
           if (stopped) break;
           // FROM THE LAST FIRE, or from when this schedule was first armed (`armed`), or from now on its very first
