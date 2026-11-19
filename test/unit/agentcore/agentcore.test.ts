@@ -18,6 +18,7 @@ import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/sr
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
 import { DEPLOY_SCHEDULE_NAME, DEPLOY_SESSION_ID } from "../../../packages/agentcore/src/variables.ts";
 import { Unavailable } from "../../../packages/fastagent/src/unavailable.ts";
+import { readInvokeMessage } from "@fastagent-sh/fastagent/platform";
 import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
@@ -534,10 +535,131 @@ describe("fastagent deploy init agentcore", () => {
     const dir = await fauxAgent("fa-agentcore-usage-");
     const flag = await runInProcess(["agentcore", "start", "--force"], dir);
     expect([flag.code, flag.stderr.split("\n")[0]]).toEqual([2, "Error: --force and --no-install are init's"]);
+    const invokeFlag = await runInProcess(["agentcore", "start", "--arn", RUNTIME], dir);
+    expect(invokeFlag.code).toBe(2);
+    expect(invokeFlag.stderr).toContain("are invoke's");
     // The one thing the container cannot serve without: the build it runs.
     const unbuilt = await runInProcess(["agentcore", "start"], dir);
     expect(unbuilt.code).toBe(1);
     expect(unbuilt.stderr).toContain("holds no build");
+  });
+});
+
+describe("fastagent agentcore invoke", () => {
+  it("streams text and NDJSON through AgentCore, continues a session via --instance + --session, honors FASTAGENT_AGENTCORE_ARN and --qualifier", async () => {
+    const { handler } = await runtimeOf("fa-agentcore-invoke-");
+    const aws = agentCore(handler);
+    try {
+      const first = await runInProcess(["agentcore", "invoke", "first turn", "--arn", RUNTIME, "--qualifier", "prod"]);
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stdout.trim()).toBe("seen 1");
+      expect(aws.urls.every((u) => u.includes("qualifier=prod"))).toBe(true);
+      const match = first.stderr.match(/--instance (cli-[0-9a-f-]+) --session (\S+)\)/);
+      expect(match, first.stderr).not.toBeNull();
+      const instance = match?.[1] ?? "";
+      const sessionId = match?.[2] ?? "";
+      expect(instance.length).toBeGreaterThanOrEqual(33);
+      expect(sessionId.length).toBeGreaterThan(0);
+
+      vi.stubEnv("FASTAGENT_AGENTCORE_ARN", RUNTIME);
+      try {
+        const second = await runInProcess([
+          "agentcore",
+          "invoke",
+          "follow up",
+          "--instance",
+          instance,
+          "--session",
+          sessionId,
+          "--json",
+        ]);
+        expect(second.code, second.stderr).toBe(0);
+        const events = second.stdout
+          .trim()
+          .split("\n")
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                type: string;
+                message?: { sessionId: string; status: string; answer?: { text: string } };
+              },
+          );
+        const done = events.find((e) => e.type === "done");
+        expect(done?.message).toMatchObject({ sessionId, status: "completed", answer: { text: "seen 2" } });
+      } finally {
+        vi.stubEnv("FASTAGENT_AGENTCORE_ARN", undefined);
+      }
+    } finally {
+      await aws.close();
+      await handler.close();
+    }
+  });
+
+  it("refuses missing ARN, --session without --instance, invalid ARN/instance/model, wrong flags, extra args, and empty message with exit 2", async () => {
+    vi.stubEnv("FASTAGENT_AGENTCORE_ARN", undefined);
+    const cases: Array<[string[], RegExp]> = [
+      [["agentcore", "invoke", "hi"], /missing runtime ARN.*FASTAGENT_AGENTCORE_ARN/],
+      [["agentcore", "invoke", "hi", "--arn", RUNTIME, "--session", "s1"], /--session requires --instance/],
+      [["agentcore", "invoke", "hi", "--arn", "not-an-arn"], /is not an AgentCore runtime's ARN/],
+      [["agentcore", "invoke", "hi", "--arn", RUNTIME, "--instance", "too-short"], /33 to 256/],
+      [["agentcore", "invoke", "hi", "--arn", RUNTIME, "--model", "badmodel"], /--model/],
+      [["agentcore", "invoke", "hi", "--arn", RUNTIME, "--force"], /--force and --no-install are init's/],
+      [["agentcore", "invoke", "one", "two", "--arn", RUNTIME], /at most one <message>/],
+      [["agentcore", "invoke", "   ", "--arn", RUNTIME], /message must not be empty/],
+      [
+        ["agentcore", "invoke", "hi", "--arn", RUNTIME, "--instance", freshInstance(), "--session", "--json"],
+        /ambiguous/,
+      ],
+    ];
+    for (const [args, pattern] of cases) {
+      const res = await runInProcess(args);
+      expect(res.code, `${args.join(" ")}: ${res.stderr}`).toBe(2);
+      expect(res.stdout, args.join(" ")).toBe("");
+      expect(res.stderr, args.join(" ")).toMatch(pattern);
+    }
+
+    const prevTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      expect(await readInvokeMessage(undefined, "fastagent agentcore invoke")).toEqual({
+        ok: false,
+        error: 'missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent agentcore invoke)',
+      });
+    } finally {
+      if (prevTTY) Object.defineProperty(process.stdin, "isTTY", prevTTY);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+    }
+  });
+
+  it("exits 1 with clean stdout when AgentCore refuses the invocation, and accepts a dash-prefixed --session id", async () => {
+    const { handler } = await runtimeOf("fa-agentcore-invoke-refuse-");
+    const aws = agentCore(handler);
+    try {
+      aws.refuse(403, "AccessDeniedException");
+      const res = await runInProcess(["agentcore", "invoke", "hi", "--arn", RUNTIME]);
+      expect(res.code).toBe(1);
+      expect(res.stdout).toBe("");
+      expect(res.stderr).toContain("unauthorized");
+
+      // Base64url session ids can start with `-`; `parseArgs` must accept `--session -id` rather than exiting 2.
+      const dashSession = await runInProcess([
+        "agentcore",
+        "invoke",
+        "hi",
+        "--arn",
+        RUNTIME,
+        "--instance",
+        freshInstance(),
+        "--session",
+        "-dashSessionId.1",
+      ]);
+      expect(dashSession.code).toBe(1);
+      expect(dashSession.stdout).toBe("");
+      expect(dashSession.stderr).toContain("--session -dashSessionId.1: no such session");
+    } finally {
+      await aws.close();
+      await handler.close();
+    }
   });
 });
 

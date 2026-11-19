@@ -12,6 +12,9 @@ export const ALARM_GROUP_ENV = "FASTAGENT_ALARM_GROUP";
 /** Comma-separated session ids armed on deploy without waiting for a Caller (`FastAgentResourcesProps.instances`). */
 export const ALARM_INSTANCES_ENV = "FASTAGENT_ALARM_INSTANCES";
 
+/** The runtime ARN `fastagent agentcore invoke` targets when `--arn` is omitted. */
+export const AGENTCORE_ARN_ENV = "FASTAGENT_AGENTCORE_ARN";
+
 /** The schedule in the group that holds the runtime's target and fires `{ rearm: true }` once after each deploy. */
 export const DEPLOY_SCHEDULE_NAME = ".deploy";
 

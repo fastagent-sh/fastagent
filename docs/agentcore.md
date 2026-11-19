@@ -118,6 +118,24 @@ environment variables: it answers on port 8080 as it does on AgentCore.
 
 ## 4. Call it
 
+### From the CLI
+
+To smoke-test or script a deployed runtime from your terminal (`npm i @aws-sdk/client-bedrock-agentcore` once on the
+machine calling it):
+
+```bash
+export FASTAGENT_AGENTCORE_ARN="arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>"
+fastagent agentcore invoke "hello"
+echo "summarize this" | fastagent agentcore invoke --json
+fastagent agentcore invoke "follow up" --instance <id> --session <sessionId>
+```
+
+Each call prints the AgentCore `--instance` id and Agent API `--session` id on `stderr`, and streams the answer (or
+NDJSON events with `--json`) on `stdout` with the same exit codes as `fastagent invoke`. Pass `--arn <arn>` to override
+`FASTAGENT_AGENTCORE_ARN`, `--qualifier <name>` for a named endpoint, and `--model <provider/model>` to pick a model.
+
+### From a backend
+
 In your backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):
 
 ```ts

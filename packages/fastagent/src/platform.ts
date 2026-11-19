@@ -18,6 +18,8 @@ import { nextRun } from "./schedule/cron.ts";
 
 export { DATABASE_URL_ENV } from "./paths.ts";
 export { Unavailable } from "./unavailable.ts";
+export { type InvokeOverApiOptions, invokeOverApi, readInvokeMessage } from "./cli/commands/invoke.ts";
+export { modelRefOf } from "./model-ref.ts";
 import type { DeclaredSecret } from "./declared-secrets.ts";
 
 export type { ExtensionCli } from "./cli/extension.ts";

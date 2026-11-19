@@ -5,7 +5,7 @@
  * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/smoke/e2e/packed.ts <tarball>...`, every
  * package's, since one package depends on another's version before it is published.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -57,6 +57,16 @@ expectEqual(
   sh(join(tools, "node_modules", ".bin", "fastagent"), ["-C", agent, "agentcore", "--help"], work).split("\n")[0],
   "Usage: fastagent [-C <dir>] agentcore <command>",
 );
+// Production installs of `@fastagent-sh/agentcore` omit `@aws-sdk/client-bedrock-agentcore`; invoking without it exits 2 naming it.
+const missingSdk = spawnSync(
+  fastagent,
+  ["agentcore", "invoke", "ping", "--arn", "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/demo"],
+  { cwd: agent, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+);
+expectEqual("agentcore invoke without aws sdk exits 2", missingSdk.status, 2);
+if (!missingSdk.stderr.includes("npm install @aws-sdk/client-bedrock-agentcore")) {
+  throw new Error(`expected install hint in stderr, got: ${missingSdk.stderr}`);
+}
 
 // In the agent directory, where `@fastagent-sh/fastagent` is installed, as in an app that depends on it.
 const app = join(agent, "app.mjs");
