@@ -3,7 +3,7 @@
  * from and submitted to it. Admission (a key's lookup, the limits and the submission) is one step per process, since
  * one process owns a storage.
  */
-import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "@earendil-works/chord/context";
 import {
   getSupportedThinkingLevels,
   type ImageContent,
@@ -16,9 +16,11 @@ import {
   AgentDoc,
   type Conversation,
   ConversationBusy,
+  type ConversationId,
   DEFAULT_RETRY_POLICY,
   type EntryRecord,
   Harness,
+  type HarnessInspection,
   type HarnessOptions,
   type HarnessSettings,
   InboxDoc,
@@ -156,7 +158,8 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
     const ids = await storageIds(harness, context);
     const sessions = await Effect.runPromise(Scope.provide(trackSessions(harness, options.storage, context), lifetime));
     // Before `resume()`, which runs an earlier process's work.
-    const unsettled = (await harness.inspect(context)).submissions.filter(isInput);
+    const inspection = await harness.inspect(context);
+    const unsettled = inspection.submissions.filter(isInput);
     const unfinished = options.unfinished ?? "resume";
     if (unsettled.length > 0 && unfinished !== "resume") {
       const where = [...new Set(unsettled.map((record) => record.conversationId))]
@@ -167,6 +170,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
         `the storage holds ${said}, which this process would not finish: serve the agent until they end, then try again`,
       );
     } else {
+      await warnRemovedWork(harness, inspection, options.registry, ids, sessions, context);
       // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
       for (const record of unsettled) {
         const submission = await harness.submission(record.id, context);
@@ -180,6 +184,62 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
     await Effect.runPromise(Scope.close(lifetime, Exit.void));
     await harness.close(context);
     throw error;
+  }
+}
+
+/**
+ * Warn on startup when resumed in-flight work references a tool or task definition the current version no longer has.
+ * Reads only conversations with unsettled submissions or live tasks, so idle opens pay nothing.
+ */
+async function warnRemovedWork(
+  harness: Harness,
+  inspection: HarnessInspection,
+  registry: RegistryReader,
+  ids: Ids,
+  sessions: Sessions,
+  context: Context,
+): Promise<void> {
+  const label = (conversationId: ConversationId) =>
+    sessions.has(conversationId) ? ids.encode(conversationId) : `#${conversationId}`;
+
+  for (const { record, state } of inspection.tasks) {
+    if (state.kind !== "blocked") continue;
+    log.warn(
+      `[fastagent] session ${label(record.conversationId)}: in-flight task ${record.kind} (#${record.id}) is blocked (${state.reason})`,
+    );
+  }
+
+  const activeConversations = new Set<ConversationId>();
+  for (const record of inspection.submissions) if (isInput(record)) activeConversations.add(record.conversationId);
+  for (const { record } of inspection.tasks) activeConversations.add(record.conversationId);
+  if (activeConversations.size === 0) return;
+
+  const registered = new Set(
+    registry
+      .snapshot()
+      .tools()
+      .map(({ tool }) => tool.name),
+  );
+  for (const conversationId of activeConversations) {
+    const [agentDoc, liveDoc] = await Promise.all([
+      harness.snapshot(AgentDoc, conversationId, context),
+      harness.snapshot(LiveDoc, conversationId, context),
+    ]);
+    const missing = new Set<string>();
+    if (Array.isArray(agentDoc?.tools)) {
+      for (const name of agentDoc.tools) if (!registered.has(name)) missing.add(name);
+    }
+    for (const slot of liveDoc?.tools ?? []) {
+      if (slot.status !== "done" && !slot.unoffered && !registered.has(slot.name)) missing.add(slot.name);
+    }
+    for (const slot of liveDoc?.nestedTools ?? []) {
+      if (slot.status !== "done" && !registered.has(slot.name)) missing.add(slot.name);
+    }
+    if (missing.size > 0) {
+      log.warn(
+        `[fastagent] session ${label(conversationId)}: resuming in-flight work after tool(s) were removed: ${[...missing].sort().join(", ")}`,
+      );
+    }
   }
 }
 

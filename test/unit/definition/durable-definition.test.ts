@@ -12,12 +12,14 @@ import {
   InMemoryCredentialStore,
   type TranscriptContext,
   fauxAssistantMessage,
-  type fauxProvider,
+  fauxProvider,
+  fauxToolCall,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
-import { MemoryStorage } from "@earendil-works/pi-durable";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import type { DurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
+import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
+import { obj } from "@earendil-works/pi-schema";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import {
   type AssembleAgentOptions,
   buildDefinition,
@@ -25,6 +27,8 @@ import {
   loadSourceDefinition,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { log } from "../../../packages/fastagent/src/log.ts";
 import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import {
@@ -226,5 +230,153 @@ describe("an agent whose configured default model the catalog does not have", ()
     await expect(openSource(dir, { model: "openai-codex/typo" })).rejects.toThrow(
       'unknown model "openai-codex/typo": no provider "openai-codex" offers "typo"',
     );
+  });
+});
+
+describe("startup warnings when a new version removes a tool or task with work in flight", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("warns naming the session and removed tool when resuming an in-flight tool call, settles cleanly, and stays quiet once idle", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-removed-tool-"));
+    const dbPath = join(dir, "agent.sqlite");
+
+    let entered!: () => void;
+    const toolRunning = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const legacyTool = defineTool({
+      name: "legacy_tool",
+      description: "Removed in v2.",
+      parameters: obj({}),
+      execute: async (_args, _api, ctx) => {
+        entered();
+        await new Promise<void>((resolve) => {
+          ctx.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { output: [{ type: "text", text: "never" }] };
+      },
+    });
+
+    const v1Faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    v1Faux.setResponses([fauxAssistantMessage([fauxToolCall("legacy_tool", {})], { stopReason: "toolUse" })]);
+    const v1Registry = createRegistry();
+    v1Registry.install({ name: "v1", tools: [legacyTool] });
+    const models = (provider: ReturnType<typeof fauxProvider>["provider"]) =>
+      modelsOver(new InMemoryCredentialStore(), [provider]);
+    const v1 = await openDurableAgent({
+      storage: await openLockedStorage(dbPath),
+      models: models(v1Faux.provider),
+      registry: v1Registry,
+      name: "support",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    const session = await v1.sessions.create();
+    const sent = await v1.messages.send({ sessionId: session.id, content: "run legacy" });
+    await toolRunning;
+    // Simulate deploy restart while `legacy_tool` is mid-flight.
+    await v1.close();
+
+    const warned: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((line) => warned.push(line));
+
+    const v2Faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    v2Faux.setResponses([fauxAssistantMessage("handled missing tool")]);
+    const v2 = await openDurableAgent({
+      storage: await openLockedStorage(dbPath),
+      models: models(v2Faux.provider),
+      registry: createRegistry(),
+      name: "support",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      expect(
+        warned.some(
+          (line) =>
+            line.includes(`session ${session.id}`) &&
+            line.includes("resuming in-flight work after tool(s) were removed: legacy_tool"),
+        ),
+        warned.join("\n"),
+      ).toBe(true);
+      const settled = await v2.messages.get({ sessionId: session.id, messageId: sent.id }, { wait: 15 });
+      expect(settled.status).toBe("completed");
+      expect(settled.answer?.text).toBe("handled missing tool");
+    } finally {
+      await v2.close();
+    }
+
+    // Once idle, reopening without `legacy_tool` emits no warning.
+    warned.length = 0;
+    const v3 = await openDurableAgent({
+      storage: await openLockedStorage(dbPath),
+      models: models(v2Faux.provider),
+      registry: createRegistry(),
+      name: "support",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      expect(warned).toEqual([]);
+    } finally {
+      await v3.close();
+    }
+  });
+
+  it("warns naming the session and task kind when a live task is blocked by missing_task on restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-removed-task-"));
+    const dbPath = join(dir, "agent.sqlite");
+
+    const customTask = defineTask({
+      name: "custom.sleeper",
+      version: 1,
+      initial: () => ({ phase: "wait" as const }),
+      phases: {
+        wait: async (_task, runtime, ctx) => {
+          await runtime.commit(
+            () => ({ status: "sleeping", until: Date.now() + 60 * 60_000, checkpoint: { phase: "wait" as const } }),
+            ctx,
+          );
+        },
+      },
+      abort: async () => undefined,
+    });
+    const v1Faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    const v1Registry = createRegistry();
+    v1Registry.install({ name: "v1", tasks: [customTask] });
+    const v1 = await openDurableAgent({
+      storage: await openLockedStorage(dbPath),
+      models: modelsOver(new InMemoryCredentialStore(), [v1Faux.provider]),
+      registry: v1Registry,
+      name: "support",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    const session = await v1.sessions.create();
+    const conv = await v1.conversation(session.id);
+    await conv?.commit(
+      (tx) => tx.createTask(customTask, null, { ownership: { kind: "conversation" } }),
+      BACKGROUND_CONTEXT,
+    );
+    await v1.close();
+
+    const warned: string[] = [];
+    vi.spyOn(log, "warn").mockImplementation((line) => warned.push(line));
+    const v2 = await openDurableAgent({
+      storage: await openLockedStorage(dbPath),
+      models: modelsOver(new InMemoryCredentialStore(), [v1Faux.provider]),
+      registry: createRegistry(),
+      name: "support",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      expect(
+        warned.some(
+          (line) =>
+            line.includes(`session ${session.id}`) &&
+            line.includes("in-flight task custom.sleeper") &&
+            line.includes("blocked (missing_task)"),
+        ),
+        warned.join("\n"),
+      ).toBe(true);
+    } finally {
+      await v2.close();
+    }
   });
 });
