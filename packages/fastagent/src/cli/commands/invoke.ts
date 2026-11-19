@@ -1,5 +1,5 @@
 /**
- * `fastagent invoke <message> [agent]`: send ONE message to the opened agent, print its answer, then exit. Every run
+ * `fastagent invoke <message>`: send ONE message to the opened agent, print its answer, then exit. Every run
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
  * served agent instead, over its Agent API, with the same output and exit code.
  */

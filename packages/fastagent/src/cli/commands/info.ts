@@ -1,5 +1,5 @@
 /**
- * `fastagent info [agent] [--json]`: print what the directory builds into, WITHOUT opening or serving the agent: it
+ * `fastagent info [--json]`: print what the directory builds into, WITHOUT opening or serving the agent: it
  * reads the directory and the environment, never the instance's storage, so it answers beside a running serve. What
  * the instance's clock did is `fastagent schedules list`'s.
  */

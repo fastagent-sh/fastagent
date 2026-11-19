@@ -7,7 +7,7 @@ status: current
 # CLI reference
 
 ```bash
-fastagent <command> [args] [options]
+fastagent [-C <dir>] <command> [args] [options]
 fastagent <command> --help     # every argument, flag and example, generated from the code
 ```
 
@@ -20,8 +20,9 @@ on an agent whose `dev` is running go through that `dev`, by its Agent API, so t
 contend for its storage. With no `dev` running they open the instance themselves; with `--url` they act on a
 deployment.
 
-`[agent]` is the agent directory (the one with `fastagent.config.ts`), by default the current one. Nothing is searched
-for: from a subdirectory, a command names the agent's root and stops.
+Every command runs in the current directory; pass `-C <dir>` before the command (as in `git -C`) to run in another
+agent directory (project CLI forwarding and extension resolution follow `-C` too). Nothing is searched for: from a
+subdirectory, a command names the agent's root and stops.
 
 ## Commands
 
@@ -45,11 +46,13 @@ An extension the agent installs adds a command of its own: `npm i @fastagent-sh/
 
 ## Global options
 
-Flags come after the command: `fastagent info --json`. `-h`/`--help` works on every command (also
-`fastagent help <command>`); `-v`/`--version` comes before any command: `fastagent --version`.
+`-C <dir>` and `-v`/`--version` come before any command: `fastagent -C ./my-agent info --json`, `fastagent --version`.
+Command flags come after the command: `fastagent info --json`. `-h`/`--help` works on every command (also
+`fastagent help <command>`).
 
 | Option | Commands | Meaning |
 |---|---|---|
+| `-C <dir>` | before any command | Run as if `fastagent` was started in `<dir>` (including version forwarding, extensions, `login`, `models`). |
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `docker init`) | Model for this run. `docker init` has none: the model is the configuration's. |

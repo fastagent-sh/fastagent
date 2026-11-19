@@ -1,4 +1,4 @@
-/** `fastagent build [agent] [--no-check] [--json]`: the agent compiled into `dist/`. */
+/** `fastagent build [--no-check] [--json]`: the agent compiled into `dist/`. */
 import { relative, resolve } from "node:path";
 import { buildProject } from "../../harnesses/pi-durable/build.ts";
 import { log } from "../../log.ts";

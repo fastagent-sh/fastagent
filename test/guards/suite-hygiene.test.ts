@@ -94,7 +94,9 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts has at 
     .join("\n");
   const uncovered = commands.filter(
     (cmd) =>
-      !new RegExp(`(?:runInProcess|run|spawnCli|whileRunning|cliInit|cli)\\(\\s*\\[\\s*"${cmd}"`).test(testCorpus),
+      !new RegExp(
+        `(?:runInProcess|run|spawnCli|whileRunning|cliInit|cli)\\(\\s*\\[\\s*(?:"-C"\\s*,\\s*[^,\\]]+,\\s*)?"${cmd}"`,
+      ).test(testCorpus),
   );
   expect(uncovered).toEqual([]);
 });

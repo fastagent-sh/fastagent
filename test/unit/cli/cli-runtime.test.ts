@@ -51,11 +51,11 @@ describe("cli: invoke", () => {
   it("goes through the serve that owns the instance, and --session continues a session an earlier run printed", async () => {
     const dir = await agent("fa-invoke-session-");
     await whileServed(dir, async () => {
-      const first = await runInProcess(["invoke", "hello", dir]);
+      const first = await runInProcess(["-C", dir, "invoke", "hello"]);
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
       expect(first.stderr).toContain("through its serve at http://127.0.0.1:");
       const sessionId = sessionOf(first);
-      const second = await runInProcess(["invoke", "--session", sessionId, "again", dir]);
+      const second = await runInProcess(["-C", dir, "invoke", "--session", sessionId, "again"]);
       expect([second.code, second.stdout.trim(), sessionOf(second)], second.stderr).toEqual([0, "seen 2", sessionId]);
     });
   });
@@ -69,7 +69,7 @@ describe("cli: invoke", () => {
     await whileServed(
       dir,
       async () => {
-        const sent = await runInProcess(["invoke", "hello", dir, "--no-input"], undefined, env);
+        const sent = await runInProcess(["-C", dir, "invoke", "hello", "--no-input"], undefined, env);
         expect([sent.code, sent.stdout.trim()], sent.stderr).toEqual([0, "seen 1"]);
       },
       { model: "gw/m1" },
@@ -82,7 +82,7 @@ describe("cli: invoke", () => {
     await whileServed(other, async (url) => {
       await mkdir(resolveStateRoot(dir), { recursive: true });
       await writeFile(join(resolveStateRoot(dir), "owner.json"), JSON.stringify({ url, key: "a killed owner's key" }));
-      const sent = await runInProcess(["invoke", "hello", dir]);
+      const sent = await runInProcess(["-C", dir, "invoke", "hello"]);
       expect([sent.code, sent.stdout.trim()], sent.stderr).toEqual([0, "seen 1"]);
       expect(sent.stderr).not.toContain("through its serve");
     });
@@ -91,8 +91,8 @@ describe("cli: invoke", () => {
   it("without --session, each run starts a session of its own", async () => {
     const dir = await agent("fa-invoke-fresh-");
     await whileServed(dir, async () => {
-      const first = await runInProcess(["invoke", "hello", dir]);
-      const fresh = await runInProcess(["invoke", "hello", dir]);
+      const first = await runInProcess(["-C", dir, "invoke", "hello"]);
+      const fresh = await runInProcess(["-C", dir, "invoke", "hello"]);
       expect([first.code, fresh.code], `${first.stderr}\n${fresh.stderr}`).toEqual([0, 0]);
       expect([first.stdout.trim(), fresh.stdout.trim()]).toEqual(["seen 1", "seen 1"]);
       expect(sessionOf(fresh)).not.toBe(sessionOf(first));
@@ -105,7 +105,7 @@ describe("cli: an instance in PostgreSQL", () => {
     const dir = await agent("fa-invoke-postgres-unnamed-");
     const env: NodeJS.ProcessEnv = { ...process.env, FASTAGENT_DATABASE_URL: "postgres://agent@127.0.0.1:1/agents" };
     delete env.FASTAGENT_NAME;
-    const run = await runInProcess(["invoke", "hello", dir], undefined, env);
+    const run = await runInProcess(["-C", dir, "invoke", "hello"], undefined, env);
     expect([run.code, run.stdout]).toEqual([2, ""]);
     expect(run.stderr).toContain(
       "FASTAGENT_DATABASE_URL keeps the sessions in a database that instances share by name: name this one with --name <name> or FASTAGENT_NAME",
@@ -126,17 +126,17 @@ describe("cli: an instance in PostgreSQL", () => {
         mkdtempSync(join(tmpdir(), "fa-postgres-root-a-")),
         mkdtempSync(join(tmpdir(), "fa-postgres-root-b-")),
       ];
-      const first = await runInProcess(["invoke", "hello", dir], undefined, inRoot(rootA));
+      const first = await runInProcess(["-C", dir, "invoke", "hello"], undefined, inRoot(rootA));
       expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
       // A new machine's empty state root: the session is in the database.
       const next = await runInProcess(
-        ["invoke", "--session", sessionOf(first), "again", dir],
+        ["-C", dir, "invoke", "--session", sessionOf(first), "again"],
         undefined,
         inRoot(rootB),
       );
       expect([next.code, next.stdout.trim()], next.stderr).toEqual([0, "seen 2"]);
       expect(existsSync(join(rootA, ".state", "agent.sqlite"))).toBe(false);
-      const info = JSON.parse((await runInProcess(["info", dir, "--json"], undefined, inRoot(rootB))).stdout) as {
+      const info = JSON.parse((await runInProcess(["-C", dir, "info", "--json"], undefined, inRoot(rootB))).stdout) as {
         storage: string;
       };
       expect(info.storage).toBe(`PostgreSQL ${new URL(postgres.url).host}/postgres, instance "support"`);
@@ -180,10 +180,14 @@ registerHooks({
         ...process.env,
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(blocker).href}`,
       };
-      const plain = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello", dir], undefined, env);
+      const plain = await runInProcess(
+        ["-C", dir, "invoke", "--url", url, "--key", "the-key", "hello"],
+        undefined,
+        env,
+      );
       expect([plain.code, plain.stdout.trim()], plain.stderr).toEqual([0, "seen 1"]);
       const selected = await runInProcess(
-        ["invoke", "--url", url, "--key", "the-key", "--model", "gw/m2", "hello", dir],
+        ["-C", dir, "invoke", "--url", url, "--key", "the-key", "--model", "gw/m2", "hello"],
         undefined,
         env,
       );
@@ -201,7 +205,7 @@ registerHooks({
         fireAt: new Date(Date.now() + 3_600_000),
       });
       if (!added.ok) throw new Error(added.error);
-      const listed = await runInProcess(["schedules", "list", "--url", url, "--key", "the-key", "--json", dir]);
+      const listed = await runInProcess(["-C", dir, "schedules", "list", "--url", url, "--key", "the-key", "--json"]);
       expect(listed.code, listed.stderr).toBe(0);
       expect(JSON.parse(listed.stdout)).toEqual({
         schedules: [],
@@ -212,7 +216,7 @@ registerHooks({
 
   it("refuses a key the served instance does not hold", async () => {
     await withServedAgent(async (dir, url) => {
-      const refused = await runInProcess(["invoke", "--url", url, "--key", "not-a-key", "hello", dir]);
+      const refused = await runInProcess(["-C", dir, "invoke", "--url", url, "--key", "not-a-key", "hello"]);
       expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("unauthorized: ")]);
     });
   });
@@ -229,14 +233,14 @@ describe("cli: the agent's clock", () => {
         'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
     });
     await whileServed(dir, async () => {
-      const info = JSON.parse((await runInProcess(["info", dir, "--json"])).stdout) as {
+      const info = JSON.parse((await runInProcess(["-C", dir, "info", "--json"])).stdout) as {
         schedules: { name: string; tz: string | null; next: string | null }[];
       };
       expect(info.schedules.map((s) => [s.name, s.tz, typeof s.next])).toEqual([
         ["daily", null, "string"],
         ["weekly", "Asia/Shanghai", "string"],
       ]);
-      expect((await runInProcess(["info", dir])).stdout).toMatch(/daily \(next \S+\), weekly \(next \S+\)/);
+      expect((await runInProcess(["-C", dir, "info"])).stdout).toMatch(/daily \(next \S+\), weekly \(next \S+\)/);
     });
   });
 
@@ -259,7 +263,7 @@ describe("cli: the agent's clock", () => {
     });
     if (!added.ok) throw new Error(added.error);
 
-    const listed = await runInProcess(["schedules", "list", dir, "--json"]);
+    const listed = await runInProcess(["-C", dir, "schedules", "list", "--json"]);
     expect(listed.code, listed.stderr).toBe(0);
     const clock = JSON.parse(listed.stdout) as {
       schedules: { name: string; tz?: string; next?: string; last?: { outcome?: string } }[];
@@ -272,7 +276,7 @@ describe("cli: the agent's clock", () => {
     expect(clock.wakeups).toEqual([
       expect.objectContaining({ id: added.id, sessionId: "chat:42", prompt: "check the deploy" }),
     ]);
-    const text = await runInProcess(["schedules", "list", dir]);
+    const text = await runInProcess(["-C", dir, "schedules", "list"]);
     expect(text.stdout).toMatch(/daily {2}"0 9 \* \* \*" {2}next \S+ {2}last failed at 2026-01-01T09:00:00\.000Z/);
     expect(text.stdout).toContain(`${added.id}  ${added.fireAt}  session=chat:42  check the deploy`);
   });
@@ -281,7 +285,7 @@ describe("cli: the agent's clock", () => {
     const dir = await agentWorkspace("fa-clock-held-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
     const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"));
     try {
-      const listed = await runInProcess(["schedules", "list", dir]);
+      const listed = await runInProcess(["-C", dir, "schedules", "list"]);
       expect([listed.code, listed.stdout]).toEqual([1, ""]);
       expect(listed.stderr).toMatch(/the storage \S+agent\.sqlite is held by another process/);
     } finally {
@@ -302,9 +306,9 @@ describe("cli: the agent's clock", () => {
       })),
     );
 
-    const first = await runInProcess(["schedules", "run", "digest", dir]);
+    const first = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-    const second = await runInProcess(["schedules", "run", "digest", dir]);
+    const second = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
     expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
     expect((await clockOf(dir, (clock) => readFires(clock, "digest"))).map((fire) => fire.outcome)).toEqual([
       "interrupted",
@@ -323,9 +327,9 @@ describe("cli: the agent's clock", () => {
     );
     if (!added.ok) throw new Error(added.error);
     await whileServed(dir, async () => {
-      const fired = await runInProcess(["schedules", "run", "digest", dir]);
+      const fired = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
       expect([fired.code, fired.stdout.trim()], fired.stderr).toEqual([0, "seen 1"]);
-      const clock = JSON.parse((await runInProcess(["schedules", "list", dir, "--json"])).stdout) as {
+      const clock = JSON.parse((await runInProcess(["-C", dir, "schedules", "list", "--json"])).stdout) as {
         schedules: { name: string; last?: { outcome?: string } }[];
         wakeups: { id: string }[];
       };
@@ -333,14 +337,14 @@ describe("cli: the agent's clock", () => {
         expect.objectContaining({ name: "digest", last: expect.objectContaining({ outcome: "completed" }) }),
       ]);
       expect(clock.wakeups.map(({ id }) => id)).toEqual([added.id]);
-      const unwoken = await runInProcess(["schedules", "unwake", added.id, dir]);
+      const unwoken = await runInProcess(["-C", dir, "schedules", "unwake", added.id]);
       expect([unwoken.code, unwoken.stdout], unwoken.stderr).toEqual([0, expect.stringContaining(added.id)]);
-      const gone = await runInProcess(["schedules", "unwake", added.id, dir]);
+      const gone = await runInProcess(["-C", dir, "schedules", "unwake", added.id]);
       expect([gone.code, gone.stderr]).toEqual([
         1,
         expect.stringContaining(`not_found: no pending wake-up ${added.id}`),
       ]);
-      const refused = await runInProcess(["schedules", "run", "digest", dir, "--model", "faux/m"]);
+      const refused = await runInProcess(["-C", dir, "schedules", "run", "digest", "--model", "faux/m"]);
       expect([refused.code, refused.stderr]).toEqual([2, expect.stringContaining("drop --model")]);
     });
   });
@@ -351,7 +355,7 @@ describe("cli: dev", () => {
     const dir = await agentWorkspace("fa-cli-dev-");
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL;
-    const refused = await runInProcess(["dev", dir, "--no-input"], undefined, env);
+    const refused = await runInProcess(["-C", dir, "dev", "--no-input"], undefined, env);
     expect(refused.code).toBe(2);
     expect(refused.stderr).toMatch(/missing model/);
   });

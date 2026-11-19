@@ -21,7 +21,7 @@ describe("cli: info", () => {
         'export default { name: "lookup", description: "Lookup", parameters: { type: "object" }, async execute() { return {}; } };\n',
     });
     await writeFile(join(dir, "AGENTS.md"), "You are terse.\n");
-    const { code, stdout } = await runInProcess(["info", dir, "--json"], undefined, withoutModel());
+    const { code, stdout } = await runInProcess(["-C", dir, "info", "--json"], undefined, withoutModel());
     expect(code).toBe(0); // an unset model is reported, not fatal
     const info = JSON.parse(stdout);
     expect(info.model).toBeNull();
@@ -38,14 +38,14 @@ describe("cli: info", () => {
     const dir = await agentWorkspace("fa-info-defaults-", {
       "fastagent.config.ts": 'export default { defaults: { model: "openai/gpt-5.5" } };\n',
     });
-    const refused = await runInProcess(["info", dir], undefined, withoutModel());
+    const refused = await runInProcess(["-C", dir, "info"], undefined, withoutModel());
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/fastagent\.config\.ts: unknown key "defaults": its keys are top-level now/);
     // The top-level shape is the one read.
     const flat = await agentWorkspace("fa-info-flat-", {
       "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
     });
-    const read = await runInProcess(["info", flat, "--json"], undefined, withoutModel());
+    const read = await runInProcess(["-C", flat, "info", "--json"], undefined, withoutModel());
     expect(read.code, read.stderr).toBe(0);
     expect(JSON.parse(read.stdout).model).toBe("openai/gpt-5.5");
   });
@@ -55,7 +55,7 @@ describe("cli: info", () => {
     const missing = await agentWorkspace("fa-info-toolfail-", {
       "src/tools/broken.ts": 'import "totally-not-a-real-package-xyz";\nexport default {};\n',
     });
-    const failed = await runInProcess(["info", missing], undefined, withoutModel());
+    const failed = await runInProcess(["-C", missing, "info"], undefined, withoutModel());
     expect(failed.code).toBe(1);
     expect(failed.stderr).toMatch(/totally-not-a-real-package-xyz/);
     expect(failed.stderr).not.toMatch(/\n\s+at /); // a refusal, not a stack
@@ -64,7 +64,7 @@ describe("cli: info", () => {
     const badCron = await agentWorkspace("fa-info-schedfail-", {
       "src/schedules/bad.ts": 'export default { kind: "fastagent.schedule", cron: "not a cron", prompt: "x" };\n',
     });
-    const refused = await runInProcess(["info", badCron], undefined, withoutModel());
+    const refused = await runInProcess(["-C", badCron, "info"], undefined, withoutModel());
     expect(refused.code).toBe(1);
     expect(refused.stderr).toMatch(/src\/schedules\/bad\.ts/);
   });

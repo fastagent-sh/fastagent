@@ -11,7 +11,7 @@ const scratch = () => mkdtemp(join(tmpdir(), "fa-instance-"));
 describe("info reports where the instance is", () => {
   const where = async (args: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env) => {
     const dir = await agentWorkspace("fa-instance-info-");
-    const result = await runInProcess(["info", dir, "--json", ...args], cwd, env);
+    const result = await runInProcess(["-C", dir, "info", "--json", ...args], cwd, env);
     expect(result.code, result.stderr).toBe(0);
     const { workdir, stateRoot } = JSON.parse(result.stdout) as { workdir: string; stateRoot: string };
     return { dir, workdir, stateRoot };
