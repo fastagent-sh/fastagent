@@ -4,7 +4,7 @@
  * filters by substring. `--refresh` asks the network for the lists even when the kept ones are fresh.
  */
 import { definedValues } from "../../declared-secrets.ts";
-import { InMemoryCredentialStore, type Provider } from "@earendil-works/pi-ai";
+import type { Provider } from "@earendil-works/pi-ai";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { listModels, providerOf } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
@@ -28,12 +28,10 @@ export async function runModels(
     installProxyFetch();
   }
   // Outside an agent, no credentials file is read: the built-ins' lists need none.
-  const environment = await modelEnvironment(
-    agentDir,
-    agentDir ? {} : { credentialStore: new InMemoryCredentialStore() },
-    providers,
-    { force: opts.refresh === true, environment: definedValues(process.env) },
-  );
+  const environment = await modelEnvironment(agentDir, agentDir ? {} : { authPath: null }, providers, {
+    force: opts.refresh === true,
+    environment: definedValues(process.env),
+  });
   const { lines, error } = formatModelsCommand(listModels(environment.models), search);
   if (opts.json) {
     const models = lines.map((spec) => {

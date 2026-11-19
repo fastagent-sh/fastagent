@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
-import { assertOneCredentialSource, fastagentCredentialStore } from "./credentials.ts";
+import { fastagentCredentialStore } from "./credentials.ts";
 import { UNNAMED_AUTH_SOURCE, interactiveAuth, loginProviders, modelsOver, probeApiKey } from "./models.ts";
 
 export type SignInMethod = Credential["type"];
@@ -148,28 +148,15 @@ export function loginStatusText(option: SignInOption): string {
 }
 
 export type LoginRequest = {
-  /**
-   * Stable installation identity (Sign in with ChatGPT requires one). With `authPath` it defaults to `device.json`
-   * beside that file, written before the flow runs; over a caller's `credentialStore` there is no file to keep it
-   * beside, so a flow that needs one fails unless this supplies it.
-   */
+  /** Stable installation identity (Sign in with ChatGPT requires one); defaults to `device.json` beside `authPath`. */
   getDeviceId?: () => string;
   provider: string;
   method: SignInMethod;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
   interaction: AuthInteraction;
-} & (
-  | {
-      /** The credentials file the sign-in is written to. */
-      authPath: string;
-      credentialStore?: never;
-    }
-  | {
-      /** The caller's own store the sign-in is written to, in place of any file. */
-      credentialStore: CredentialStore;
-      authPath?: never;
-    }
-);
+  /** The credentials file the sign-in is written to. */
+  authPath: string;
+};
 
 /** Combine present abort signals into one (no-op when none/one). */
 function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -211,10 +198,6 @@ export interface LoginInternals {
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<SignInResult> {
   const { providers, verifyWith } = internals;
   const { method, interaction } = request;
-  assertOneCredentialSource(request);
-  if (request.credentialStore === undefined && typeof request.authPath !== "string") {
-    throw new Error("login needs authPath or credentialStore: where the sign-in is written");
-  }
   const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
   const auth = interactiveAuth(provider, method);
@@ -225,12 +208,12 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   // Only a key needs the registry: it is checked with one request before it is kept.
   const models: Models | undefined =
     method === "api_key" ? modelsOver(trial, providers, undefined, definedValues(process.env)) : undefined;
-  const store = request.credentialStore ?? fastagentCredentialStore(request.authPath);
+  const store = fastagentCredentialStore(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
   let getDeviceId = request.getDeviceId;
-  if (method === "oauth" && !getDeviceId && request.authPath !== undefined) {
+  if (method === "oauth" && !getDeviceId) {
     const deviceId = await deviceIdBeside(request.authPath);
     getDeviceId = () => deviceId;
   }

@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { InMemoryCredentialStore, fauxAssistantMessage, type fauxProvider } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, type fauxProvider } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openAgent, openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
@@ -35,7 +35,7 @@ describe("two agents in one process", () => {
           ownEnv: process.env,
           runsAs: NOT_HOSTED,
           storage: "memory",
-          credentialStore: new InMemoryCredentialStore(),
+          authPath: null,
         }),
       );
     }
