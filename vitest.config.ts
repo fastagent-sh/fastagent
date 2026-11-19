@@ -18,6 +18,8 @@ export default defineConfig({
       { find: /^@fastagent-sh\/client$/, replacement: `${source("client")}/index.ts` },
       { find: /^@fastagent-sh\/fastagent\/(.+)$/, replacement: `${source("fastagent")}/$1.ts` },
       { find: /^@fastagent-sh\/fastagent$/, replacement: `${source("fastagent")}/index.ts` },
+      { find: /^@fastagent-sh\/agentcore\/(.+)$/, replacement: `${source("agentcore")}/$1.ts` },
+      { find: /^@fastagent-sh\/agentcore$/, replacement: `${source("agentcore")}/index.ts` },
     ],
   },
   test: {

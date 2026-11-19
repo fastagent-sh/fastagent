@@ -25,7 +25,7 @@ const echoRaw = async (req: Request) => new Response(`raw=[${await req.text()}]`
 /** Two paths and a 404 under them, as a served agent answers its own. */
 const routes: Handler = (req) => {
   const path = new URL(req.url).pathname;
-  if (path === "/telegram" && req.method === "POST") return echoRaw(req);
+  if (path === "/webhook" && req.method === "POST") return echoRaw(req);
   if (path === "/health") return new Response("ok");
   return new Response("not found\n", { status: 404 });
 };
@@ -61,8 +61,7 @@ const post = (url: string, body: string) =>
 
 describe("embedding: Express", () => {
   it("mounts the whole route table under a prefix, on the app's own server", async () => {
-    // The other half of the promise: not "a handler", but every channel the agent declares —
-    // one server, one port, the prefix chosen by the embedder.
+    // One server, one port, every route under the prefix chosen by the embedder.
     const app = express();
     const seen: string[] = [];
     app.use((req, _res, next) => {
@@ -76,12 +75,12 @@ describe("embedding: Express", () => {
 
     const base = await listen(app);
     expect(await (await fetch(`${base}/mine`)).text()).toBe("the app's own route");
-    expect(await (await post(`${base}/agent/telegram`, "hi")).text()).toBe("raw=[hi]");
+    expect(await (await post(`${base}/agent/webhook`, "hi")).text()).toBe("raw=[hi]");
     expect(await (await fetch(`${base}/agent/health`)).text()).toBe("ok");
     // Unknown paths under the prefix are OURS to answer, and must not leak into the app's routing.
     expect((await fetch(`${base}/agent/nope`)).status).toBe(404);
     // The embedder's middleware still runs for fastagent's routes — mounting must not opt out of it.
-    expect(seen).toContain("POST /agent/telegram");
+    expect(seen).toContain("POST /agent/webhook");
   });
 
   it("mount-before-parser is the documented order: the agent gets the raw body, the app its parsed one", async () => {
@@ -126,7 +125,7 @@ describe("embedding: Fastify", () => {
     await app.listen({ port: 0, host: "127.0.0.1" });
     started.push(() => app.close());
     const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
-    expect(await (await post(`${base}/agent/telegram`, '{"a":1}')).text()).toBe('raw=[{"a":1}]');
+    expect(await (await post(`${base}/agent/webhook`, '{"a":1}')).text()).toBe('raw=[{"a":1}]');
     expect(await (await fetch(`${base}/agent/health`)).text()).toBe("ok");
   });
 });

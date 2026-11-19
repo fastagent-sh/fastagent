@@ -18,7 +18,9 @@
       "@fastagent-sh/client": ["./packages/client/src/index.ts"],
       "@fastagent-sh/client/*": ["./packages/client/src/*.ts"],
       "@fastagent-sh/fastagent": ["./packages/fastagent/src/index.ts"],
-      "@fastagent-sh/fastagent/*": ["./packages/fastagent/src/*.ts"]
+      "@fastagent-sh/fastagent/*": ["./packages/fastagent/src/*.ts"],
+      "@fastagent-sh/agentcore": ["./packages/agentcore/src/index.ts"],
+      "@fastagent-sh/agentcore/*": ["./packages/agentcore/src/*.ts"]
     }
   },
   "include": ["packages/*/src", "test"],

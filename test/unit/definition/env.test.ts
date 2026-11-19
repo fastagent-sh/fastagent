@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyEnvValues } from "../../../packages/fastagent/src/env.ts";
 import { dotEnvPath, loadEnvValues } from "../../../packages/fastagent/src/value-file.ts";
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe("dotEnvPath (follows the resolved secrets dir)", () => {
   it("is <root>/.secrets/.env, and <root>/.secrets/production/.env for production", () => {
@@ -26,26 +28,31 @@ describe("loadEnvValues + applyEnvValues", () => {
 
   it("parses KEY=VALUE: comments/blanks skipped, quotes stripped, first-= split, env-wins, last-wins", async () => {
     const key = `A_${Date.now()}`;
-    const file = await write(`# a comment\n\n${key}_PLAIN=value\n${key}_DQ="quoted spaces"\n${key}_SQ='single'\n`);
-    loadEnvFile(file);
-    expect(process.env[`${key}_PLAIN`]).toBe("value");
-    expect(process.env[`${key}_DQ`]).toBe("quoted spaces"); // surrounding quotes stripped, inner space kept
-    expect(process.env[`${key}_SQ`]).toBe("single");
-
-    // Only the FIRST `=` splits, so a value carrying `=` or `:` survives intact.
     const b = `B_${Date.now()}`;
-    loadEnvFile(await write(`${b}=7676:AA=bb-cc_dd\n`));
-    expect(process.env[b]).toBe("7676:AA=bb-cc_dd");
-
-    // A real env var wins over the file…
     const c = `C_${Date.now()}`;
-    process.env[c] = "from_real_env";
-    loadEnvFile(await write(`${c}=from_file\n`));
-    expect(process.env[c]).toBe("from_real_env");
-
-    // …and within the file, the LAST occurrence wins.
     const d = `D_${Date.now()}`;
-    loadEnvFile(await write(`${d}=first\n${d}=second\n`));
-    expect(process.env[d]).toBe("second");
+    const created = [`${key}_PLAIN`, `${key}_DQ`, `${key}_SQ`, b, c, d];
+    try {
+      const file = await write(`# a comment\n\n${key}_PLAIN=value\n${key}_DQ="quoted spaces"\n${key}_SQ='single'\n`);
+      loadEnvFile(file);
+      expect(process.env[`${key}_PLAIN`]).toBe("value");
+      expect(process.env[`${key}_DQ`]).toBe("quoted spaces"); // surrounding quotes stripped, inner space kept
+      expect(process.env[`${key}_SQ`]).toBe("single");
+
+      // Only the FIRST `=` splits, so a value carrying `=` or `:` survives intact.
+      loadEnvFile(await write(`${b}=7676:AA=bb-cc_dd\n`));
+      expect(process.env[b]).toBe("7676:AA=bb-cc_dd");
+
+      // A real env var wins over the file…
+      vi.stubEnv(c, "from_real_env");
+      loadEnvFile(await write(`${c}=from_file\n`));
+      expect(process.env[c]).toBe("from_real_env");
+
+      // …and within the file, the LAST occurrence wins.
+      loadEnvFile(await write(`${d}=first\n${d}=second\n`));
+      expect(process.env[d]).toBe("second");
+    } finally {
+      for (const name of created) delete process.env[name];
+    }
   });
 });

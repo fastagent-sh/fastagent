@@ -8,9 +8,9 @@ test/
 ├── doubles/      # Shared test doubles
 ├── harnesses/    # Multi-suite conformance and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
-├── unit/         # [L1] domain suites: agent-api, definition, cli, deploy, schedules, embedding, security, storage, traces
+├── unit/         # [L1] domain suites: agent-api, agentcore, cli, definition, deploy, embedding, schedules, security, storage, traces
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
-└── smoke/        # [L3, CI-only] e2e/packed.ts
+└── smoke/        # [L3] CI packed E2E (`e2e/packed.ts`) and manual live AWS scripts (`agentcore/live.ts`, `dsql/live.ts`)
 ```
 
 ## Canonical Doubles & Harnesses

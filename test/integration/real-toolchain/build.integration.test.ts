@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildProject } from "../../../packages/fastagent/src/harnesses/pi-durable/build.ts";
 import { buildDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
-import { made, project, FILES, listing } from "./build-fixtures.ts";
+import { made, project, FILES, listing } from "../../fixtures/build-fixtures.ts";
 
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });

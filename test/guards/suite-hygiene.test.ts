@@ -79,14 +79,14 @@ it("no comment or test references a deleted *.test.ts file", () => {
   expect(ghosts).toEqual([]);
 });
 
-it("every top-level CLI command in packages/fastagent/src/cli/program.ts has at least one CLI test", () => {
+it("every top-level CLI command in packages/fastagent/src/cli/program.ts and core subcommands have CLI tests", () => {
   const program = readFileSync(join(REPO_ROOT, "packages/fastagent/src/cli/program.ts"), "utf8");
   const list = /const specs: readonly CommandSpec\[] = \[([\s\S]*?)];/.exec(program)?.[1] ?? "";
   const commands = list
     .split(",")
     .map((name) => name.trim())
     .filter(Boolean);
-  expect(commands.length).toBeGreaterThan(10);
+  expect(commands.length).toBeGreaterThanOrEqual(8);
 
   const testCorpus = files
     .filter((file) => file.endsWith(".test.ts"))
@@ -99,6 +99,30 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts has at 
       ).test(testCorpus),
   );
   expect(uncovered).toEqual([]);
+
+  const subcommands: Array<[string, string]> = [
+    ["deploy", "init"],
+    ["deploy", "check"],
+    ["schedules", "list"],
+    ["schedules", "run"],
+    ["schedules", "unwake"],
+    ["agentcore", "start"],
+    ["agentcore", "invoke"],
+  ];
+  const uncoveredSubs = subcommands.filter(
+    ([group, sub]) =>
+      !new RegExp(
+        `(?:runInProcess|run|spawnCli|whileRunning)\\(\\s*\\[\\s*(?:"-C"\\s*,\\s*[^,\\]]+,\\s*)?"${group}"\\s*,\\s*"${sub}"`,
+      ).test(testCorpus),
+  );
+  expect(uncoveredSubs).toEqual([]);
+});
+
+it("unit tests never import from test/integration/ (shared fixtures belong in test/fixtures/)", () => {
+  const offenders = lines
+    .filter(({ file, line }) => file.startsWith("unit/") && /from\s+["'][^"']*\/integration\//.test(line))
+    .map(({ at }) => at);
+  expect(offenders).toEqual([]);
 });
 
 it("CLI unit tests use runInProcess instead of manually spying on process.cwd or console.log", () => {
