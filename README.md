@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://fastagent.sh"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — Vibe first. Then FastAgent. An agent directory becomes a live service in your app, in Telegram, in Slack, or any channel." width="860"></a>
+  <a href="https://fastagent.sh"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — Vibe first. Then FastAgent. Turn a local agent directory into a durable service in your app or behind the Agent API." width="860"></a>
 </p>
 
 [![CI](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml/badge.svg)](https://github.com/fastagent-sh/fastagent/actions/workflows/ci.yml)
@@ -21,7 +21,7 @@ over HTTP through its Agent API, or on a schedule, and no message is lost across
 There is no new framework to learn.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy init prepares the container it runs in." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="FastAgent workflow: author an agent directory, serve it locally with fastagent dev, invoke it over the Agent API, and prepare a portable container with fastagent deploy init." width="860">
 </p>
 
 ## Get started
@@ -64,6 +64,14 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 
 Your app keeps its auth, database and routes. See [Embedding](https://fastagent.sh/docs/embedding/).
 
+## Packages
+
+| Package | Role |
+|---|---|
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | The durable runtime, Agent API server, `openAgent` embedding, and the `fastagent` CLI |
+| [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | The Agent API client: `connectAgent` (HTTP, zero Node deps) and `@fastagent-sh/client/agentcore` |
+| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore runtime, Aurora DSQL, Secrets Manager, EventBridge alarms, and CDK construct |
+
 ## Documentation
 
 Everything is at **[fastagent.sh/docs](https://fastagent.sh/docs/)**. Start with the
@@ -83,7 +91,7 @@ change. Changes are in the [releases](https://github.com/fastagent-sh/fastagent/
 
 Built on **[pi](https://github.com/earendil-works/pi)** (pi-durable's durable agent loop, pi-ai's model API), with
 [Effect](https://github.com/Effect-TS/effect), [undici](https://github.com/nodejs/undici),
-[chokidar](https://github.com/paulmillr/chokidar), [giget](https://github.com/unjs/giget),
+[chokidar](https://github.com/paulmillr/chokidar), [node-postgres](https://node-postgres.com),
 [@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore) and
 [croner](https://github.com/Hexagon/croner). The scaffolded `writing-great-skills` skill is vendored from
 [mattpocock/skills](https://github.com/mattpocock/skills), with its license.
