@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, info, models, login, logout, dev, invoke, build, start, schedules and docker, with their flags, and the commands an extension adds."
+description: "The fastagent CLI reference: init, login, logout, dev, invoke, info, models, schedules, build, start and deploy, with their flags, and the commands an extension adds."
 status: current
 ---
 
@@ -29,20 +29,22 @@ subdirectory, a command names the agent's root and stops.
 | Command | Does |
 |---|---|
 | `init <dir>` | create an agent |
-| `info` | show what the agent loads, without serving |
-| `dev` | serve locally, restarting on code edits |
-| `invoke <message>` | send one message and print the answer (`--url` for a deployment) |
-| `build` | compile the agent into `dist/` |
-| `start` | serve the build |
-| `models [search]` | list model specs |
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
+| `dev` | serve locally, restarting on code edits |
+| `invoke <message>` | send one message and print the answer (`--url` for a deployment) |
+| `info` | show what the agent loads, without serving |
+| `models [search]` | list model specs |
 | `schedules list\|run\|unwake` | the schedules' next and last runs and the pending wake-ups; fire a schedule now; cancel a wake-up |
-| `docker init` | write the `Dockerfile` and `.dockerignore`, and print how to build and run them ([Deploy](deploy.md)) |
+| `build` | compile the agent into `dist/` |
+| `start` | serve the build |
+| `deploy init <target>` | write container and platform files (`docker`, `compose`, `fly`, `railway`, or an installed extension such as `agentcore`) ([Deploy](deploy.md)) |
+| `deploy check` | verify the definition loads and the build context leaks no local secrets or state (`--json`) |
 
-An extension the agent installs adds a command of its own: `npm i @fastagent-sh/agentcore` in the agent adds
-`fastagent agentcore` ([AgentCore](agentcore.md)). Every argument after its name is the extension's, and
-`fastagent <name> --help` is its own. A command no installed extension adds exits 2, naming the package to install.
+An extension the agent installs adds a `deploy init <target>` target and commands of its own:
+`npm i @fastagent-sh/agentcore` adds `fastagent deploy init agentcore` and `fastagent agentcore`
+([AgentCore](agentcore.md)). Every argument after its name is the extension's, and `fastagent <name> --help` is its
+own. A command or deploy target no installed extension adds exits 2, naming the package to install.
 
 ## Global options
 
@@ -55,8 +57,8 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 | `-C <dir>` | before any command | Run as if `fastagent` was started in `<dir>` (including version forwarding, extensions, `login`, `models`). |
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
-| `--model <provider/modelId>` | assembly commands (not `docker init`) | Model for this run. `docker init` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `login`, `schedules list` | Machine-readable output. |
+| `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
+| `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `build`, `deploy check` | Machine-readable output. |
 | `--url <base>`, `--key <key>` | `invoke`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. |
 
 ## Exit codes

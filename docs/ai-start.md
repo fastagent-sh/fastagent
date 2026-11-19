@@ -235,12 +235,12 @@ keeps auth, users and data. One instance is one trust domain: give users who mus
 Choose the host and its cost with the owner, and read [Deploy](deploy.md) before creating anything.
 
 ```bash
-fastagent docker init        # writes Dockerfile + .dockerignore, prints the docker build and run commands
+fastagent deploy init docker  # or compose, fly, railway, agentcore
 ```
 
 The owner keeps the values (the model's API key, `FASTAGENT_API_KEY`) in a file of their own and
-passes it to the container: never in this conversation. If `docker init` stops, fix the cause it names and run it
-again ([Troubleshooting](troubleshooting.md#docker-init-stopped-or-the-container-does-not-start)). Then check the
+passes it to the container: never in this conversation. If `deploy init` stops, fix the cause it names and run it
+again ([Troubleshooting](troubleshooting.md#deploy-init-stopped-or-the-container-does-not-start)). Then check the
 deployment:
 
 ```bash

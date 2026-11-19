@@ -16,8 +16,8 @@ one after its timeout, and the next request opens the instance where it left off
 In the agent directory:
 
 ```bash
-npm i @fastagent-sh/agentcore       # adds `fastagent agentcore`
-fastagent agentcore init
+npm i @fastagent-sh/agentcore       # adds the `agentcore` target and runtime
+fastagent deploy init agentcore
 ```
 
 `init` writes, for you to commit:

@@ -10,7 +10,7 @@ vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/gi
 const warnings = async (agentDir: string) => {
   const checked = await checkContainer({ agentDir, force: false, target: DOCKER_TARGET });
   if (!checked.ok) throw new Error(checked.gate);
-  return checked.messages.filter((m) => m.level === "warn").map((m) => m.text);
+  return checked.messages.filter((m) => m.level === "warn" || m.level === "leak").map((m) => m.text);
 };
 
 describe("deploy/preflight: what the container is checked for", () => {

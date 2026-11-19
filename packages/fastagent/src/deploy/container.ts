@@ -30,7 +30,7 @@ export function isGeneratedDockerignore(content: string): boolean {
 
 /** What a platform makes of the portable container. */
 export interface ContainerTarget {
-  /** The command that writes the files, named in their first line: `fastagent docker init`. */
+  /** The command that writes the files, named in their first line: `fastagent deploy init docker`. */
   writtenBy: string;
   /** What the image runs, in the agent directory at {@link IMAGE_APP_DIR}. */
   command: readonly string[];
@@ -39,15 +39,18 @@ export interface ContainerTarget {
    * container, one instance), or a database the platform gives it, so the container holds nothing that must survive.
    */
   storage: "volume" | "database";
+  /** The HTTP port the image listens on (`EXPOSE <port>`), so container platforms detect it without guessing. */
+  port?: number;
   /** What else the image leaves out: the platform's own project files. */
   ignore?: readonly string[];
 }
 
-/** `docker init`'s: `fastagent start` on a volume. */
+/** Standard container target: `fastagent start` on a volume, listening on port 8787. */
 export const DOCKER_TARGET: ContainerTarget = {
-  writtenBy: "fastagent docker init",
+  writtenBy: "fastagent deploy init docker",
   command: ["./node_modules/.bin/fastagent", "start"],
   storage: "volume",
+  port: 8787,
 };
 
 export interface ContainerInput {
@@ -111,12 +114,13 @@ ${deployment}`;
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent); fall back to `npm
   // install` when there is none so the build never breaks.
   const install = input.hasLockfile ? "npm ci" : "npm install";
+  const expose = target.port === undefined ? "" : `EXPOSE ${target.port}\n`;
   return `${head}COPY package.json package-lock.json* *.tgz ./
 RUN ${install}
 COPY . .
 ${BUILD_STEP_NOTE}
 RUN ./node_modules/.bin/fastagent build
-CMD [${target.command.map((part) => JSON.stringify(part)).join(", ")}]
+${expose}CMD [${target.command.map((part) => JSON.stringify(part)).join(", ")}]
 `;
 }
 

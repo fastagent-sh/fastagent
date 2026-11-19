@@ -1,5 +1,5 @@
 /**
- * The AgentCore project `fastagent agentcore init` writes into the agent directory, for the AgentCore CLI to deploy:
+ * The AgentCore project `fastagent deploy init agentcore` writes into the agent directory, for the AgentCore CLI to deploy:
  * `agentcore/agentcore.json` with one runtime built from the agent directory's Dockerfile, and the CDK app that
  * `agentcore deploy` synthesizes, its stack adding {@link FastAgentResources}. The CDK app is the AgentCore CLI's own, as
  * `agentcore create` writes it in {@link AGENTCORE_CLI}, so the CLI of that version deploys it.

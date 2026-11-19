@@ -21,7 +21,7 @@ over HTTP through its Agent API, or on a schedule, and no message is lost across
 There is no new framework to learn.
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent docker init writes the container it runs in." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="Three acts in one terminal: a coding agent vibes a support agent into a directory; fastagent dev serves it live, answering a Telegram message and a Slack mention and firing a daily schedule; fastagent deploy init prepares the container it runs in." width="860">
 </p>
 
 ## Get started
@@ -43,7 +43,7 @@ The agent depends on its own version of FastAgent, and a `fastagent` installed g
 Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
 `npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
 
-Then run it in a container (`fastagent docker init`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
+Then prepare it for Docker, Compose, Fly.io, Railway, or AWS AgentCore (`fastagent deploy init <target>`). The [quickstart](https://fastagent.sh/docs/quickstart/) walks through it.
 
 ## Embed it in your app
 
