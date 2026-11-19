@@ -19,6 +19,7 @@ import {
   SchedulerClient,
   UpdateScheduleCommand,
 } from "@aws-sdk/client-scheduler";
+import { SESSION_ID_PATTERN } from "@fastagent-sh/client/agentcore/contract";
 import type { AgentDefinition, PostgresDatabase } from "@fastagent-sh/fastagent";
 import {
   Unavailable,
@@ -26,7 +27,7 @@ import {
   earliestScheduleRun,
   listDatabaseInstances,
 } from "@fastagent-sh/fastagent/platform";
-import { DEPLOY_SCHEDULE_NAME, SESSION_ID_PATTERN } from "./variables.ts";
+import { DEPLOY_SCHEDULE_NAME } from "./variables.ts";
 
 const REARM_CONCURRENCY = 16;
 

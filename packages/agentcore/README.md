@@ -9,10 +9,10 @@ fastagent agentcore init             # the container and the AgentCore project
 npx -y @aws/agentcore@1.0.3 deploy   # here or in CI
 ```
 
-From a backend:
+From a backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):
 
 ```ts
-import { connectAgentCore } from "@fastagent-sh/agentcore/client";
+import { connectAgentCore } from "@fastagent-sh/client/agentcore";
 
 const agent = connectAgentCore({ runtimeArn, sessionId: sessionOf(user) });
 const session = await agent.sessions.create();

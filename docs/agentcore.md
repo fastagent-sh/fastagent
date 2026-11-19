@@ -118,8 +118,10 @@ environment variables: it answers on port 8080 as it does on AgentCore.
 
 ## 4. Call it
 
+In your backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):
+
 ```ts
-import { connectAgentCore } from "@fastagent-sh/agentcore/client";
+import { connectAgentCore } from "@fastagent-sh/client/agentcore";
 
 const agent = connectAgentCore({
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
@@ -129,10 +131,11 @@ const session = await agent.sessions.create();
 const message = await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 120 });
 ```
 
-`agent` is the [Agent API](agent-api.md), as `connectAgent` gives it. `@fastagent-sh/agentcore/client` loads no
-runtime: a backend needs only it and AWS credentials that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime.
-Each request is one invocation of the session; an answer streams as it is written. `qualifier` picks a runtime
-endpoint (`prod`), and with it the version that answers.
+`agent` is the [Agent API](agent-api.md), as `connectAgent` gives it, and `@fastagent-sh/client/agentcore` re-exports
+`AgentError` and `connectAgent` so the same backend talks to `fastagent dev` locally and to AgentCore in production. It
+loads no runtime: a backend needs only `@fastagent-sh/client`, `@aws-sdk/client-bedrock-agentcore`, and AWS credentials
+that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime. Each request is one invocation of the session; an answer
+streams as it is written. `qualifier` picks a runtime endpoint (`prod`), and with it the version that answers.
 
 - **The session id is the instance.** Keep the mapping from your users to session ids. Through the Agent API, a
   session id reaches only its own instance, and each runs in a microVM of its own: its files and processes are apart

@@ -1,7 +1,11 @@
 /**
- * An agent on AgentCore, from wherever the AWS SDK runs: the Agent API, as `connectAgent` gives it, each request one
- * `InvokeAgentRuntime` on the session (signed with the SDK's credentials), wrapped as the runtime unwraps it
- * (`envelope.ts`). AgentCore's refusals of an invocation it did not deliver come back as the Agent API's.
+ * An agent on Amazon Bedrock AgentCore, from wherever the AWS SDK runs: the Agent API, as `connectAgent` gives it,
+ * each request one `InvokeAgentRuntime` on the session (signed with the SDK's credentials), wrapped as the runtime
+ * unwraps it (`agentcore/contract.ts`). AgentCore's refusals of an invocation it did not deliver come back as the
+ * Agent API's.
+ *
+ * Install `@aws-sdk/client-bedrock-agentcore` alongside `@fastagent-sh/client` when importing this subpath; the root
+ * `@fastagent-sh/client` entry loads no AWS package.
  */
 import {
   BedrockAgentCoreClient,
@@ -9,12 +13,57 @@ import {
   InvokeAgentRuntimeCommand,
   type InvokeAgentRuntimeCommandOutput,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { type Agent, connectAgent } from "@fastagent-sh/client";
-import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
-import { statusOf } from "@fastagent-sh/client/http/contract";
-import { type EnvelopedResponse, envelopeRequest, isEventStream, unwrapResponse } from "./envelope.ts";
-import { SESSION_ID_PATTERN } from "./variables.ts";
+import { type Agent, type ErrorCode, agentError, errorData } from "./agent-api.ts";
+import {
+  type EnvelopedResponse,
+  SESSION_ID_PATTERN,
+  envelopeRequest,
+  isEventStream,
+  unwrapResponse,
+} from "./agentcore/contract.ts";
+import { connectAgent } from "./http/client.ts";
+import { statusOf } from "./http/contract.ts";
 
+/** @public */
+export type {
+  Agent,
+  AgentErrorData,
+  AgentInfo,
+  CompactOptions,
+  ContentPart,
+  CreateSessionOptions,
+  EntriesOptions,
+  Entry,
+  ErrorCode,
+  Json,
+  ListOptions,
+  Message,
+  MessageKey,
+  MessageStatus,
+  MessageStreamEvent,
+  Metadata,
+  ModelRef,
+  Page,
+  ScheduleRun,
+  ScheduleState,
+  SendRequest,
+  Session,
+  SessionChanges,
+  SessionEvent,
+  SessionSettings,
+  SessionStatus,
+  ThinkingLevel,
+  Tokens,
+  Usage,
+  WaitOptions,
+  Wakeup,
+} from "./agent-api.ts";
+/** @public */
+export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
+/** @public */
+export { type ConnectOptions, connectAgent } from "./http/client.ts";
+
+/** @public */
 export interface AgentCoreConnection {
   /** The runtime: `arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>`. */
   runtimeArn: string;
@@ -59,7 +108,10 @@ const clientIn = (region: string): BedrockAgentCoreClient => {
   return client;
 };
 
-/** The Agent of the session `sessionId` on the runtime `runtimeArn`. */
+/**
+ * The Agent of the session `sessionId` on the runtime `runtimeArn`.
+ * @public
+ */
 export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCoreConnection): Agent {
   const region = RUNTIME_ARN.exec(runtimeArn)?.[1];
   if (region === undefined) {
@@ -111,7 +163,7 @@ export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCore
     const answer = JSON.parse(await invoked.response.transformToString()) as { response?: EnvelopedResponse };
     if (answer.response === undefined)
       throw new Error(
-        "the runtime answered what is not an Agent API answer: does it serve `fastagent agentcore serve`?",
+        "the runtime answered what is not an Agent API answer: does it serve `fastagent agentcore start`?",
       );
     return unwrapResponse(answer.response);
   };

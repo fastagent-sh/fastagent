@@ -1,6 +1,6 @@
 /**
  * An agent on a live AgentCore runtime, called as a Caller calls it (`connectAgentCore`, this machine's AWS
- * credentials): what no test on this machine can show. The runtime serves `fastagent agentcore serve` with its instances in
+ * credentials): what no test on this machine can show. The runtime serves `fastagent agentcore start` with its instances in
  * Aurora DSQL, and was made with a short idle timeout. A session answers through invocations, streams, keeps a refusal's
  * code, goes on after AgentCore reclaims its microVM (the conversation is in the database, not the microVM), and keeps
  * to itself. Outside the test suite, which leaves no test a way off the machine: run by hand when the
@@ -9,7 +9,7 @@
  *   node --conditions=@fastagent-sh/source test/smoke/agentcore/live.ts <runtime ARN> <idle timeout seconds>
  */
 import assert from "node:assert/strict";
-import { connectAgentCore } from "../../../packages/agentcore/src/client.ts";
+import { connectAgentCore } from "@fastagent-sh/client/agentcore";
 
 const [runtimeArn, idle] = process.argv.slice(2);
 if (runtimeArn === undefined || idle === undefined) {

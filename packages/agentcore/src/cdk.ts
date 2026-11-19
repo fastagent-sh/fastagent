@@ -11,6 +11,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { SESSION_ID_PATTERN } from "@fastagent-sh/client/agentcore/contract";
 import type { ScheduleFact } from "@fastagent-sh/fastagent/platform";
 import { Names, RemovalPolicy, Stack } from "aws-cdk-lib";
 import { CfnCluster } from "aws-cdk-lib/aws-dsql";
@@ -26,7 +27,6 @@ import {
   DEPLOY_SESSION_ID,
   DSQL_ENDPOINT_ENV,
   SECRETS_ENV,
-  SESSION_ID_PATTERN,
 } from "./variables.ts";
 
 /** The runtime the agent runs as: the AgentCore CLI's `application.runtime(name)`, or any CDK runtime construct. */

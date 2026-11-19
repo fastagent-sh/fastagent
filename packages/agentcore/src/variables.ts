@@ -15,8 +15,5 @@ export const ALARM_INSTANCES_ENV = "FASTAGENT_ALARM_INSTANCES";
 /** The schedule in the group that holds the runtime's target and fires `{ rearm: true }` once after each deploy. */
 export const DEPLOY_SCHEDULE_NAME = ".deploy";
 
-/** The session id `.deploy` invokes: apart from every user's session, and matching {@link SESSION_ID_PATTERN}. */
+/** The session id `.deploy` invokes: apart from every user's session, and matching `SESSION_ID_PATTERN`. */
 export const DEPLOY_SESSION_ID = "fastagent-deploy-000000000000000000";
-
-/** AgentCore's rule for `runtimeSessionId`: 33 to 256 letters, digits, hyphens and underscores, starting alphanumeric. */
-export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;

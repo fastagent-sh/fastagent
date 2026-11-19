@@ -97,9 +97,11 @@ describe("package lines", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("@fastagent-sh/agentcore/client, a Caller's, loads no runtime", () => {
-    const reached = [...staticPackageGraph(resolve(srcOf("agentcore"), "client.ts"))].map(packageOf);
-    expect(reached).not.toContain("@fastagent-sh/fastagent");
+  it("@fastagent-sh/client/agentcore, a Caller's, reaches no Node API and no package but effect and @aws-sdk/client-bedrock-agentcore", () => {
+    const entry = resolve(srcOf("client"), "agentcore.ts");
+    const packages = [...staticPackageGraph(entry)].map(packageOf);
+    expect(packages.filter((p) => p !== "effect" && p !== "@aws-sdk/client-bedrock-agentcore")).toEqual([]);
+    expect([...staticPackageGraph(entry, true)]).toEqual([]);
   });
 
   it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
@@ -137,6 +139,8 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"), true)]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
   });
 });
