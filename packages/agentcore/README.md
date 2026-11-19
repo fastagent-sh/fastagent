@@ -7,6 +7,7 @@ a microVM of its own, with what it keeps in Aurora DSQL.
 npm i @fastagent-sh/agentcore        # in the agent directory: adds the `agentcore` target and runtime
 fastagent deploy init agentcore      # the container and the AgentCore project
 npx -y @aws/agentcore@1.0.3 deploy   # here or in CI
+fastagent agentcore invoke "hello" --arn <runtimeArn>   # smoke-test from the terminal
 ```
 
 From a backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):

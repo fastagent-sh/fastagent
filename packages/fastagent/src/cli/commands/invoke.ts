@@ -81,6 +81,35 @@ async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOpti
   await invokeThrough(agent, url, message, opts, settings, DEPLOYED_AUTH_HINT);
 }
 
+/** Options for sending one message over an Agent API client (`invoke --url`, `agentcore invoke`, local serve). */
+export interface InvokeOverApiOptions {
+  session?: string;
+  settings?: SessionSettings;
+  json?: boolean;
+  authHint: string;
+  /** The flags printed after `continue it with …`; defaults to `--session <sessionId>`. */
+  continueFlags?: (sessionId: string) => string;
+}
+
+/**
+ * Send one message through an Agent API client (`agent`), stream its answer to stdout (text or NDJSON) and progress to
+ * stderr, and return the CLI exit code (0 only for `completed`). Throws on session lookup/creation refusal.
+ */
+export async function invokeOverApi(
+  agent: Agent,
+  where: string,
+  message: string,
+  opts: InvokeOverApiOptions,
+): Promise<number> {
+  console.error(`[fastagent] invoke: ${where}`);
+  const sessionId = await remoteSession(agent, opts.session, opts.settings, where).catch((error: unknown) => {
+    throw refusal(error);
+  });
+  const flags = opts.continueFlags ? opts.continueFlags(sessionId) : `--session ${sessionId}`;
+  console.error(`[fastagent] session ${sessionId} (continue it with ${flags})`);
+  return answer(agent.messages.stream({ sessionId, content: message }), opts.json, opts.authHint);
+}
+
 /** Send `message` through the Agent API of a served instance: a deployment's, or the local serve that owns this one. */
 async function invokeThrough(
   agent: Agent,
@@ -90,12 +119,13 @@ async function invokeThrough(
   settings: SessionSettings | undefined,
   authHint: string,
 ): Promise<never> {
-  console.error(`[fastagent] invoke: ${where}`);
-  const sessionId = await remoteSession(agent, opts.session, settings, where).catch((error: unknown) =>
-    failStartup(refusal(error)),
-  );
-  console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-  process.exit(await answer(agent.messages.stream({ sessionId, content: message }), opts.json, authHint));
+  const exitCode = await invokeOverApi(agent, where, message, {
+    session: opts.session,
+    settings,
+    json: opts.json,
+    authHint,
+  }).catch(failStartup);
+  process.exit(exitCode);
 }
 
 /** The served agent's session to send into: a new one, or `sessionId`, set to `--model` when one is given. */
@@ -116,27 +146,39 @@ async function remoteSession(
   return sessionId;
 }
 
-async function readMessageInput(given: string | undefined): Promise<string> {
+/**
+ * Resolve one invoke message from a positional argument, `-`, or piped stdin.
+ * Returns `{ ok: false, error }` instead of exiting so every caller reports usage errors in its own format.
+ */
+export async function readInvokeMessage(
+  given: string | undefined,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   if (given !== undefined && given !== "-") {
-    if (given.trim() === "") failUsage("message must not be empty");
-    return given;
+    if (given.trim() === "") return { ok: false, error: "message must not be empty" };
+    return { ok: true, message: given };
   }
   if (given === undefined && process.stdin.isTTY === true) {
-    failUsage('missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent invoke)');
+    return { ok: false, error: 'missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent invoke)' };
   }
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
   }
   const piped = Buffer.concat(chunks).toString("utf8");
-  if (piped.trim() === "") failUsage("missing message: pass <message> or pipe non-empty stdin");
-  return piped.endsWith("\n") ? piped.slice(0, -1) : piped;
+  if (piped.trim() === "") {
+    return { ok: false, error: "missing message: pass <message> or pipe non-empty stdin" };
+  }
+  return { ok: true, message: piped.replace(/\r?\n$/, "") };
 }
 
 export async function runInvoke(given: string | undefined, dirArg: string, opts: InvokeOptions): Promise<void> {
-  const message = await readMessageInput(given);
+  if (opts.url === undefined && opts.key !== undefined) {
+    failUsage("--key is the key --url calls with: pass --url too");
+  }
+  const input = await readInvokeMessage(given);
+  if (!input.ok) failUsage(input.error);
+  const message = input.message;
   if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
-  if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
   const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
     import("../../harnesses/pi-durable/serve.ts"),
     import("../../harnesses/pi-durable/open.ts"),
