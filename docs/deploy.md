@@ -1,49 +1,102 @@
 ---
 title: Deploy
-description: "Run an agent in a container on any host: the Dockerfile fastagent writes, the volume and values it needs, and what survives a new image."
+description: "Prepare and verify a container deployment for Docker, Docker Compose, Fly.io, Railway, AWS AgentCore, or any container host."
 status: current
 ---
 
 # Deploy
 
-```bash
-fastagent docker init
-```
+FastAgent writes the container and platform files once (yours to commit and edit) and hands deployment off to each
+host's own tool. Pick a target:
 
-writes a `Dockerfile` and a `.dockerignore` into the agent directory and prints how to build and run them:
+| Target | Prepare | Deploy with |
+|---|---|---|
+| Docker / any container host | `fastagent deploy init docker` | `docker build` / `docker run` |
+| Docker Compose | `fastagent deploy init compose` | `docker compose up -d --build` |
+| Fly.io | `fastagent deploy init fly` | `fly launch --copy-config --ha=false --no-deploy` → `fly deploy --ha=false` |
+| Railway | `fastagent deploy init railway` | `railway init` → `railway volume add --mount-path /data` → `railway up` |
+| Amazon Bedrock AgentCore | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | `npx -y @aws/agentcore@1.0.3 deploy` ([AgentCore](agentcore.md)) |
 
-```bash
-docker build --pull -t my-agent .
-docker run -d --name my-agent --restart unless-stopped -v my-agent-data:/data --env-file <file> -p 8787:8787 my-agent
-```
-
-The image runs on any host that runs a container: give it a volume at `/data`, its values as environment variables,
-and a port when something calls it over HTTP. Run **one container** per agent: a second one on the same volume is
-refused.
+Run **one container** per instance: a second one on the same volume is refused, and schedules and wake-ups require the
+machine to stay running (unless on a scale-to-zero platform with external alarms, such as [AgentCore](agentcore.md)).
 
 ## Before you build
 
 1. **Try the production build here:** `fastagent build && fastagent start --root $(mktemp -d) --env-file prod.env`.
 2. **Set a model** in `fastagent.config.ts` (`model`), or `FASTAGENT_MODEL` on the container.
-3. **Give it its values** as environment variables: the model's API key, what your tools
-   declare with `needs`, and `FASTAGENT_API_KEY` for the [Agent API](#the-agent-api). The image holds none of them.
-4. **Make something reach it**: a schedule, or the Agent API.
+3. **Give it its values** as environment variables: the model's API key, what your tools declare with `needs`, and
+   `FASTAGENT_API_KEY` for the [Agent API](#the-agent-api). The image holds none of them.
+4. **Gate CI with `fastagent deploy check`:** verifies the definition loads and the build context leaks no local
+   secrets or state (`exit 0` clean, `exit 1` blocked; `--json` for scripts):
 
-`docker init` stops when the agent would not start in the container (no `package.json`, a definition that does not
-load), and warns about the rest: no model, no lockfile, an ignore file of yours that would ship a secret.
+```bash
+fastagent deploy check && fly deploy --ha=false
+```
+
+## Docker
+
+```bash
+fastagent deploy init docker
+docker build --pull -t my-agent .
+docker run -d --name my-agent --restart unless-stopped -v my-agent-data:/data --env-file prod.env -p 8787:8787 my-agent
+```
+
+## Docker Compose
+
+```bash
+fastagent deploy init compose
+```
+
+Writes `Dockerfile`, `.dockerignore`, and `compose.yml` (mounting `/data`, reading `prod.env` when present, and
+probing `GET /health`). Put your secrets in `prod.env` (excluded from the image by `.dockerignore`) and start:
+
+```bash
+docker compose up -d --build
+```
+
+## Fly.io
+
+Fly.io defaults to stopping idle machines and launching two replicas, which breaks scheduled work and contends for
+`/data`. `fastagent deploy init fly` writes a `fly.toml` with `auto_stop_machines = "off"`,
+`min_machines_running = 1`, a `/data` volume mount, and a `GET /health` check:
+
+```bash
+fastagent deploy init fly
+fly launch --copy-config --ha=false --no-deploy
+fly secrets set FASTAGENT_API_KEY=<key> <MODEL_API_KEY>=<value>
+fly deploy --ha=false
+```
+
+## Railway
+
+```bash
+fastagent deploy init railway
+```
+
+Writes `Dockerfile` (`EXPOSE 8787`) and `.dockerignore`, and prints the Railway steps (Railway deprecated
+`railway.json`/`railway.toml` and manages volumes separately):
+
+```bash
+railway init
+railway volume add --mount-path /data
+railway variables --set FASTAGENT_API_KEY=<key> --set <MODEL_API_KEY>=<value>
+railway up
+```
+
+In the Railway service settings, keep **1 replica** and set the healthcheck path to `/health`.
 
 ## What the files hold
 
-The `Dockerfile` installs the agent's dependencies, runs `fastagent build`, and starts `fastagent start`. It sets
-`FASTAGENT_DEPLOYED=1` (the container takes its storage: the volume must be mounted, and one process holds it),
-`FASTAGENT_NAME` (the agent the storage belongs to) and `FASTAGENT_ROOT=/data`.
+The `Dockerfile` installs the agent's dependencies, runs `fastagent build`, exposes port `8787`, and starts
+`fastagent start`. It sets `FASTAGENT_DEPLOYED=1` (the container takes its storage: the volume must be mounted, and
+one process holds it), `FASTAGENT_NAME` (the agent the storage belongs to), and `FASTAGENT_ROOT=/data`.
 
-The `.dockerignore` keeps out `.secrets/`, `.env` files, any `*.env` file, `.state/`, `.fastagent/` and
+The `.dockerignore` keeps out `.secrets/`, `.env` files, any `*.env` file, `.state/`, `.fastagent/`, and
 `node_modules`.
 
-A file you edit stays yours once you delete its first line (the `# Generated by` marker): `docker init --force`
-regenerates only the files it generated, and never one of yours. If you keep your own `.dockerignore`, `docker init`
-checks it against the same list.
+A file you edit stays yours: platform configs (`compose.yml`, `fly.toml`, `agentcore/`) are written once and never
+overwritten; for `Dockerfile` and `.dockerignore`, delete the first line (the `# Generated by` marker) to take
+ownership, or pass `--force` to regenerate only the files FastAgent generated.
 
 ## The Agent API
 

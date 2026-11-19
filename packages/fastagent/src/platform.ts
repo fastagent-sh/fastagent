@@ -98,7 +98,7 @@ export async function writeContainer(
   selectAgentEnvironment("production");
   const checked = await checkContainer({ agentDir, force, target });
   if (!checked.ok) return checked;
-  for (const m of checked.messages) console.error(`[fastagent] ${m.level}: ${m.text}`);
+  for (const m of checked.messages) console.error(`[fastagent] ${m.level === "note" ? "note" : "warn"}: ${m.text}`);
   await applyArtifactPlan(await planArtifacts(agentDir, containerArtifacts(checked.container), force, target));
   return { ok: true, name: checked.container.name, port: checked.port };
 }

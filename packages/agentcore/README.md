@@ -4,8 +4,8 @@ Run a [FastAgent](https://fastagent.sh) agent on Amazon Bedrock AgentCore: one i
 a microVM of its own, with what it keeps in Aurora DSQL.
 
 ```bash
-npm i @fastagent-sh/agentcore        # in the agent directory: adds `fastagent agentcore`
-fastagent agentcore init             # the container and the AgentCore project
+npm i @fastagent-sh/agentcore        # in the agent directory: adds the `agentcore` target and runtime
+fastagent deploy init agentcore      # the container and the AgentCore project
 npx -y @aws/agentcore@1.0.3 deploy   # here or in CI
 ```
 

@@ -80,10 +80,10 @@ Set `HTTPS_PROXY` (in the shell or `.secrets/.env`). Loopback is never proxied; 
 The state root is not on persistent storage. The generated container keeps it at `/data`: mount a volume there
 (`-v my-agent-data:/data`). On your own server set `FASTAGENT_ROOT=/data`.
 
-### `docker init` stopped, or the container does not start
+### `deploy init` stopped, or the container does not start
 
-`docker init` stops only when the container would not start: the agent directory has no `package.json`, or its
-definition does not load. The line after `docker init stopped:` names which.
+`deploy init` stops only when the container would not start: the agent directory has no `package.json`, or its
+definition does not load. The line after `deploy init <target> stopped:` names which.
 
 - **`persistent storage is not mounted at /data`:** the container runs without its volume. Add `-v <name>-data:/data`.
 - **`FASTAGENT_NAME is required for a deployment`:** a Dockerfile of your own dropped it. Add

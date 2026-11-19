@@ -174,17 +174,53 @@ const start: CommandSpec = {
     }),
 };
 
-const docker: CommandSpec = {
-  name: "docker",
-  summary: "run the agent in a container on any host",
+const deploy: CommandSpec = {
+  name: "deploy",
+  summary: "prepare deployment files for a host (`init`), or verify the build context (`check`)",
   subcommands: [
     {
       name: "init",
-      summary: "write the portable container (Dockerfile, .dockerignore) and print how to build and run it",
-      description: "Writes the Dockerfile and .dockerignore into the agent directory; a file you own is kept.",
-      flags: [{ flags: "--force", description: "regenerate the files fastagent generated" }],
-      examples: [{ cmd: "fastagent docker init", note: "Dockerfile + .dockerignore, and the docker commands" }],
-      run: async (_args, f) => (await import("./commands/docker.ts")).runDockerInit(".", { force: f.force === true }),
+      summary: "write container and platform files for a target (docker, compose, fly, railway, or an extension)",
+      description:
+        "Writes Dockerfile and .dockerignore plus the target's declarative config (never overwrites user-owned " +
+        "files), and prints the platform's own deploy commands. Never runs a remote deploy or installs packages " +
+        "into the agent.",
+      args: [
+        {
+          name: "<target>",
+          description:
+            "docker, compose, fly, railway, or an installed @fastagent-sh/<target> extension (e.g. agentcore)",
+        },
+      ],
+      flags: [
+        { flags: "--force", description: "regenerate the container files fastagent generated" },
+        {
+          flags: "--no-install",
+          description: "skip dependency installation in generated subprojects (e.g. agentcore/cdk)",
+        },
+      ],
+      examples: [
+        { cmd: "fastagent deploy init docker", note: "Dockerfile + .dockerignore for any host" },
+        { cmd: "fastagent deploy init compose", note: "Dockerfile + compose.yml" },
+        { cmd: "fastagent deploy init fly", note: "Dockerfile + fly.toml (single machine, /data, /health)" },
+        { cmd: "fastagent deploy init railway", note: "Dockerfile + Railway volume and deploy commands" },
+        { cmd: "fastagent deploy init agentcore", note: "AWS AgentCore (requires @fastagent-sh/agentcore)" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/deploy.ts")).runDeployInit(args[0] as string, {
+          force: f.force === true,
+          install: f.install !== false,
+        }),
+    },
+    {
+      name: "check",
+      summary: "verify the definition loads and the build context leaks no local secrets or state",
+      description:
+        "Read-only pre-deploy gate for CI (`fastagent deploy check && fly deploy`): exits 0 when safe, 1 on a fatal " +
+        "gate or secret/state leak.",
+      flags: [JSON_FLAG],
+      examples: [{ cmd: "fastagent deploy check" }, { cmd: "fastagent deploy check --json", note: "for CI" }],
+      run: async (_args, f) => (await import("./commands/deploy.ts")).runDeployCheck({ json: f.json === true }),
     },
   ],
 };
@@ -292,7 +328,7 @@ const logout: CommandSpec = {
     }),
 };
 
-const specs: readonly CommandSpec[] = [init, models, info, build, invoke, schedules, dev, start, docker, login, logout];
+const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, schedules, build, start, deploy];
 
 /** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {
@@ -300,11 +336,11 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
     examples: [
       { cmd: "fastagent init my-agent && cd my-agent", note: "scaffold an agent" },
       { cmd: "fastagent dev", note: "serve locally and iterate" },
-      { cmd: "fastagent docker init", note: "a container for any host" },
+      { cmd: "fastagent deploy init docker", note: "prepare a container for any host" },
     ],
     notes:
-      "An extension adds a command of its own once the agent installs it: `npm i @fastagent-sh/agentcore` adds " +
-      "`fastagent agentcore`.\nDocs: https://github.com/fastagent-sh/fastagent",
+      "Platform extensions add targets to `fastagent deploy init <target>` and runtime commands once installed " +
+      "(e.g. `npm i @fastagent-sh/agentcore`).\nDocs: https://github.com/fastagent-sh/fastagent",
     ...overrides,
   });
 }

@@ -174,7 +174,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 | `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`) |
 | `--name <name>` | `FASTAGENT_NAME` | the package's name; none with `FASTAGENT_DATABASE_URL`, where it is required |
 
-The container `docker init` writes keeps its root at `/data`. On your own server without a container:
+The container `deploy init` writes keeps its root at `/data`. On your own server without a container:
 
 ```bash
 fastagent build

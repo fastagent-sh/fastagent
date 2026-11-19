@@ -1,8 +1,7 @@
 /**
- * What a command that writes the container (`fastagent docker init`, a platform's `init`) checks before it writes it:
+ * What a command that prepares or verifies a container (`fastagent deploy init`, `fastagent deploy check`) checks:
  * that the agent directory builds into an image that starts, and that the image would carry none of this machine's
- * secrets or state. A finding the image cannot run
- * with stops the command; everything else is a warning or a note.
+ * secrets or state. A finding the image cannot run with stops the command; everything else is a leak, warning or note.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -10,16 +9,16 @@ import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
-import { DEPLOYED_ENV, exists } from "../paths.ts";
+import { DEPLOYED_ENV, exists, selectAgentEnvironment } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 import { hasLockfile as lockfileIn, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
-import { buildContextPaths, checkKeptIgnoreFiles } from "./build-context.ts";
-import { type ContainerInput, type ContainerTarget, isGeneratedDockerfile } from "./container.ts";
+import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } from "./build-context.ts";
+import { type ContainerInput, type ContainerTarget, DOCKER_TARGET, isGeneratedDockerfile } from "./container.ts";
 
-/** A stderr line the CLI prints (`[fastagent] warn: …` / `[fastagent] note: …`). */
+/** A finding reported by preflight: `leak` fails `deploy check`; `warn` and `note` are advisory. */
 interface DeployMessage {
-  level: "warn" | "note";
+  level: "leak" | "warn" | "note";
   text: string;
 }
 
@@ -27,7 +26,7 @@ interface DeployMessage {
 export interface DeployReport {
   note(text: string): void;
   warn(text: string): void;
-  /** A warning that the image would carry this machine's secrets or state. */
+  /** A finding that the image or upload would carry this machine's secrets or state. */
   leak(text: string): void;
 }
 
@@ -35,6 +34,15 @@ export interface DeployReport {
 export type ContainerCheck =
   | { ok: false; gate: string }
   | { ok: true; messages: DeployMessage[]; container: ContainerInput; port: number };
+
+/** Structured outcome of `fastagent deploy check`: fails on a fatal `gate` or any build-context `leaks`. */
+export interface DeployCheckResult {
+  ok: boolean;
+  gate?: string;
+  leaks: string[];
+  warnings: string[];
+  notes: string[];
+}
 
 class DeployGate {
   readonly text: string;
@@ -52,7 +60,7 @@ export async function checkContainer(input: {
   const report: DeployReport = {
     note: (text) => void messages.push({ level: "note", text }),
     warn: (text) => void messages.push({ level: "warn", text }),
-    leak: (text) => void messages.push({ level: "warn", text }),
+    leak: (text) => void messages.push({ level: "leak", text }),
   };
   try {
     return { ok: true, messages, ...(await gatherFacts(input, report)) };
@@ -60,6 +68,30 @@ export async function checkContainer(input: {
     if (error instanceof DeployGate) return { ok: false, gate: error.text };
     throw error;
   }
+}
+
+/**
+ * Standalone read-only deployment gate (`fastagent deploy check`): verifies the agent loads and the build context as
+ * it stands on disk right now leaks no secrets or local state (missing `.dockerignore` included).
+ */
+export async function checkDeploy(
+  agentDir: string,
+  target: ContainerTarget = DOCKER_TARGET,
+): Promise<DeployCheckResult> {
+  selectAgentEnvironment("production");
+  const checked = await checkContainer({ agentDir, force: false, target });
+  if (!checked.ok) {
+    return { ok: false, gate: checked.gate, leaks: [], warnings: [], notes: [] };
+  }
+  const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
+  const missingIgnore = await shippedWithoutIgnoreFile(agentDir, paths);
+  const leaks = [
+    ...(missingIgnore === undefined ? [] : [missingIgnore]),
+    ...checked.messages.filter((m) => m.level === "leak").map((m) => m.text),
+  ];
+  const warnings = checked.messages.filter((m) => m.level === "warn").map((m) => m.text);
+  const notes = checked.messages.filter((m) => m.level === "note").map((m) => m.text);
+  return { ok: leaks.length === 0, leaks, warnings, notes };
 }
 
 async function gatherFacts(

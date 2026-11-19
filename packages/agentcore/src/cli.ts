@@ -35,9 +35,10 @@ Commands:
 
 /** The container on AgentCore: its state in the platform's database, the AgentCore project left out of the image. */
 const AGENTCORE_TARGET: ContainerTarget = {
-  writtenBy: "fastagent agentcore init",
+  writtenBy: "fastagent deploy init agentcore",
   command: ["./node_modules/.bin/fastagent", "agentcore", "start"],
   storage: "database",
+  port: 8080,
   ignore: ["agentcore"],
 };
 
@@ -53,7 +54,7 @@ function usageError(message: string): never {
 async function init(agentDir: string, flags: { force: boolean; install: boolean }): Promise<void> {
   const facts = await agentFacts(agentDir);
   const written = await writeContainer(agentDir, AGENTCORE_TARGET, { force: flags.force });
-  if (!written.ok) throw new Error(`agentcore init stopped: ${written.gate}`);
+  if (!written.ok) throw new Error(`deploy init agentcore stopped: ${written.gate}`);
   const wrote = await writeProject(agentDir, {
     project: projectName(facts.name),
     secret: facts.name,
