@@ -25,10 +25,10 @@
   },
   "devDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
-    "@biomejs/biome": "^2.6.4",
+    "@biomejs/biome": "^2.6.8",
     "@electric-sql/pglite": "^0.5.16",
     "@electric-sql/pglite-socket": "^0.2.19",
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.8",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/express": "^5.0.6",
     "@types/pg": "^8.23.1",
@@ -37,7 +37,7 @@
     "constructs": "^10.7.0",
     "express": "^5.3.0",
     "fastify": "^5.12.7",
-    "knip": "^6.44.0",
+    "knip": "^6.45.1",
     "vitest": "^5.0.5"
   }
 }
