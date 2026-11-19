@@ -10,7 +10,8 @@ it("runInProcess answers what a spawned CLI answers: exit code, stdout and stder
     { args: ["no-such-command"], cwd: agent }, // a parse error: exit 2, the unified `Error:` prefix on stderr
     { args: ["login"], cwd: agent }, // a refusal without a terminal: exit 2 and a usage line
     { args: ["login", "OpenAI", "--json"], cwd: agent }, // a structured answer on stdout with exit 2
-    { args: ["login", "openai", "--method", "api-key", "--json"], cwd: agent }, // a structured answer, exit 0
+    { args: ["-C", agent, "login", "openai", "--method", "api-key", "--json"], cwd: undefined }, // -C selects agent dir
+    { args: ["-C", "/no-such-fastagent-dir-xyz", "info"], cwd: undefined }, // bad -C: exit 2
   ];
   const env = { ...process.env, OPENAI_API_KEY: "" };
   const spawned = await Promise.all(cases.map(({ args, cwd }) => run(args, cwd, env))); // processes overlap; runs here do not

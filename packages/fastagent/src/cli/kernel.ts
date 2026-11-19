@@ -109,6 +109,7 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)
   program.showHelpAfterError("(run with --help for usage)");
+  program.option("-C <dir>", "run as if fastagent was started in <dir>");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
   if (options.examples || options.notes) {
     specOf.set(program, { name: "fastagent", summary: "", examples: options.examples, notes: options.notes });

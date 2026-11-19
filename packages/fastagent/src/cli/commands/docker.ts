@@ -1,5 +1,5 @@
 /**
- * `fastagent docker init [agent]`: write the portable container (`Dockerfile`, `.dockerignore`) into the agent
+ * `fastagent docker init`: write the portable container (`Dockerfile`, `.dockerignore`) into the agent
  * directory and print how to build and run it. A file the author owns is kept; `--force` regenerates only the ones
  * fastagent generated.
  */

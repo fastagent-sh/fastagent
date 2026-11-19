@@ -51,11 +51,11 @@ const fastagent = join(agent, "node_modules", ".bin", "fastagent");
 expectEqual("invoke's answer", sh(fastagent, ["invoke", "ping", "--no-input"], agent).trim(), "pong");
 
 sh(fastagent, ["build"], agent);
-// An installed extension's command, through the agent's own CLI.
+// An installed extension's command, through the agent's own CLI (resolved from `-C` outside the agent dir).
 expectEqual(
   "fastagent agentcore's usage",
-  sh(fastagent, ["agentcore", "--help"], agent).split("\n")[0],
-  "Usage: fastagent agentcore <command> [agent]",
+  sh(join(tools, "node_modules", ".bin", "fastagent"), ["-C", agent, "agentcore", "--help"], work).split("\n")[0],
+  "Usage: fastagent [-C <dir>] agentcore <command>",
 );
 
 // In the agent directory, where `@fastagent-sh/fastagent` is installed, as in an app that depends on it.

@@ -46,7 +46,7 @@ export interface ContainerTarget {
 /** `docker init`'s: `fastagent start` on a volume. */
 export const DOCKER_TARGET: ContainerTarget = {
   writtenBy: "fastagent docker init",
-  command: ["./node_modules/.bin/fastagent", "start", IMAGE_APP_DIR],
+  command: ["./node_modules/.bin/fastagent", "start"],
   storage: "volume",
 };
 

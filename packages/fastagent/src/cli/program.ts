@@ -3,17 +3,13 @@
  * `fastagent <cmd>` pays only for the module graph that command actually uses.
  */
 import { fastagentVersion } from "../version.ts";
+import { applyChdir } from "./chdir.ts";
 import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } from "./kernel.ts";
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup, failUsage } from "./fail.ts";
 import { ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
 import { extensionEntry, extensionPackage, runExtension } from "./extension.ts";
 
-const AGENT_ARG = {
-  name: "[agent]",
-  description: "the agent directory holding fastagent.config.ts",
-  default: ".",
-};
 const MODEL: FlagSpec = {
   flags: "--model <provider/modelId>",
   description: "model override (--model > FASTAGENT_MODEL > config)",
@@ -58,7 +54,6 @@ const dev: CommandSpec = {
   summary: "serve the agent locally, restarting on code edits",
   description:
     "Open the agent and serve its schedules, wake-ups and Agent API; restarts worker on src/ or config edits.",
-  args: [AGENT_ARG],
   flags: [
     PORT,
     BIND,
@@ -69,8 +64,8 @@ const dev: CommandSpec = {
     ENV_FILE_FLAG,
   ],
   examples: [{ cmd: "fastagent dev" }],
-  run: async (args, f) =>
-    (await import("./commands/dev.ts")).runDev(args[0] as string, {
+  run: async (_args, f) =>
+    (await import("./commands/dev.ts")).runDev(".", {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
@@ -86,11 +81,10 @@ const info: CommandSpec = {
   description:
     "Inspect model, tools, extensions, schedules, commands and secrets read-only, from the directory: never the " +
     "instance's storage, so it answers beside a running serve.",
-  args: [AGENT_ARG],
   flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
-  run: async (args, f) =>
-    (await import("./commands/info.ts")).runInfo(args[0] as string, {
+  run: async (_args, f) =>
+    (await import("./commands/info.ts")).runInfo(".", {
       json: f.json === true,
       model: f.model as string | undefined,
       instance: instanceFlags(f),
@@ -101,11 +95,10 @@ const build: CommandSpec = {
   name: "build",
   summary: "compile the agent into dist/, the package an app or a host opens",
   description: "Type-check and compile the agent into dist/ with a generated index.js entry.",
-  args: [AGENT_ARG],
   flags: [{ flags: "--no-check", description: "emit without type-checking (tsc --noCheck)" }, JSON_FLAG],
   examples: [{ cmd: "fastagent build" }, { cmd: "fastagent build --json", note: "for CI" }],
-  run: async (args, f) =>
-    (await import("./commands/build.ts")).runBuild(args[0] as string, {
+  run: async (_args, f) =>
+    (await import("./commands/build.ts")).runBuild(".", {
       check: f.check !== false,
       json: f.json === true,
     }),
@@ -117,7 +110,7 @@ const invoke: CommandSpec = {
   description:
     "Send one message and stream its answer to stdout: through the local serve of the instance when one runs, to a " +
     "served --url, or else in this process.",
-  args: [{ name: "<message>", description: "the message to send" }, AGENT_ARG],
+  args: [{ name: "<message>", description: "the message to send" }],
   flags: [
     MODEL,
     NO_INPUT,
@@ -133,7 +126,7 @@ const invoke: CommandSpec = {
     { cmd: `fastagent invoke --url https://agent.example.com "hello"`, note: "a deployment" },
   ],
   run: async (args, f) =>
-    (await import("./commands/invoke.ts")).runInvoke(args[0] as string, args[1] as string, {
+    (await import("./commands/invoke.ts")).runInvoke(args[0] as string, ".", {
       model: f.model as string | undefined,
       input: f.input !== false,
       json: f.json === true,
@@ -169,11 +162,10 @@ const start: CommandSpec = {
   name: "start",
   summary: "serve the built dist/ in production posture (no watching)",
   description: "Serve the compiled dist/ build; refuses a missing or stale build (`fastagent build`).",
-  args: [AGENT_ARG],
   flags: [PORT, BIND, MODEL, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent start", note: "after fastagent build" }],
-  run: async (args, f) =>
-    (await import("./commands/start.ts")).runStart(args[0] as string, {
+  run: async (_args, f) =>
+    (await import("./commands/start.ts")).runStart(".", {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
@@ -190,11 +182,9 @@ const docker: CommandSpec = {
       name: "init",
       summary: "write the portable container (Dockerfile, .dockerignore) and print how to build and run it",
       description: "Writes the Dockerfile and .dockerignore into the agent directory; a file you own is kept.",
-      args: [AGENT_ARG],
       flags: [{ flags: "--force", description: "regenerate the files fastagent generated" }],
       examples: [{ cmd: "fastagent docker init", note: "Dockerfile + .dockerignore, and the docker commands" }],
-      run: async (args, f) =>
-        (await import("./commands/docker.ts")).runDockerInit(args[0] as string, { force: f.force === true }),
+      run: async (_args, f) => (await import("./commands/docker.ts")).runDockerInit(".", { force: f.force === true }),
     },
   ],
 };
@@ -206,14 +196,13 @@ const schedules: CommandSpec = {
     {
       name: "list",
       summary: "what fires next, how each schedule last ran, and the pending wake-ups, from the instance",
-      args: [AGENT_ARG],
       flags: [JSON_FLAG, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [
         { cmd: "fastagent schedules list" },
         { cmd: "fastagent schedules list --url https://agent.example.com --json", note: "a deployment" },
       ],
-      run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runList(args[0] as string, {
+      run: async (_args, f) =>
+        (await import("./commands/schedules.ts")).runList(".", {
           json: f.json === true,
           ...urlOptions(f),
           instance: instanceFlags(f),
@@ -222,14 +211,14 @@ const schedules: CommandSpec = {
     {
       name: "run",
       summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
-      args: [{ name: "<name>", description: "schedule name" }, AGENT_ARG],
+      args: [{ name: "<name>", description: "schedule name" }],
       flags: [MODEL, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [
         { cmd: "fastagent schedules run daily-digest" },
         { cmd: "fastagent schedules run daily-digest --url https://agent.example.com", note: "a deployment" },
       ],
       run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, args[1] as string, {
+        (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, ".", {
           model: f.model as string | undefined,
           input: f.input !== false,
           ...urlOptions(f),
@@ -239,11 +228,11 @@ const schedules: CommandSpec = {
     {
       name: "unwake",
       summary: "cancel a pending wake-up, through the serve that owns the instance if one runs",
-      args: [{ name: "<id>", description: "wake-up id (fastagent schedules list lists them)" }, AGENT_ARG],
+      args: [{ name: "<id>", description: "wake-up id (fastagent schedules list lists them)" }],
       flags: [...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
       run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, args[1] as string, {
+        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, ".", {
           ...urlOptions(f),
           instance: instanceFlags(f),
         }),
@@ -324,7 +313,8 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
 export async function runCli(argv: readonly string[]): Promise<void> {
   const unsupported = unsupportedRuntime();
   if (unsupported !== undefined) failStartup(new Error(unsupported));
-  const [name, ...rest] = argv.slice(2);
+  const stripped = applyChdir(argv);
+  const [name, ...rest] = stripped.slice(2);
   if (name !== undefined && !specs.some((spec) => spec.name === name)) {
     const entry = extensionEntry(process.cwd(), name);
     if (entry !== undefined) return runExtension(entry, rest).catch(failStartup);
@@ -335,5 +325,5 @@ export async function runCli(argv: readonly string[]): Promise<void> {
       unknown === name && /^[a-z][a-z0-9-]*$/.test(unknown)
         ? `(an extension adds it: install ${extensionPackage(unknown)} in the agent, with npm i ${extensionPackage(unknown)})`
         : undefined,
-  }).parseAsync([...argv]);
+  }).parseAsync(stripped);
 }

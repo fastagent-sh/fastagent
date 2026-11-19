@@ -51,7 +51,7 @@ describe("cli: login and models", () => {
     await withRepoModules(dir);
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.FA_TEST_GATEWAY_KEY;
-    const listed = await runInProcess(["models", "gw/"], dir, env);
+    const listed = await runInProcess(["-C", dir, "models", "gw/"], undefined, env);
     expect([listed.code, listed.stdout.trim()], listed.stderr).toEqual([0, "gw/m1"]);
     const json = await runInProcess(["models", "gw/", "--json"], dir, env);
     expect(JSON.parse(json.stdout)).toEqual([{ spec: "gw/m1", provider: "gw", id: "m1", name: "m1" }]);

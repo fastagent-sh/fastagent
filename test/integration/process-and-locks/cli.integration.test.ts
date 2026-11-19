@@ -32,6 +32,8 @@ describe("cli: process contracts", () => {
     );
     const handed = await run(["info", "--json"], project);
     expect([handed.code, handed.stdout.trim()]).toEqual([3, "project info --json"]);
+    const viaChdir = await run(["-C", project, "info", "--json"]);
+    expect([viaChdir.code, viaChdir.stdout.trim()]).toEqual([3, "project info --json"]);
     const elsewhere = await run(["--version"], await mkdtemp(join(tmpdir(), "fa-no-project-")));
     expect(elsewhere.stdout.trim()).not.toBe("project --version");
   });
@@ -49,7 +51,7 @@ describe("cli: process contracts", () => {
     const cwd = await agentWorkspace("fa-cli-inv-");
     const env = { ...process.env };
     delete env.FASTAGENT_MODEL; // no model source → assembly fails before any model call (no auth needed)
-    const { code, stdout, stderr } = await run(["invoke", "hi", cwd], undefined, env);
+    const { code, stdout, stderr } = await run(["-C", cwd, "invoke", "hi"], undefined, env);
     expect(code).toBe(2); // the choice a terminal's picker would have asked for: a usage error
     expect(stderr).toMatch(/missing model/);
     expect(stdout).toBe(""); // a failure never pollutes stdout
@@ -60,7 +62,7 @@ describe("cli: process contracts", () => {
     // placementOrExit the refusal surfaced as an uncaught stack trace (found in acceptance).
     const dir = await mkdtemp(join(tmpdir(), "fa-not-an-agent-"));
     await writeFile(join(dir, "AGENTS.md"), "# just a project\n"); // context, not a definition
-    const { code, stderr } = await run(["info", dir]);
+    const { code, stderr } = await run(["-C", dir, "info"]);
     expect(code).toBe(1); // runtime failure, not a crash
     expect(stderr).toMatch(/^Error: .*not a fastagent agent.*fastagent init/); // the one-line failStartup presentation
     expect(stderr).not.toMatch(/\n\s+at /); // no stack frames — this is a user-fixable refusal, not a bug

@@ -50,7 +50,7 @@ describe("fastagent build", () => {
 
   it("`fastagent build --json` compiles through the CLI entry and emits dist/", async () => {
     const dir = await agentWorkspace("fa-cli-build-");
-    const built = await runInProcess(["build", dir, "--json"]);
+    const built = await runInProcess(["-C", dir, "build", "--json"]);
     expect(built.code, built.stderr).toBe(0);
     expect(JSON.parse(built.stdout)).toMatchObject({
       dist: expect.stringMatching(/\/dist$/),

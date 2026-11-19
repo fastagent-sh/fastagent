@@ -144,4 +144,32 @@ describe("cli: a command an installed extension adds", () => {
       expect([name, refused.code, refused.stdout]).toEqual([name, 2, ""]);
     }
   });
+
+  it("global -C <dir> selects the agent directory before extension lookup and built-in commands, and refuses bad paths", async () => {
+    const dir = await project({ "@fastagent-sh/demo": {} });
+    const nested = join(dir, "sub");
+    await mkdir(nested, { recursive: true });
+    // Extension lookup runs in `-C <dir>` from outside `dir`, and strips `-C` before handing off.
+    const ext = await runInProcess(["-C", dir, "demo", "init"]);
+    expect([ext.code, JSON.parse(ext.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["init"] }]);
+    // Attached `-C<dir>` and chained `-C a -C b` work sequentially like `git -C`.
+    const attached = await runInProcess([`-C${dir}`, "demo", "ping"]);
+    expect([attached.code, JSON.parse(attached.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["ping"] }]);
+    const chained = await runInProcess(["-C", nested, "-C", "..", "demo", "ping"]);
+    expect([chained.code, JSON.parse(chained.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["ping"] }]);
+    // `-C` inside a subcommand's own args is NOT consumed as a global prefix.
+    const subArg = await runInProcess(["-C", dir, "demo", "-C", "kept"]);
+    expect([subArg.code, JSON.parse(subArg.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["-C", "kept"] }]);
+    // Missing or nonexistent `-C` is a usage error (exit 2, clean stdout).
+    const missing = await runInProcess(["-C"]);
+    expect([missing.code, missing.stdout]).toEqual([2, ""]);
+    expect(missing.stderr).toContain("option '-C <dir>' argument missing");
+    const nope = await runInProcess(["-C", join(dir, "no-such-dir"), "info"]);
+    expect([nope.code, nope.stdout]).toEqual([2, ""]);
+    expect(nope.stderr).toContain("-C ");
+    // Documented in root --help.
+    const help = await parse(["--help"]);
+    expect(help.code).toBe(0);
+    expect(help.out).toContain("-C <dir>");
+  });
 });

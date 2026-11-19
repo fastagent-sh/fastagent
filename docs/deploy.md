@@ -34,7 +34,7 @@ load), and warns about the rest: no model, no lockfile, an ignore file of yours 
 
 ## What the files hold
 
-The `Dockerfile` installs the agent's dependencies, runs `fastagent build`, and starts `fastagent start /app`. It sets
+The `Dockerfile` installs the agent's dependencies, runs `fastagent build`, and starts `fastagent start`. It sets
 `FASTAGENT_DEPLOYED=1` (the container takes its storage: the volume must be mounted, and one process holds it),
 `FASTAGENT_NAME` (the agent the storage belongs to) and `FASTAGENT_ROOT=/data`.
 

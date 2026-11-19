@@ -26,19 +26,17 @@ import { serveAgentCore } from "./runtime.ts";
 import { secretValues } from "./secrets.ts";
 import { ALARM_GROUP_ENV, ALARM_INSTANCES_ENV, DSQL_ENDPOINT_ENV, SECRETS_ENV } from "./variables.ts";
 
-const USAGE = `Usage: fastagent agentcore <command> [agent]
+const USAGE = `Usage: fastagent [-C <dir>] agentcore <command>
 
 Commands:
-  init [agent]   write the agent's container and its AgentCore project, for \`npx ${AGENTCORE_CLI} deploy\`
-                 --force: regenerate the container files fastagent generated; --no-install: skip npm install
-  start [agent]  serve the agent's build on AgentCore's port: the container's command
-
-[agent] is the agent directory, by default the current one.`;
+  init   write the agent's container and its AgentCore project, for \`npx ${AGENTCORE_CLI} deploy\`
+         --force: regenerate the container files fastagent generated; --no-install: skip npm install
+  start  serve the agent's build on AgentCore's port: the container's command`;
 
 /** The container on AgentCore: its state in the platform's database, the AgentCore project left out of the image. */
 const AGENTCORE_TARGET: ContainerTarget = {
   writtenBy: "fastagent agentcore init",
-  command: ["./node_modules/.bin/fastagent", "agentcore", "start", "/app"],
+  command: ["./node_modules/.bin/fastagent", "agentcore", "start"],
   storage: "database",
   ignore: ["agentcore"],
 };
@@ -137,13 +135,13 @@ export const run: ExtensionCli["run"] = async (args) => {
     usageError((error as Error).message);
   }
   const { values, positionals } = parsed;
-  const [command, dir, ...extra] = positionals;
+  const [command, ...extra] = positionals;
   if (values.help || command === undefined) {
     console.log(USAGE);
     return;
   }
-  if (extra.length > 0) usageError(`${command} takes one agent directory, and was given ${extra.length + 1}`);
-  const agentDir = resolve(dir ?? ".");
+  if (extra.length > 0) usageError(`${command} takes no positional arguments (use \`fastagent -C <dir>\`)`);
+  const agentDir = resolve(".");
   if (command === "init") return init(agentDir, { force: values.force === true, install: values.install !== false });
   if (values.force !== undefined || values.install !== undefined) usageError(`--force and --no-install are init's`);
   if (command === "start") return start(agentDir);
