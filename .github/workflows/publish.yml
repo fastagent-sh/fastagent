@@ -16,6 +16,19 @@ jobs:
     name: Publish to npm
     runs-on: ubuntu-latest
     environment: npm
+    services:
+      # The server the PostgreSQL double is held against (double-parity/postgres-double.integration.test.ts).
+      postgres:
+        image: postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc
+        env:
+          POSTGRES_PASSWORD: fastagent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - name: Verify public release repository
         env:
@@ -69,6 +82,8 @@ jobs:
         run: npm test
 
       - name: Integration tests
+        env:
+          FASTAGENT_TEST_POSTGRES_URL: postgres://postgres:fastagent@127.0.0.1:5432/postgres
         run: npm run test:integration
 
       - name: Publish with provenance
