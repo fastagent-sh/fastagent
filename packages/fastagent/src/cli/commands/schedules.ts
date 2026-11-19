@@ -97,16 +97,23 @@ export async function runList(dirArg: string, opts: ClockOptions & { json?: bool
   }
 }
 
-/** Wait for the fire's message to end, print its answer, and exit as `invoke` does: 0 only for `completed`. */
-async function reportFire(agent: Agent, name: string, message: Message, close: () => Promise<void>): Promise<never> {
+/** Wait for the fire's message to end, print its answer (or Message JSON), and exit as `invoke` does: 0 only for `completed`. */
+async function reportFire(
+  agent: Agent,
+  name: string,
+  message: Message,
+  close: () => Promise<void>,
+  json?: boolean,
+): Promise<never> {
   let now = message;
   while (!hasEnded(now)) {
     now = await agent.messages.get({ sessionId: now.sessionId, messageId: now.id }, { wait: 60 }).catch(failStartup);
   }
-  if (now.answer !== undefined) process.stdout.write(`${now.answer.text}\n`);
+  if (json) console.log(JSON.stringify(now, null, 2));
+  else if (now.answer !== undefined) process.stdout.write(`${now.answer.text}\n`);
   await close();
   // The claim counts a cut-off answer as completed; the exit code does not.
-  if (now.status === "incomplete") console.error(`[fastagent] ${name}: its answer was cut off (incomplete)`);
+  if (!json && now.status === "incomplete") console.error(`[fastagent] ${name}: its answer was cut off (incomplete)`);
   process.exit(exitCodeOf(now));
 }
 
@@ -114,14 +121,14 @@ async function reportFire(agent: Agent, name: string, message: Message, close: (
 export async function runScheduleNow(
   name: string,
   dirArg: string,
-  opts: ClockOptions & { model?: string; input?: boolean },
+  opts: ClockOptions & { model?: string; input?: boolean; json?: boolean },
 ): Promise<void> {
   const served = await servedAgent(dirArg, opts);
   if (served !== undefined) {
     if (opts.model !== undefined) failUsage("a served instance fires with the model it serves: drop --model");
     const fired = await served.schedules.run(name).catch((error: unknown) => failStartup(refusal(error)));
     if (fired.status === "skipped") failStartup(new Error(`${name} did not fire: ${fired.reason}`));
-    return reportFire(served, name, fired.message, async () => {});
+    return reportFire(served, name, fired.message, async () => {}, opts.json);
   }
   // The name before the model, from the definition's shape: a script told its schedule does not exist need not set up
   // a model first.
@@ -148,7 +155,7 @@ export async function runScheduleNow(
     await agent.close();
     failStartup(new Error(`${name} did not fire: ${fired.reason}`));
   }
-  return reportFire(agent, name, fired.message, () => agent.close());
+  return reportFire(agent, name, fired.message, () => agent.close(), opts.json);
 }
 
 /**

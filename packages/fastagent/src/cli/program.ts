@@ -110,7 +110,7 @@ const invoke: CommandSpec = {
   description:
     "Send one message and stream its answer to stdout: through the local serve of the instance when one runs, to a " +
     "served --url, or else in this process.",
-  args: [{ name: "<message>", description: "the message to send" }],
+  args: [{ name: "[message]", description: "the message to send (omit or pass '-' to read from stdin)" }],
   flags: [
     MODEL,
     NO_INPUT,
@@ -122,11 +122,12 @@ const invoke: CommandSpec = {
   ],
   examples: [
     { cmd: `fastagent invoke "summarize today's inbox"` },
+    { cmd: `echo "summarize this" | fastagent invoke`, note: "from stdin" },
     { cmd: `fastagent invoke --session <id> "which number?"` },
     { cmd: `fastagent invoke --url https://agent.example.com "hello"`, note: "a deployment" },
   ],
   run: async (args, f) =>
-    (await import("./commands/invoke.ts")).runInvoke(args[0] as string, ".", {
+    (await import("./commands/invoke.ts")).runInvoke(args[0] as string | undefined, ".", {
       model: f.model as string | undefined,
       input: f.input !== false,
       json: f.json === true,
@@ -248,13 +249,15 @@ const schedules: CommandSpec = {
       name: "run",
       summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
       args: [{ name: "<name>", description: "schedule name" }],
-      flags: [MODEL, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+      flags: [JSON_FLAG, MODEL, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [
         { cmd: "fastagent schedules run daily-digest" },
+        { cmd: "fastagent schedules run daily-digest --json", note: "Message JSON on stdout" },
         { cmd: "fastagent schedules run daily-digest --url https://agent.example.com", note: "a deployment" },
       ],
       run: async (args, f) =>
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, ".", {
+          json: f.json === true,
           model: f.model as string | undefined,
           input: f.input !== false,
           ...urlOptions(f),

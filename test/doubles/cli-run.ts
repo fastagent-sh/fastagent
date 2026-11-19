@@ -89,12 +89,14 @@ export function run(
   args: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  stdin?: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
       ...(cwd ? { cwd } : {}),
       env: onCleanMachine(env ?? process.env),
     });
+    if (stdin !== undefined) child.stdin.write(stdin);
     child.stdin.end();
     let stdout = "";
     let stderr = "";

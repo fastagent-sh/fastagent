@@ -32,7 +32,7 @@ subdirectory, a command names the agent's root and stops.
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
 | `dev` | serve locally, restarting on code edits |
-| `invoke <message>` | send one message and print the answer (`--url` for a deployment) |
+| `invoke [message]` | send one message (positional, `-`, or piped `stdin`) and print the answer (`--url` for a deployment) |
 | `info` | show what the agent loads, without serving |
 | `models [search]` | list model specs |
 | `schedules list\|run\|unwake` | the schedules' next and last runs and the pending wake-ups; fire a schedule now; cancel a wake-up |
@@ -58,8 +58,8 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `build`, `deploy check` | Machine-readable output. |
-| `--url <base>`, `--key <key>` | `invoke`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. |
+| `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `schedules run`, `build`, `deploy check` | Machine-readable output. |
+| `--url <base>`, `--key <key>` | `invoke`, `schedules list`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
 
 ## Exit codes
 

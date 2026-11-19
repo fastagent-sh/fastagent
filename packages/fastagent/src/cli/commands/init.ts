@@ -33,10 +33,12 @@ export async function runInit(dirArg: string, opts: InitOptions): Promise<void> 
   console.error(`    npm run dev   # serve locally and iterate`);
 }
 
-/** Run `npm install` in `cwd` (inherit stdio). */
+/** Run `npm install` in `cwd`, keeping progress output on stderr so stdout stays clean. */
 function npmInstall(cwd: string): Promise<number> {
   return new Promise((resolveCode) => {
-    const child = spawn("npm", ["install"], { cwd, stdio: "inherit" });
+    const child = spawn("npm", ["install"], { cwd, stdio: ["inherit", "pipe", "pipe"] });
+    child.stdout?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
     child.on("close", (code) => resolveCode(code ?? 1));
     child.on("error", () => resolveCode(1));
   });
