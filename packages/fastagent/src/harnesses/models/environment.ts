@@ -31,7 +31,7 @@ interface AuthStatus {
   source?: string;
   /** Why resolving it failed (a corrupt entry, a refresh the provider refused), when it did. */
   error?: string;
-  /** The file that holds the stored credential, or the one a login would write; absent over a caller's store. */
+  /** The file that holds the stored credential, or the one a login would write; absent when no credentials file is used. */
   path?: string;
   /** The kind of credential the store holds for it, usable or not. */
   stored?: Credential["type"];
@@ -43,7 +43,7 @@ interface AuthStatus {
 }
 
 export interface ModelEnvironment {
-  /** The credentials files behind {@link credentials}; absent when the caller supplied its own store. */
+  /** The credentials files behind {@link credentials}; absent when no credentials file is used. */
   auth?: AuthLayers;
   credentials: CredentialStore;
   /** pi's built-ins and the definition's providers, over {@link credentials}. */
