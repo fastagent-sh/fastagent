@@ -10,7 +10,6 @@ import { createModels } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
 import type { ClockStore } from "../../schedule/clock.ts";
 import { clockStore } from "./clock.ts";
-import type { CredentialSourceOptions } from "../models/credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
@@ -35,7 +34,9 @@ import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
 import { otlpTraces } from "../telemetry/otlp.ts";
 import { fastagentVersion } from "../../version.ts";
 
-export interface OpenServingOptions extends CredentialSourceOptions {
+export interface OpenServingOptions {
+  /** Override the credentials file, or `null` to read no credentials file at all. */
+  authPath?: string | null;
   /** The instance's name. Default: the definition's, as one segment. */
   name?: string;
   /**
@@ -237,17 +238,17 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   );
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
   const authPath =
-    options.authPath ??
-    (options.keeps === "state" && options.credentialStore === undefined ? join(stateRoot, "auth.json") : undefined);
-  const models = await modelEnvironment(
-    projectDir,
-    {
-      ...(authPath === undefined ? {} : { authPath }),
-      ...(options.credentialStore === undefined ? {} : { credentialStore: options.credentialStore }),
-    },
-    code.providers,
-    { stateRoot, environment: secrets, env, offline: options.offline ?? env.FASTAGENT_OFFLINE === "1" },
-  );
+    options.authPath !== undefined
+      ? options.authPath
+      : options.keeps === "state"
+        ? join(stateRoot, "auth.json")
+        : undefined;
+  const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
+    stateRoot,
+    environment: secrets,
+    env,
+    offline: options.offline ?? env.FASTAGENT_OFFLINE === "1",
+  });
   // Before anything is opened: a setting it cannot honor refuses the open.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const chosen = options.storage ?? "instance";

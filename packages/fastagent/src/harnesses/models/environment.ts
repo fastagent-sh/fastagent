@@ -5,17 +5,21 @@
  * the Agent does.
  */
 import { join } from "node:path";
-import type { Credential, CredentialStore, Models, Provider } from "@earendil-works/pi-ai";
+import {
+  type Credential,
+  type CredentialStore,
+  InMemoryCredentialStore,
+  type Models,
+  type Provider,
+} from "@earendil-works/pi-ai";
 import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { catalogsIn } from "./catalog.ts";
 import {
   type AuthLayers,
-  type CredentialSourceOptions,
   type FastagentAuthOptions,
   type FastagentCredentialStore,
   GLOBAL_AUTH_PATH,
-  assertOneCredentialSource,
   fastagentCredentialStore,
   resolveAuthLayers,
 } from "./credentials.ts";
@@ -56,17 +60,15 @@ export interface ModelEnvironment {
 
 /**
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
- * credentials file). A supplied `credentialStore` is used as given; otherwise the files: the directory's own layers
- * ({@link resolveAuthLayers}), or the named file, or the global one. `providers` are the definition's. `environment` is
- * the one source of the values a provider authenticates with and of the requests' settings, which this process's
- * environment never adds to; where its files are (`FASTAGENT_ROOT`) is still read from
- * this process's first. The model lists are refreshed before it
- * resolves, kept in the instance's state root (`stateRoot`, else the directory's); `force` asks the network even when
- * they are fresh.
+ * credentials file). Passing `authPath: null` reads no credentials file at all (environment variables only). `providers`
+ * are the definition's. `environment` is the one source of the values a provider authenticates with and of the requests'
+ * settings, which this process's environment never adds to; where its files are (`FASTAGENT_ROOT`) is still read from
+ * this process's first. The model lists are refreshed before it resolves, kept in the instance's state root
+ * (`stateRoot`, else the directory's); `force` asks the network even when they are fresh.
  */
 export async function modelEnvironment(
   agentDir: string | undefined,
-  source: CredentialSourceOptions & FastagentAuthOptions = {},
+  source: FastagentAuthOptions & { authPath?: string | null } = {},
   providers: readonly Provider[] = [],
   options: {
     force?: boolean;
@@ -80,14 +82,14 @@ export async function modelEnvironment(
 ): Promise<ModelEnvironment> {
   const environment = options.environment ?? {};
   const env = { ...(options.env ?? process.env), ...environment };
-  assertOneCredentialSource(source);
-  const files = source.credentialStore
-    ? undefined
-    : agentDir
-      ? resolveAuthLayers(agentDir, source.authPath, env)
-      : { path: source.authPath ?? GLOBAL_AUTH_PATH };
+  const files =
+    source.authPath === null
+      ? undefined
+      : agentDir
+        ? resolveAuthLayers(agentDir, source.authPath, env)
+        : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, environment);
-  const credentials = source.credentialStore ?? (store as FastagentCredentialStore);
+  const credentials: CredentialStore = store ?? new InMemoryCredentialStore();
   const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir, env));
   const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
   const models = modelsOver(credentials, providers, catalogs, environment);
