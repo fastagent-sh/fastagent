@@ -68,8 +68,10 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
   if (wrote && flags.install) {
     const installed = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
       cwd: join(agentDir, "agentcore", "cdk"),
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
+    if (installed.stdout?.length) process.stderr.write(installed.stdout);
+    if (installed.stderr?.length) process.stderr.write(installed.stderr);
     if (installed.status !== 0) throw new Error("npm install in agentcore/cdk failed: run it there, then deploy");
   }
   const names = [...new Set(facts.secrets.filter((s) => !s.optional).map((s) => s.name))];

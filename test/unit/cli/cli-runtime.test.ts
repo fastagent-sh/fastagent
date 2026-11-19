@@ -214,10 +214,28 @@ registerHooks({
     });
   });
 
-  it("refuses a key the served instance does not hold", async () => {
+  it("refuses a key the served instance does not hold, and honors FASTAGENT_API_KEY and --env-file outside any agent directory", async () => {
     await withServedAgent(async (dir, url) => {
       const refused = await runInProcess(["-C", dir, "invoke", "--url", url, "--key", "not-a-key", "hello"]);
       expect([refused.code, refused.stderr]).toEqual([1, expect.stringContaining("unauthorized: ")]);
+
+      const outside = mkdtempSync(join(tmpdir(), "fa-outside-url-"));
+      const fromEnv = await runInProcess(["-C", outside, "invoke", "--url", url, "hello"], undefined, {
+        ...process.env,
+        FASTAGENT_API_KEY: "the-key",
+      });
+      expect([fromEnv.code, fromEnv.stdout.trim()], fromEnv.stderr).toEqual([0, "seen 1"]);
+
+      const envFile = join(outside, "prod.env");
+      await writeFile(envFile, "FASTAGENT_API_KEY=the-next-key\n");
+      const envWithoutKey = { ...process.env };
+      delete envWithoutKey.FASTAGENT_API_KEY;
+      const fromFile = await runInProcess(
+        ["-C", outside, "invoke", "--url", url, "--env-file", envFile, "hello"],
+        undefined,
+        envWithoutKey,
+      );
+      expect([fromFile.code, fromFile.stdout.trim()], fromFile.stderr).toEqual([0, "seen 1"]);
     });
   });
 });
@@ -308,8 +326,12 @@ describe("cli: the agent's clock", () => {
 
     const first = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
     expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-    const second = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
-    expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
+    const second = await runInProcess(["-C", dir, "schedules", "run", "digest", "--json"]);
+    expect(second.code, second.stderr).toBe(0);
+    expect(JSON.parse(second.stdout)).toMatchObject({
+      status: "completed",
+      answer: { text: "seen 2" },
+    });
     expect((await clockOf(dir, (clock) => readFires(clock, "digest"))).map((fire) => fire.outcome)).toEqual([
       "interrupted",
       "completed",

@@ -2,9 +2,10 @@
 import { resolve } from "node:path";
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import { connectAgent } from "@fastagent-sh/client";
-import { enterAgentEnv } from "../env.ts";
+import { applyEnvValues, enterAgentEnv } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { installProxyFetch } from "../proxy.ts";
+import { loadEnvValues, valueFileOf } from "../value-file.ts";
 import { failUsage, optionalAgentDirOrExit } from "./fail.ts";
 import { type InstanceFlags, enterEnvFile } from "./instance.ts";
 
@@ -40,13 +41,14 @@ function deploymentKey(url: string): string {
  * the key to call `url` with: `--key`, from anywhere (the ambient environment when no agent is here), or the agent's.
  */
 function enterForUrl(dirArg: string, key: string | undefined, url: string): string {
-  const agentDir = optionalAgentDirOrExit(resolve(dirArg));
+  const target = resolve(dirArg);
+  const agentDir = optionalAgentDirOrExit(target);
   if (agentDir === undefined) {
+    // No agent directory here: honor an explicit --env-file and the ambient environment (e.g. FASTAGENT_API_KEY).
+    const file = valueFileOf(target);
+    if (file !== undefined) applyEnvValues(loadEnvValues(file));
     installProxyFetch();
-    if (key === undefined) {
-      failUsage(`no key to call ${url} with: pass --key, or run this in the agent whose deploy wrote one`);
-    }
-    return key;
+    return key ?? deploymentKey(url);
   }
   enterAgentEnv(agentDir);
   return key ?? deploymentKey(url);

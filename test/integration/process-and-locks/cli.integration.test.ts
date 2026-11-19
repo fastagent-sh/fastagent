@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentWorkspace, run } from "../../doubles/cli-run.ts";
+import { agentWorkspace, fauxAgent, run } from "../../doubles/cli-run.ts";
 
 describe("cli: process contracts", () => {
   it("--version / -v prints the version to stdout and exits 0 (no parse crash)", async () => {
@@ -38,13 +38,19 @@ describe("cli: process contracts", () => {
     expect(elsewhere.stdout.trim()).not.toBe("project --version");
   });
 
-  // One command is enough through the real binary: that a missing required argument is exit 2 on
-  // EVERY command is cli-kernel.test.ts's, against the spec table.
-  it("invoke without a message is a usage error on stderr, exits 2 (stdout clean)", async () => {
-    const { code, stdout, stderr } = await run(["invoke"]);
-    expect(code).toBe(2);
-    expect(stderr).toMatch(/missing required argument 'message'/);
-    expect(stdout).toBe("");
+  it("invoke reads piped stdin (omitted message or '-'), and exits 2 with clean stdout when stdin is empty", async () => {
+    const empty = await run(["invoke"]);
+    expect(empty.code).toBe(2);
+    expect(empty.stderr).toMatch(/missing message/);
+    expect(empty.stdout).toBe("");
+
+    const dir = await fauxAgent("fa-cli-stdin-");
+    const piped = await run(["-C", dir, "invoke", "--json"], undefined, undefined, "hello from pipe\n");
+    expect(piped.code, piped.stderr).toBe(0);
+    expect(piped.stdout).toContain("hello from pipe");
+    const dash = await run(["-C", dir, "invoke", "-", "--json"], undefined, undefined, "hello via dash\n");
+    expect(dash.code, dash.stderr).toBe(0);
+    expect(dash.stdout).toContain("hello via dash");
   });
 
   it("invoke surfaces a startup error to stderr, keeps stdout empty, exits non-zero", async () => {

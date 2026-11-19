@@ -93,9 +93,9 @@ describe("cli: login and models", () => {
       value_file: join(await realpath(cwd), ".secrets", ".env"),
     });
 
-    const oauthNeeded = await runInProcess(["login", "openai-codex", "--method", "account", "--json"], cwd);
-    expect(oauthNeeded.code).toBe(2);
-    expect(JSON.parse(oauthNeeded.stdout)).toMatchObject({
+    const accountPrompt = await runInProcess(["login", "openai-codex", "--method", "account", "--json"], cwd);
+    expect(accountPrompt.code).toBe(2);
+    expect(JSON.parse(accountPrompt.stdout)).toMatchObject({
       status: "need_user_action",
       provider: "openai-codex",
       method: "account",
@@ -103,7 +103,7 @@ describe("cli: login and models", () => {
       check_command: "fastagent login openai-codex --check --json",
     });
     // The command it names answers: the sign-in is still to be done.
-    const [command, ...args] = (JSON.parse(oauthNeeded.stdout).check_command as string).split(" ");
+    const [command, ...args] = (JSON.parse(accountPrompt.stdout).check_command as string).split(" ");
     expect(command).toBe("fastagent");
     const checked = await runInProcess(args, cwd);
     expect([checked.code, JSON.parse(checked.stdout).status]).toEqual([1, "not_ready"]);

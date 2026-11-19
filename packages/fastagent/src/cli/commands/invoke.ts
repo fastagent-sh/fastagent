@@ -1,5 +1,5 @@
 /**
- * `fastagent invoke <message>`: send ONE message to the opened agent, print its answer, then exit. Every run
+ * `fastagent invoke [message]`: send ONE message (positional, `-`, or piped stdin) to the opened agent, print its answer, then exit. Every run
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
  * served agent instead, over its Agent API, with the same output and exit code.
  */
@@ -116,7 +116,25 @@ async function remoteSession(
   return sessionId;
 }
 
-export async function runInvoke(message: string, dirArg: string, opts: InvokeOptions): Promise<void> {
+async function readMessageInput(given: string | undefined): Promise<string> {
+  if (given !== undefined && given !== "-") {
+    if (given.trim() === "") failUsage("message must not be empty");
+    return given;
+  }
+  if (given === undefined && process.stdin.isTTY === true) {
+    failUsage('missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent invoke)');
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : (chunk as Buffer));
+  }
+  const piped = Buffer.concat(chunks).toString("utf8");
+  if (piped.trim() === "") failUsage("missing message: pass <message> or pipe non-empty stdin");
+  return piped.endsWith("\n") ? piped.slice(0, -1) : piped;
+}
+
+export async function runInvoke(given: string | undefined, dirArg: string, opts: InvokeOptions): Promise<void> {
+  const message = await readMessageInput(given);
   if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
   if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
   const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
