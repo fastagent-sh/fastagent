@@ -18,6 +18,7 @@ import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/sr
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
 import { DEPLOY_SCHEDULE_NAME, DEPLOY_SESSION_ID } from "../../../packages/agentcore/src/variables.ts";
 import { Unavailable } from "../../../packages/fastagent/src/unavailable.ts";
+import { readInvokeMessage } from "@fastagent-sh/fastagent/platform";
 import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
@@ -605,6 +606,10 @@ describe("fastagent agentcore invoke", () => {
       [["agentcore", "invoke", "hi", "--arn", RUNTIME, "--force"], /--force and --no-install are init's/],
       [["agentcore", "invoke", "one", "two", "--arn", RUNTIME], /at most one <message>/],
       [["agentcore", "invoke", "   ", "--arn", RUNTIME], /message must not be empty/],
+      [
+        ["agentcore", "invoke", "hi", "--arn", RUNTIME, "--instance", freshInstance(), "--session", "--json"],
+        /ambiguous/,
+      ],
     ];
     for (const [args, pattern] of cases) {
       const res = await runInProcess(args);
@@ -613,18 +618,20 @@ describe("fastagent agentcore invoke", () => {
       expect(res.stderr, args.join(" ")).toMatch(pattern);
     }
 
-    const prevTTY = process.stdin.isTTY;
+    const prevTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
     try {
-      const tty = await runInProcess(["agentcore", "invoke", "--arn", RUNTIME]);
-      expect([tty.code, tty.stdout]).toEqual([2, ""]);
-      expect(tty.stderr).toContain("fastagent agentcore invoke");
+      expect(await readInvokeMessage(undefined, "fastagent agentcore invoke")).toEqual({
+        ok: false,
+        error: 'missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent agentcore invoke)',
+      });
     } finally {
-      Object.defineProperty(process.stdin, "isTTY", { value: prevTTY, configurable: true });
+      if (prevTTY) Object.defineProperty(process.stdin, "isTTY", prevTTY);
+      else delete (process.stdin as { isTTY?: boolean }).isTTY;
     }
   });
 
-  it("exits 1 with clean stdout when AgentCore refuses the invocation", async () => {
+  it("exits 1 with clean stdout when AgentCore refuses the invocation, and accepts a dash-prefixed --session id", async () => {
     const { handler } = await runtimeOf("fa-agentcore-invoke-refuse-");
     const aws = agentCore(handler);
     try {
@@ -633,6 +640,22 @@ describe("fastagent agentcore invoke", () => {
       expect(res.code).toBe(1);
       expect(res.stdout).toBe("");
       expect(res.stderr).toContain("unauthorized");
+
+      // Base64url session ids can start with `-`; `parseArgs` must accept `--session -id` rather than exiting 2.
+      const dashSession = await runInProcess([
+        "agentcore",
+        "invoke",
+        "hi",
+        "--arn",
+        RUNTIME,
+        "--instance",
+        freshInstance(),
+        "--session",
+        "-dashSessionId.1",
+      ]);
+      expect(dashSession.code).toBe(1);
+      expect(dashSession.stdout).toBe("");
+      expect(dashSession.stderr).toContain("--session -dashSessionId.1: no such session");
     } finally {
       await aws.close();
       await handler.close();

@@ -215,7 +215,12 @@ async function invoke(
 export const run: ExtensionCli["run"] = async (args) => {
   let parsed: ReturnType<typeof parseArgs<{ options: typeof OPTIONS; allowPositionals: true }>>;
   try {
-    parsed = parseArgs({ args: [...args], options: OPTIONS, allowPositionals: true, allowNegative: true });
+    parsed = parseArgs({
+      args: normalizeValueArgs(args),
+      options: OPTIONS,
+      allowPositionals: true,
+      allowNegative: true,
+    });
   } catch (error) {
     usageError((error as Error).message);
   }
@@ -265,3 +270,39 @@ const OPTIONS = {
   model: { type: "string" },
   json: { type: "boolean" },
 } as const;
+
+const VALUE_OPTIONS = new Set(["--arn", "--instance", "--session", "--qualifier", "--model"]);
+const ALL_FLAGS = new Set([
+  "-h",
+  "--help",
+  "--force",
+  "--no-force",
+  "--install",
+  "--no-install",
+  "--json",
+  "--no-json",
+  ...VALUE_OPTIONS,
+]);
+
+/**
+ * Node's `parseArgs` rejects `--session -abc` when a base64url session id starts with `-`. Rewrite `<opt> <val>` into
+ * `<opt>=<val>` when `<val>` starts with `-` and is not another known flag, matching commander's `--session` parsing.
+ */
+function normalizeValueArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--") {
+      out.push(...args.slice(i));
+      break;
+    }
+    const next = args[i + 1];
+    if (VALUE_OPTIONS.has(arg) && next !== undefined && next.startsWith("-") && !ALL_FLAGS.has(next)) {
+      out.push(`${arg}=${next}`);
+      i++;
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
+}
