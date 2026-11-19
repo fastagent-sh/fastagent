@@ -291,13 +291,14 @@ const ALL_FLAGS = new Set([
 function normalizeValueArgs(args: readonly string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
+    const arg = args[i];
+    if (arg === undefined) continue;
     if (arg === "--") {
       out.push(...args.slice(i));
       break;
     }
     const next = args[i + 1];
-    if (VALUE_OPTIONS.has(arg) && next !== undefined && next.startsWith("-") && !ALL_FLAGS.has(next)) {
+    if (VALUE_OPTIONS.has(arg) && next?.startsWith("-") && !ALL_FLAGS.has(next)) {
       out.push(`${arg}=${next}`);
       i++;
     } else {
