@@ -49,14 +49,14 @@ describe("cli: deploy init", () => {
     expect(await readFile(join(composeDir, "compose.yml"), "utf8")).toBe("# custom compose\n");
 
     const flyDir = await agentWorkspace("fa-deploy-fly-", {
-      "package.json": JSON.stringify({ type: "module", name: "_Support_Bot" }),
+      "package.json": JSON.stringify({ type: "module", name: `_${"a".repeat(62)}_tail` }),
     });
     const flown = await runInProcess(["-C", flyDir, "deploy", "init", "fly"]);
     expect(flown.code, flown.stderr).toBe(0);
     expect(flown.stdout).toContain("fly launch --copy-config --ha=false --no-deploy");
     expect(flown.stdout).toContain("fly deploy --ha=false");
     const flyToml = await readFile(join(flyDir, "fly.toml"), "utf8");
-    expect(flyToml).toContain('app = "support-bot"');
+    expect(flyToml).toContain(`app = "${"a".repeat(62)}"`);
     expect(flyToml).toContain('destination = "/data"');
     expect(flyToml).toContain('auto_stop_machines = "off"');
     expect(flyToml).toContain("min_machines_running = 1");

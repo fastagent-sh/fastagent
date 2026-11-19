@@ -54,8 +54,9 @@ function flyAppName(agentName: string): string {
     agentName
       .toLowerCase()
       .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 63) || "fastagent"
+      .replace(/^-+/, "")
+      .slice(0, 63)
+      .replace(/-+$/, "") || "fastagent"
   );
 }
 
