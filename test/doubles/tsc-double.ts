@@ -1,5 +1,5 @@
 /**
- * The build's compiler (src/harnesses/pi-durable/tsc.ts) for a unit test whose subject is what the build decides, not
+ * The build's compiler (`packages/fastagent/src/harnesses/pi-durable/tsc.ts`) for a unit test whose subject is what the build decides, not
  * what TypeScript does: the program is found by following relative imports, and each file is emitted with Node's type
  * stripping. It checks no types and resolves no package, so a test of a type error or a workspace package stays with the
  * real compiler. Installed with `vi.mock("../../packages/fastagent/src/harnesses/pi-durable/tsc.ts", () => import("./tsc-double.ts"))`;

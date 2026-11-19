@@ -1,5 +1,5 @@
 /**
- * `src/harnesses/pi-durable/storage.ts` without the wait for a database another opener holds: refused at once, for a unit
+ * `packages/fastagent/src/harnesses/pi-durable/storage.ts` without the wait for a database another opener holds: refused at once, for a unit
  * test of who refuses and what it says. Installed with
  * `vi.mock("../../packages/fastagent/src/harnesses/pi-durable/storage.ts", () => import("./storage-no-wait.ts"))`.
  */

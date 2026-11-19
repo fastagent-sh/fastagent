@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
-import { type Harness, Harness as Harnesses, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
+import {
+  type Harness,
+  Harness as Harnesses,
+  MemoryStorage,
+  type ToolRegistration,
+  createRegistry,
+} from "@earendil-works/pi-durable";
+import { cronError, nextRun } from "../../../packages/fastagent/src/schedule/cron.ts";
+import { wakeExtension } from "../../../packages/fastagent/src/harnesses/pi-durable/wake.ts";
 import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
 import { clockStore } from "../../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
 import type { SendRequest } from "../../../packages/client/src/agent-api.ts";
@@ -263,5 +271,52 @@ describe("schedule/scheduler: scale-to-zero arming, tick and nextDue", () => {
     await removeAnyWakeup(root, (await listWakeups(root))[0]!.id);
     expect((await s.nextDue(new Date("2026-07-07T11:00:05Z")))?.toISOString()).toBe("2026-07-07T12:00:00.000Z");
     s.stop();
+  });
+});
+
+describe("schedule/cron", () => {
+  it("nextRun is the next instant STRICTLY AFTER `from`, timezone-aware, UTC by default", () => {
+    // 9am America/New_York = 13:00 UTC in July (EDT).
+    const n = nextRun("0 9 * * *", "America/New_York", new Date("2026-07-07T00:00:00Z"));
+    expect(n?.toISOString()).toBe("2026-07-07T13:00:00.000Z");
+    // From that instant, the NEXT one is the following day (strictly after, not the same slot).
+    expect(nextRun("0 9 * * *", "America/New_York", n!)?.toISOString()).toBe("2026-07-08T13:00:00.000Z");
+    // Omitted tz is UTC, not the host's zone.
+    expect(nextRun("0 9 * * *", undefined, new Date("2026-07-07T00:00:00Z"))?.toISOString()).toBe(
+      "2026-07-07T09:00:00.000Z",
+    );
+  });
+
+  it("cronError: undefined for valid, a message for an invalid pattern or timezone", () => {
+    expect(cronError("0 9 * * *", "UTC")).toBeUndefined();
+    expect(cronError("not a cron", undefined)).toBeTruthy();
+    expect(cronError("0 9 * * *", "Not/AZone")).toBeTruthy();
+  });
+});
+
+describe("schedule/wake-tool", () => {
+  const wakeNow = new Date("2026-07-07T12:00:00Z");
+
+  it("records a wake-up into the CURRENT session, in the tool call's own commit", async () => {
+    const harness = await Harnesses.open(
+      new MemoryStorage(),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    opened.push(harness);
+    const conversation = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
+    const tool = wakeExtension({ now: () => wakeNow }).tools?.find(({ name }) => name === "wake") as ToolRegistration;
+    // The tool's only way to its Session is its call's commit.
+    const api = {
+      conversationId: conversation.id,
+      snapshot: async () => ({ incarnation: "inc" }),
+      commit: (change: Parameters<Harness["commit"]>[0], context: Parameters<Harness["commit"]>[1]) =>
+        harness.commit(change, context),
+    };
+    await tool.execute({ in: "30m", prompt: "resume the check" } as never, api as never, BACKGROUND_CONTEXT);
+    const wakeups = await listWakeups(clockStore(harness, BACKGROUND_CONTEXT));
+    expect(wakeups).toEqual([
+      expect.objectContaining({ session: `inc.${conversation.id}`, prompt: "resume the check" }),
+    ]);
   });
 });

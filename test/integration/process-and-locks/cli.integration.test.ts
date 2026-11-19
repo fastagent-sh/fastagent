@@ -28,7 +28,7 @@ describe("cli: process contracts", () => {
     );
     await writeFile(
       join(installed, "cli.js"),
-      'console.log(`project ${process.argv.slice(2).join(" ")}`); process.exitCode = 3;\n',
+      'console.log("project " + process.argv.slice(2).join(" ")); process.exitCode = 3;\n',
     );
     const handed = await run(["info", "--json"], project);
     expect([handed.code, handed.stdout.trim()]).toEqual([3, "project info --json"]);

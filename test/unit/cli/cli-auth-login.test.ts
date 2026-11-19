@@ -39,7 +39,7 @@ describe("cli: login and models", () => {
   });
 
   it("models in an agent lists its definition's providers, without the secrets a serve needs", async () => {
-    // A secret not filled in yet (`add telegram` writes none) stops dev and start; listing models must not need it.
+    // A declared secret not filled in yet stops dev and start; listing models must not need it.
     const dir = await agentWorkspace("fa-models-shape-", {
       "fastagent.config.ts":
         'import { fauxProvider } from "@earendil-works/pi-ai";\n' +
