@@ -1,8 +1,7 @@
 /**
  * The CLI of the project the command runs in. An agent depends on a version of FastAgent, and that version's CLI is
  * the one to run it, so a `fastagent` installed elsewhere (globally) hands the command to the project's. Asked from
- * the working directory, as Node resolves a package from there: an agent named by an argument elsewhere runs on the
- * CLI that was started.
+ * the working directory (after any leading `-C <dir>`), as Node resolves a package from there.
  */
 import { readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
