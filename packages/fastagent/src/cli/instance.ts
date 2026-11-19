@@ -11,6 +11,7 @@ import type { OpenServingOptions } from "../harnesses/pi-durable/serve.ts";
 import {
   DATABASE_URL_ENV,
   INSTANCE_ROOT_ENV,
+  type InstanceMode,
   isDeployedWorkspace,
   resolveOverridePath,
   resolveStateRoot,
@@ -138,16 +139,18 @@ export function refuseUnnamedDatabaseInstance(): void {
  */
 export function instanceInputs(
   agentDir: string,
+  options: { mode?: InstanceMode } = {},
 ): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
   refuseUnnamedDatabaseInstance();
-  const workdir = resolveWorkdir(agentDir);
-  // A default one is the project's own `.fastagent/<environment>/`, which nothing has made yet.
+  const mode = options.mode ?? "dev";
+  const workdir = resolveWorkdir(agentDir, process.env, mode);
+  // A default one is the project's own `.fastagent/<mode>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
   return {
     projectDir: agentDir,
     ...(enteredInstanceName() === undefined ? {} : { name: enteredInstanceName() as string }),
     workdir,
-    stateRoot: resolveStateRoot(agentDir),
+    stateRoot: resolveStateRoot(agentDir, process.env, mode),
     secrets: definedValues(process.env),
     env: baseEnv(process.env),
     ownEnv: process.env,

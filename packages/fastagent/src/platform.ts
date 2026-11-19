@@ -13,7 +13,6 @@ import { loadProjectBuild } from "./harnesses/pi-durable/built.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
 import { type PostgresDatabase, listPostgresInstances } from "./harnesses/pi-durable/postgres/storage.ts";
 import { instanceName } from "./instance-name.ts";
-import { selectAgentEnvironment } from "./paths.ts";
 import { nextRun } from "./schedule/cron.ts";
 
 export { DATABASE_URL_ENV } from "./paths.ts";
@@ -96,8 +95,6 @@ export async function writeContainer(
   target: ContainerTarget,
   { force = false }: { force?: boolean } = {},
 ): Promise<ContainerWrite> {
-  // The image is a production instance: its secrets directory is the production one, which the checks keep out of it.
-  selectAgentEnvironment("production");
   const checked = await checkContainer({ agentDir, force, target });
   if (!checked.ok) return checked;
   for (const m of checked.messages) console.error(`[fastagent] ${m.level === "note" ? "note" : "warn"}: ${m.text}`);
@@ -110,7 +107,6 @@ export async function writeContainer(
  * through an ignore file that does not leave them out, or no ignore file at all. Empty when it carries none.
  */
 export async function buildContextLeaks(agentDir: string): Promise<string[]> {
-  selectAgentEnvironment("production");
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
   const unignored = await shippedWithoutIgnoreFile(agentDir, paths);
   if (unignored !== undefined) return [unignored];

@@ -9,7 +9,7 @@ import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
-import { DEPLOYED_ENV, exists, selectAgentEnvironment } from "../paths.ts";
+import { DEPLOYED_ENV, exists } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 import { hasLockfile as lockfileIn, listsFastagent, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
@@ -78,7 +78,6 @@ export async function checkDeploy(
   agentDir: string,
   target: ContainerTarget = DOCKER_TARGET,
 ): Promise<DeployCheckResult> {
-  selectAgentEnvironment("production");
   const checked = await checkContainer({ agentDir, force: false, target });
   if (!checked.ok) {
     return { ok: false, gate: checked.gate, leaks: [], warnings: [], notes: [] };
