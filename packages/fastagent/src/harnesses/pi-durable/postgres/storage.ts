@@ -80,6 +80,11 @@ interface LeaseOptions {
 
 const DEFAULT_LEASE: LeaseOptions = { leaseMs: LEASE_MS, waitMs: LEASE_MS + 5_000 };
 
+/**
+ * Renew every quarter of the lease so the third missed tick lands at 3/4 — comfortably past {@link GIVE_UP_AFTER} (2/3)
+ * even with sub-millisecond timer jitter, while still a full quarter ahead of lease expiry.
+ */
+const RENEW_EVERY = 1 / 4;
 /** The share of the lease a holder goes without renewing before it gives the instance up. */
 const GIVE_UP_AFTER = 2 / 3;
 
@@ -334,7 +339,7 @@ export class PostgresStorage implements Storage {
             );
           },
         );
-    }, leaseMs / 3);
+    }, leaseMs * RENEW_EVERY);
     this.renewal.unref();
   }
 
