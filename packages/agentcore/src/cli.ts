@@ -196,7 +196,7 @@ async function invoke(
   } catch (error) {
     usageError(error instanceof Error ? error.message : String(error));
   }
-  const input = await readInvokeMessage(given);
+  const input = await readInvokeMessage(given, "fastagent agentcore invoke");
   if (!input.ok) usageError(input.error);
   const where =
     flags.qualifier === undefined

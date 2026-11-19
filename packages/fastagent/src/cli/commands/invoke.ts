@@ -152,13 +152,14 @@ async function remoteSession(
  */
 export async function readInvokeMessage(
   given: string | undefined,
+  command = "fastagent invoke",
 ): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   if (given !== undefined && given !== "-") {
     if (given.trim() === "") return { ok: false, error: "message must not be empty" };
     return { ok: true, message: given };
   }
   if (given === undefined && process.stdin.isTTY === true) {
-    return { ok: false, error: 'missing message: pass <message> or pipe stdin (e.g. echo "hi" | fastagent invoke)' };
+    return { ok: false, error: `missing message: pass <message> or pipe stdin (e.g. echo "hi" | ${command})` };
   }
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {

@@ -612,6 +612,16 @@ describe("fastagent agentcore invoke", () => {
       expect(res.stdout, args.join(" ")).toBe("");
       expect(res.stderr, args.join(" ")).toMatch(pattern);
     }
+
+    const prevTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    try {
+      const tty = await runInProcess(["agentcore", "invoke", "--arn", RUNTIME]);
+      expect([tty.code, tty.stdout]).toEqual([2, ""]);
+      expect(tty.stderr).toContain("fastagent agentcore invoke");
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: prevTTY, configurable: true });
+    }
   });
 
   it("exits 1 with clean stdout when AgentCore refuses the invocation", async () => {
