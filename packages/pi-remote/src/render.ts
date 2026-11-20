@@ -40,6 +40,7 @@ interface ToolResultEntryData {
   toolName?: string;
   isError?: boolean;
   content?: ContentPart[];
+  details?: Json;
 }
 
 interface CompactionEntryData {
@@ -148,7 +149,23 @@ function formatUsageTotals(usage: Usage | undefined): string {
 }
 
 export function shortId(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
+  if (id.length <= 12) return id;
+  const dot = id.lastIndexOf(".");
+  if (dot > 0 && dot < id.length - 1) {
+    return `${id.slice(0, 4)}…${id.slice(dot)}`;
+  }
+  return `${id.slice(0, 4)}…${id.slice(-4)}`;
+}
+
+export function formatRelativeTime(timestamp: number | undefined, now = Date.now()): string {
+  if (timestamp === undefined) return "";
+  const diffSec = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (diffSec < 60) return "just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  return `${Math.floor(diffHr / 24)}d ago`;
 }
 
 export function renderRemoteEntry(
@@ -191,15 +208,24 @@ export function renderRemoteEntry(
       const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
       const header = `${icon} ${theme.bold(toolName)}`;
 
+      const detailsText = data.details !== undefined ? JSON.stringify(data.details, null, 2) : undefined;
       const box = new Box(1, 0, (line) => theme.bg(isError ? "toolErrorBg" : "toolSuccessBg", line));
       if (options.expanded) {
-        box.addChild(new Text(lines.length > 0 ? `${header}\n${theme.fg("dim", text)}` : header, 0, 0));
+        const sections = [header];
+        if (lines.length > 0) sections.push(theme.fg("dim", text));
+        if (detailsText) sections.push(theme.fg("dim", `details: ${detailsText}`));
+        box.addChild(new Text(sections.join("\n"), 0, 0));
       } else {
         const previewLines = lines.slice(0, 3);
         const more = lines.length - previewLines.length;
-        const hint = more > 0 ? ` (${more} more lines, ${options.keyHint("app.tools.expand", "to expand")})` : "";
+        const extra =
+          more > 0
+            ? ` (${more} more lines, ${options.keyHint("app.tools.expand", "to expand")})`
+            : detailsText
+              ? ` (details, ${options.keyHint("app.tools.expand", "to expand")})`
+              : "";
         const body = previewLines.length > 0 ? `\n${theme.fg("dim", previewLines.join("\n"))}` : "";
-        box.addChild(new Text(`${header}${theme.fg("dim", hint)}${body}`, 0, 0));
+        box.addChild(new Text(`${header}${theme.fg("dim", extra)}${body}`, 0, 0));
       }
       return box;
     }
@@ -225,6 +251,7 @@ export function renderRemoteEntry(
 
 export function hasLiveContent(state: RemoteViewState): boolean {
   if (state.status === "connecting" || state.status === "reconnecting") return true;
+  if (state.compacting) return true;
   if (state.retrying !== undefined) return true;
   if (state.activeTools.length > 0) return true;
   if (state.liveReply && (state.liveReply.text.length > 0 || state.liveReply.thinking.length > 0)) return true;
@@ -233,9 +260,16 @@ export function hasLiveContent(state: RemoteViewState): boolean {
 }
 
 function renderActiveToolLine(tool: ActiveTool, theme: Theme): string {
-  const args = formatArgsSummary(tool.args, 60);
+  const args = tool.args === undefined ? "" : formatArgsSummary(tool.args, 60);
   const base = `${theme.fg("warning", "●")} ${theme.bold(tool.name)}${args ? ` ${theme.fg("dim", args)}` : ""}`;
-  return tool.progress ? `${base}\n  ${theme.fg("dim", tool.progress)}` : base;
+  const body = tool.output ?? tool.progress;
+  if (!body) return base;
+  const indented = body
+    .split("\n")
+    .slice(-6)
+    .map((line) => `  ${theme.fg("dim", line)}`)
+    .join("\n");
+  return `${base}\n${indented}`;
 }
 
 export function createLiveWidgetComponent(getState: () => RemoteViewState, theme: Theme): Component {
@@ -263,6 +297,10 @@ export function createLiveWidgetComponent(getState: () => RemoteViewState, theme
       } else if (state.status === "reconnecting") {
         const err = state.lastError ? ` (${state.lastError})` : "";
         container.addChild(new Text(theme.fg("warning", `Reconnecting to ${label}…${err}`), 1, 0));
+      }
+
+      if (state.compacting) {
+        container.addChild(new Text(theme.fg("accent", `Compacting ${label} session…`), 1, 0));
       }
 
       if (state.retrying) {
@@ -311,7 +349,10 @@ export function createLiveWidgetComponent(getState: () => RemoteViewState, theme
       }
 
       if (state.session?.status === "running") {
-        container.addChild(new Text(theme.fg("dim", `● ${label} running… (Esc to cancel, type to steer)`), 1, 0));
+        const queued = state.queuedMessages.length > 0 ? ` · ${state.queuedMessages.length} queued` : "";
+        container.addChild(
+          new Text(theme.fg("dim", `● ${label} running${queued}… (Esc to cancel, type to steer)`), 1, 0),
+        );
       }
 
       return container.render(width);
@@ -330,7 +371,14 @@ export function renderRemoteFooterLine(state: RemoteViewState, width: number, th
         : theme.fg("success", "●");
   const usageStr = formatUsageTotals(session?.usage);
   const sid = session ? shortId(session.id) : "—";
-  const leftParts = [`${statusIcon} fastagent:${remote}`, theme.fg("dim", sid)];
+  const titleStr = session?.title
+    ? session.title.length > 28
+      ? `${session.title.slice(0, 27)}…`
+      : session.title
+    : undefined;
+  const leftParts = [`${statusIcon} fastagent:${remote}`, theme.fg("dim", titleStr ? `${titleStr} (${sid})` : sid)];
+  if (state.compacting) leftParts.push(theme.fg("accent", "compacting"));
+  if (state.queuedMessages.length > 0) leftParts.push(theme.fg("dim", `queued:${state.queuedMessages.length}`));
   if (usageStr) leftParts.push(theme.fg("dim", usageStr));
   const left = leftParts.join(" · ");
 

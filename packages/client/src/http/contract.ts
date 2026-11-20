@@ -207,6 +207,11 @@ const AgentGroup = HttpApiGroup.make("agent")
       success: Session,
       error: Refused,
     }),
+    HttpApiEndpoint.delete("deleteSession", "/sessions/:sessionId", {
+      params: sessionPath,
+      success: HttpApiSchema.NoContent,
+      error: Refused,
+    }),
     HttpApiEndpoint.get("entries", "/sessions/:sessionId/entries", {
       params: sessionPath,
       query: EntriesOptions,

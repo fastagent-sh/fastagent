@@ -70,7 +70,15 @@ import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
-import { type InputRecord, MetadataDoc, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
+import {
+  type InputRecord,
+  MetadataDoc,
+  SessionMetaDoc,
+  isInput,
+  queuedInputs,
+  requestIdFor,
+  usageOfState,
+} from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
@@ -78,6 +86,7 @@ import { messageStream } from "./stream.ts";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type ClockState, clockOperations } from "../../schedule/operations.ts";
 import type { ClockStore } from "../../schedule/clock.ts";
+import { removeSessionWakeups } from "../../schedule/wakeups.ts";
 import { clockStore } from "./clock.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
@@ -461,6 +470,8 @@ function durableAgent(
         let submitting = false;
         const admitted = yield* fromPromise(() =>
           conversation.commit(async (tx) => {
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return { kind: "deleted" } as const;
             if (request.idempotencyKey !== undefined) {
               const seen = await tx.submissionByRequest(conversation.id, requestId);
               if (isInput(seen)) return { kind: "seen", seen } as const;
@@ -483,6 +494,7 @@ function durableAgent(
             if (request.metadata !== undefined) {
               (await tx.doc(MetadataDoc, String(id), null)).metadata = { ...request.metadata };
             }
+            meta.updatedAt = Date.now();
             return { kind: "admitted", id } as const;
           }, context),
         ).pipe(
@@ -495,6 +507,9 @@ function durableAgent(
             return submitting ? Effect.fail(unconfirmed(conversation, undefined, error)) : Effect.failCause(cause);
           }),
         );
+        if (admitted.kind === "deleted") {
+          return yield* agentError("not_found", `No session ${request.sessionId}`);
+        }
         if (admitted.kind === "seen") return { message: yield* reads.message(admitted.seen), replayed: true };
         if (admitted.kind === "capacity") {
           return yield* agentError("busy", `This agent already holds ${LIMITS.inFlightPerProcess} messages`, {
@@ -612,8 +627,22 @@ function durableAgent(
   const create = (createOptions?: CreateSessionOptions): Promise<Session> =>
     settle(
       Effect.gen(function* () {
-        const { forkFrom, ...settings } = yield* decode(CreateSessionOptions, createOptions ?? {}, "sessions.create");
-        const creation = { ...OWNERLESS, agent: yield* changeOf(settings) };
+        const { forkFrom, title, ...settings } = yield* decode(
+          CreateSessionOptions,
+          createOptions ?? {},
+          "sessions.create",
+        );
+        const now = Date.now();
+        const initMeta = async (
+          tx: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[0],
+          id: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[1],
+        ) => {
+          const meta = await tx.doc(SessionMetaDoc, id);
+          meta.createdAt = now;
+          meta.updatedAt = now;
+          if (title !== undefined) meta.title = title;
+        };
+        const creation = { ...OWNERLESS, agent: yield* changeOf(settings), init: initMeta };
         if (forkFrom === undefined) {
           return yield* reads.session(yield* fromPromise(() => harness.createConversation(creation, context)));
         }
@@ -638,6 +667,7 @@ function durableAgent(
                     init: async (tx, id) => {
                       Object.assign(await tx.doc(AgentDoc, id), inherited);
                       await configure(tx, id, creation.agent);
+                      await initMeta(tx, id);
                     },
                   },
                   context,
@@ -655,13 +685,55 @@ function durableAgent(
         if (Object.values(decoded).every((value) => value === undefined)) {
           return yield* agentError(
             "invalid_request",
-            "Nothing to update: give a model, a thinking level, instructions or tools",
+            "Nothing to update: give a title, a model, a thinking level, instructions or tools",
           );
         }
         const conversation = yield* conversationOf(sessionId);
-        const change = yield* changeOf(decoded);
-        yield* fromPromise(() => conversation.configure(change, context));
+        const { title, ...agentChanges } = decoded;
+        const hasAgentChange = Object.values(agentChanges).some((value) => value !== undefined);
+        const change = hasAgentChange ? yield* changeOf(agentChanges) : undefined;
+        const updated = yield* fromPromise(() =>
+          harness.commit(async (tx) => {
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return false;
+            if (change !== undefined) await configure(tx, conversation.id, change);
+            if (title !== undefined) meta.title = title;
+            meta.updatedAt = Date.now();
+            return true;
+          }, context),
+        );
+        if (!updated) return yield* agentError("not_found", `No session ${sessionId}`);
         return yield* reads.session(conversation);
+      }),
+    );
+
+  const clock =
+    options.clock === undefined
+      ? undefined
+      : { store: clockStore(harness, context), schedules: options.clock.schedules };
+
+  const remove = (sessionId: string): Promise<void> =>
+    settle(
+      Effect.gen(function* () {
+        const conversation = yield* conversationOf(sessionId);
+        const marked = yield* fromPromise(() =>
+          harness.commit(async (tx) => {
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return false;
+            meta.deleted = true;
+            meta.updatedAt = Date.now();
+            return true;
+          }, context),
+        );
+        if (!marked) return yield* agentError("not_found", `No session ${sessionId}`);
+        yield* fromPromise(async () => {
+          if (clock !== undefined) await removeSessionWakeups(clock.store, sessionId);
+          try {
+            await conversation.abort(context);
+          } catch (error: unknown) {
+            if (!closing) throw error;
+          }
+        });
       }),
     );
 
@@ -817,10 +889,6 @@ function durableAgent(
   const getSession = (sessionId: string): Promise<Session> =>
     settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session)));
   const messages = { send, stream, get };
-  const clock =
-    options.clock === undefined
-      ? undefined
-      : { store: clockStore(harness, context), schedules: options.clock.schedules };
   return {
     harness,
     ...(clock === undefined ? {} : { clock: clock.store }),
@@ -832,6 +900,7 @@ function durableAgent(
       get: getSession,
       list,
       update,
+      delete: remove,
       entries,
       events,
       cancel,

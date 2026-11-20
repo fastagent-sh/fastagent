@@ -5,11 +5,20 @@
 import { randomUUID } from "node:crypto";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
-import { type AgentState, type EntryRecord, type SubmissionRecord, defineDocFamily } from "@earendil-works/pi-durable";
 import {
+  type AgentState,
+  type EntryRecord,
+  type SubmissionRecord,
+  type ToolSlot,
+  defineDoc,
+  defineDocFamily,
+} from "@earendil-works/pi-durable";
+import {
+  type ActiveTool,
   type AgentErrorData,
   type Message,
   type Metadata,
+  type QueuedMessage,
   type Session,
   type Tokens,
   type Usage,
@@ -42,6 +51,27 @@ export const MetadataDoc = defineDocFamily<{ metadata: Metadata }, null>({
   checkpointWhen: () => false,
 });
 
+export type SessionMetaState = {
+  title: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+  deleted: boolean;
+};
+
+/**
+ * Per-session metadata and soft-delete tombstone. `fork: "initial"` keeps a forked session from inheriting its
+ * parent's title, creation timestamp, or deletion state.
+ */
+export const SessionMetaDoc = defineDoc<SessionMetaState>({
+  kind: "fastagent.session-meta",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ title: null, createdAt: null, updatedAt: null, deleted: false }),
+  checkpointWhen: () => false,
+});
+
 /** Every message is submitted with a request id, so its entry can name it: the Caller's key, or one of our own. */
 export function requestIdFor(idempotencyKey: string | undefined): string {
   return idempotencyKey === undefined ? `id:${randomUUID()}` : `${KEY}${idempotencyKey}`;
@@ -70,6 +100,8 @@ export interface UsageView {
 export interface LiveView {
   readonly run?: { readonly inputs: readonly number[] };
   readonly generation?: { readonly message?: unknown };
+  readonly tools?: readonly ToolSlot[];
+  readonly compactions?: readonly { readonly taskId: number; readonly trigger: "manual" | "threshold" | "overflow" }[];
 }
 
 /** The queued inputs in the order they will be taken: steers before follow-ups, each in arrival order. */
@@ -146,18 +178,64 @@ function unanswered(record: Extract<EndedRecord, { status: "unanswered" }>): Pic
   }
 }
 
+function lastProgressLine(output: string | undefined): string | undefined {
+  if (!output) return undefined;
+  const lines = output.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]?.trim();
+    if (line) return line;
+  }
+  return undefined;
+}
+
+function activeToolsOf(live: LiveView | undefined): ActiveTool[] {
+  const tools = live?.tools ?? [];
+  const active: ActiveTool[] = [];
+  for (const slot of tools) {
+    if (slot.status === "done") continue;
+    const progress = lastProgressLine(slot.output);
+    active.push({
+      toolCallId: slot.callId,
+      name: slot.name,
+      status: slot.status,
+      ...(progress === undefined ? {} : { progress }),
+    });
+  }
+  return active;
+}
+
+function queuedMessagesOf(inbox: InboxView | undefined, ids: Ids | undefined): QueuedMessage[] {
+  if (!inbox || !ids) return [];
+  const steers: QueuedMessage[] = [];
+  const queued: QueuedMessage[] = [];
+  for (const item of inbox.items) {
+    if (item.mode === "steer") steers.push({ id: ids.encode(item.id), mode: "steer" });
+    else if (item.mode === "followUp") queued.push({ id: ids.encode(item.id), mode: "queue" });
+  }
+  return [...steers, ...queued];
+}
+
 /** The session as it is now, from its documents as one commit or one event snapshot holds them. */
 export function sessionOf(
   id: string,
   live: LiveView | undefined,
   usage: UsageView | undefined,
   agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools"> | undefined,
+  inbox?: InboxView,
+  meta?: SessionMetaState,
+  ids?: Ids,
 ): Session {
   const partial = live?.generation?.message as Pick<AssistantMessage, "content"> | undefined;
   const thinking = partial === undefined ? undefined : thinkingOf(partial);
+  const activeTools = activeToolsOf(live);
+  const queuedMessages = queuedMessagesOf(inbox, ids);
+  const compacting = (live?.compactions?.length ?? 0) > 0;
   return {
     id,
     status: live?.run === undefined ? "idle" : "running",
+    ...(meta?.title ? { title: meta.title } : {}),
+    ...(typeof meta?.createdAt === "number" ? { createdAt: meta.createdAt } : {}),
+    ...(typeof meta?.updatedAt === "number" ? { updatedAt: meta.updatedAt } : {}),
     ...(agent?.model === undefined ? {} : { model: { provider: agent.model.provider, modelId: agent.model.modelId } }),
     ...(agent?.thinkingLevel === undefined ? {} : { thinkingLevel: agent.thinkingLevel }),
     ...(agent?.instructions === undefined ? {} : { instructions: agent.instructions }),
@@ -166,6 +244,9 @@ export function sessionOf(
     ...(partial === undefined
       ? {}
       : { reply: { text: replyText(partial), ...(thinking === undefined ? {} : { thinking }) } }),
+    ...(activeTools.length > 0 ? { activeTools } : {}),
+    ...(queuedMessages.length > 0 ? { queuedMessages } : {}),
+    ...(compacting ? { compacting: true } : {}),
     usage: usageOfState(usage),
   };
 }

@@ -126,13 +126,40 @@ const open = <S extends Schema.Top>(known: S) =>
 export const SessionStatus = Schema.Literals(["idle", "running"]);
 export type SessionStatus = typeof SessionStatus.Type;
 
+const SessionTitle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
+
+/** A tool call in the session's current tool round, present while it has not finished. */
+export const ActiveTool = Schema.Struct({
+  toolCallId: Schema.String,
+  name: Schema.String,
+  status: Schema.Literals(["pending", "running"]),
+  progress: Schema.optionalKey(Schema.String),
+});
+export type ActiveTool = typeof ActiveTool.Type;
+
+/** A message waiting in the session's inbox for the current turn or run to take it. */
+export const QueuedMessage = Schema.Struct({
+  id: Schema.String,
+  mode: Schema.Literals(["steer", "queue"]),
+});
+export type QueuedMessage = typeof QueuedMessage.Type;
+
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
     id: Schema.String,
     status: open(SessionStatus),
+    title: Schema.optionalKey(Schema.String),
+    createdAt: Schema.optionalKey(Schema.Number),
+    updatedAt: Schema.optionalKey(Schema.Number),
     ...settingsFields(Schema.optionalKey),
     /** The agent's reply being written, as written so far: present only while one is. */
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
+    /** Tool calls currently pending or running in the active round; absent when none. */
+    activeTools: Schema.optionalKey(Schema.Array(ActiveTool)),
+    /** Messages queued behind the current work; absent when none. */
+    queuedMessages: Schema.optionalKey(Schema.Array(QueuedMessage)),
+    /** Present and true while a compaction task is running for this session. */
+    compacting: Schema.optionalKey(Schema.Boolean),
     usage: Usage,
   }),
 ) {}
@@ -205,13 +232,26 @@ export const SessionEvent = Schema.Union([
     name: Schema.String,
     args: Schema.Json,
   }),
-  Schema.Struct({ type: Schema.Literal("tool_progress"), toolCallId: Schema.String, text: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("tool_progress"),
+    toolCallId: Schema.String,
+    text: Schema.String,
+    output: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({
     type: Schema.Literal("retrying"),
     attempt: Schema.Number,
     maxAttempts: Schema.Number,
     delayMs: Schema.Number,
     reason: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("compaction_started"),
+    trigger: Schema.Literals(["manual", "threshold", "overflow"]),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("compaction_failed"),
+    error: Schema.String,
   }),
   Schema.Struct({ type: Schema.Literal("done"), message: Message }),
   Schema.Struct({ type: Schema.Literal("stream_error"), error: AgentErrorData }),
@@ -231,6 +271,7 @@ export const SessionSettings = Schema.Struct(settingsFields(Schema.optional));
 export type SessionSettings = typeof SessionSettings.Type;
 
 export const CreateSessionOptions = Schema.Struct({
+  title: Schema.optional(SessionTitle),
   ...settingsFields(Schema.optional),
   forkFrom: Schema.optional(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optional(Schema.String) })),
 });
@@ -238,6 +279,7 @@ export type CreateSessionOptions = typeof CreateSessionOptions.Type;
 
 /** `null` clears a field back to the deployment's. */
 export const SessionChanges = Schema.Struct({
+  title: Schema.optional(Schema.NullOr(SessionTitle)),
   model: Schema.optional(Schema.NullOr(ModelRef)),
   thinkingLevel: Schema.optional(Schema.NullOr(ThinkingLevel)),
   instructions: Schema.optional(Schema.NullOr(Schema.String)),
@@ -351,6 +393,7 @@ export interface Agent {
     get(sessionId: string): Promise<Session>;
     list(options?: ListOptions): Promise<Page<Session>>;
     update(sessionId: string, changes: SessionChanges): Promise<Session>;
+    delete(sessionId: string): Promise<void>;
     entries(sessionId: string, options?: EntriesOptions): Promise<Page<Entry>>;
     events(sessionId: string, options?: { after?: string; signal?: AbortSignal }): AsyncIterable<SessionEvent>;
     cancel(sessionId: string): Promise<{ stopped: string[] }>;

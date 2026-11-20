@@ -43,4 +43,4 @@ Create `~/.config/fastagent/remotes.json` (or point `FASTAGENT_REMOTES_PATH` at 
 - Connect to a saved remote: `/fa connect ops` (or `/fa connect` to pick interactively / guide setup if none saved)
 - Connect on startup: `pi --fa ops`
 - Send messages and images normally; while the remote agent is running, typing steers it and `Esc` cancels it.
-- Commands: `/fa add`, `/fa remove`, `/fa connect`, `/fa disconnect`, `/fa status`, `/fa sessions`, `/fa new`, `/fa fork`, `/fa model`, `/fa thinking`, `/fa compact`, `/fa schedules`, `/fa run <name>`, `/fa wakeups`, `/fa cancel`.
+- Commands: `/fa add`, `/fa remove`, `/fa connect`, `/fa disconnect`, `/fa status`, `/fa sessions`, `/fa title`, `/fa delete`, `/fa new`, `/fa fork`, `/fa model`, `/fa thinking`, `/fa compact`, `/fa schedules`, `/fa run <name>`, `/fa wakeups`, `/fa cancel`.
