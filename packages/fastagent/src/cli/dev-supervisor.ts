@@ -5,10 +5,10 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_FILE, isUnderDir } from "./paths.ts";
-import { dotEnvPath } from "./value-file.ts";
-import { log } from "./log.ts";
-import { activeWork } from "./busy.ts";
+import { AGENT_CONFIG_FILE, isUnderDir } from "../paths.ts";
+import { dotEnvPath } from "../value-file.ts";
+import { log } from "../log.ts";
+import { activeWork } from "../busy.ts";
 
 /** The agent's code (its tools, extensions and schedules), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";

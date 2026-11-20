@@ -7,7 +7,7 @@
  * answered twice, since a message is sent only once its session is recorded.
  */
 import { type Agent, AgentError } from "@fastagent-sh/client/agent-api";
-import { log } from "./log.ts";
+import { log } from "../log.ts";
 
 /** What the map asks of the Agent: whether a recorded session is still there, and a new one when it is not. */
 type SessionsAgent = { sessions: Pick<Agent["sessions"], "get" | "create"> };

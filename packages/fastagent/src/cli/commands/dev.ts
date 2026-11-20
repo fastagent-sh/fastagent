@@ -2,7 +2,7 @@
  * `fastagent dev`: a SUPERVISOR that spawns a worker (this command with FASTAGENT_DEV_WORKER set) to assemble + serve,
  * restarting it on agent edits.
  */
-import { listenForRestart, runDevSupervisor } from "../../dev-supervisor.ts";
+import { listenForRestart, runDevSupervisor } from "../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
