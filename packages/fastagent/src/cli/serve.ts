@@ -23,17 +23,15 @@ export function serveService(
   owner?: { stateRoot: string; key: string },
 ): void {
   let unannounce = () => {};
-  const announced: Service = {
-    ...service,
-    close: () => {
-      unannounce();
-      return service.close();
+  serve(
+    service,
+    bind,
+    (port) => {
+      if (owner !== undefined) unannounce = announceOwner(owner.stateRoot, bind.host, port, owner.key);
+      reportServing(service, bind.host, port, owner !== undefined);
     },
-  };
-  serve(announced, bind, (port) => {
-    if (owner !== undefined) unannounce = announceOwner(owner.stateRoot, bind.host, port, owner.key);
-    reportServing(service, bind.host, port, owner !== undefined);
-  });
+    () => unannounce(),
+  );
 }
 
 /** The "we are serving" report: the supervisor message `dev`'s watcher waits for, the address, and the Agent API. */
@@ -63,12 +61,14 @@ function serve(
   service: Service,
   bind: { port: number; host?: string },
   onListening?: (boundPort: number) => void,
+  beforeClose?: () => void,
 ): void {
   const { port, host } = bind;
   let stopping = false;
   const stop = (exitCode: number): void => {
     if (stopping) return;
     stopping = true;
+    beforeClose?.();
     // Bounded: shutdown must not hang on a step that will not finish, so the deadline fires regardless.
     const deadline = setTimeout(() => {
       log.error(`[fastagent] shutdown did not finish within ${FORCED_EXIT_MS}ms; exiting`);
