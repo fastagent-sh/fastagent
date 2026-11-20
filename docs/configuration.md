@@ -34,6 +34,7 @@ Every key is optional. An unknown key refuses the start.
 |---|---|---|
 | `model` | none | `provider/modelId` ([model selection](#model-selection)) |
 | `thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `codingTools` | `true` | Built-in coding tools (`read`, `write`, `edit`, `bash`): `true`, `false`, or a subset array such as `["read"]` |
 | `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
@@ -219,9 +220,13 @@ skipped, and helpers go elsewhere (`lib/`). Rename a file to `<name>.ts.disabled
 
 ## Tools
 
-Every agent has the coding tools `read`, `write`, `edit` and `bash`. They are not a sandbox: to isolate an agent,
-sandbox its process. A tool's `parameters` schema is checked before `execute` runs. A tool that needs its session id
-calls `await sessionIdOf(api, context)`. [MCP servers](mcp.md) add tools from `mcpServers`.
+By default an agent has the coding tools `read`, `write`, `edit` and `bash`. Set `codingTools: false` in
+`fastagent.config.ts` to disable all four (for tool-only or multi-user embedded agents), or pass a subset such as
+`codingTools: ["read"]`. When `codingTools` is disabled, workspace paths and filesystem instructions are omitted from
+the system prompt; when `read` is disabled, skills remain usable via `/skill:<name>` rather than model-driven `read`.
+Coding tools are not a sandbox: to isolate an agent that enables them, sandbox its process. A tool's `parameters` schema
+is checked before `execute` runs. A tool that needs its session id calls `await sessionIdOf(api, context)`.
+[MCP servers](mcp.md) add tools from `mcpServers`.
 
 ## Extensions
 

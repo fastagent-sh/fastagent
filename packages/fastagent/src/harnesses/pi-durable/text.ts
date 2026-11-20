@@ -11,6 +11,7 @@ import { parse as parseYaml } from "yaml";
 import { log } from "../../log.ts";
 import type { RunsAs } from "../../serving-command.ts";
 import type { AgentCommand } from "./agent.ts";
+import { CODING_TOOL_NAMES, type CodingToolName } from "./define.ts";
 
 interface Skill {
   name: string;
@@ -253,26 +254,51 @@ const fileText = (path: string): string | undefined => {
  */
 export function definitionSections(
   agentDir: string,
-  options: { wake: boolean; runsAs: RunsAs; workdir?: string; source?: boolean },
+  options: {
+    wake: boolean;
+    runsAs: RunsAs;
+    workdir?: string;
+    source?: boolean;
+    codingTools?: readonly CodingToolName[];
+  },
 ): PromptSection[] {
+  const tools = new Set<CodingToolName>(options.codingTools ?? CODING_TOOL_NAMES);
+  const hasCodingTools = tools.size > 0;
+  const hasRead = tools.has("read");
+  const canWrite = tools.has("write") || tools.has("edit") || tools.has("bash");
+  const canExec = tools.has("bash");
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
-    section("skills", () => skillsPrompt(readSkills(agentDir))),
+    section("skills", () => (hasRead ? skillsPrompt(readSkills(agentDir)) : undefined)),
     section("workspace", () =>
-      workspaceSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true }),
+      hasCodingTools
+        ? workspaceSection({
+            agentDir,
+            workdir: options.workdir ?? agentDir,
+            source: options.source === true,
+            canWrite,
+          })
+        : undefined,
     ),
-    section("self_change", () => (options.runsAs.deployed ? selfChangeSection(options.wake) : undefined)),
+    section("self_change", () =>
+      options.runsAs.deployed ? selfChangeSection(options.wake, { canWrite, canExec }) : undefined,
+    ),
   ];
 }
 
-function selfChangeSection(wake: boolean): string {
+function selfChangeSection(wake: boolean, capabilities: { canWrite: boolean; canExec: boolean }): string | undefined {
+  if (!capabilities.canWrite) {
+    return wake ? "To schedule your own follow-up work, use the wake tool." : undefined;
+  }
+  const install = capabilities.canExec
+    ? "A tool you install yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. "
+    : "";
   return (
     "Your directory survives restarts, including uncommitted work; /tmp does not. Your directory is this host's " +
     "storage and survives deployments of a new version. " +
     `Your definition (SYSTEM.md, AGENTS.md, skills/, prompts/, src/ and the configuration) is the author's release, ` +
-    `read as it was built from where it is installed: a copy of it you make in your directory is not read. A tool you install ` +
-    `yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. A ` +
+    `read as it was built from where it is installed: a copy of it you make in your directory is not read. ${install}A ` +
     `capability that should outlast a deployment belongs in the author's release: propose it to them.` +
     // Named only when it has the tool: naming a tool the model does not have invites calls to it.
     (wake ? " To schedule your own follow-up work, use the wake tool." : "")
@@ -287,10 +313,12 @@ function workspaceSection({
   agentDir,
   workdir,
   source,
+  canWrite,
 }: {
   agentDir: string;
   workdir: string;
   source: boolean;
+  canWrite: boolean;
 }): string {
   // A source project is the author's working copy, which `dev` exists for the agent to improve; a built package is read-only.
   const definition = source
@@ -298,6 +326,11 @@ function workspaceSection({
       `re-read for every message, so an edit to them takes effect on the next one, while src/ and the configuration ` +
       `are read when you start and need a restart.`
     : `Your definition is in ${agentDir}, which you read and do not change.`;
+  if (!canWrite) {
+    return workdir === agentDir
+      ? `Your working directory is ${agentDir}, which holds your definition.`
+      : `Your working directory is ${workdir}. ${definition}`;
+  }
   return workdir === agentDir
     ? `Your working directory, ${agentDir}, is your own directory: it holds your definition, and files you create ` +
         `land there unless you put them elsewhere.`

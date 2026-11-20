@@ -24,6 +24,9 @@ import type { DeclaredSecret } from "./declared-secrets.ts";
 export type { ExtensionCli } from "./cli/extension.ts";
 export type { ContainerTarget } from "./deploy/container.ts";
 export type { DeclaredSecret } from "./declared-secrets.ts";
+export type { PostgresDatabase, PostgresLimits } from "./harnesses/pi-durable/postgres/storage.ts";
+export type { CreateIndex } from "./harnesses/pi-durable/postgres/schema.ts";
+export type { PgExecutor } from "./harnesses/pi-durable/postgres/database.ts";
 
 /** One of the definition's schedules, as a platform inspects it without running it. */
 export interface ScheduleFact {

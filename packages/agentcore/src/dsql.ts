@@ -5,7 +5,7 @@
  * (1 MiB); and an index is built asynchronously (`CREATE INDEX ASYNC`, then waited for).
  */
 import { DsqlSigner, type DsqlSignerConfig } from "@aws-sdk/dsql-signer";
-import type { CreateIndex, PostgresDatabase, PostgresLimits } from "@fastagent-sh/fastagent";
+import type { CreateIndex, PostgresDatabase, PostgresLimits } from "@fastagent-sh/fastagent/platform";
 
 /**
  * Below DSQL's own caps: its 10 MiB counts what a transaction stores, which is more than the records the storage

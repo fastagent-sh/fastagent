@@ -43,14 +43,17 @@ export {
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-// A PostgreSQL database for `openAgent`'s `database`, and what a platform's own one (Aurora DSQL) sets on it.
-export type { PostgresDatabase, PostgresLimits } from "./harnesses/pi-durable/postgres/storage.ts";
-export type { CreateIndex } from "./harnesses/pi-durable/postgres/schema.ts";
-export type { PgExecutor } from "./harnesses/pi-durable/postgres/database.ts";
+export type { PostgresDatabase } from "./harnesses/pi-durable/postgres/storage.ts";
 export { McpError, type McpErrorCode } from "./mcp-api.ts";
 export { baseEnv } from "./child-env.ts";
 
-export { defineAgent, defineSchedule, type AgentConfig } from "./harnesses/pi-durable/define.ts";
+export {
+  defineAgent,
+  defineSchedule,
+  type AgentConfig,
+  type CodingToolName,
+  type CodingToolsConfig,
+} from "./harnesses/pi-durable/define.ts";
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.

@@ -21,6 +21,10 @@ import { obj } from "@earendil-works/pi-schema";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import {
+  DEFINITION_FORMAT,
+  defineDefinition,
+} from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
+import {
   type AssembleAgentOptions,
   buildDefinition,
   assembleAgent,
@@ -186,6 +190,147 @@ export default defineTool({
       const tools = await offered((await open(ownWake, { clocked: true })).agent);
       expect(tools).toContain("wake");
       expect(tools).not.toContain("unwake");
+    });
+
+    it("codingTools: false disables read/write/edit/bash, refuses enabling them on a session, and omits workspace and skills prompts even with a custom read tool", async () => {
+      const noCoding = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: false, providers: [faux.provider] };
+`,
+        "src/tools/read.ts": `import { obj } from "@earendil-works/pi-schema";
+import { defineTool } from "@earendil-works/pi-durable";
+export default defineTool({
+  name: "read",
+  description: "Read a CRM record",
+  parameters: obj({}),
+  execute: async () => ({ output: [{ type: "text", text: "record" }] }),
+});
+`,
+      };
+      const { dir, agent, faux } = await open(noCoding, { runsAs: { dev: false, deployed: true } });
+      const tools = await offered(agent);
+      for (const name of ["write", "edit", "bash"]) expect(tools).not.toContain(name);
+      expect(tools).toContain("weather");
+      expect(tools).toContain("read");
+
+      await expect(agent.sessions.create({ tools: ["bash"] })).rejects.toMatchObject({
+        code: "invalid_request",
+        message: expect.stringContaining("bash"),
+      });
+
+      const prompts: string[] = [];
+      faux.setResponses([
+        (context: TranscriptContext) => {
+          prompts.push(getCurrentSystemPrompt(context.messages));
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(agent, "hi");
+      const prompt = prompts[0]!;
+      expect(prompt).toContain("You are Support.");
+      expect(prompt).not.toContain("Your working directory");
+      expect(prompt).not.toContain(dir);
+      expect(prompt).not.toContain("apt-get");
+      expect(prompt).not.toContain("<available_skills>");
+
+      // /skill:<name> command still expands the skill directly without needing the read tool.
+      const info = await agent.info();
+      expect(info.commands.map((command) => command.name)).toContain("skill:lookup-order");
+
+      const emptyArray = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: [], providers: [faux.provider] };
+`,
+      };
+      const emptyTools = await offered((await open(emptyArray)).agent);
+      for (const name of ["read", "write", "edit", "bash"]) expect(emptyTools).not.toContain(name);
+    });
+
+    it("codingTools subsets tailor installed tools and prompt guidance for read-only and no-bash agents", async () => {
+      const readOnly = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read"], providers: [faux.provider] };
+`,
+      };
+      const { agent: roAgent, faux: roFaux } = await open(readOnly, { runsAs: { dev: false, deployed: true } });
+      const roTools = await offered(roAgent);
+      expect(roTools).toContain("read");
+      for (const name of ["write", "edit", "bash"]) expect(roTools).not.toContain(name);
+
+      const roPrompts: string[] = [];
+      roFaux.setResponses([
+        (context: TranscriptContext) => {
+          roPrompts.push(getCurrentSystemPrompt(context.messages));
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(roAgent, "hi");
+      expect(roPrompts[0]).toContain("<available_skills>");
+      expect(roPrompts[0]).toContain("Your working directory");
+      expect(roPrompts[0]).not.toContain("files you create");
+      expect(roPrompts[0]).not.toContain("apt-get");
+
+      const noBash = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read", "write", "edit"], providers: [faux.provider] };
+`,
+      };
+      const { agent: nbAgent, faux: nbFaux } = await open(noBash, { runsAs: { dev: false, deployed: true } });
+      const nbTools = await offered(nbAgent);
+      for (const name of ["read", "write", "edit"]) expect(nbTools).toContain(name);
+      expect(nbTools).not.toContain("bash");
+
+      const nbPrompts: string[] = [];
+      nbFaux.setResponses([
+        (context: TranscriptContext) => {
+          nbPrompts.push(getCurrentSystemPrompt(context.messages));
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(nbAgent, "hi");
+      expect(nbPrompts[0]).toContain("files you create");
+      expect(nbPrompts[0]).toContain("Your directory survives restarts");
+      expect(nbPrompts[0]).not.toContain("apt-get");
+    });
+
+    it("defineDefinition freezes an array codingTools setting so later caller mutation cannot alter it", () => {
+      const selected: ("read" | "write" | "edit" | "bash")[] = ["read"];
+      const def = defineDefinition({
+        format: DEFINITION_FORMAT,
+        builtWith: "0.0.0",
+        name: "support",
+        version: "0.0.0",
+        dir: "/tmp/support",
+        config: { codingTools: selected },
+        registry: { tools: [], extensions: [], schedules: [] },
+      });
+      selected.push("bash");
+      expect(def.config.codingTools).toEqual(["read"]);
+      expect(Object.isFrozen(def.config.codingTools)).toBe(true);
+    });
+
+    it("refuses unknown, duplicate, or non-array codingTools values in fastagent.config.ts", async () => {
+      const invalidName = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: ["read", "rm"] };\n',
+      });
+      await expect(loadSourceDefinition(invalidName)).rejects.toThrow(/unknown coding tool "rm"/);
+
+      const duplicate = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: ["read", "read"] };\n',
+      });
+      await expect(loadSourceDefinition(duplicate)).rejects.toThrow(/duplicate coding tool "read"/);
+
+      const wrongType = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: "none" };\n',
+      });
+      await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
     });
   });
 });

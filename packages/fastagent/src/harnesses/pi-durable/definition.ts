@@ -70,6 +70,7 @@ export function defineDefinition(spec: DefinitionSpec): AgentDefinition {
   );
   const config = Object.freeze({
     ...spec.config,
+    ...(Array.isArray(spec.config.codingTools) ? { codingTools: Object.freeze([...spec.config.codingTools]) } : {}),
     ...(spec.config.providers === undefined ? {} : { providers: Object.freeze([...spec.config.providers]) }),
     ...(spec.config.starters === undefined ? {} : { starters: Object.freeze([...spec.config.starters]) }),
   });

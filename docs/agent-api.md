@@ -205,7 +205,9 @@ curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorizat
 
 - **One instance is one trust domain.** A key can do everything, in every session, and the agent's tools act with the
   process's authority.
-- **One instance per customer.** People who must not read each other's conversations get an instance each.
+- **One instance per customer (unless tool-only).** People who must not read each other's conversations get an instance
+  each when the agent has coding tools (`read`, `write`, `edit`, `bash`); with `codingTools: false` and isolated
+  custom tools, an embedding backend may share one instance and enforce per-user session ownership itself.
 - **A key belongs on a server**, sent only over HTTPS. Rotate it by adding the new one, moving callers, removing the
   old.
 - **A session id is a name, not a credential.**

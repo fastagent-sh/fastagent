@@ -3,7 +3,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../../mcp/config.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import type { AgentConfig } from "./define.ts";
+import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type CodingToolsConfig } from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
 const THINKING_LEVELS = [
@@ -18,7 +18,34 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = ["model", "thinkingLevel", "starters", "providers", "mcpServers"];
+const KEYS = ["model", "thinkingLevel", "codingTools", "starters", "providers", "mcpServers"];
+const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
+
+/** Resolve `codingTools` from config into the concrete list of built-in coding tools to install. */
+export function resolveCodingTools(setting: CodingToolsConfig | undefined): readonly CodingToolName[] {
+  if (setting === undefined || setting === true) return CODING_TOOL_NAMES;
+  if (setting === false) return [];
+  return setting;
+}
+
+function checkCodingTools(value: unknown, file: string): void {
+  if (value === undefined || typeof value === "boolean") return;
+  if (!Array.isArray(value)) {
+    throw new Error(`${file}: "codingTools" must be a boolean or an array of (${CODING_TOOL_NAMES.join(", ")})`);
+  }
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || !CODING_TOOL_SET.has(item)) {
+      throw new Error(
+        `${file}: unknown coding tool ${JSON.stringify(item)} (allowed: ${CODING_TOOL_NAMES.join(", ")})`,
+      );
+    }
+    if (seen.has(item)) {
+      throw new Error(`${file}: duplicate coding tool "${item}"`);
+    }
+    seen.add(item);
+  }
+}
 
 /** The keys whose values are plain data; `providers` and `mcpServers` are checked by their own readers. */
 const DATA: Schema = obj({
@@ -48,7 +75,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, starters, providers, mcpServers } = config as AgentConfig;
+  const { model, thinkingLevel, codingTools, starters, providers, mcpServers } = config as AgentConfig;
   const validator = compile(DATA);
   const data = { model, thinkingLevel, starters };
   if (!validator.check(data)) {
@@ -57,6 +84,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
       .map(({ path, message }) => `${path === "" ? "(the value)" : path} ${message}`);
     throw new Error(`${file}: ${problems.join("; ")}`);
   }
+  checkCodingTools(codingTools, file);
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (mcpServers !== undefined) declareServers(mcpServers, file);
