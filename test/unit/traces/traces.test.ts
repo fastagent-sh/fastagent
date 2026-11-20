@@ -76,6 +76,7 @@ async function collector({ held = false } = {}) {
     release,
     close: () => {
       release();
+      server.closeAllConnections();
       return new Promise((resolve) => server.close(resolve));
     },
   };

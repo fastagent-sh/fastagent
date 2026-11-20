@@ -49,6 +49,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  proxy.closeAllConnections();
+  origin.closeAllConnections();
   await new Promise<void>((resolve) => proxy.close(() => resolve()));
   await new Promise<void>((resolve) => origin.close(() => resolve()));
 });
