@@ -20,7 +20,7 @@ import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { pendingWakeups, scheduleStates } from "../../schedule/operations.ts";
 import { removeAnyWakeup } from "../../schedule/wakeups.ts";
-import { deploymentAgent } from "../deployment.ts";
+import { resolveRemoteTarget } from "../deployment.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
 import { type InstanceFlags, enterInstance, instanceInputs, refuseUnnamedDatabaseInstance } from "../instance.ts";
@@ -29,8 +29,9 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface ClockOptions {
   instance?: InstanceFlags;
-  /** A served instance's Agent API, and the key to call it with. */
+  /** A served instance's Agent API, named by `--url` or `--remote`, and optional key override. */
   url?: string;
+  remote?: string;
   key?: string;
 }
 
@@ -38,10 +39,10 @@ export interface ClockOptions {
 const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
 
-/** The instance's owner, when one serves it: the deployment `--url` names, or the local serve of the instance here. */
+/** The instance's owner, when one serves it: `--url` / `--remote`, or the local serve of the instance here. */
 async function servedAgent(dirArg: string, opts: ClockOptions): Promise<Agent | undefined> {
-  if (opts.url !== undefined) return deploymentAgent(dirArg, opts.url, opts.key, opts.instance);
-  if (opts.key !== undefined) failUsage("--key is the key --url calls with: pass --url too");
+  const remoteTarget = await resolveRemoteTarget(dirArg, opts, opts.instance);
+  if (remoteTarget !== undefined) return remoteTarget.agent;
   const target = agentDirOrExit(resolve(dirArg));
   enterInstance(target, opts.instance);
   const owner: Owner | undefined = await reachOwner(resolveStateRoot(target)).catch(failStartup);

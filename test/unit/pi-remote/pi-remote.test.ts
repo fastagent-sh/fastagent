@@ -662,6 +662,23 @@ describe("RemoteController", () => {
     });
     await flushMicrotasks();
     expect(controller.getState().queuedMessages).toEqual([]);
+
+    // Mid-stream state push (e.g. title edit) must not regress liveReply accumulated from deltas.
+    stream.control.push({ type: "delta", channel: "text", text: "Hello streaming world" });
+    await flushMicrotasks();
+    stream.control.push({
+      type: "state",
+      session: {
+        ...makeSession("sess-1", "running"),
+        title: "Synced title",
+        reply: { text: "Hello" },
+        contextUsage: { tokens: 50_000, contextWindow: 200_000 },
+      },
+    });
+    await flushMicrotasks();
+    expect(controller.getState().session?.title).toBe("Synced title");
+    expect(controller.getState().session?.contextUsage).toEqual({ tokens: 50_000, contextWindow: 200_000 });
+    expect(controller.getState().liveReply?.text).toBe("Hello streaming world");
     controller.disconnect();
   });
 

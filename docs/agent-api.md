@@ -37,7 +37,7 @@ in the OpenAPI document a served agent publishes at `/v1/openapi.json`. This pag
 | | Is |
 |---|---|
 | **Agent** | One served agent, one trust domain. `info()` says what it offers (commands, tools, models), `usage()` what it has spent |
-| **Session** | A conversation: its entries, its status (`idle` or `running`), its metadata (`title`, `createdAt`, `updatedAt`), its settings (`model`, `thinkingLevel`, `instructions`, `tools`), and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). The agent names it |
+| **Session** | A conversation: its entries, its status (`idle` or `running`), its metadata (`title`, `createdAt`, `updatedAt`), its settings (`model`, `thinkingLevel`, `instructions`, `tools`), active context occupancy (`contextUsage`), and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). The agent names it |
 | **Message** | One thing a caller sends into a session, from acceptance to its end: a `status`, and its `answer` |
 | **Entry** | One durable record of a session's history: `user`, `assistant`, `tool_result`, `compaction`. A fork shares its source's entries, ids included |
 
@@ -125,7 +125,7 @@ own.
 | Event | Carries |
 |---|---|
 | `entry` | A durable entry (`tool_result` entries include optional `details` when reported by the tool) |
-| `state` | The session |
+| `state` | The session (delivered after replay, and again whenever session title or settings change) |
 | `delta` | Text added to the reply being written; `channel: "thinking"` is reasoning, never part of the answer |
 | `tool_started`, `tool_progress` | A running tool's call, then its latest status line (and optional multi-line `output` tail) |
 | `retrying` | A pause while a model call waits to be tried again |

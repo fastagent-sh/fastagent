@@ -47,6 +47,7 @@ import {
   AgentError,
   type AgentInfo,
   CompactOptions,
+  type ContextUsage,
   CreateSessionOptions,
   type Entry,
   EntriesOptions,
@@ -81,7 +82,7 @@ import {
 } from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
-import { type Sessions, trackSessions } from "./sessions.ts";
+import { type Sessions, latestContextTokens, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type ClockState, clockOperations } from "../../schedule/operations.ts";
@@ -290,7 +291,23 @@ function durableAgent(
   options: DurableAgentOptions,
 ): DurableAgent {
   const context = BACKGROUND_CONTEXT;
-  const reads = durableReads(harness, ids, sessions, context);
+  const contextUsageOf = (
+    conversationId: ConversationId,
+    agentDoc: { readonly model?: ModelRef } | undefined,
+  ): ContextUsage | undefined => {
+    const tokens = sessions.contextTokens(conversationId);
+    if (tokens === undefined) return undefined;
+    const effective = agentDoc?.model ?? options.model;
+    const window =
+      effective === undefined
+        ? undefined
+        : options.models.getModel(effective.provider, effective.modelId)?.contextWindow;
+    return {
+      tokens,
+      ...(window !== undefined && window > 0 ? { contextWindow: window } : {}),
+    };
+  };
+  const reads = durableReads(harness, ids, sessions, context, contextUsageOf);
   const admission = Semaphore.makeUnsafe(1);
   const commands = options.commands ?? (() => []);
   let closing = false;
@@ -674,6 +691,15 @@ function durableAgent(
                 );
               })
             : yield* fromPromise(() => source.fork(at.id, creation, context));
+        if (at !== undefined) {
+          const inheritedTokens =
+            forkFrom.entryId === undefined
+              ? sessions.contextTokens(source.id)
+              : latestContextTokens(
+                  (yield* fromPromise(() => fork.entries({ order: "descending" }, 20, undefined, context))).items,
+                );
+          sessions.setContextTokens(fork.id, inheritedTokens);
+        }
         return yield* reads.session(fork);
       }),
     );
@@ -789,6 +815,7 @@ function durableAgent(
         context,
         failureOf,
         maxRetries: options.settings?.retry?.maxRetries ?? DEFAULT_RETRY_POLICY.maxRetries,
+        contextUsageOf,
       },
       sessionId,
       eventsOptions?.after,

@@ -32,6 +32,7 @@ export type {
   AgentInfo,
   CompactOptions,
   ContentPart,
+  ContextUsage,
   CreateSessionOptions,
   EntriesOptions,
   Entry,

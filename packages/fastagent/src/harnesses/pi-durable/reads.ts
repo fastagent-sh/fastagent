@@ -6,6 +6,7 @@
 import type { Context } from "@earendil-works/chord/context";
 import {
   AgentDoc,
+  type AgentState,
   type Conversation,
   type ConversationId,
   type EntryQuery,
@@ -18,7 +19,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import type { Entry, Message, Session } from "@fastagent-sh/client/agent-api";
+import type { ContextUsage, Entry, Message, Session } from "@fastagent-sh/client/agent-api";
 import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
@@ -29,7 +30,18 @@ const SCAN_PAGE = 100;
 
 export type Reads = ReturnType<typeof durableReads>;
 
-export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions, "has">, context: Context) {
+export type ContextUsageOf = (
+  conversationId: ConversationId,
+  agentDoc: Pick<AgentState, "model"> | undefined,
+) => ContextUsage | undefined;
+
+export function durableReads(
+  harness: Harness,
+  ids: Ids,
+  sessions: Pick<Sessions, "has">,
+  context: Context,
+  contextUsageOf?: ContextUsageOf,
+) {
   /** The session `sessionId` names: a conversation that is not a session (a subagent's) is no more reachable than none. */
   const conversation = (sessionId: string): Effect.Effect<Conversation | undefined, PromiseFailure> => {
     const id = ids.decode(sessionId) as ConversationId | undefined;
@@ -134,15 +146,17 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
       harness.commit(async (tx) => {
         const read: Session[] = [];
         for (const id of conversations) {
+          const agentDoc = await tx.doc(AgentDoc, id);
           read.push(
             sessionOf(
               ids.encode(id),
               await tx.doc(LiveDoc, id),
               await tx.doc(UsageDoc, id),
-              await tx.doc(AgentDoc, id),
+              agentDoc,
               await tx.doc(InboxDoc, id),
               await tx.doc(SessionMetaDoc, id),
               ids,
+              contextUsageOf?.(id, agentDoc),
             ),
           );
         }

@@ -16,6 +16,7 @@ import {
 import {
   type ActiveTool,
   type AgentErrorData,
+  type ContextUsage,
   type Message,
   type Metadata,
   type QueuedMessage,
@@ -224,6 +225,7 @@ export function sessionOf(
   inbox?: InboxView,
   meta?: SessionMetaState,
   ids?: Ids,
+  contextUsage?: ContextUsage,
 ): Session {
   const partial = live?.generation?.message as Pick<AssistantMessage, "content"> | undefined;
   const thinking = partial === undefined ? undefined : thinkingOf(partial);
@@ -247,6 +249,7 @@ export function sessionOf(
     ...(activeTools.length > 0 ? { activeTools } : {}),
     ...(queuedMessages.length > 0 ? { queuedMessages } : {}),
     ...(compacting ? { compacting: true } : {}),
+    ...(contextUsage === undefined ? {} : { contextUsage }),
     usage: usageOfState(usage),
   };
 }

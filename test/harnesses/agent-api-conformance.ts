@@ -1156,6 +1156,62 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           details: { count: 1 },
         });
       });
+
+      it("reports active contextUsage on sessions, clears it after compaction, and preserves it across forks and restarts", async () => {
+        const sessionId = await newSession(agent);
+        expect(await agent.sessions.get(sessionId)).not.toHaveProperty("contextUsage");
+
+        await ended(agent, await send({ sessionId, content: "one" }));
+        const afterOne = await agent.sessions.get(sessionId);
+        expect(afterOne.contextUsage?.tokens).toBeGreaterThan(0);
+        expect(afterOne.contextUsage?.contextWindow).toBeGreaterThan(0);
+
+        const fork = await agent.sessions.create({ forkFrom: { sessionId } });
+        expect(fork.contextUsage?.tokens).toBe(afterOne.contextUsage?.tokens);
+
+        agent = await subject.restart();
+        expect((await agent.sessions.get(sessionId)).contextUsage?.tokens).toBe(afterOne.contextUsage?.tokens);
+        expect((await agent.sessions.get(fork.id)).contextUsage?.tokens).toBe(afterOne.contextUsage?.tokens);
+
+        for (const word of ["two", "three"]) await ended(agent, await send({ sessionId, content: word }));
+        await agent.sessions.compact(sessionId);
+        await vi.waitFor(
+          async () => expect((await history(agent, sessionId)).some((entry) => entry.kind === "compaction")).toBe(true),
+          { interval: 20 },
+        );
+        expect(await agent.sessions.get(sessionId)).not.toHaveProperty("contextUsage");
+
+        await ended(agent, await send({ sessionId, content: "after compact" }));
+        expect((await agent.sessions.get(sessionId)).contextUsage?.tokens).toBeGreaterThan(0);
+      });
+
+      it("pushes live state updates on sessions.events when title or settings change, and ends the stream on delete", async () => {
+        const sessionId = await newSession(agent);
+        const watching = attach(agent, sessionId);
+        await watching.until(isState);
+
+        await agent.sessions.update(sessionId, { title: "Release triage" });
+        const afterTitle = await watching.until(
+          (event) => event.type === "state" && event.session.title === "Release triage",
+        );
+        expect(afterTitle.at(-1)).toMatchObject({ type: "state", session: { id: sessionId, title: "Release triage" } });
+
+        await agent.sessions.update(sessionId, { title: "Combined update", thinkingLevel: "high" });
+        const afterCombined = await watching.until(
+          (event) => event.type === "state" && event.session.thinkingLevel === "high",
+        );
+        // Updating title and settings in one commit must emit a single non-torn state event.
+        const stateEvents = afterCombined.filter((event) => event.type === "state");
+        expect(stateEvents).toHaveLength(1);
+        expect(stateEvents[0]).toMatchObject({
+          type: "state",
+          session: { id: sessionId, title: "Combined update", thinkingLevel: "high" },
+        });
+
+        await agent.sessions.delete(sessionId);
+        const tail = await watching.rest();
+        expect(tail.at(-1)).toMatchObject({ type: "stream_error", error: { code: "not_found" } });
+      });
     });
 
     describe("Info", () => {

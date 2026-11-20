@@ -12,7 +12,7 @@ import {
   getMarkdownTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { ContentPart, Entry, Json, Tokens, Usage } from "@fastagent-sh/client";
+import type { ContentPart, ContextUsage, Entry, Json, Tokens, Usage } from "@fastagent-sh/client";
 import type { ActiveTool, LiveReply, RemoteViewState } from "./controller.ts";
 
 export interface RemoteEntryPayload {
@@ -146,6 +146,16 @@ function formatUsageTotals(usage: Usage | undefined): string {
   const parts = [`↑${fmt(input)} ↓${fmt(output)}`];
   if (cost > 0) parts.push(`$${cost.toFixed(3)}`);
   return parts.join(" ");
+}
+
+function formatContextUsage(contextUsage: ContextUsage | undefined): string {
+  if (!contextUsage) return "";
+  const fmt = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`);
+  if (contextUsage.contextWindow && contextUsage.contextWindow > 0) {
+    const pct = Math.min(100, Math.round((contextUsage.tokens / contextUsage.contextWindow) * 100));
+    return `${pct}%/${fmt(contextUsage.contextWindow)}`;
+  }
+  return `${fmt(contextUsage.tokens)} ctx`;
 }
 
 export function shortId(id: string): string {
@@ -377,8 +387,10 @@ export function renderRemoteFooterLine(state: RemoteViewState, width: number, th
       : session.title
     : undefined;
   const leftParts = [`${statusIcon} fastagent:${remote}`, theme.fg("dim", titleStr ? `${titleStr} (${sid})` : sid)];
+  const contextStr = formatContextUsage(session?.contextUsage);
   if (state.compacting) leftParts.push(theme.fg("accent", "compacting"));
   if (state.queuedMessages.length > 0) leftParts.push(theme.fg("dim", `queued:${state.queuedMessages.length}`));
+  if (contextStr) leftParts.push(theme.fg("dim", contextStr));
   if (usageStr) leftParts.push(theme.fg("dim", usageStr));
   const left = leftParts.join(" · ");
 

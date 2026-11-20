@@ -8,6 +8,7 @@ import type { Context } from "@earendil-works/chord/context";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   AgentDoc,
+  type AgentState,
   type Conversation,
   type ConversationDocToken,
   type ConversationView,
@@ -35,13 +36,13 @@ import {
 import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
 import { isPublished, replyText, thinkingOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
-import { type EndedRecord, SessionMetaDoc, hasEnded, isInput, sessionOf } from "./messages.ts";
-import type { Reads } from "./reads.ts";
+import { type EndedRecord, SessionMetaDoc, type SessionMetaState, hasEnded, isInput, sessionOf } from "./messages.ts";
+import type { ContextUsageOf, Reads } from "./reads.ts";
 
 /** Revisions a Caller may leave unread before its stream ends: pi-durable keeps no bound for a synchronous observer. */
 const UNREAD_REVISIONS = 1000;
 
-type Pending = { view: ConversationView } | { end: WatchEnd } | { behind: true };
+type Pending = { view: ConversationView } | { meta: SessionMetaState } | { end: WatchEnd } | { behind: true };
 type Blocks = AssistantMessage["content"];
 
 export interface EventsOptions {
@@ -52,6 +53,7 @@ export interface EventsOptions {
   failureOf: (error: unknown) => AgentError;
   /** The retry budget a `retrying` reports. */
   maxRetries: number;
+  contextUsageOf?: ContextUsageOf;
 }
 
 /**
@@ -59,7 +61,7 @@ export interface EventsOptions {
  * entry, and a storage that fails before the snapshot, fail the stream; a failure after it is a `stream_error`.
  */
 export function sessionEvents(
-  { harness, reads, ids, context, failureOf, maxRetries }: EventsOptions,
+  { harness, reads, ids, context, failureOf, maxRetries, contextUsageOf }: EventsOptions,
   sessionId: string,
   afterEntry: string | undefined,
 ): Stream.Stream<SessionEvent, AgentError> {
@@ -98,28 +100,86 @@ export function sessionEvents(
         (attached) => Effect.sync(() => attached.detach()),
       );
 
+      let latestMeta: SessionMetaState | undefined;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          harness.observeCommits({
+            advance: ({ changes }) => {
+              if (behind) return;
+              let metaChange: SessionMetaState | undefined;
+              let hasAgentChange = false;
+              for (const change of changes) {
+                if (
+                  change.type !== "document" ||
+                  change.kind !== "change" ||
+                  change.conversationId !== conversation.id
+                ) {
+                  continue;
+                }
+                if (change.record.kind === SessionMetaDoc.definition.kind) {
+                  metaChange = change.value as SessionMetaState;
+                } else if (change.record.kind === AgentDoc.definition.kind) {
+                  hasAgentChange = true;
+                }
+              }
+              if (metaChange === undefined) return;
+              latestMeta = metaChange;
+              // When the same commit also updated AgentDoc, observeConversation emits a view that reads latestMeta,
+              // avoiding torn/duplicate state events. Deletions are always queued immediately.
+              if (!hasAgentChange || metaChange.deleted) {
+                behind = Queue.sizeUnsafe(pending) >= UNREAD_REVISIONS;
+                Queue.offerUnsafe(pending, behind ? { behind } : { meta: metaChange });
+              }
+            },
+            end: () => {},
+          }),
+        ),
+        (attached) => Effect.sync(() => attached.detach()),
+      );
+
       const snapshot = observation.value;
       const meta = yield* fromPromise(() => harness.snapshot(SessionMetaDoc, conversation.id, context));
+      if (meta?.deleted || latestMeta?.deleted) {
+        return yield* agentError("not_found", `No session ${sessionId}`);
+      }
+      if (latestMeta === undefined) latestMeta = meta;
       const newest = newestEntry(snapshot);
-      const live = liveTranslator(harness, reads, conversation, context, maxRetries, snapshot);
+      const live = liveTranslator(
+        harness,
+        reads,
+        ids,
+        conversation,
+        context,
+        maxRetries,
+        snapshot,
+        latestMeta,
+        () => latestMeta,
+        contextUsageOf,
+      );
       const replay =
         after === undefined || newest === undefined || after >= newest
           ? Stream.empty
           : replayed(reads, conversation, after, newest);
+      const initialAgent = docOf(snapshot, AgentDoc);
       const present = Stream.succeed<SessionEvent>({
         type: "state",
         session: sessionOf(
           ids.encode(conversation.id),
           docOf(snapshot, LiveDoc),
           docOf(snapshot, UsageDoc),
-          docOf(snapshot, AgentDoc),
+          initialAgent,
           docOf(snapshot, InboxDoc),
-          meta,
+          latestMeta,
           ids,
+          contextUsageOf?.(conversation.id, initialAgent),
         ),
       });
       const events = Stream.fromQueue(pending).pipe(
-        Stream.mapEffect((next) => ("view" in next ? live.translate(next.view) : Effect.succeed([ended(next)]))),
+        Stream.mapEffect((next) => {
+          if ("view" in next) return live.translate(next.view);
+          if ("meta" in next) return Effect.succeed(live.translateMeta(next.meta));
+          return Effect.succeed([ended(next)]);
+        }),
         Stream.flattenIterable,
       );
       return Stream.concat(Stream.concat(replay, present), events).pipe(
@@ -196,16 +256,52 @@ const shownOf = (content: Blocks) => ({ text: replyText({ content }), thinking: 
  * that start and their status lines, retries, the entries appended, and a `done` for each message that ended, before
  * the next message's entry.
  */
+function sessionPropsKey(
+  agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools"> | undefined,
+  meta: SessionMetaState | undefined,
+): string {
+  return JSON.stringify([
+    meta?.title ?? null,
+    agent?.model ?? null,
+    agent?.thinkingLevel ?? null,
+    agent?.instructions ?? null,
+    Array.isArray(agent?.tools) ? agent.tools : null,
+  ]);
+}
+
 function liveTranslator(
   harness: Harness,
   reads: Reads,
+  ids: Ids,
   conversation: Conversation,
   context: Context,
   maxRetries: number,
   snapshot: ConversationView,
+  initialMeta: SessionMetaState | undefined,
+  getLatestMeta: () => SessionMetaState | undefined,
+  contextUsageOf: ContextUsageOf | undefined,
 ) {
   const first = liveOf(snapshot);
   let newest = newestEntry(snapshot);
+  let currentView = snapshot;
+  let currentMeta = initialMeta;
+  let propsKey = sessionPropsKey(docOf(snapshot, AgentDoc), initialMeta);
+  const currentStateEvent = (): SessionEvent => {
+    const agentDoc = docOf(currentView, AgentDoc);
+    return {
+      type: "state",
+      session: sessionOf(
+        ids.encode(conversation.id),
+        docOf(currentView, LiveDoc),
+        docOf(currentView, UsageDoc),
+        agentDoc,
+        docOf(currentView, InboxDoc),
+        currentMeta,
+        ids,
+        contextUsageOf?.(conversation.id, agentDoc),
+      ),
+    };
+  };
   let shown = shownOf((first?.generation?.message?.content as Blocks | undefined) ?? []);
   let retry = retryKey(first);
   let unended = unendedInputs(snapshot);
@@ -322,8 +418,19 @@ function liveTranslator(
   };
 
   return {
+    translateMeta: (meta: SessionMetaState): SessionEvent[] => {
+      currentMeta = meta;
+      if (meta.deleted) {
+        return [streamError(agentError("not_found", `Session ${ids.encode(conversation.id)} was deleted`))];
+      }
+      const nextKey = sessionPropsKey(docOf(currentView, AgentDoc), currentMeta);
+      if (nextKey === propsKey) return [];
+      propsKey = nextKey;
+      return [currentStateEvent()];
+    },
     translate: (view: ConversationView): Effect.Effect<SessionEvent[], PromiseFailure> =>
       Effect.gen(function* () {
+        currentView = view;
         const records = yield* appended(view);
         learnToolArgs(records);
         const live = liveOf(view);
@@ -369,11 +476,16 @@ function liveTranslator(
         // pi-durable places the next queued message in the commit that ends a run: its message's `done` goes first.
         const next = published.findIndex((entry) => entry.kind === "user");
         const at = next === -1 ? published.length : next;
+        currentMeta = getLatestMeta() ?? currentMeta;
+        const nextPropsKey = sessionPropsKey(docOf(view, AgentDoc), currentMeta);
+        const stateUpdate = nextPropsKey === propsKey ? [] : [currentStateEvent()];
+        propsKey = nextPropsKey;
         return [
           ...before,
           ...published.slice(0, at).map(entryEvent),
           ...dones.map((message): SessionEvent => ({ type: "done", message })),
           ...published.slice(at).map(entryEvent),
+          ...stateUpdate,
         ];
       }),
   };
