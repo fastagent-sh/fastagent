@@ -153,9 +153,18 @@ export type LoginRequest = {
   method: SignInMethod;
   /** pi-ai's own interaction: prompts (`text`, `secret`, `select`, `manual_code`) and events (`auth_url`, …). */
   interaction: AuthInteraction;
-  /** The credentials file the sign-in is written to. */
-  authPath: string;
-};
+} & (
+  | {
+      /** The credentials file the sign-in is written to. */
+      authPath: string;
+    }
+  | {
+      /** Direct credential store (e.g. instance durable storage) the sign-in is written to. */
+      store: CredentialStore;
+      /** Async provider of the durable installation device ID for OAuth flows. */
+      resolveDeviceId?: () => Promise<string>;
+    }
+);
 
 /** Combine present abort signals into one (no-op when none/one). */
 function anySignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -176,6 +185,8 @@ export interface LoginInternals {
    * is used, then its first. On one registry, any of a provider's models answers the 401 question.
    */
   verifyWith?: string;
+  /** Provider request environment for API-key verification. Defaults to this process's defined environment values. */
+  environment?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -195,7 +206,7 @@ export interface LoginInternals {
  * flow settles with a prompt still pending.
  */
 export async function loginOver(request: LoginRequest, internals: LoginInternals = {}): Promise<SignInResult> {
-  const { providers, verifyWith } = internals;
+  const { providers, verifyWith, environment } = internals;
   const { method, interaction } = request;
   const provider = loginProviders(providers).find((p) => p.id === request.provider);
   if (!provider) throw new Error(`unknown provider "${request.provider}"`);
@@ -206,15 +217,24 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   const trial = new InMemoryCredentialStore();
   // Only a key needs the registry: it is checked with one request before it is kept.
   const models: Models | undefined =
-    method === "api_key" ? modelsOver(trial, providers, undefined, definedValues(process.env)) : undefined;
-  const store = fastagentCredentialStore(request.authPath);
+    method === "api_key"
+      ? modelsOver(trial, providers, undefined, environment ?? definedValues(process.env))
+      : undefined;
+  const store = "store" in request ? request.store : fastagentCredentialStore(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;
   const notify = (event: AuthEvent) => interaction.notify(event);
   let getDeviceId = request.getDeviceId;
   if (method === "oauth" && !getDeviceId) {
-    const deviceId = await deviceIdBeside(request.authPath);
-    getDeviceId = () => deviceId;
+    if ("store" in request) {
+      if (request.resolveDeviceId !== undefined) {
+        const deviceId = await request.resolveDeviceId();
+        getDeviceId = () => deviceId;
+      }
+    } else {
+      const deviceId = await deviceIdBeside(request.authPath);
+      getDeviceId = () => deviceId;
+    }
   }
 
   for (;;) {

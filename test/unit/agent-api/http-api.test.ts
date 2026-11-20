@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
-import { connectAgent, connectClock } from "../../../packages/client/src/http/client.ts";
+import { connectAgent, connectAuth, connectClock } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
 import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
@@ -54,6 +54,11 @@ describe("the Agent API over HTTP", () => {
     expect(document.openapi).toBe("3.1.0");
     expect(Object.keys(document.paths).sort()).toEqual([
       "/v1/agent",
+      "/v1/auth/login",
+      "/v1/auth/login/{flowId}",
+      "/v1/auth/login/{flowId}/input",
+      "/v1/auth/providers",
+      "/v1/auth/providers/{provider}",
       "/v1/openapi.json",
       "/v1/schedules",
       "/v1/schedules/{name}/run",
@@ -79,6 +84,20 @@ describe("the Agent API over HTTP", () => {
     expect(await clock.wakeups.list()).toEqual([]);
     await expect(clock.schedules.run("daily")).rejects.toMatchObject({ code: "not_found" });
     await expect(clock.wakeups.cancel("missing")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("answers auth endpoints with empty providers and not_found when served without an auth manager", async () => {
+    const authClient = connectAuth(server.url, { apiKey: KEY });
+    expect(await authClient.providers()).toEqual([]);
+    await expect(authClient.startLogin({ provider: "openai", method: "api_key" })).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await expect(authClient.getLogin("missing")).rejects.toMatchObject({ code: "not_found" });
+    await expect(authClient.submitInput("missing", { promptId: "p1", value: "v" })).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await expect(authClient.cancelLogin("missing")).rejects.toMatchObject({ code: "not_found" });
+    await expect(authClient.logout("openai")).rejects.toMatchObject({ code: "not_found" });
   });
 });
 

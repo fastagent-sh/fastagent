@@ -11,7 +11,9 @@ import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-
 import type { ClockStore } from "../../schedule/clock.ts";
 import { type ClockRunner, createClockRunner } from "../../schedule/runner.ts";
 import { clockStore } from "./clock.ts";
+import { type DurableCredentialStore, durableCredentialStore, overlayCredentialStore } from "./credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
+import { type AuthManager, createAuthManager } from "../models/remote-auth.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
 import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
@@ -112,6 +114,8 @@ export interface OpenedServing {
   agent: DurableAgent;
   /** The instance's external clock runner, when opened on durable instance storage. */
   clock?: ClockRunner;
+  /** The instance's remote authentication manager, backed by durable storage. */
+  auth?: AuthManager;
   definition: AgentDefinition;
   /** The instance's name: what `info().name` reports. */
   name: string;
@@ -244,15 +248,19 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       : options.keeps === "state"
         ? join(stateRoot, "auth.json")
         : undefined;
+  const chosen = options.storage ?? "instance";
+  let durableCreds: DurableCredentialStore | undefined;
   const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
     stateRoot,
     environment: secrets,
     env,
     offline: options.offline ?? env.FASTAGENT_OFFLINE === "1",
+    ...(chosen === "instance"
+      ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
+      : {}),
   });
   // Before anything is opened: a setting it cannot honor refuses the open.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
-  const chosen = options.storage ?? "instance";
   const place: InstancePlace = {
     stateRoot,
     env,
@@ -266,6 +274,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   // Before the agent exists, a lost hold fails its open's first commit instead.
   let stopRuns: ((error: Error) => void) | undefined;
   let clock: ClockRunner | undefined;
+  let auth: AuthManager | undefined;
   const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
   if (database !== undefined) log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
   let mcp: McpClients | undefined;
@@ -309,6 +318,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   let resourcesClosed: Promise<void> | undefined;
   const closeResources = (): Promise<void> =>
     (resourcesClosed ??= (async () => {
+      auth?.close();
       const failures: unknown[] = [];
       await mcp.close().catch((error: unknown) => failures.push(error));
       // Last: what the agent recorded up to its close goes out with it.
@@ -331,6 +341,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       })()),
   };
   if (chosen === "instance") {
+    durableCreds = durableCredentialStore(managedAgent.harness, BACKGROUND_CONTEXT);
+    auth = createAuthManager({
+      models,
+      durableStore: durableCreds,
+      providers: code.providers,
+      environment: secrets,
+    });
     clock = createClockRunner({
       agent: managedAgent,
       store: clockStore(managedAgent.harness, BACKGROUND_CONTEXT),
@@ -340,6 +357,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   return {
     agent: managedAgent,
     ...(clock === undefined ? {} : { clock }),
+    ...(auth === undefined ? {} : { auth }),
     definition,
     name,
     code,

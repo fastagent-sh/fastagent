@@ -21,7 +21,11 @@ import {
   AgentError,
   AgentErrorData,
   AgentInfo,
+  AuthFlowState,
+  AuthLoginInput,
+  AuthProviderStatus,
   CompactOptions,
+  StartAuthLoginRequest,
   CreateSessionOptions,
   Entry,
   EntriesOptions,
@@ -291,7 +295,46 @@ const ClockGroup = HttpApiGroup.make("clock")
   .middleware(Authorization)
   .prefix(API_PREFIX);
 
+const AuthGroup = HttpApiGroup.make("auth")
+  .add(
+    HttpApiEndpoint.get("listAuthProviders", "/auth/providers", {
+      success: Schema.Array(AuthProviderStatus),
+      error: Refused,
+    }),
+    HttpApiEndpoint.post("startAuthLogin", "/auth/login", {
+      payload: StartAuthLoginRequest,
+      success: AuthFlowState,
+      error: Refused,
+    }),
+    HttpApiEndpoint.get("getAuthLogin", "/auth/login/:flowId", {
+      params: { flowId: Schema.String },
+      query: WaitQuery,
+      success: AuthFlowState,
+      error: Refused,
+    }),
+    HttpApiEndpoint.post("submitAuthInput", "/auth/login/:flowId/input", {
+      params: { flowId: Schema.String },
+      payload: AuthLoginInput,
+      success: AuthFlowState,
+      error: Refused,
+    }),
+    HttpApiEndpoint.delete("cancelAuthLogin", "/auth/login/:flowId", {
+      params: { flowId: Schema.String },
+      success: HttpApiSchema.NoContent,
+      error: Refused,
+    }),
+    HttpApiEndpoint.delete("logoutAuthProvider", "/auth/providers/:provider", {
+      params: { provider: Schema.String },
+      success: Schema.Struct({ removed: Schema.Boolean }),
+      error: Refused,
+    }),
+  )
+  .middleware(Malformed)
+  .middleware(Authorization)
+  .prefix(API_PREFIX);
+
 export class AgentHttpApi extends HttpApi.make("fastagent")
   .add(AgentGroup)
   .add(ClockGroup)
+  .add(AuthGroup)
   .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "1" })) {}

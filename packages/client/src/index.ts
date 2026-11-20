@@ -8,6 +8,13 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
+  AuthApi,
+  AuthFlowState,
+  AuthFlowStatus,
+  AuthLoginInput,
+  AuthMethod,
+  AuthPromptInfo,
+  AuthProviderStatus,
   ClockApi,
   CompactOptions,
   ContentPart,
@@ -34,6 +41,7 @@ export type {
   SessionEvent,
   SessionSettings,
   SessionStatus,
+  StartAuthLoginRequest,
   ThinkingLevel,
   Tokens,
   Usage,
@@ -44,4 +52,4 @@ export type {
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 /** @public */
-export { connectAgent, connectClock, type ConnectOptions } from "./http/client.ts";
+export { connectAgent, connectAuth, connectClock, type ConnectOptions } from "./http/client.ts";

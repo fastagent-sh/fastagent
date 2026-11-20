@@ -26,10 +26,13 @@ import {
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { type RemoteTargetFlags, resolveRemoteTarget } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import type { InstanceFlags } from "../instance.ts";
 import { chooseLogin, isInteractive, loginFlow, printReport, terminalLoginIO } from "../login-ui.ts";
+import { runRemoteLogin } from "../remote-login.ts";
 
-export interface LoginOptions {
+export interface LoginOptions extends RemoteTargetFlags {
   /** `-g`: store in the user-global file, which an agent reads for a provider it has no other credential for. */
   global?: boolean;
   /** false ⇔ `--no-input`. */
@@ -40,11 +43,27 @@ export interface LoginOptions {
   json?: boolean;
   /** `--timeout <seconds>`: how long an interactive sign-in stays open. */
   timeout?: string;
+  instance?: InstanceFlags;
 }
 
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const method = opts.method === undefined ? undefined : methodOf(opts.method);
   const givenTimeout = opts.timeout === undefined ? undefined : secondsOf(opts.timeout);
+  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  if (remoteTarget !== undefined) {
+    if (opts.global === true) {
+      failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
+    }
+    await runRemoteLogin(remoteTarget.auth, remoteTarget.label, provider, {
+      ...(method === undefined ? {} : { method }),
+      ...(opts.input === undefined ? {} : { input: opts.input }),
+      ...(opts.json === undefined ? {} : { json: opts.json }),
+      ...(givenTimeout === undefined ? {} : { timeoutSeconds: givenTimeout }),
+      ...(opts.url === undefined ? {} : { url: opts.url }),
+      ...(opts.remote === undefined ? {} : { remote: opts.remote }),
+    });
+    return;
+  }
   // "Outside an agent" must mean exactly that: inside one is refused (findAgentDir), never a global login.
   const agentDir = optionalAgentDirOrExit(process.cwd());
   // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers

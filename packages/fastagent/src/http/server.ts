@@ -15,6 +15,7 @@ import { HttpApiBuilder, HttpApiError, OpenApi } from "effect/http-api";
 import {
   type Agent,
   AgentError,
+  type AuthApi,
   type ClockApi,
   LIMITS,
   type SessionEvent,
@@ -67,6 +68,8 @@ export interface ApiOptions {
   keys: readonly string[];
   /** Optional clock operations mounted under `/v1/schedules` and `/v1/wakeups`. */
   clock?: ClockApi;
+  /** Optional remote auth operations mounted under `/v1/auth`. */
+  auth?: AuthApi;
   /** For tests: the longest a request waits, and how often a quiet stream says it is open. */
   waitCapSeconds?: number;
   keepAliveMs?: number;
@@ -286,6 +289,34 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       ),
   );
 
+  const { auth } = options;
+  const noAuth = () => Effect.fail(agentError("not_found", "This instance does not expose remote auth management"));
+  const authHandlers = HttpApiBuilder.group(AgentHttpApi, "auth", (handle) =>
+    handle
+      .handle("listAuthProviders", () =>
+        auth === undefined ? Effect.succeed([]) : call("auth.providers", () => auth.providers()),
+      )
+      .handle("startAuthLogin", ({ payload }) =>
+        auth === undefined ? noAuth() : call("auth.startLogin", (signal) => auth.startLogin(payload, { signal })),
+      )
+      .handle("getAuthLogin", ({ params, query }) =>
+        auth === undefined
+          ? noAuth()
+          : call("auth.getLogin", (signal) => auth.getLogin(params.flowId, { wait: capped(query.wait), signal })),
+      )
+      .handle("submitAuthInput", ({ params, payload }) =>
+        auth === undefined
+          ? noAuth()
+          : call("auth.submitInput", (signal) => auth.submitInput(params.flowId, payload, { signal })),
+      )
+      .handle("cancelAuthLogin", ({ params }) =>
+        auth === undefined ? noAuth() : call("auth.cancelLogin", () => auth.cancelLogin(params.flowId)),
+      )
+      .handle("logoutAuthProvider", ({ params }) =>
+        auth === undefined ? noAuth() : call("auth.logout", () => auth.logout(params.provider)),
+      ),
+  );
+
   const authorization = Layer.succeed(Authorization)({
     bearer: (effect, { credential }) => {
       const given = Redacted.value(credential);
@@ -310,7 +341,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
 
   const { handler, dispose } = HttpRouter.toWebHandler(
     Layer.mergeAll(HttpApiBuilder.layer(AgentHttpApi), Edges).pipe(
-      Layer.provide([handlers, clockHandlers]),
+      Layer.provide([handlers, clockHandlers, authHandlers]),
       Layer.provide([authorization, malformed]),
       Layer.provide(HttpServer.layerServices),
       Layer.provide(Layer.succeed(HttpIncomingMessage.MaxBodySize)(MAX_BODY)),

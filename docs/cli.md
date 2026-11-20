@@ -59,7 +59,7 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
 | `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `schedules run`, `build`, `deploy check` | Machine-readable output. |
-| `--url <base>`, `--key <key>` | `invoke`, `schedules list`, `schedules run`, `schedules unwake` | Act on a served instance through its Agent API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
+| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `schedules list`, `schedules run`, `schedules unwake` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
 
 ## Exit codes
 
