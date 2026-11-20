@@ -12,6 +12,7 @@ import { HttpApiClient } from "effect/http-api";
 import {
   type Agent,
   AgentError,
+  type ClockApi,
   CompactOptions,
   CreateSessionOptions,
   EntriesOptions,
@@ -139,16 +140,16 @@ function sendFailure(baseUrl: string, stage: SendStage, error: unknown): AgentEr
   return agentError("unconfirmed", `${whatFailed(baseUrl, error)}; the message may have been recorded`, finds);
 }
 
-export function connectAgent(url: string, options: ConnectOptions): Agent {
+function createTransport(url: string, options: ConnectOptions) {
   const { apiKey, fetch } = options;
-  const client = Effect.runSync(
+  const api = Effect.runSync(
     HttpApiClient.make(AgentHttpApi, {
       baseUrl: url,
       ...(apiKey === undefined
         ? {}
         : { transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(apiKey)) }),
     }).pipe(Effect.provide(FetchHttpClient.layer)),
-  ).agent;
+  );
   /** What every request runs with: no trace headers of Effect's own, and the Caller's `fetch`. */
   const sending = <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> => {
     const quiet = effect.pipe(Effect.provideService(HttpClient.TracerPropagationEnabled, false));
@@ -182,10 +183,10 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
    */
   const waited = async (
     first: (wait: number | undefined) => Promise<Message>,
-    options: WaitOptions | undefined,
+    waitOptions: WaitOptions | undefined,
     failureAfter: (message: Message) => (error: unknown) => AgentError = () => read,
   ) => {
-    const wait = options?.wait === undefined ? undefined : checked(Wait, options.wait, "wait");
+    const wait = waitOptions?.wait === undefined ? undefined : checked(Wait, waitOptions.wait, "wait");
     const deadline = wait === undefined ? undefined : Date.now() + wait * 1000;
     const remaining = () => (deadline === undefined ? 0 : Math.max(0, deadline - Date.now()) / 1000);
     const capped = () => Math.min(remaining(), LIMITS.httpWaitSeconds);
@@ -193,13 +194,20 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
     while (!hasEnded(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
       message = await request(
-        client.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
-        options?.signal,
+        api.agent.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
+        waitOptions?.signal,
         failureAfter(message),
       );
     }
     return message;
   };
+
+  return { api, sending, read, sent, request, waited };
+}
+
+export function connectAgent(url: string, options: ConnectOptions): Agent {
+  const { api, sending, read, sent, request, waited } = createTransport(url, options);
+  const client = api.agent;
 
   /**
    * An event stream. Until it has delivered an event, a failure rejects its first read with what `refused` makes of
@@ -389,6 +397,14 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         );
       },
     },
+  };
+}
+
+/** Connect to the served instance's clock API (schedules and wake-ups) over HTTP. */
+export function connectClock(url: string, options: ConnectOptions): ClockApi {
+  const { api, request, waited } = createTransport(url, options);
+  const client = api.clock;
+  return {
     schedules: {
       run: async (name, runOptions) => {
         // Answered once the message is recorded; a wait then follows the message, as `messages.get` does.

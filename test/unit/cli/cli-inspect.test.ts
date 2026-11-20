@@ -28,6 +28,7 @@ describe("cli: info", () => {
       agent: { name: expect.any(String), description: null },
     });
     expect(info.codingTools).toEqual(["read", "write", "edit", "bash"]);
+    expect(info.wakeTools).toBe(false);
     expect(info.tools).toEqual(["lookup"]);
     expect(info.commands.map((command: { name: string }) => command.name)).toEqual(["skill:greet"]);
     await expect(stat(join(dir, ".state"))).rejects.toMatchObject({ code: "ENOENT" }); // read-only: never creates the state root
@@ -42,13 +43,14 @@ describe("cli: info", () => {
     expect(refused.stderr).toMatch(/fastagent\.config\.ts: unknown key "defaults": its keys are top-level now/);
     // The top-level shape is the one read.
     const flat = await agentWorkspace("fa-info-flat-", {
-      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", codingTools: false };\n',
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", codingTools: false, wakeTools: true };\n',
     });
     const read = await runInProcess(["-C", flat, "info", "--json"], undefined, withoutModel());
     expect(read.code, read.stderr).toBe(0);
     const parsed = JSON.parse(read.stdout);
     expect(parsed.model).toBe("openai/gpt-5.5");
     expect(parsed.codingTools).toEqual([]);
+    expect(parsed.wakeTools).toBe(true);
   });
 
   it("info says why the definition does not open, naming the module, as dev and start would refuse it", async () => {

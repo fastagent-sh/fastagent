@@ -21,6 +21,8 @@ export interface AgentConfig {
   thinkingLevel?: ModelThinkingLevel;
   /** Built-in coding tools (`read`, `write`, `edit`, `bash`). Default `true`; pass `false` or a subset to restrict. */
   codingTools?: CodingToolsConfig;
+  /** Built-in self-scheduling tools (`wake`, `unwake`). Default `false`; pass `true` to enable. */
+  wakeTools?: boolean;
   /** Example first messages a client may offer as drafts, up to six: `info().starters`. */
   starters?: readonly string[];
   /** Model providers beyond pi-ai's built-ins (a self-hosted endpoint, a gateway); a built-in's id replaces it. */

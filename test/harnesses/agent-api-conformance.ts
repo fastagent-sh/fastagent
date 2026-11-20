@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type Agent,
+  type ClockApi,
   type ContentPart,
   type Entry,
   type Message,
@@ -43,6 +44,8 @@ export interface AgentApiSubject {
   failStorage(): void;
   /** Where the instance's clock keeps its fires and wake-ups; its schedules are `digest` and `long` (a `hold`). */
   clock(): ClockStore;
+  /** The decoupled Clock API (`schedules`, `wakeups`) wired alongside the Agent. */
+  clockApi(): ClockApi;
   /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
   keysSends?: boolean;
   stop(): Promise<void>;
@@ -354,18 +357,19 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
     describe("Clock", () => {
       it("lists its schedules, with when each fires next and its last occurrence once one ran", async () => {
-        const before = await agent.schedules.list();
+        const clock = subject.clockApi();
+        const before = await clock.schedules.list();
         expect(before.map(({ name }) => name).sort()).toEqual(["digest", "long"]);
         expect(before.find(({ name }) => name === "digest")).toEqual({
           name: "digest",
           cron: "0 9 * * *",
           next: expect.stringMatching(/T09:00:00\.000Z$/),
         });
-        const fired = await agent.schedules.run("digest", { wait: WAIT });
+        const fired = await clock.schedules.run("digest", { wait: WAIT });
         if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
         // Its outcome is written once its message has ended, a moment after the answer: until then it has none.
         await vi.waitFor(async () => {
-          const digest = (await agent.schedules.list()).find(({ name }) => name === "digest");
+          const digest = (await clock.schedules.list()).find(({ name }) => name === "digest");
           expect(digest?.last).toEqual({
             slot: expect.any(String),
             firedAt: expect.any(String),
@@ -376,39 +380,43 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
       });
 
       it("lists the pending wake-ups of every session, in the order they were set", async () => {
+        const clock = subject.clockApi();
         const [one, two] = [await newSession(agent), await newSession(agent)];
         const at = new Date(Date.now() + 3_600_000);
         const first = await addWakeup(subject.clock(), { session: two, prompt: "later", fireAt: at });
         const second = await addWakeup(subject.clock(), { session: one, prompt: "recur", cron: "0 9 * * *" });
         if (!first.ok || !second.ok) throw new Error("not set");
-        expect(await agent.wakeups.list()).toEqual([
+        expect(await clock.wakeups.list()).toEqual([
           { id: first.id, sessionId: two, fireAt: first.fireAt, prompt: "later" },
           { id: second.id, sessionId: one, fireAt: second.fireAt, prompt: "recur", cron: "0 9 * * *" },
         ]);
       });
 
       it("fires a schedule now in its own session, answering once recorded or, with wait, once ended", async () => {
-        const fired = await agent.schedules.run("digest");
+        const clock = subject.clockApi();
+        const fired = await clock.schedules.run("digest");
         if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
         expect(fired.message).toMatchObject({ status: expect.stringMatching(/^(queued|running|completed)$/) });
         expect((await ended(agent, fired.message)).answer?.text).toBe("answer: the digest");
-        const again = await agent.schedules.run("digest", { wait: WAIT });
+        const again = await clock.schedules.run("digest", { wait: WAIT });
         expect(again).toMatchObject({
           status: "sent",
           message: { sessionId: fired.message.sessionId, status: "completed", answer: { text: "answer: the digest" } },
         });
-        await expect(agent.schedules.run("nope")).rejects.toMatchObject({ code: "not_found" });
+        await expect(clock.schedules.run("nope")).rejects.toMatchObject({ code: "not_found" });
       });
 
       it("skips an occurrence while the schedule's previous run still holds its session", async () => {
-        const first = await agent.schedules.run("long");
+        const clock = subject.clockApi();
+        const first = await clock.schedules.run("long");
         expect(first.status).toBe("sent");
         await holding();
-        expect(await agent.schedules.run("long")).toMatchObject({ status: "skipped", reason: expect.any(String) });
+        expect(await clock.schedules.run("long")).toMatchObject({ status: "skipped", reason: expect.any(String) });
         subject.release();
       });
 
       it("cancels a pending wake-up whichever session set it, answering what it was, and not_found once gone", async () => {
+        const clock = subject.clockApi();
         const sessionId = await newSession(agent);
         const set = await addWakeup(subject.clock(), {
           session: sessionId,
@@ -416,14 +424,14 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           fireAt: new Date(Date.now() + 3_600_000),
         });
         if (!set.ok) throw new Error(set.error);
-        expect(await agent.wakeups.cancel(set.id)).toEqual({
+        expect(await clock.wakeups.cancel(set.id)).toEqual({
           id: set.id,
           sessionId,
           fireAt: set.fireAt,
           prompt: "check in",
         });
         expect(await listWakeups(subject.clock())).toEqual([]);
-        await expect(agent.wakeups.cancel(set.id)).rejects.toMatchObject({ code: "not_found" });
+        await expect(clock.wakeups.cancel(set.id)).rejects.toMatchObject({ code: "not_found" });
       });
     });
 
@@ -1098,7 +1106,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(rejected).toHaveLength(1);
         expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "not_found" });
         expect(subject.signalled()).toBeGreaterThan(0);
-        expect((await agent.wakeups.list()).filter((w) => w.sessionId === created.id)).toEqual([]);
+        expect((await subject.clockApi().wakeups.list()).filter((w) => w.sessionId === created.id)).toEqual([]);
 
         await expect(agent.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
         await expect(agent.sessions.delete(created.id)).rejects.toMatchObject({ code: "not_found" });

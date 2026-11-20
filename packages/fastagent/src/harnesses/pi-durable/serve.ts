@@ -9,6 +9,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
 import type { ClockStore } from "../../schedule/clock.ts";
+import { type ClockRunner, createClockRunner } from "../../schedule/runner.ts";
 import { clockStore } from "./clock.ts";
 import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
 import { openMcpClients, type McpClients } from "../../mcp/client.ts";
@@ -109,6 +110,8 @@ const NAMED_INSTANCE_HOLDERS =
 
 export interface OpenedServing {
   agent: DurableAgent;
+  /** The instance's external clock runner, when opened on durable instance storage. */
+  clock?: ClockRunner;
   definition: AgentDefinition;
   /** The instance's name: what `info().name` reports. */
   name: string;
@@ -262,6 +265,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const maxMessageBytes = messageBytesFor(database?.limits);
   // Before the agent exists, a lost hold fails its open's first commit instead.
   let stopRuns: ((error: Error) => void) | undefined;
+  let clock: ClockRunner | undefined;
   const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
   if (database !== undefined) log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
   let mcp: McpClients | undefined;
@@ -278,7 +282,9 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       processEnv,
       models: models.models,
       ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(chosen === "instance" ? { clocked: true } : {}),
+      ...(chosen === "instance"
+        ? { clocked: true, onSessionDelete: (sessionId) => clock?.onSessionDelete(sessionId) }
+        : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
@@ -324,8 +330,16 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         if (failures.length) throw new AggregateError(failures, "Agent close failed");
       })()),
   };
+  if (chosen === "instance") {
+    clock = createClockRunner({
+      agent: managedAgent,
+      store: clockStore(managedAgent.harness, BACKGROUND_CONTEXT),
+      schedules: code.schedules,
+    });
+  }
   return {
     agent: managedAgent,
+    ...(clock === undefined ? {} : { clock }),
     definition,
     name,
     code,
@@ -437,8 +451,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
-    schedules: agent.schedules,
-    wakeups: agent.wakeups,
     harness: agent.harness,
     busy: () => activeWork() > 0 || agent.harness.wake().active,
     serve(serveOptions = {}) {

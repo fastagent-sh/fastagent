@@ -18,7 +18,7 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = ["model", "thinkingLevel", "codingTools", "starters", "providers", "mcpServers"];
+const KEYS = ["model", "thinkingLevel", "codingTools", "wakeTools", "starters", "providers", "mcpServers"];
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
 
 /** Resolve `codingTools` from config into the concrete list of built-in coding tools to install. */
@@ -75,7 +75,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, codingTools, starters, providers, mcpServers } = config as AgentConfig;
+  const { model, thinkingLevel, codingTools, wakeTools, starters, providers, mcpServers } = config as AgentConfig;
   const validator = compile(DATA);
   const data = { model, thinkingLevel, starters };
   if (!validator.check(data)) {
@@ -85,6 +85,9 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
     throw new Error(`${file}: ${problems.join("; ")}`);
   }
   checkCodingTools(codingTools, file);
+  if (wakeTools !== undefined && typeof wakeTools !== "boolean") {
+    throw new Error(`${file}: "wakeTools" must be a boolean`);
+  }
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (mcpServers !== undefined) declareServers(mcpServers, file);

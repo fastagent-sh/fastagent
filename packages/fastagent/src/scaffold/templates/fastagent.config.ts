@@ -17,5 +17,6 @@ export default {
   // model: "openai/gpt-5.5",
   // thinkingLevel: "high", // reasoning effort (off|minimal|low|medium|high|xhigh|max)
   // codingTools: false, // disable built-in read/write/edit/bash, or pick a subset like ["read"]
+  // wakeTools: true, // opt in to built-in wake/unwake self-scheduling tools
   // starters: ["What can you do?"], // example first messages a client may offer
 } satisfies AgentConfig;

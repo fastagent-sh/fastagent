@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
-import { connectAgent } from "../../../packages/client/src/http/client.ts";
+import { connectAgent, connectClock } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
 import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
@@ -71,6 +71,14 @@ describe("the Agent API over HTTP", () => {
       "/v1/wakeups",
       "/v1/wakeups/{id}",
     ]);
+  });
+
+  it("answers clock endpoints with empty lists and not_found when served without a clock", async () => {
+    const clock = connectClock(server.url, { apiKey: KEY });
+    expect(await clock.schedules.list()).toEqual([]);
+    expect(await clock.wakeups.list()).toEqual([]);
+    await expect(clock.schedules.run("daily")).rejects.toMatchObject({ code: "not_found" });
+    await expect(clock.wakeups.cancel("missing")).rejects.toMatchObject({ code: "not_found" });
   });
 });
 

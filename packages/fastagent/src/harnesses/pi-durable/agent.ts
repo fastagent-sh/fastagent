@@ -85,10 +85,6 @@ import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, latestContextTokens, trackSessions } from "./sessions.ts";
 import { messageStream } from "./stream.ts";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import { type ClockState, clockOperations } from "../../schedule/operations.ts";
-import type { ClockStore } from "../../schedule/clock.ts";
-import { removeSessionWakeups } from "../../schedule/wakeups.ts";
-import { clockStore } from "./clock.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
 export interface AgentCommand {
@@ -118,11 +114,8 @@ export interface DurableAgentOptions {
   thinkingLevel?: ModelThinkingLevel;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
-  /**
-   * The instance's clock: its schedules, which `schedules` and `wakeups` operate, with its state kept in the storage.
-   * Without one, the agent has no clock.
-   */
-  clock?: { schedules: ClockState["schedules"] };
+  /** Optional hook invoked after a session is marked deleted (e.g. for an external clock to clear its wake-ups). */
+  onSessionDelete?: (sessionId: string) => Promise<void> | void;
   /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
   telemetry?: TelemetryContext;
   /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
@@ -139,8 +132,6 @@ export type Unfinished = "resume" | "refuse";
 export interface DurableAgent extends Agent {
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
-  /** Where its clock keeps its state, when it has one: what a scheduler serving it fires from. */
-  readonly clock?: ClockStore;
   /** The conversation a session id names, to operate it through `harness`. */
   conversation(sessionId: string): Promise<Conversation | undefined>;
   close(): Promise<void>;
@@ -733,11 +724,6 @@ function durableAgent(
       }),
     );
 
-  const clock =
-    options.clock === undefined
-      ? undefined
-      : { store: clockStore(harness, context), schedules: options.clock.schedules };
-
   const remove = (sessionId: string): Promise<void> =>
     settle(
       Effect.gen(function* () {
@@ -753,7 +739,7 @@ function durableAgent(
         );
         if (!marked) return yield* agentError("not_found", `No session ${sessionId}`);
         yield* fromPromise(async () => {
-          if (clock !== undefined) await removeSessionWakeups(clock.store, sessionId);
+          await options.onSessionDelete?.(sessionId);
           try {
             await conversation.abort(context);
           } catch (error: unknown) {
@@ -918,9 +904,7 @@ function durableAgent(
   const messages = { send, stream, get };
   return {
     harness,
-    ...(clock === undefined ? {} : { clock: clock.store }),
     info,
-    ...clockOperations({ sessions: { get: getSession, create }, messages }, clock),
     usage: () => settle(fromPromise(() => harness.usage(context)).pipe(Effect.map((spent) => usageOfState(spent)))),
     sessions: {
       create,

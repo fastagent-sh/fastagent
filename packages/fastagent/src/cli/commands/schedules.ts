@@ -8,12 +8,13 @@ import { resolve } from "node:path";
 import {
   type Agent,
   AgentError,
+  type ClockApi,
   type Message,
   type ScheduleState,
   type Wakeup,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
-import { connectAgent } from "@fastagent-sh/client";
+import { connectAgent, connectClock } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { openServing, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
@@ -40,23 +41,25 @@ const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
 
 /** The instance's owner, when one serves it: `--url` / `--remote`, or the local serve of the instance here. */
-async function servedAgent(dirArg: string, opts: ClockOptions): Promise<Agent | undefined> {
+async function servedOwner(dirArg: string, opts: ClockOptions): Promise<{ agent: Agent; clock: ClockApi } | undefined> {
   const remoteTarget = await resolveRemoteTarget(dirArg, opts, opts.instance);
-  if (remoteTarget !== undefined) return remoteTarget.agent;
+  if (remoteTarget !== undefined) return { agent: remoteTarget.agent, clock: remoteTarget.clock };
   const target = agentDirOrExit(resolve(dirArg));
   enterInstance(target, opts.instance);
   const owner: Owner | undefined = await reachOwner(resolveStateRoot(target)).catch(failStartup);
-  return owner === undefined ? undefined : connectAgent(owner.url, { apiKey: owner.key });
+  return owner === undefined
+    ? undefined
+    : { agent: connectAgent(owner.url, { apiKey: owner.key }), clock: connectClock(owner.url, { apiKey: owner.key }) };
 }
 
-/** The clock as the Agent API says it, through whatever owns the instance. */
+/** The clock as the Clock API says it, through whatever owns the instance. */
 async function readClock(
   dirArg: string,
   opts: ClockOptions,
 ): Promise<{ schedules: ScheduleState[]; wakeups: Wakeup[] }> {
-  const served = await servedAgent(dirArg, opts);
+  const served = await servedOwner(dirArg, opts);
   if (served !== undefined) {
-    const [schedules, wakeups] = await Promise.all([served.schedules.list(), served.wakeups.list()]).catch(
+    const [schedules, wakeups] = await Promise.all([served.clock.schedules.list(), served.clock.wakeups.list()]).catch(
       (error: unknown) => failStartup(refusal(error)),
     );
     return { schedules, wakeups };
@@ -124,12 +127,12 @@ export async function runScheduleNow(
   dirArg: string,
   opts: ClockOptions & { model?: string; input?: boolean; json?: boolean },
 ): Promise<void> {
-  const served = await servedAgent(dirArg, opts);
+  const served = await servedOwner(dirArg, opts);
   if (served !== undefined) {
     if (opts.model !== undefined) failUsage("a served instance fires with the model it serves: drop --model");
-    const fired = await served.schedules.run(name).catch((error: unknown) => failStartup(refusal(error)));
+    const fired = await served.clock.schedules.run(name).catch((error: unknown) => failStartup(refusal(error)));
     if (fired.status === "skipped") failStartup(new Error(`${name} did not fire: ${fired.reason}`));
-    return reportFire(served, name, fired.message, async () => {}, opts.json);
+    return reportFire(served.agent, name, fired.message, async () => {}, opts.json);
   }
   // The name before the model, from the definition's shape: a script told its schedule does not exist need not set up
   // a model first.
@@ -142,13 +145,17 @@ export async function runScheduleNow(
     }
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
-  const { agent, models } = await loadSourceDefinition(agentDir)
+  const { agent, clock, models } = await loadSourceDefinition(agentDir)
     .then((definition) =>
       openServing(definition, { model: modelSpec, ...instanceInputs(agentDir), unfinished: "refuse" }),
     )
     .catch(failStartup);
   await reportAuth(models, modelSpec, agentDir);
-  const fired = await agent.schedules.run(name).catch(async (error: unknown) => {
+  if (clock === undefined) {
+    await agent.close();
+    failStartup(new Error(`the instance has no clock to run schedule "${name}"`));
+  }
+  const fired = await clock.api.schedules.run(name).catch(async (error: unknown) => {
     await agent.close();
     return failStartup(refusal(error));
   });
@@ -164,10 +171,10 @@ export async function runScheduleNow(
  * the agent (a schedule's own session). With no serve of the instance, this process holds its storage while it writes.
  */
 export async function runUnwake(id: string, dirArg: string, opts: ClockOptions): Promise<void> {
-  const served = await servedAgent(dirArg, opts);
+  const served = await servedOwner(dirArg, opts);
   const removed =
     served !== undefined
-      ? await served.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
+      ? await served.clock.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
       : await (async () => {
           refuseUnnamedDatabaseInstance();
           const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));

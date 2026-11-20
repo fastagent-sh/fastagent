@@ -220,8 +220,8 @@ fastagent schedules list               # next run, last outcome, pending wake-up
 fastagent schedules run daily-review   # a real run now, through dev when it runs
 ```
 
-The agent can also schedule its own follow-ups with `wake`; test one while serving. A schedule fires only while the
-agent runs, so run its container without scaling it to zero.
+Set `wakeTools: true` in `fastagent.config.ts` to let the agent schedule its own follow-ups with `wake`; test one while
+serving. A schedule fires only while the agent runs, so run its container without scaling it to zero.
 
 ## 7. Embed it in an app (optional)
 

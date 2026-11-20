@@ -8,6 +8,7 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
+  ClockApi,
   CompactOptions,
   ContentPart,
   ContextUsage,
@@ -43,4 +44,4 @@ export type {
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 /** @public */
-export { connectAgent, type ConnectOptions } from "./http/client.ts";
+export { connectAgent, connectClock, type ConnectOptions } from "./http/client.ts";
