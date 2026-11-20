@@ -1,0 +1,79 @@
+{
+  "name": "@fastagent-sh/pi-remote",
+  "version": "0.32.0",
+  "description": "Pi extension for connecting directly to deployed FastAgent instances over HTTP or Amazon Bedrock AgentCore.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "fastagent",
+    "agent-api",
+    "remote-agent"
+  ],
+  "license": "MIT",
+  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
+  "homepage": "https://fastagent.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fastagent-sh/fastagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fastagent-sh/fastagent/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@fastagent-sh/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "node ../../scripts/prepack.mjs && npm run build"
+  },
+  "dependencies": {
+    "@fastagent-sh/client": "0.32.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-bedrock-agentcore": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  }
+}

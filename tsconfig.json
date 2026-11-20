@@ -20,7 +20,9 @@
       "@fastagent-sh/fastagent": ["./packages/fastagent/src/index.ts"],
       "@fastagent-sh/fastagent/*": ["./packages/fastagent/src/*.ts"],
       "@fastagent-sh/agentcore": ["./packages/agentcore/src/index.ts"],
-      "@fastagent-sh/agentcore/*": ["./packages/agentcore/src/*.ts"]
+      "@fastagent-sh/agentcore/*": ["./packages/agentcore/src/*.ts"],
+      "@fastagent-sh/pi-remote": ["./packages/pi-remote/src/index.ts"],
+      "@fastagent-sh/pi-remote/*": ["./packages/pi-remote/src/*.ts"]
     }
   },
   "include": ["packages/*/src", "test"],

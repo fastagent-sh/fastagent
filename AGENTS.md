@@ -11,9 +11,10 @@ that API from outside the runtime: channels are not part of it.
   from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
 - **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, and
-  `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI) and
+  `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI),
   `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager, EventBridge alarms,
-  and its CDK construct). A package reaches another only by name, and in the repository reads its source through the
+  and its CDK construct) and `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
+  FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`). A package reaches another only by name, and in the repository reads its source through the
   `@fastagent-sh/source` export condition; `test/guards/package-boundary.test.ts` holds the lines.
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
   (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,

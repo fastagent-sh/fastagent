@@ -1,6 +1,6 @@
 /**
- * `src/git.ts` for a unit test whose subject is not git: a machine without git, unless the test says what git answers
- * in a directory. Installed with `vi.mock("../../packages/fastagent/src/git.ts", () => import("./git-double.ts"))`;
+ * `packages/fastagent/src/git.ts` for a unit test whose subject is not git: a machine without git, unless the test says
+ * what git answers in a directory. Installed with `vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"))`;
  * git-double.integration.test.ts checks both against the real module.
  */
 export class GitNotInstalled extends Error {}

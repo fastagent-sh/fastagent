@@ -11,6 +11,7 @@ import {
   type EntryQuery,
   type EntryRecord,
   type Harness,
+  InboxDoc,
   LiveDoc,
   UsageDoc,
 } from "@earendil-works/pi-durable";
@@ -22,7 +23,7 @@ import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
 import type { Sessions } from "./sessions.ts";
-import { type InputRecord, MetadataDoc, isInput, messageOf, sessionOf } from "./messages.ts";
+import { type InputRecord, MetadataDoc, SessionMetaDoc, isInput, messageOf, sessionOf } from "./messages.ts";
 
 const SCAN_PAGE = 100;
 
@@ -139,6 +140,9 @@ export function durableReads(harness: Harness, ids: Ids, sessions: Pick<Sessions
               await tx.doc(LiveDoc, id),
               await tx.doc(UsageDoc, id),
               await tx.doc(AgentDoc, id),
+              await tx.doc(InboxDoc, id),
+              await tx.doc(SessionMetaDoc, id),
+              ids,
             ),
           );
         }

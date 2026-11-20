@@ -26,6 +26,7 @@ import { statusOf } from "./http/contract.ts";
 
 /** @public */
 export type {
+  ActiveTool,
   Agent,
   AgentErrorData,
   AgentInfo,
@@ -44,6 +45,7 @@ export type {
   Metadata,
   ModelRef,
   Page,
+  QueuedMessage,
   ScheduleRun,
   ScheduleState,
   SendRequest,

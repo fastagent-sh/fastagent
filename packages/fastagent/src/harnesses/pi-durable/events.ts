@@ -35,7 +35,7 @@ import {
 import { type PromiseFailure, fromPromise, originalError } from "../../promise-bridge.ts";
 import { isPublished, replyText, thinkingOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
-import { type EndedRecord, hasEnded, isInput, sessionOf } from "./messages.ts";
+import { type EndedRecord, SessionMetaDoc, hasEnded, isInput, sessionOf } from "./messages.ts";
 import type { Reads } from "./reads.ts";
 
 /** Revisions a Caller may leave unread before its stream ends: pi-durable keeps no bound for a synchronous observer. */
@@ -99,6 +99,7 @@ export function sessionEvents(
       );
 
       const snapshot = observation.value;
+      const meta = yield* fromPromise(() => harness.snapshot(SessionMetaDoc, conversation.id, context));
       const newest = newestEntry(snapshot);
       const live = liveTranslator(harness, reads, conversation, context, maxRetries, snapshot);
       const replay =
@@ -112,6 +113,9 @@ export function sessionEvents(
           docOf(snapshot, LiveDoc),
           docOf(snapshot, UsageDoc),
           docOf(snapshot, AgentDoc),
+          docOf(snapshot, InboxDoc),
+          meta,
+          ids,
         ),
       });
       const events = Stream.fromQueue(pending).pipe(
@@ -207,8 +211,10 @@ function liveTranslator(
   let unended = unendedInputs(snapshot);
   const toolArgs = new Map<string, Json>();
   const started = new Set((first?.tools ?? []).filter((slot) => slot.status !== "pending").map((slot) => slot.callId));
-  const lines = new Map((first?.tools ?? []).flatMap((slot) => lineOf(slot.callId, slot.output)));
+  const lines = new Map((first?.tools ?? []).flatMap((slot) => progressKeyOf(slot.callId, slot.output)));
   const nested = new Map((first?.nestedTools ?? []).map((slot) => [slot.callId, slot.parentCallId]));
+  const seenCompactions = new Set((first?.compactions ?? []).map((c) => c.taskId));
+  let lastCompactionFailure = first?.compactionFailure?.taskId;
   const outermost = (callId: string): string => {
     const parent = nested.get(callId);
     return parent === undefined ? callId : outermost(parent);
@@ -249,10 +255,11 @@ function liveTranslator(
     shown = now;
     return events;
   };
-  const progress = (toolCallId: string, text: string | undefined): SessionEvent[] => {
+  const progress = (toolCallId: string, text: string | undefined, rawOutput?: string): SessionEvent[] => {
     if (text === undefined || lines.get(toolCallId) === text) return [];
     lines.set(toolCallId, text);
-    return [{ type: "tool_progress", toolCallId, text }];
+    const output = tailOutput(rawOutput);
+    return [{ type: "tool_progress", toolCallId, text, ...(output === undefined ? {} : { output }) }];
   };
   const toolEvents = (live: LiveState | undefined): SessionEvent[] => {
     const events: SessionEvent[] = [];
@@ -265,7 +272,7 @@ function liveTranslator(
         if (args === undefined) throw new Error(`tool call ${slot.callId} started with no answer that made it`);
         events.push({ type: "tool_started", toolCallId: slot.callId, name: slot.name, args });
       }
-      if (slot.status === "running") events.push(...progress(slot.callId, lastLine(slot.output ?? "")));
+      if (slot.status === "running") events.push(...progress(slot.callId, lastLine(slot.output ?? ""), slot.output));
     }
     const calls = live?.nestedTools ?? [];
     for (const slot of calls) {
@@ -338,6 +345,22 @@ function liveTranslator(
         if (reply === undefined || records.some((record) => record.model?.[0]?.role === "assistant")) {
           shown = shownOf([]);
         }
+        const activeCompactions = live?.compactions ?? [];
+        for (const c of activeCompactions) {
+          if (seenCompactions.has(c.taskId)) continue;
+          seenCompactions.add(c.taskId);
+          before.push({ type: "compaction_started", trigger: c.trigger });
+        }
+        const activeCompactionIds = new Set(activeCompactions.map((c) => c.taskId));
+        for (const id of [...seenCompactions]) {
+          if (!activeCompactionIds.has(id)) seenCompactions.delete(id);
+        }
+        const failure = live?.compactionFailure;
+        if (failure !== undefined && failure.taskId !== lastCompactionFailure) {
+          lastCompactionFailure = failure.taskId;
+          before.push({ type: "compaction_failed", error: failure.error });
+        }
+
         yield* recallToolArgs(live);
         before.push(...toolEvents(live));
 
@@ -362,7 +385,21 @@ function retryKey(live: LiveState | undefined): string | undefined {
   return generation?.retry === undefined ? undefined : `${generation.attempt}:${generation.retry.at}`;
 }
 
-function lineOf(callId: string, output: string | undefined): [string, string][] {
+const MAX_PROGRESS_LINES = 20;
+const MAX_PROGRESS_CHARS = 4096;
+
+/** Tail of multi-line running tool output; omitted for single-line output already carried by `text`. */
+function tailOutput(raw: string | undefined): string | undefined {
+  if (!raw?.includes("\n")) return undefined;
+  const trimmed = raw.trimEnd();
+  if (!trimmed.includes("\n")) return undefined;
+  const lines = trimmed.split("\n");
+  let tail = lines.slice(-MAX_PROGRESS_LINES).join("\n");
+  if (tail.length > MAX_PROGRESS_CHARS) tail = tail.slice(-MAX_PROGRESS_CHARS);
+  return tail;
+}
+
+function progressKeyOf(callId: string, output: string | undefined): [string, string][] {
   const line = lastLine(output ?? "");
   return line === undefined ? [] : [[callId, line]];
 }

@@ -37,7 +37,7 @@ in the OpenAPI document a served agent publishes at `/v1/openapi.json`. This pag
 | | Is |
 |---|---|
 | **Agent** | One served agent, one trust domain. `info()` says what it offers (commands, tools, models), `usage()` what it has spent |
-| **Session** | A conversation: its entries, its status (`idle` or `running`), its settings (`model`, `thinkingLevel`, `instructions`, `tools`). The agent names it |
+| **Session** | A conversation: its entries, its status (`idle` or `running`), its metadata (`title`, `createdAt`, `updatedAt`), its settings (`model`, `thinkingLevel`, `instructions`, `tools`), and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). The agent names it |
 | **Message** | One thing a caller sends into a session, from acceptance to its end: a `status`, and its `answer` |
 | **Entry** | One durable record of a session's history: `user`, `assistant`, `tool_result`, `compaction`. A fork shares its source's entries, ids included |
 
@@ -57,9 +57,10 @@ may write into one session, so the session's status says it is busy, not whether
 | Operation | Does |
 |---|---|
 | `info()`, `usage()` | What the agent offers; what the instance has spent |
-| `sessions.create({ model?, …, forkFrom? })` | A new session, or a fork: the source's entries up to `entryId`, its settings, none of its messages |
+| `sessions.create({ title?, model?, …, forkFrom? })` | A new session, or a fork: the source's entries up to `entryId`, its settings, none of its messages |
 | `sessions.get`, `sessions.list` | A session as it is now; every session, most recently active first, in pages |
-| `sessions.update` | Change its settings from its next model request; `null` clears one |
+| `sessions.update` | Change its title or settings from its next model request; `null` clears one |
+| `sessions.delete` | Abort any active work and remove the session from this agent |
 | `sessions.entries` | One page of history, the newest page first, then `prev` and `next` |
 | `sessions.events` | Watch it ([below](#watching)) |
 | `sessions.cancel` | Stop everything it is doing; answers once the stop is recorded, with the messages it stopped |
@@ -117,17 +118,18 @@ own.
 `sessions.events(sessionId, { after })` delivers, in order:
 
 1. **Replay:** the entries after the entry `after` names, every entry with `after: "start"`, none without `after`.
-2. **Snapshot:** one `state` event with the session as it is now, including the `reply` being written.
+2. **Snapshot:** one `state` event with the session as it is now, including any in-flight `reply`, `activeTools`, `queuedMessages`, and `compacting` state.
 3. **Live:** everything that happens next, with no gap. A message's `done` comes before the next message's `user`
    entry.
 
 | Event | Carries |
 |---|---|
-| `entry` | A durable entry |
+| `entry` | A durable entry (`tool_result` entries include optional `details` when reported by the tool) |
 | `state` | The session |
 | `delta` | Text added to the reply being written; `channel: "thinking"` is reasoning, never part of the answer |
-| `tool_started`, `tool_progress` | A running tool's call, then its latest status line |
+| `tool_started`, `tool_progress` | A running tool's call, then its latest status line (and optional multi-line `output` tail) |
 | `retrying` | A pause while a model call waits to be tried again |
+| `compaction_started`, `compaction_failed` | When a compaction task begins (`trigger`), or fails (`error`) |
 | `done` | A message that has ended |
 | `stream_error` | The stream cannot go on (the message does) |
 
@@ -172,7 +174,7 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `GET /v1/agent`, `GET /v1/usage` | `info`, `usage` |
 | `GET /v1/openapi.json` | This API as an OpenAPI 3.1 document |
 | `POST /v1/sessions`, `GET /v1/sessions?limit&after` | `sessions.create` (`201`), `sessions.list` |
-| `GET`, `PATCH /v1/sessions/{sessionId}` | `sessions.get`, `sessions.update` |
+| `GET`, `PATCH`, `DELETE /v1/sessions/{sessionId}` | `sessions.get`, `sessions.update`, `sessions.delete` (`204`) |
 | `GET /v1/sessions/{sessionId}/entries?after&before&limit` | `sessions.entries` |
 | `GET /v1/sessions/{sessionId}/events?after` | `sessions.events`, as server-sent events |
 | `POST /v1/sessions/{sessionId}/cancel`, `/compact` | `sessions.cancel`, `sessions.compact` (`202`) |

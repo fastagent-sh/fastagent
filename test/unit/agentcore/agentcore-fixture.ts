@@ -75,6 +75,7 @@ export function installFakeAgentCore() {
   });
   afterAll(async () => {
     vi.unstubAllEnvs();
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 

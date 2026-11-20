@@ -267,6 +267,10 @@ export function scriptedAgent(
         existing(sessionId);
         return sessionOf(sessionId);
       },
+      delete: async (sessionId) => {
+        existing(sessionId);
+        sessions.delete(sessionId);
+      },
       async entries(sessionId, entriesOptions = {}) {
         const kept = existing(sessionId);
         const from =
