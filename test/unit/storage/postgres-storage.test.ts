@@ -12,6 +12,8 @@ import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/po
 import {
   InstanceHeld,
   PostgresStorage,
+  listPostgresInstances,
+  openPostgresDatabase,
   openPostgresStorage,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
@@ -392,4 +394,75 @@ it("names an unreachable database without its credentials", async () => {
   const opening = openPostgresStorage("postgres://agent:s3cret@127.0.0.1:1/agents", freshInstance());
   await expect(opening).rejects.toThrow(/^the database 127\.0\.0\.1:1\/agents: /);
   await expect(opening).rejects.not.toThrow(/s3cret/);
+});
+
+describe("openPostgresDatabase: shared connection pool across multiple instances", () => {
+  it("migrates once across concurrent opens, keeps the pool alive when individual instances close, and refuses opens after close", async () => {
+    const fresh = await servedPostgres();
+    let createIndexCalls = 0;
+    const shared = openPostgresDatabase(
+      {
+        url: fresh.url,
+        createIndex: async (db, statement) => {
+          createIndexCalls += 1;
+          await db.query(statement);
+        },
+      },
+      { max: 4, idleTimeoutMillis: 1_000 },
+    );
+    try {
+      const dir = await fauxAgent("fa-shared-pg-");
+      const [a, b, c] = await Promise.all([
+        openSource(dir, { name: "tenant-a", database: shared }),
+        openSource(dir, { name: "tenant-b", database: shared }),
+        openSource(dir, { name: "tenant-c", database: shared }),
+      ]);
+      // Single-flight migration ran once across all three concurrent opens.
+      const callsAfterFirst = createIndexCalls;
+      expect(callsAfterFirst).toBeGreaterThan(0);
+
+      const sessionA = await a.sessions.create();
+      const sessionB = await b.sessions.create();
+      expect((await a.messages.send({ sessionId: sessionA.id, content: "hi a" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+
+      // Closing instance A releases its lease immediately without closing the shared pool or disturbing B.
+      await a.close();
+      expect((await b.messages.send({ sessionId: sessionB.id, content: "hi b" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+
+      // Reopening tenant-a reuses the shared pool and runs zero additional migrations.
+      const aAgain = await openSource(dir, { name: "tenant-a", database: shared });
+      expect(createIndexCalls).toBe(callsAfterFirst);
+      expect((await aAgain.sessions.get(sessionA.id)).id).toBe(sessionA.id);
+
+      // listPostgresInstances reuses the shared pool without closing it.
+      const agentName = (await aAgain.info()).agent.name;
+      const listed = await listPostgresInstances(shared, agentName);
+      expect(listed).toEqual(["tenant-a", "tenant-b", "tenant-c"]);
+
+      await aAgain.close();
+      await b.close();
+      await c.close();
+
+      // Closing the shared handle is idempotent and rejects later opens or listings.
+      await shared.close();
+      await shared.close();
+      await expect(openPostgresStorage(shared, "tenant-d")).rejects.toThrow(/is closed/);
+      await expect(listPostgresInstances(shared, agentName)).rejects.toThrow(/is closed/);
+    } finally {
+      await shared.close();
+      await fresh.close();
+    }
+  });
+
+  it("refuses invalid pool options up front", () => {
+    expect(() => openPostgresDatabase({ url: postgres.url }, { max: 0 })).toThrow(/max must be a positive integer/);
+    expect(() => openPostgresDatabase({ url: postgres.url }, { max: 1.5 })).toThrow(/max must be a positive integer/);
+    expect(() => openPostgresDatabase({ url: postgres.url }, { idleTimeoutMillis: -1 })).toThrow(
+      /idleTimeoutMillis must be a non-negative number/,
+    );
+  });
 });

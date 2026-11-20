@@ -10,7 +10,7 @@ A compact reference for the packages, one entry per kind of user:
 
 | Import | Holds |
 |---|---|
-| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `McpError`, and what an author writes: `defineAgent`, `defineSchedule`, `needs`, `sessionIdOf` |
+| `@fastagent-sh/fastagent` | The Agent API's types and `AgentError`, `openAgent`, `openPostgresDatabase`, `McpError`, and what an author writes: `defineAgent`, `defineSchedule`, `needs`, `sessionIdOf` |
 | `@fastagent-sh/client` | `connectAgent` (core Agent API), `connectClock` (schedules & wake-ups), and `connectAuth` (remote provider login/logout) over HTTP, with `AgentError` and the types: for a program anywhere `fetch` runs (Node, Bun, Deno, Workers). It does not install the runtime |
 | `@fastagent-sh/client/agentcore` | `connectAgentCore`, `connectAgentCoreClock`, and `connectAgentCoreAuth` (plus `connectAgent`, `connectClock`, `connectAuth`, `AgentError` and the types), for one AgentCore session with `@aws-sdk/client-bedrock-agentcore` installed |
 | `@fastagent-sh/agentcore` | Running on Amazon Bedrock AgentCore: `serveAgentCore`, `createAlarmGroup`, and `dsqlDatabase`, an Aurora DSQL cluster as `openAgent`'s `database`. Installed in an agent, it adds `fastagent agentcore` |

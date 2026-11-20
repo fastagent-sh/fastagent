@@ -39,8 +39,11 @@ await agent.close(); // on shutdown: releases the instance's storage
 - [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
 - `database: { url: "postgres://…" }` keeps the sessions and the clock in PostgreSQL
   ([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), under the instance's `name`, which is then
-  required; so does `secrets.FASTAGENT_DATABASE_URL`. On Aurora DSQL, `dsqlDatabase({ endpoint })` from
-  `@fastagent-sh/agentcore` gives it: signed in with the process's AWS credentials, within DSQL's limits.
+  required; so does `secrets.FASTAGENT_DATABASE_URL`. To host several instances in one process over a single shared
+  connection pool, open it once with `const db = openPostgresDatabase({ url }, { max: 20 })`, pass `database: db` to
+  each `openAgent` (migration runs once, and each `agent.close()` releases only that instance's lease), and call
+  `await db.close()` on shutdown. On Aurora DSQL, `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` gives
+  the database descriptor (and can also be wrapped with `openPostgresDatabase`).
 - [Run traces](configuration.md#run-traces) are exported when `secrets` holds `OTEL_EXPORTER_OTLP_ENDPOINT` (and the
   other `OTEL_*` variables). Pass them there, not in `env`: what is in `env` reaches the agent's commands.
 
