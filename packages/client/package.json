@@ -56,6 +56,11 @@
       "types": "./dist/http/contract.d.ts",
       "default": "./dist/http/contract.js"
     },
+    "./remotes": {
+      "@fastagent-sh/source": "./src/remotes.ts",
+      "types": "./dist/remotes.d.ts",
+      "default": "./dist/remotes.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

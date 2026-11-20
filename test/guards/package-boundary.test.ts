@@ -148,5 +148,7 @@ describe("the contracts depend on nothing", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"), true)]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"), true)]).toEqual([]);
   });
 });

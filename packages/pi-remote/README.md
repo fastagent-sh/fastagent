@@ -16,7 +16,7 @@ pi -e npm:@fastagent-sh/pi-remote
 
 ## Configure remotes
 
-Create `~/.config/fastagent/remotes.json` (or point `FASTAGENT_REMOTES_PATH` at a file):
+Create `~/.config/fastagent/remotes.json` (or point `FASTAGENT_REMOTES_PATH` at a file; shared with `fastagent invoke --remote <name>` and `fastagent schedules --remote <name>`):
 
 ```json
 {

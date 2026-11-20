@@ -662,6 +662,19 @@ describe("RemoteController", () => {
     });
     await flushMicrotasks();
     expect(controller.getState().queuedMessages).toEqual([]);
+
+    // Live state push updates title and contextUsage in place.
+    stream.control.push({
+      type: "state",
+      session: {
+        ...makeSession("sess-1", "idle"),
+        title: "Synced title",
+        contextUsage: { tokens: 50_000, contextWindow: 200_000 },
+      },
+    });
+    await flushMicrotasks();
+    expect(controller.getState().session?.title).toBe("Synced title");
+    expect(controller.getState().session?.contextUsage).toEqual({ tokens: 50_000, contextWindow: 200_000 });
     controller.disconnect();
   });
 

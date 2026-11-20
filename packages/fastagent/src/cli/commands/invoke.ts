@@ -10,7 +10,7 @@ import { resolveStateRoot } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { reachOwner } from "../owner.ts";
 import { failStartup, failUsage } from "../fail.ts";
-import { deploymentAgent } from "../deployment.ts";
+import { resolveRemoteTarget } from "../deployment.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 
 export interface InvokeOptions {
@@ -21,7 +21,9 @@ export interface InvokeOptions {
   session?: string;
   /** A served agent's base URL: the message goes there, over its Agent API. */
   url?: string;
-  /** The key `url` is called with; else the first `FASTAGENT_API_KEY` of the environment. */
+  /** A named remote from ~/.config/fastagent/remotes.json. */
+  remote?: string;
+  /** The key `url` or `remote` is called with; else the first `FASTAGENT_API_KEY` of the environment. */
   key?: string;
   instance?: InstanceFlags;
 }
@@ -68,17 +70,23 @@ async function answer(
   return exitCode;
 }
 
-/** `--url`: the message sent to a served agent over its Agent API, in a session there; nothing opens here. */
-async function runRemoteInvoke(message: string, dirArg: string, opts: InvokeOptions & { url: string }) {
-  const { url } = opts;
-  const agent = deploymentAgent(dirArg, url, opts.key, opts.instance);
+/** `--url` / `--remote`: send through a served agent's Agent API; nothing opens locally. */
+async function runRemoteInvoke(
+  message: string,
+  target: { agent: Agent; label: string; defaultSessionId?: string },
+  opts: InvokeOptions,
+) {
   let settings: SessionSettings | undefined;
   try {
     settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
   } catch (error) {
     failUsage(error instanceof Error ? error.message : String(error));
   }
-  await invokeThrough(agent, url, message, opts, settings, DEPLOYED_AUTH_HINT);
+  const effectiveOpts =
+    opts.session === undefined && target.defaultSessionId !== undefined
+      ? { ...opts, session: target.defaultSessionId }
+      : opts;
+  await invokeThrough(target.agent, target.label, message, effectiveOpts, settings, DEPLOYED_AUTH_HINT);
 }
 
 /** Options for sending one message over an Agent API client (`invoke --url`, `agentcore invoke`, local serve). */
@@ -173,13 +181,19 @@ export async function readInvokeMessage(
 }
 
 export async function runInvoke(given: string | undefined, dirArg: string, opts: InvokeOptions): Promise<void> {
-  if (opts.url === undefined && opts.key !== undefined) {
-    failUsage("--key is the key --url calls with: pass --url too");
+  if (opts.url !== undefined && opts.remote !== undefined) {
+    failUsage("pass either --url or --remote, not both");
+  }
+  if (opts.url === undefined && opts.remote === undefined && opts.key !== undefined) {
+    failUsage("--key is the key --url or --remote calls with: pass --url or --remote too");
   }
   const input = await readInvokeMessage(given);
   if (!input.ok) failUsage(input.error);
   const message = input.message;
-  if (opts.url !== undefined) return runRemoteInvoke(message, dirArg, { ...opts, url: opts.url });
+  if (opts.url !== undefined || opts.remote !== undefined) {
+    const remoteTarget = await resolveRemoteTarget(dirArg, opts, opts.instance);
+    if (remoteTarget !== undefined) return runRemoteInvoke(message, remoteTarget, opts);
+  }
   const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
     import("../../harnesses/pi-durable/serve.ts"),
     import("../../harnesses/pi-durable/open.ts"),

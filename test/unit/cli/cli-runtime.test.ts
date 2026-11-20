@@ -236,6 +236,43 @@ registerHooks({
         envWithoutKey,
       );
       expect([fromFile.code, fromFile.stdout.trim()], fromFile.stderr).toEqual([0, "seen 1"]);
+
+      // Shared remotes.json resolution via --remote <name> for both invoke and schedules.
+      const remotesPath = join(outside, "remotes.json");
+      await writeFile(
+        remotesPath,
+        JSON.stringify({
+          default: "prod",
+          remotes: {
+            prod: { url, apiKey: "$PROD_AGENT_KEY" },
+          },
+        }),
+      );
+      const remoteEnv = { ...envWithoutKey, FASTAGENT_REMOTES_PATH: remotesPath, PROD_AGENT_KEY: "the-key" };
+      const byRemote = await runInProcess(["-C", outside, "invoke", "--remote", "prod", "hello"], undefined, remoteEnv);
+      expect([byRemote.code, byRemote.stdout.trim()], byRemote.stderr).toEqual([0, "seen 1"]);
+
+      const schedByRemote = await runInProcess(
+        ["-C", outside, "schedules", "list", "--remote", "prod", "--json"],
+        undefined,
+        remoteEnv,
+      );
+      expect(schedByRemote.code, schedByRemote.stderr).toBe(0);
+      expect(JSON.parse(schedByRemote.stdout)).toEqual({ schedules: [], wakeups: [] });
+
+      const both = await runInProcess(
+        ["-C", outside, "invoke", "--url", url, "--remote", "prod", "hello"],
+        undefined,
+        remoteEnv,
+      );
+      expect([both.code, both.stderr]).toEqual([2, expect.stringContaining("either --url or --remote")]);
+
+      const unknown = await runInProcess(
+        ["-C", outside, "invoke", "--remote", "missing", "hello"],
+        undefined,
+        remoteEnv,
+      );
+      expect([unknown.code, unknown.stderr]).toEqual([2, expect.stringContaining("unknown remote")]);
     });
   });
 });

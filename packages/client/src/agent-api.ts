@@ -144,6 +144,13 @@ export const QueuedMessage = Schema.Struct({
 });
 export type QueuedMessage = typeof QueuedMessage.Type;
 
+/** Current context-window occupancy of the session's active branch (clears after compaction until the next answer). */
+export const ContextUsage = Schema.Struct({
+  tokens: Schema.Number,
+  contextWindow: Schema.optionalKey(Schema.Number),
+});
+export type ContextUsage = typeof ContextUsage.Type;
+
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
     id: Schema.String,
@@ -160,6 +167,8 @@ export class Session extends Schema.Opaque<Session>()(
     queuedMessages: Schema.optionalKey(Schema.Array(QueuedMessage)),
     /** Present and true while a compaction task is running for this session. */
     compacting: Schema.optionalKey(Schema.Boolean),
+    /** Latest context window occupancy in the active branch; absent before the first answer or right after compaction. */
+    contextUsage: Schema.optionalKey(ContextUsage),
     usage: Usage,
   }),
 ) {}

@@ -27,10 +27,12 @@ const BIND: FlagSpec = {
 /** A served instance's Agent API, in place of the local one. */
 const URL_FLAGS: FlagSpec[] = [
   { flags: "--url <base>", description: "a served instance's Agent API base URL" },
-  { flags: "--key <key>", description: "API key for --url" },
+  { flags: "--remote <name>", description: "a named remote from ~/.config/fastagent/remotes.json" },
+  { flags: "--key <key>", description: "API key for --url or an HTTP --remote" },
 ];
 const urlOptions = (f: Record<string, unknown>) => ({
   ...(typeof f.url === "string" ? { url: f.url } : {}),
+  ...(typeof f.remote === "string" ? { remote: f.remote } : {}),
   ...(typeof f.key === "string" ? { key: f.key } : {}),
 });
 const GLOBAL_AUTH: FlagSpec = {
