@@ -11,13 +11,10 @@ import {
   fauxProvider,
 } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { type IoOption, type LoginIO, chooseLogin, loginFlow } from "../../../packages/fastagent/src/cli/login-ui.ts";
 import {
-  type IoOption,
-  type LoginIO,
   LoginRefused,
   SignInCancelled,
-  chooseLogin,
-  loginFlow,
   loginOptionsOver,
   loginOver,
 } from "../../../packages/fastagent/src/harnesses/models/login.ts";

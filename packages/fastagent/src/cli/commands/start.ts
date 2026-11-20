@@ -10,8 +10,8 @@ import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
-import { cliMountOptions, serveService } from "../serve.ts";
-import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
+import { cliMountOptions, parseBind, parsePort, serveService } from "../serve.ts";
+import { enterAgentCommand, reportAssembly } from "../shared.ts";
 
 export interface StartOptions {
   port?: string;
