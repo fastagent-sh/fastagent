@@ -55,14 +55,11 @@ export interface Service {
   close(): Promise<void>;
 }
 
-/** A serve as the CLI reports it: what it serves, beside the Service itself. */
+/** A serve as the CLI and tests inspect it: its schedules and whether the Agent API is mounted. */
 export interface ServedAgent extends Service {
-  agentDir: string;
   schedules: readonly Schedule[];
   /** Whether the Agent API is served, under `/v1`: only with a key. */
   api: boolean;
-  /** The earliest instant a schedule or pending wake-up is next due, when the serve has a clock. */
-  nextClockDue(at?: Date): Promise<Date | undefined>;
 }
 
 /**
@@ -119,15 +116,20 @@ export interface ServeOptions {
   apiKeys?: readonly string[];
   /** Stamps schedules seen for the first time, when a cold open was woken by an external alarm. */
   since?: Date;
+  /** Optional external alarm watcher tied to this serve's lifetime, synced on start and after each `tick()`. */
+  watchAlarm?: (nextClockDue: (at?: Date) => Promise<Date | undefined>) => {
+    sync(options?: { forceClear?: boolean }): Promise<void>;
+    stop(): void;
+  };
+  /** Runs before `tick()` claims due schedules and wake-ups (e.g. `harness.resume()`). */
+  beforeTick?: () => void;
+  /** Runs when this serve closes or rolls back after a failed start. */
+  onClose?: () => void;
 }
 
-/** What the assembly serves. */
-export interface ServableAgent {
-  agent: Agent;
-  /** The project directory the instance's `.secrets/` belong to. */
-  agentDir: string;
-  /** Where its clock keeps its state (fires, wake-ups): without one, nothing fires. */
-  clock?: ClockStore;
+/** What the assembly serves: the opened agent (carrying its own clock, when it has one) and its schedules. */
+interface ServableAgent {
+  agent: Agent & { readonly clock?: ClockStore };
   schedules: readonly Schedule[];
 }
 
@@ -143,9 +145,10 @@ function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
   };
 }
 
-/** The assembly itself: the schedules, and the Agent API with a key, composed into one handler. */
+/** The assembly itself: the schedules, optional alarm watcher, and the Agent API with a key, composed into one handler. */
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
-  const { agent, agentDir, clock, schedules } = opened;
+  const { agent, schedules } = opened;
+  const clock = agent.clock;
   const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -161,6 +164,10 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ),
       );
       return yield* Effect.gen(function* () {
+        if (options.onClose !== undefined) {
+          const onClose = options.onClose;
+          yield* Effect.addFinalizer(() => Effect.sync(onClose));
+        }
         if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
         const scheduled =
           clock === undefined
@@ -172,15 +179,29 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
                 }),
                 (started) => Effect.sync(started.stop),
               );
+        const nextClockDue = (at?: Date) => scheduled?.nextDue(at) ?? Promise.resolve(undefined);
+        const watchAlarm = options.watchAlarm;
+        const watcher =
+          watchAlarm === undefined
+            ? undefined
+            : yield* Effect.acquireRelease(
+                Effect.sync(() => watchAlarm(nextClockDue)),
+                (active) => Effect.sync(() => active.stop()),
+              );
+        if (watcher !== undefined) {
+          yield* Effect.tryPromise({ try: () => watcher.sync(), catch: (error) => error });
+        }
         return {
           ...serviceOver(
             surface(api),
             () => Effect.runPromise(shutdown),
             async () => api?.endStreams(),
           ),
-          tick: (tickOptions?: { since?: Date }) => scheduled?.tick(tickOptions) ?? Promise.resolve(),
-          nextClockDue: (at?: Date) => scheduled?.nextDue(at) ?? Promise.resolve(undefined),
-          agentDir,
+          tick: async (tickOptions?: { since?: Date }) => {
+            options.beforeTick?.();
+            await scheduled?.tick(tickOptions);
+            await watcher?.sync({ forceClear: true });
+          },
           schedules,
           api: api !== undefined,
         };

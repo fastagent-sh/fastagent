@@ -1,6 +1,5 @@
 /** Production serving. */
 import { resolve } from "node:path";
-import type { Agent } from "@fastagent-sh/client/agent-api";
 import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
 import { isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
@@ -21,9 +20,6 @@ export interface StartOptions {
   input?: boolean;
   instance?: InstanceFlags;
 }
-
-/** What `start` opened and serves. */
-type StartedService = ServedAgent & { agent: Agent; stateRoot: string };
 
 export async function runStart(dirArg: string, opts: StartOptions): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
@@ -55,7 +51,7 @@ async function prepareStartWorkspace(): Promise<void> {
 }
 
 /** Take the storage on a deployed box, then open the built definition in `dirArg` and serve it. */
-async function openStartService(dirArg: string, opts: StartOptions): Promise<StartedService> {
+async function openStartService(dirArg: string, opts: StartOptions): Promise<ServedAgent> {
   await prepareStartWorkspace();
   // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<AgentDefinition> | undefined;
@@ -65,13 +61,11 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Sta
     model: modelSpec,
     ...instanceInputs(agentDir, { mode: "start" }),
   });
-  const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);
-  if (isUnderDir(stateRoot, agentDir)) {
+  if (isUnderDir(opened.stateRoot, agentDir)) {
     log.info(
       "[fastagent] note: state lives under the definition; use FASTAGENT_ROOT on persistent storage for deployment.",
     );
   }
-  const service = await serveAgent(opened, cliMountOptions());
-  return { ...service, agent: opened.agent, stateRoot };
+  return serveAgent(opened, cliMountOptions());
 }

@@ -124,8 +124,6 @@ export interface OpenedServing {
   workdir: string;
   /** Where the instance's state is: its storage, its schedules' state, its wake-ups. */
   stateRoot: string;
-  /** Where its clock keeps its state, when it has one (`storage: "instance"`). */
-  clock?: ClockStore;
   /** The definition's schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   schedules: BuiltDefinition["schedules"];
 }
@@ -301,26 +299,33 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       .close(BACKGROUND_CONTEXT)
       .catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
   };
-  // A storage failure or a direct harness close also ends the resources this open acquired.
-  void agent.harness.closed
-    .then(() => mcp.close())
-    .catch((error: unknown) => {
-      log.warn(`[fastagent] MCP cleanup after harness shutdown failed: ${String(error)}`);
-    })
-    .finally(() => traces?.close());
-  const closeAgent = agent.close.bind(agent);
-  let closing: Promise<void> | undefined;
-  agent.close = () =>
-    (closing ??= (async () => {
+  // One idempotent teardown for MCP clients and trace export, shared between explicit close and unexpected harness shutdown.
+  let resourcesClosed: Promise<void> | undefined;
+  const closeResources = (): Promise<void> =>
+    (resourcesClosed ??= (async () => {
       const failures: unknown[] = [];
-      await closeAgent().catch((error: unknown) => failures.push(error));
       await mcp.close().catch((error: unknown) => failures.push(error));
       // Last: what the agent recorded up to its close goes out with it.
       await traces?.close();
-      if (failures.length) throw new AggregateError(failures, "Agent close failed");
+      if (failures.length > 0) throw failures[0];
     })());
+  void agent.harness.closed.then(closeResources).catch((error: unknown) => {
+    log.warn(`[fastagent] cleanup after harness shutdown failed: ${String(error)}`);
+  });
+  const closeAgent = agent.close.bind(agent);
+  let closing: Promise<void> | undefined;
+  const managedAgent: DurableAgent = {
+    ...agent,
+    close: () =>
+      (closing ??= (async () => {
+        const failures: unknown[] = [];
+        await closeAgent().catch((error: unknown) => failures.push(error));
+        await closeResources().catch((error: unknown) => failures.push(error));
+        if (failures.length) throw new AggregateError(failures, "Agent close failed");
+      })()),
+  };
   return {
-    agent,
+    agent: managedAgent,
     definition,
     name,
     code,
@@ -330,7 +335,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     agentDir: projectDir,
     workdir,
     stateRoot,
-    ...(agent.clock === undefined ? {} : { clock: agent.clock }),
     schedules: code.schedules,
   };
 }
@@ -442,38 +446,20 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
       ticking = true;
-      const serving = serveAgent(opened, serveOptions).then(async (service): Promise<Service> => {
-        const watcher =
-          serveOptions.alarm === undefined
-            ? undefined
-            : watchInstanceAlarm({
-                harness: agent.harness,
-                nextClockDue: service.nextClockDue,
-                setAlarm: serveOptions.alarm,
-              });
-        if (watcher !== undefined) {
-          try {
-            await watcher.sync();
-          } catch (error) {
-            watcher.stop();
-            await service.close().catch(() => undefined);
-            throw error;
-          }
-        }
-        return {
-          ...service,
-          tick: async (tickOptions) => {
-            agent.harness.resume();
-            await service.tick(tickOptions);
-            await watcher?.sync({ forceClear: true });
-          },
-          close: () => {
-            // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
-            ticking = false;
-            watcher?.stop();
-            return service.close();
-          },
-        };
+      const { alarm, ...rest } = serveOptions;
+      const serving: Promise<Service> = serveAgent(opened, {
+        ...rest,
+        ...(alarm === undefined
+          ? {}
+          : {
+              watchAlarm: (nextClockDue) =>
+                watchInstanceAlarm({ harness: agent.harness, nextClockDue, setAlarm: alarm }),
+            }),
+        beforeTick: () => agent.harness.resume(),
+        onClose: () => {
+          // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
+          ticking = false;
+        },
       });
       served = serving;
       serving.catch(() => {
