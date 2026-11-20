@@ -1,0 +1,76 @@
+{
+  "name": "@fastagent-sh/harness-dsh",
+  "version": "0.32.0",
+  "private": true,
+  "description": "Experimental DeepSeek Harness (@deepseek-ai/dsh) adapter implementing the FastAgent Agent API with OS sandboxing.",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "fastagent",
+    "dsh",
+    "deepseek-harness",
+    "sandbox"
+  ],
+  "license": "MIT",
+  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
+  "homepage": "https://fastagent.sh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fastagent-sh/fastagent.git"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@fastagent-sh/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@fastagent-sh/client": "0.32.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-agent": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-agent-loop": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-llm-pi-ai": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-sandbox-local": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-session": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-persistence": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-session-projection": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-system-prompt": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-tool-executor-native": ">=0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": ">=0.2.2-rc.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-agent-loop": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-llm-pi-ai": { "optional": true },
+    "@deepseek-ai/dsh-sandbox-local": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-session-projection": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
+    "@deepseek-ai/dsh-tool-executor-native": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true }
+  }
+}
