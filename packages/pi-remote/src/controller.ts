@@ -63,6 +63,7 @@ export interface RemoteViewState {
 
 export interface RemoteControllerCallbacks {
   onStateChange?: (state: RemoteViewState) => void;
+  onSessionReady?: (state: RemoteViewState, meta: { fresh: boolean; resumed: boolean }) => void;
   onEntry?: (entry: Entry, meta: { replayed: boolean }) => void;
   onDone?: (message: Message) => void;
   onError?: (error: Error) => void;
@@ -115,6 +116,7 @@ export class RemoteController {
   private seenEntryIds = new Set<string>();
   private toolCallArgs = new Map<string, Json>();
   private autoTitleAttempted = false;
+  private inFlightSends = 0;
   private state: RemoteViewState = {
     status: "disconnected",
     activeTools: [],
@@ -147,7 +149,7 @@ export class RemoteController {
   async connect(
     remoteName: string,
     agent: Agent,
-    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string> } = {},
+    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string>; resumed?: boolean } = {},
   ): Promise<Session> {
     const wasConnected = this.isConnected();
     const beforeGen = wasConnected ? this.generation : this.nextGeneration();
@@ -178,6 +180,7 @@ export class RemoteController {
       this.agent = agent;
       this.seenEntryIds = new Set(options.seenEntryIds ?? []);
       this.toolCallArgs.clear();
+      this.inFlightSends = 0;
       this.autoTitleAttempted = Boolean(session.title || options.sessionId);
       this.setState({
         status: "connected",
@@ -191,6 +194,10 @@ export class RemoteController {
         canceling: false,
         compacting: session.compacting === true,
         ...(options.after && options.after !== "start" ? { lastEntryId: options.after } : {}),
+      });
+      this.callbacks.onSessionReady?.(this.state, {
+        fresh: options.sessionId === undefined,
+        resumed: options.resumed === true,
       });
       this.startEventLoop(gen, agent, session.id, options.after ?? "start");
       return session;
@@ -217,6 +224,7 @@ export class RemoteController {
     this.agent = undefined;
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.inFlightSends = 0;
     this.autoTitleAttempted = false;
     this.setState({
       status: "disconnected",
@@ -243,6 +251,7 @@ export class RemoteController {
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.inFlightSends = 0;
     this.autoTitleAttempted = true;
     this.setState({
       status: "connected",
@@ -256,6 +265,7 @@ export class RemoteController {
       canceling: false,
       compacting: session.compacting === true,
     });
+    this.callbacks.onSessionReady?.(this.state, { fresh: false, resumed: false });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
   }
@@ -274,6 +284,7 @@ export class RemoteController {
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.inFlightSends = 0;
     this.autoTitleAttempted = Boolean(session.title || options?.forkFrom);
     this.setState({
       status: "connected",
@@ -287,6 +298,7 @@ export class RemoteController {
       canceling: false,
       compacting: session.compacting === true,
     });
+    this.callbacks.onSessionReady?.(this.state, { fresh: !options?.forkFrom, resumed: false });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
   }
@@ -323,6 +335,7 @@ export class RemoteController {
     const gen = this.generation;
     const whenBusy = options.whenBusy ?? (session.status === "running" ? "steer" : "queue");
     const preview = previewOfContent(content);
+    this.inFlightSends += 1;
     this.setState({ ...this.state, sending: true, lastError: undefined });
 
     let message: Message;
@@ -333,8 +346,12 @@ export class RemoteController {
         whenBusy,
       });
     } finally {
-      if (this.generation === gen && this.state.sending) {
-        this.setState({ ...this.state, sending: false });
+      if (this.generation === gen) {
+        this.inFlightSends = Math.max(0, this.inFlightSends - 1);
+        const stillSending = this.inFlightSends > 0;
+        if (this.state.sending !== stillSending) {
+          this.setState({ ...this.state, sending: stillSending });
+        }
       }
     }
 
@@ -357,14 +374,14 @@ export class RemoteController {
           session: nextSession,
           queuedMessages: nextQueued,
           queuedPreviews: nextPreviews,
-          sending: false,
+          sending: this.inFlightSends > 0,
           lastError: undefined,
         });
       }
       if (!this.autoTitleAttempted && !this.state.session.title) {
-        this.autoTitleAttempted = true;
         const autoTitle = autoTitleOf(preview);
         if (autoTitle) {
+          this.autoTitleAttempted = true;
           void agent.sessions
             .update(session.id, { title: autoTitle })
             .then((updated) => {
@@ -525,6 +542,7 @@ export class RemoteController {
         if (this.generation !== gen || abort.signal.aborted) return;
 
         if (fatalStreamError) {
+          this.inFlightSends = 0;
           this.setState({
             ...this.state,
             status: "disconnected",

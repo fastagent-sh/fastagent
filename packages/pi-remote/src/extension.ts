@@ -150,7 +150,6 @@ export function parseInterceptedRemoteBuiltin(raw: string): { command: string; a
 interface RemoteEditorCallbacks {
   isConnected: () => boolean;
   isRunning: () => boolean;
-  onBuiltinCommand: (command: string, args: string) => void;
   onQueueMessage: (text: string) => void;
 }
 
@@ -164,6 +163,11 @@ class RemoteEditor extends CustomEditor {
     this.callbacks = callbacks;
   }
 
+  private submitFa(command: string, args = ""): void {
+    const line = args ? `/fa ${command} ${args}` : `/fa ${command}`;
+    this.onSubmit?.(line);
+  }
+
   override handleInput(data: string): void {
     if (this.callbacks.isConnected() && !this.isShowingAutocomplete()) {
       if (this.kb.matches(data, "tui.input.submit")) {
@@ -172,7 +176,7 @@ class RemoteEditor extends CustomEditor {
         if (builtin) {
           this.addToHistory?.(text);
           this.setText("");
-          this.callbacks.onBuiltinCommand(builtin.command, builtin.args);
+          this.submitFa(builtin.command, builtin.args);
           return;
         }
       }
@@ -186,19 +190,19 @@ class RemoteEditor extends CustomEditor {
         }
       }
       if (this.kb.matches(data, "app.model.select")) {
-        this.callbacks.onBuiltinCommand("model", "");
+        this.submitFa("model");
         return;
       }
       if (this.kb.matches(data, "app.session.new")) {
-        this.callbacks.onBuiltinCommand("new", "");
+        this.submitFa("new");
         return;
       }
       if (this.kb.matches(data, "app.session.resume")) {
-        this.callbacks.onBuiltinCommand("sessions", "");
+        this.submitFa("sessions");
         return;
       }
       if (this.kb.matches(data, "app.session.fork")) {
-        this.callbacks.onBuiltinCommand("fork", "");
+        this.submitFa("fork");
         return;
       }
     }
@@ -251,6 +255,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
   let widgetMounted = false;
   let footerMounted = false;
   let editorMounted = false;
+  let previousEditorFactory: ReturnType<ExtensionContext["ui"]["getEditorComponent"]>;
   let lastWindowTitle: string | undefined;
 
   const terminalStatus = new TerminalStatusReporter();
@@ -293,7 +298,8 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         requestFooterRender = undefined;
       }
       if (editorMounted) {
-        ctx.ui.setEditorComponent?.(undefined);
+        ctx.ui.setEditorComponent?.(previousEditorFactory);
+        previousEditorFactory = undefined;
         editorMounted = false;
       }
       ctx.ui.setStatus("fastagent-remote", undefined);
@@ -304,16 +310,13 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
 
     if (ctx.mode === "tui") {
       if (!editorMounted && typeof ctx.ui.setEditorComponent === "function") {
+        previousEditorFactory = ctx.ui.getEditorComponent?.();
         editorMounted = true;
         ctx.ui.setEditorComponent(
           (tui, theme, keybindings) =>
             new RemoteEditor(tui, theme, keybindings, {
               isConnected: () => controller.isConnected(),
               isRunning: () => controller.getState().session?.status === "running",
-              onBuiltinCommand: (command, args) => {
-                if (!activeCtx) return;
-                void dispatchAction(command, args ? args.split(/\s+/) : [], activeCtx);
-              },
               onQueueMessage: (text) => {
                 void controller.send(text, { whenBusy: "queue" }).catch((error) => {
                   activeCtx?.ui.notify(`Remote queue failed: ${errorText(error)}`, "error");
@@ -384,6 +387,9 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
   const controller = new RemoteController({
     onStateChange: (state) => {
       syncUi(state);
+    },
+    onSessionReady: (state, meta) => {
+      if (!meta.resumed) appendBanner(state, meta.fresh);
     },
     onEntry: (entry: Entry) => {
       const state = controller.getState();
@@ -519,13 +525,11 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       ...(targetSession !== undefined ? { sessionId: targetSession } : {}),
       ...(options.after !== undefined ? { after: options.after } : {}),
       ...(options.seenEntryIds !== undefined ? { seenEntryIds: options.seenEntryIds } : {}),
+      ...(options.showBanner === false ? { resumed: true } : {}),
     });
     activeRemoteConfig = remote;
     if (options.persistBinding !== false) {
       pi.appendEntry<RemoteBinding>(REMOTE_BINDING_TYPE, { remoteName: name, sessionId: session.id });
-    }
-    if (options.showBanner !== false) {
-      appendBanner(controller.getState(), targetSession === undefined);
     }
     ctx.ui.notify(`Connected to ${name} (session ${shortId(session.id)})`, "info");
   };
@@ -1012,7 +1016,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             if (outcome !== "unsupported") return;
           }
           const session = await controller.createSession();
-          appendBanner(controller.getState(), true);
           ctx.ui.notify(`Started new remote session ${shortId(session.id)}`, "info");
         } catch (error) {
           ctx.ui.notify(`Failed to create session: ${errorText(error)}`, "error");
@@ -1244,6 +1247,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     widgetMounted = false;
     footerMounted = false;
     editorMounted = false;
+    previousEditorFactory = undefined;
     lastWindowTitle = undefined;
     requestFooterRender = undefined;
     requestWidgetRender = undefined;

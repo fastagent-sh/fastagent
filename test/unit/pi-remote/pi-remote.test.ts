@@ -686,16 +686,34 @@ describe("RemoteController", () => {
     controller.disconnect();
   });
 
-  it("auto-titles an untitled session from the first user message and tracks queuedPreviews and toolCallArgs", async () => {
+  it("auto-titles an untitled session from the first non-command text message and tracks concurrent sends, queuedPreviews, and toolCallArgs", async () => {
     const stream = createEventStream();
     const { agent, updated } = makeFakeAgent({
       onEvents: () => stream.iterable,
     });
+    const resolvers: Array<() => void> = [];
+    const origSend = agent.messages.send;
+    agent.messages.send = (req) =>
+      new Promise<Message>((resolve) => {
+        resolvers.push(() => void origSend(req).then(resolve));
+      });
+
     const controller = new RemoteController({}, { sleep: async () => {} });
     await controller.connect("ops", agent);
 
-    const first = await controller.send("Investigate checkout 502 errors in production");
+    // Concurrent sends keep sending=true until all in-flight sends settle; leading slash commands do not burn auto-title.
+    const slashPromise = controller.send("/skill:deploy");
+    const firstPromise = controller.send("Investigate checkout 502 errors in production");
+    expect(controller.getState().sending).toBe(true);
+    resolvers.shift()!();
+    await slashPromise;
+    expect(controller.getState().sending).toBe(true);
+    expect(updated).toEqual([]);
+
+    resolvers.shift()!();
+    const first = await firstPromise;
     await flushMicrotasks();
+    expect(controller.getState().sending).toBe(false);
     expect(updated).toEqual([
       { sessionId: "sess-1", changes: { title: "Investigate checkout 502 errors in production" } },
     ]);
@@ -918,6 +936,9 @@ describe("Pi extension host integration", () => {
         setFooter(factory: unknown) {
           footer = factory;
           if (factory !== undefined) footerSetCount += 1;
+        },
+        getEditorComponent() {
+          return editorComponent;
         },
         setEditorComponent(factory: unknown) {
           editorComponent = factory;
@@ -1146,13 +1167,26 @@ describe("Pi extension host integration", () => {
         action: "continue",
       });
 
-      // /fa <name> connects directly without requiring "connect", mounts RemoteEditor and window title, and /fa off disconnects.
+      // /fa <name> connects directly, preserves & restores any prior custom editor, emits banner before entries, and /fa off cleans up.
+      const priorEditor = () => ({});
+      mock.ctx.ui.setEditorComponent(priorEditor);
+      const entriesBeforeDirect = mock.appendedEntries.length;
       await fa.handler("ops", mock.ctx);
-      expect(mock.getEditorComponent()).toBeDefined();
+      await waitFor(() =>
+        mock.appendedEntries.slice(entriesBeforeDirect).some((entry) => entry.customType === REMOTE_ENTRY_TYPE),
+      );
+      const directBatch = mock.appendedEntries.slice(entriesBeforeDirect);
+      const bannerIdx = directBatch.findIndex((e) => e.customType === "fastagent-remote-banner");
+      const entryIdx = directBatch.findIndex((e) => e.customType === REMOTE_ENTRY_TYPE);
+      expect(bannerIdx).toBeGreaterThanOrEqual(0);
+      expect(bannerIdx).toBeLessThan(entryIdx);
+
+      expect(mock.getEditorComponent()).not.toBe(priorEditor);
       expect(mock.getWindowTitle()).toContain("☁ ops");
       await fa.handler("off", mock.ctx);
-      expect(mock.getEditorComponent()).toBeUndefined();
+      expect(mock.getEditorComponent()).toBe(priorEditor);
       expect(mock.getWindowTitle()).toBe("");
+      mock.ctx.ui.setEditorComponent(undefined);
 
       // Direct URL connect works without any saved remotes.json.
       process.env.FASTAGENT_REMOTES_PATH = join(dir, "empty-remotes.json");
