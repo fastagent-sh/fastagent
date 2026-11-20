@@ -41,7 +41,7 @@ Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagen
 - **Smart entry:** run `/fa` to pick a remote (or set one up) when disconnected, or open the remote action menu when connected.
 - **Direct connect:** `/fa <name>` or `/fa https://ops.example.com [apiKey]` (or start with `pi --fa ops`). Each connection starts a fresh remote session like local Pi; use `/resume` to switch to an existing session.
 - **Native Pi workflow while connected:**
-  - `/resume`, `/new`, `/name`, `/fork`, `/model`, `/thinking`, `/compact`, and `Shift+Tab` route directly to the connected remote session and restore local Pi behavior after `/fa off`.
+  - `/resume`, `/new`, `/name`, `/session`, `/copy`, `/fork`, `/clone`, `/model`, `/thinking`, `/compact`, `/login`, `/logout`, and shortcuts (`Ctrl+L`, `Ctrl+P`, `Shift+Tab`, copy, session shortcuts) route directly to the connected remote and restore local Pi behavior after `/fa off`.
   - Send text and images normally. While the remote agent is running, `Enter` steers, `Alt+Enter` queues, and `Esc` cancels.
   - The first user message on an untitled session automatically sets a concise session title.
-- **Remote management commands:** `/fa off`, `/fa sessions`, `/fa clock` (schedules & wake-ups), `/fa remotes` (add/remove/switch), `/fa delete`, `/fa status`.
+- **Remote management commands:** `/fa off`, `/fa sessions`, `/fa clock` (schedules & wake-ups), `/fa login` / `/fa logout` (remote server credentials), `/fa remotes` (add/remove/switch), `/fa delete`, `/fa status`.

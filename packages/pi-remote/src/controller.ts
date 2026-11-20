@@ -115,6 +115,7 @@ export class RemoteController {
   private eventSeq = 0;
   private seenEntryIds = new Set<string>();
   private toolCallArgs = new Map<string, Json>();
+  private lastAssistantText?: string;
   private autoTitleAttempted = false;
   private inFlightSends = 0;
   private state: RemoteViewState = {
@@ -140,6 +141,10 @@ export class RemoteController {
 
   getToolCallArgs(toolCallId: string): Json | undefined {
     return this.toolCallArgs.get(toolCallId);
+  }
+
+  getLastAssistantText(): string | undefined {
+    return this.lastAssistantText;
   }
 
   isConnected(): boolean {
@@ -180,6 +185,7 @@ export class RemoteController {
       this.agent = agent;
       this.seenEntryIds = new Set(options.seenEntryIds ?? []);
       this.toolCallArgs.clear();
+      this.lastAssistantText = undefined;
       this.inFlightSends = 0;
       this.autoTitleAttempted = Boolean(session.title || options.sessionId);
       this.setState({
@@ -224,6 +230,7 @@ export class RemoteController {
     this.agent = undefined;
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.lastAssistantText = undefined;
     this.inFlightSends = 0;
     this.autoTitleAttempted = false;
     this.setState({
@@ -251,6 +258,7 @@ export class RemoteController {
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.lastAssistantText = undefined;
     this.inFlightSends = 0;
     this.autoTitleAttempted = true;
     this.setState({
@@ -284,6 +292,7 @@ export class RemoteController {
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
+    this.lastAssistantText = undefined;
     this.inFlightSends = 0;
     this.autoTitleAttempted = Boolean(session.title || options?.forkFrom);
     this.setState({
@@ -702,7 +711,10 @@ export class RemoteController {
             nextSession = { ...nextSession, status: "running" };
           }
         } else if (entry.kind === "assistant") {
-          const data = entry.data as { toolCalls?: Array<{ id?: unknown; args?: Json }> } | null;
+          const data = entry.data as { text?: unknown; toolCalls?: Array<{ id?: unknown; args?: Json }> } | null;
+          if (typeof data?.text === "string" && data.text.trim().length > 0) {
+            this.lastAssistantText = data.text;
+          }
           for (const call of data?.toolCalls ?? []) {
             if (typeof call.id === "string" && call.args !== undefined) {
               this.toolCallArgs.set(call.id, call.args);
@@ -738,6 +750,9 @@ export class RemoteController {
         return;
       }
       case "done": {
+        if (event.message.answer?.text && event.message.answer.text.trim().length > 0) {
+          this.lastAssistantText = event.message.answer.text;
+        }
         const failed = event.message.status === "failed" ? event.message.error?.message : undefined;
         const session = this.state.session ? { ...this.state.session, status: "idle" as const } : undefined;
         this.setState({
