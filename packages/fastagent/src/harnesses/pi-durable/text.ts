@@ -253,20 +253,36 @@ const fileText = (path: string): string | undefined => {
  */
 export function definitionSections(
   agentDir: string,
-  options: { wake: boolean; runsAs: RunsAs; workdir?: string; source?: boolean },
+  options: {
+    wake: boolean;
+    runsAs: RunsAs;
+    workdir?: string;
+    source?: boolean;
+    hasCodingTools?: boolean;
+    hasRead?: boolean;
+  },
 ): PromptSection[] {
+  const hasCodingTools = options.hasCodingTools ?? true;
+  const hasRead = options.hasRead ?? hasCodingTools;
   return [
     section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
     section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
-    section("skills", () => skillsPrompt(readSkills(agentDir))),
+    section("skills", () => (hasRead ? skillsPrompt(readSkills(agentDir)) : undefined)),
     section("workspace", () =>
-      workspaceSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true }),
+      hasCodingTools
+        ? workspaceSection({ agentDir, workdir: options.workdir ?? agentDir, source: options.source === true })
+        : undefined,
     ),
-    section("self_change", () => (options.runsAs.deployed ? selfChangeSection(options.wake) : undefined)),
+    section("self_change", () =>
+      options.runsAs.deployed ? selfChangeSection(options.wake, hasCodingTools) : undefined,
+    ),
   ];
 }
 
-function selfChangeSection(wake: boolean): string {
+function selfChangeSection(wake: boolean, hasCodingTools: boolean): string | undefined {
+  if (!hasCodingTools) {
+    return wake ? "To schedule your own follow-up work, use the wake tool." : undefined;
+  }
   return (
     "Your directory survives restarts, including uncommitted work; /tmp does not. Your directory is this host's " +
     "storage and survives deployments of a new version. " +

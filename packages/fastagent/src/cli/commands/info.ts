@@ -9,7 +9,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { agentPresentation } from "../../harnesses/pi-durable/config.ts";
+import { agentPresentation, resolveCodingTools } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { describeInstanceStorage } from "../../harnesses/pi-durable/serve.ts";
@@ -68,6 +68,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     tz: s.tz ?? null,
     next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
   }));
+  const codingTools = [...resolveCodingTools(config.codingTools)];
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const auth = models.auth;
   const mcp = declareMcp(config.mcpServers, definition.dir).map(({ name, server }) => ({
@@ -87,6 +88,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
+          codingTools,
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
@@ -119,6 +121,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   const unbuilt = "(not built: a required secret has no value)";
+  line("coding tools", codingTools.join(", ") || "(none)");
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");

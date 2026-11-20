@@ -140,6 +140,17 @@ describe("public entries", () => {
       expect(readFileSync(resolve(repo, entry), "utf8"), entry).not.toMatch(/export\s+(?:type\s+)?\*/);
     }
   });
+
+  it("platform-only Postgres adapter types stay on @fastagent-sh/fastagent/platform, not the root entry", () => {
+    const rootEntry = readFileSync(resolve(srcOf("fastagent"), "index.ts"), "utf8");
+    for (const symbol of ["PostgresLimits", "CreateIndex", "PgExecutor"]) {
+      expect(rootEntry).not.toMatch(new RegExp(`\\b${symbol}\\b`));
+    }
+    const platformEntry = readFileSync(resolve(srcOf("fastagent"), "platform.ts"), "utf8");
+    for (const symbol of ["PostgresDatabase", "PostgresLimits", "CreateIndex", "PgExecutor"]) {
+      expect(platformEntry).toMatch(new RegExp(`\\b${symbol}\\b`));
+    }
+  });
 });
 
 describe("the contracts depend on nothing", () => {

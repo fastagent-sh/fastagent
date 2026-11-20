@@ -13,7 +13,13 @@ import {
   createRegistry,
   defineExtension,
 } from "@earendil-works/pi-durable";
-import { CodingTools } from "@earendil-works/pi-durable/tools";
+import {
+  CodingTools,
+  createBashTool,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+} from "@earendil-works/pi-durable/tools";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
@@ -29,8 +35,8 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type Needs, isNeeds } from "../../needs.ts";
-import type { AgentConfig, DefinedSchedule } from "./define.ts";
-import { agentPresentation, checkProgramConfig } from "./config.ts";
+import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type DefinedSchedule } from "./define.ts";
+import { agentPresentation, checkProgramConfig, resolveCodingTools } from "./config.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
@@ -146,8 +152,9 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
+  const codingTools = resolveCodingTools(config.codingTools);
   refuseTwins("extension", [
-    { source: "pi-durable's coding tools", name: CodingTools.name },
+    ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CodingTools.name }] : []),
     { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
     { source: "FastAgent's wake tools", name: WAKE_EXTENSION },
     ...extensions,
@@ -255,7 +262,23 @@ function resolveDefaultModel(
   return { unusableDefault: { spec, reason } };
 }
 
-/** Open the definition as an Agent over `models`: the coding tools, then its own. */
+const CODING_TOOL_FACTORIES: Record<CodingToolName, () => ToolRegistration> = {
+  read: () => createReadTool(),
+  write: () => createWriteTool(),
+  edit: () => createEditTool(),
+  bash: () => createBashTool(),
+};
+
+function codingToolsExtension(selected: readonly CodingToolName[]): Extension | undefined {
+  if (selected.length === 0) return undefined;
+  if (selected.length === CODING_TOOL_NAMES.length) return CodingTools;
+  return defineExtension({
+    name: CodingTools.name,
+    tools: selected.map((name) => CODING_TOOL_FACTORIES[name]()),
+  });
+}
+
+/** Open the definition as an Agent over `models`: the selected coding tools, then its own. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir } = definition;
   const { code, models } = options;
@@ -276,8 +299,15 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   for (const tool of options.mcpTools ?? []) {
     if (authoredNames.has(tool.name)) throw new Error(`MCP tool ${tool.name} conflicts with an authored tool`);
   }
+  const selectedCodingTools = resolveCodingTools(config.codingTools);
+  const builtinCoding = codingToolsExtension(selectedCodingTools);
+  const hasCodingTools = selectedCodingTools.length > 0;
+  const hasRead =
+    selectedCodingTools.includes("read") ||
+    authoredNames.has("read") ||
+    (options.mcpTools ?? []).some((tool) => tool.name === "read");
   const registry = createRegistry();
-  registry.install(CodingTools);
+  if (builtinCoding !== undefined) registry.install(builtinCoding);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
   registry.install(
     defineExtension({
@@ -287,6 +317,8 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         source: definition.source === true,
+        hasCodingTools,
+        hasRead,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),

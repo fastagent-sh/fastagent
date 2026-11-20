@@ -176,9 +176,9 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
 - **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
   `sessions.cancel` was stopping it.
 - **`serve()`.** `close()` ends the API's event streams, gives requests in flight 500 ms, then stops the schedules.
-- **Users kept apart are yours.** An app serving its own users over one instance checks every session id a request
-  names, a fork's source included, and that holds only for an agent whose tools reach neither its storage nor its
-  files.
+- **Users kept apart are yours.** An app serving its own users over one instance sets `codingTools: false` in
+  `fastagent.config.ts` (so the agent has no `read`, `write`, `edit` or `bash`), uses only tools that cannot reach
+  the instance's storage or files, and checks every session id a request names, a fork's source included.
 
 ## 6. A desktop host
 

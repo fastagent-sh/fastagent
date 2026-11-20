@@ -187,6 +187,82 @@ export default defineTool({
       expect(tools).toContain("wake");
       expect(tools).not.toContain("unwake");
     });
+
+    it("codingTools: false disables read/write/edit/bash and omits workspace and read-based skills from the system prompt", async () => {
+      const noCoding = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: false, providers: [faux.provider] };
+`,
+      };
+      const { dir, agent, faux } = await open(noCoding, { runsAs: { dev: false, deployed: true } });
+      const tools = await offered(agent);
+      for (const name of ["read", "write", "edit", "bash"]) expect(tools).not.toContain(name);
+      expect(tools).toContain("weather");
+
+      const prompts: string[] = [];
+      faux.setResponses([
+        (context: TranscriptContext) => {
+          prompts.push(getCurrentSystemPrompt(context.messages));
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(agent, "hi");
+      const prompt = prompts[0]!;
+      expect(prompt).toContain("You are Support.");
+      expect(prompt).not.toContain("Your working directory");
+      expect(prompt).not.toContain(dir);
+      expect(prompt).not.toContain("apt-get");
+      expect(prompt).not.toContain("<available_skills>");
+
+      // /skill:<name> command still expands the skill directly without needing the read tool.
+      const info = await agent.info();
+      expect(info.commands.map((command) => command.name)).toContain("skill:lookup-order");
+    });
+
+    it("codingTools: ['read'] installs only the requested subset and keeps skills in the prompt", async () => {
+      const readOnly = {
+        ...FILES,
+        "fastagent.config.ts": `import { faux } from "./model.ts";
+export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read"], providers: [faux.provider] };
+`,
+      };
+      const { agent, faux } = await open(readOnly);
+      const tools = await offered(agent);
+      expect(tools).toContain("read");
+      for (const name of ["write", "edit", "bash"]) expect(tools).not.toContain(name);
+
+      const prompts: string[] = [];
+      faux.setResponses([
+        (context: TranscriptContext) => {
+          prompts.push(getCurrentSystemPrompt(context.messages));
+          return fauxAssistantMessage("ok");
+        },
+      ]);
+      await ask(agent, "hi");
+      expect(prompts[0]).toContain("<available_skills>");
+      expect(prompts[0]).toContain("Your working directory");
+    });
+
+    it("refuses unknown, duplicate, or non-array codingTools values in fastagent.config.ts", async () => {
+      const invalidName = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: ["read", "rm"] };\n',
+      });
+      await expect(loadSourceDefinition(invalidName)).rejects.toThrow(/unknown coding tool "rm"/);
+
+      const duplicate = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: ["read", "read"] };\n',
+      });
+      await expect(loadSourceDefinition(duplicate)).rejects.toThrow(/duplicate coding tool "read"/);
+
+      const wrongType = agentPackage({
+        ...FILES,
+        "fastagent.config.ts": 'export default { codingTools: "none" };\n',
+      });
+      await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
+    });
   });
 });
 
