@@ -271,10 +271,11 @@ const CODING_TOOL_FACTORIES: Record<CodingToolName, () => ToolRegistration> = {
 
 function codingToolsExtension(selected: readonly CodingToolName[]): Extension | undefined {
   if (selected.length === 0) return undefined;
-  if (selected.length === CODING_TOOL_NAMES.length) return CodingTools;
+  const unique = new Set(selected);
+  if (CODING_TOOL_NAMES.every((name) => unique.has(name))) return CodingTools;
   return defineExtension({
     name: CodingTools.name,
-    tools: selected.map((name) => CODING_TOOL_FACTORIES[name]()),
+    tools: [...unique].map((name) => CODING_TOOL_FACTORIES[name]()),
   });
 }
 
@@ -301,11 +302,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   }
   const selectedCodingTools = resolveCodingTools(config.codingTools);
   const builtinCoding = codingToolsExtension(selectedCodingTools);
-  const hasCodingTools = selectedCodingTools.length > 0;
-  const hasRead =
-    selectedCodingTools.includes("read") ||
-    authoredNames.has("read") ||
-    (options.mcpTools ?? []).some((tool) => tool.name === "read");
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
@@ -317,8 +313,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         source: definition.source === true,
-        hasCodingTools,
-        hasRead,
+        codingTools: selectedCodingTools,
       }),
       tools: [...code.tools, ...(options.mcpTools ?? [])],
     }),
