@@ -1,16 +1,14 @@
 /**
- * Helpers shared across command modules: interactivity gates, port parsing, the startup auth report, first-run model
- * resolution, and the login terminal IO.
+ * Entering an agent directory for commands that run the agent (`dev`, `start`, `invoke`, `schedules run`):
+ * directory + instance entry, first-run model resolution, and startup assembly/auth reporting.
  */
-import { definedValues } from "../declared-secrets.ts";
 import { resolve } from "node:path";
-import { autocomplete, isCancel, log as clackLog, password, select, text as clackText } from "@clack/prompts";
+import { autocomplete, isCancel } from "@clack/prompts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
-import { buildModelPickerOptions } from "./models-view.ts";
-import { type LoginIO, SignInCancelled, loginFlow } from "../harnesses/models/login.ts";
+import { definedValues } from "../declared-secrets.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
+import { SignInCancelled } from "../harnesses/models/login.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
-import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
 import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
 import {
   buildDefinitionShape,
@@ -18,29 +16,24 @@ import {
   loadSourceDefinition,
   modelSpecFor,
 } from "../harnesses/pi-durable/open.ts";
-import { formatAuthReport } from "./auth-view.ts";
-import { isDeployedWorkspace } from "../paths.ts";
+import type { OpenedServing } from "../harnesses/pi-durable/serve.ts";
 import { log } from "../log.ts";
-import { type InstanceFlags, enterInstance } from "./instance.ts";
+import { isDeployedWorkspace } from "../paths.ts";
 import { dotEnvPath } from "../value-file.ts";
-import { openExternalUrl } from "../open-url.ts";
-import { bindAddress, isBindAddress } from "../bind.ts";
+import { formatAuthReport } from "./auth-view.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
+import { type InstanceFlags, enterInstance } from "./instance.ts";
+import { isInteractive, loginFlow, terminalLoginIO } from "./login-ui.ts";
+import { buildModelPickerOptions } from "./models-view.ts";
 
 /** The definition a command runs, when it is not the source one (`start` runs the build). */
 type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;
 
-/** An agent directory a command entered, and the default model that then resolves, if any. */
-export interface EnteredAgent {
+interface EnteredAgent {
   agentDir: string;
   modelSpec?: string;
 }
 
-/**
- * How a command enters its agent directory, in the one order that works: the directory, the agent's environment, then
- * the first-run model picker. Returns the default model that then resolves, if any. `before`: what the command checks
- * of the directory before a model is asked for (`schedules run`: that the schedule it names exists).
- */
 async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
@@ -55,9 +48,8 @@ async function enterAgentDirectory(
 }
 
 /**
- * How every command that RUNS the agent on this machine enters it (dev, start, invoke, schedules run):
- * {@link enterAgentDirectory}, plus a default model. The agent opens without one, but a process here would then fail
- * every new conversation, so it stops at startup instead: exit 2, the choice a terminal's picker would have asked for.
+ * How every command that runs the agent on this machine enters it (`dev`, `start`, `invoke`, `schedules run`):
+ * enters the directory and resolves a default model, or exits 2 when none is set and no terminal can pick one.
  */
 export async function enterAgentCommand(
   dirArg: string,
@@ -76,17 +68,12 @@ export async function enterAgentCommand(
   return { ...entered, modelSpec };
 }
 
-/** The padded label writer for the STARTUP report (`dev`/`start`, stderr via the log level). */
 function reportLine(label: string, value: string): void {
   log.info(`[fastagent] ${`${label}:`.padEnd(13)}${value}`);
 }
 
 /** What `dev` and `start` say about the agent they just opened, in the order they say it. */
-export async function reportAssembly(
-  opened: OpenedServing,
-  modelSpec: string,
-  extras: [label: string, value: string][] = [],
-): Promise<void> {
+export async function reportAssembly(opened: OpenedServing, modelSpec: string): Promise<void> {
   const { code, models, agentDir, workdir, stateRoot, config } = opened;
   reportLine("agent", `${opened.name} — ${workdir}`);
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
@@ -96,53 +83,16 @@ export async function reportAssembly(
   if (code.extensions.length > 0) reportLine("extensions", names(code.extensions));
   reportLine("commands", (await opened.agent.info()).commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   reportLine("state", stateRoot);
-  for (const [label, value] of extras) reportLine(label, value);
-}
-
-/** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
-export function isInteractive(): boolean {
-  return Boolean(process.stdin.isTTY && process.stdout.isTTY);
-}
-
-/** Parse + range-check a port string (CLI flag or env). */
-export function parsePort(value: string | undefined, source: string, from: "flag" | "env"): number | undefined {
-  if (value === undefined) return undefined;
-  const trimmed = value.trim();
-  if (trimmed === "") return undefined;
-  if (!/^\d+$/.test(trimmed) || Number(trimmed) > 65535) {
-    const message = `invalid ${source} "${value}": must be an integer 0-65535`;
-    if (from === "flag") failUsage(message);
-    failStartup(new Error(message));
-  }
-  return Number(trimmed);
-}
-
-/**
- * Parse a `--bind` address: empty/whitespace is "not set" → undefined (the `??` chain falls through to config, then
- * all interfaces).
- */
-export function parseBind(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) return undefined;
-  if (!isBindAddress(trimmed)) failUsage(`invalid --bind "${value}": must be an IP address or "localhost"`);
-  return bindAddress(trimmed); // a name never travels past this point — see bind.ts
 }
 
 /** Report which source provides the model's credentials, surfacing a remediation hint at startup. */
 export async function reportAuth(models: ModelEnvironment, modelSpec: string, agentDir: string): Promise<void> {
   const provider = providerOf(modelSpec);
-  // No files: the opener was handed a credential store, which is its caller's to describe.
-  if (models.auth === undefined) {
-    log.info(`[fastagent] auth:   the caller's credential store (${provider})`);
-    return;
-  }
-  // The agent's own model environment, the one its turns run on and a deployed box's `login --if-missing` asks: the
-  // line cannot name a file, or a source, other than the ones the runtime uses.
   const modelId = modelSpec.slice(provider.length + 1);
   const status = await models.authStatus(provider, modelId).catch(failStartup);
   const report = formatAuthReport({
     provider,
-    path: models.auth.path,
+    path: models.auth?.path ?? "",
     ...status,
     ...(isDeployedWorkspace() ? { deployed: true } : { local: { valueFile: dotEnvPath(agentDir) } }),
   });
@@ -160,27 +110,23 @@ async function resolveFirstRunModel(
   load?: LoadDefinition,
 ): Promise<string | undefined> {
   const loaded = (load ?? loadSourceDefinition)(agentDir);
-  // A custom loader's refusal is the caller's to report.
   const definition = await (load === undefined ? loaded.catch(failStartup) : loaded);
   const spec = modelSpecFor(definition.config, options.model);
   if (spec) return spec;
-  if (options.input === false) return undefined; // --no-input: never prompt (clig) — the caller decides what's missing
-  if (!isInteractive()) return undefined; // CI/deploy: the caller raises the actionable missing-model error
+  if (options.input === false) return undefined;
+  if (!isInteractive()) return undefined;
   const providers =
     load === undefined
       ? await definitionProviders(agentDir, process.env).catch(failStartup)
       : buildDefinitionShape(definition, process.env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
-  if (chosen === undefined) return undefined; // cancelled (or auth probe failed): the caller raises its clear error
-  process.env.FASTAGENT_MODEL = chosen; // this process + any spawned dev worker inherits it
-  console.error(`[fastagent] picked ${chosen} — set \`${pickedModelLine(chosen)}\` in fastagent.config.ts to keep it`);
+  if (chosen === undefined) return undefined;
+  process.env.FASTAGENT_MODEL = chosen;
+  console.error(
+    `[fastagent] picked ${chosen} — set \`model: ${JSON.stringify(chosen)}\` in fastagent.config.ts to keep it`,
+  );
   return chosen;
-}
-
-/** The line of `fastagent.config.ts` that keeps a picked model: what the picker prints, and what it must accept. */
-function pickedModelLine(model: string): string {
-  return `model: ${JSON.stringify(model)}`;
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */
@@ -193,7 +139,6 @@ async function pickWithCredentials(
   try {
     statuses = await providerAuthStatuses(models);
   } catch (error) {
-    // Per-provider auth throws are captured as `broken` INSIDE providerAuthStatuses.
     log.warn(`[fastagent] could not probe provider auth: ${(error as Error).message}`);
     return undefined;
   }
@@ -201,14 +146,13 @@ async function pickWithCredentials(
     message: "Choose a model for this agent",
     options: buildModelPickerOptions(listModels(models), statuses),
   });
-  if (isCancel(r)) return undefined; // cancelled: the caller raises its clear missing-model error
+  if (isCancel(r)) return undefined;
   const chosen = r as string;
   const provider = providerOf(chosen);
   const status = statuses.get(provider);
-  if (status?.state === "ready") return chosen; // usable now — nothing to fix
+  if (status?.state === "ready") return chosen;
 
   if (status && status.login === "none") {
-    // No login flow exists for this provider — KEEP the choice and name the remedy.
     if (status.state === "broken") {
       log.warn(
         `[fastagent] stored auth for "${provider}" is unusable: ${status.message} — fix or remove it in ${authPath}; invokes fail until then`,
@@ -220,43 +164,13 @@ async function pickWithCredentials(
   }
 
   try {
-    // Verified on this agent's registry, against the chosen model: the request the agent is about to make.
     await loginFlow(terminalLoginIO(), { provider, authPath, providers, verifyWith: chosen });
     console.error(`[fastagent] logged in to ${provider} — saved to ${authPath}`);
   } catch (error) {
-    if (error instanceof SignInCancelled) return undefined; // user backed out — discard the choice, like a picker cancel
-    // A FAILED login keeps the choice: the pick persists, the startup auth report names the remedy, and a later
-    // `fastagent login` fixes auth without re-picking the model.
+    if (error instanceof SignInCancelled) return undefined;
     log.warn(
       `[fastagent] login for "${provider}" failed: ${(error as Error).message} — model saved; run \`fastagent login\` to fix auth`,
     );
   }
   return chosen;
-}
-
-/** Login terminal IO via @clack/prompts: a searchable list once long, a hidden prompt for keys. */
-export function terminalLoginIO(): LoginIO {
-  return {
-    async select(message, options) {
-      const r = await (options.length > 7 ? autocomplete : select)({ message, options });
-      return isCancel(r) ? undefined : (r as string);
-    },
-    async prompt(message, opts) {
-      const r = opts?.hidden
-        ? await password({ message, signal: opts.signal })
-        : await clackText({ message, signal: opts?.signal });
-      return isCancel(r) ? undefined : (r as string);
-    },
-    note: (message) => clackLog.info(message),
-    openUrl: openExternalUrl,
-  };
-}
-
-/** Print one JSON object or human-readable lines to stdout. */
-export function printReport(asJson: boolean | undefined, json: Record<string, unknown>, text: readonly string[]): void {
-  if (asJson) {
-    console.log(JSON.stringify(json));
-    return;
-  }
-  for (const line of text) console.log(line);
 }

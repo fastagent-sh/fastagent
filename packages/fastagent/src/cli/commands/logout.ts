@@ -9,7 +9,7 @@ import { loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { globalHome } from "../../paths.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
-import { isInteractive, terminalLoginIO } from "../shared.ts";
+import { isInteractive, terminalLoginIO } from "../login-ui.ts";
 
 export async function runLogout(provider: string | undefined, opts: { global?: boolean; input?: boolean }) {
   const agentDir = opts.global ? undefined : optionalAgentDirOrExit(process.cwd());

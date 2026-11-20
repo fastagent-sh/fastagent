@@ -1,11 +1,34 @@
 /** What `dev` (its worker) and `start` need beyond the service itself. */
-import { bindLabel, classifyBind } from "../bind.ts";
+import { bindAddress, bindLabel, classifyBind, isBindAddress } from "../bind.ts";
 import type { ServedAgent, ServeOptions, Service } from "../service.ts";
 import { API_PREFIX } from "@fastagent-sh/client/http/contract";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
-import { failStartup } from "./fail.ts";
+import { failStartup, failUsage } from "./fail.ts";
 import { announceOwner } from "./owner.ts";
+
+/** Parse + range-check a port string (CLI flag or env). */
+export function parsePort(value: string | undefined, source: string, from: "flag" | "env"): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (!/^\d+$/.test(trimmed) || Number(trimmed) > 65535) {
+    const message = `invalid ${source} "${value}": must be an integer 0-65535`;
+    if (from === "flag") failUsage(message);
+    failStartup(new Error(message));
+  }
+  return Number(trimmed);
+}
+
+/**
+ * Parse a `--bind` address: empty/whitespace is "not set" → undefined (falls through to config, then all interfaces).
+ */
+export function parseBind(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (!isBindAddress(trimmed)) failUsage(`invalid --bind "${value}": must be an IP address or "localhost"`);
+  return bindAddress(trimmed);
+}
 
 /** What the CLI adds to the assembly: the API's keys. */
 export function cliMountOptions(): ServeOptions {

@@ -21,15 +21,13 @@ import {
   SignInCancelled,
   type SignInMethod,
   type SignInOption,
-  chooseLogin,
-  loginFlow,
   loginOptionsOver,
   loginStatusText,
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
-import { isInteractive, printReport, terminalLoginIO } from "../shared.ts";
+import { chooseLogin, isInteractive, loginFlow, printReport, terminalLoginIO } from "../login-ui.ts";
 
 export interface LoginOptions {
   /** `-g`: store in the user-global file, which an agent reads for a provider it has no other credential for. */

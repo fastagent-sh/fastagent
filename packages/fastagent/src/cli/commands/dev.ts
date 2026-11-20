@@ -10,9 +10,9 @@ import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup } from "../fail.ts";
 import { ownerKey } from "../owner.ts";
-import { cliMountOptions, serveService } from "../serve.ts";
+import { cliMountOptions, parseBind, parsePort, serveService } from "../serve.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
-import { enterAgentCommand, parseBind, parsePort, reportAssembly } from "../shared.ts";
+import { enterAgentCommand, reportAssembly } from "../shared.ts";
 
 /**
  * `dev` binds loopback unless `--bind` says otherwise: a dev serve carries the agent's full tool authority and lands on
