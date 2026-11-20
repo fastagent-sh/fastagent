@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/client",
     "packages/fastagent",
-    "packages/agentcore"
+    "packages/agentcore",
+    "packages/pi-remote"
   ],
   "engines": {
     "node": ">=24.15.0"
@@ -26,6 +27,8 @@
   "devDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
     "@biomejs/biome": "^2.6.4",
+    "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-tui": "1.5.2",
     "@electric-sql/pglite": "^0.5.16",
     "@electric-sql/pglite-socket": "^0.2.19",
     "@hono/node-server": "^2.1.5",
