@@ -104,7 +104,7 @@ Prompt templates (`prompts/<name>.md`) run on a message that is a bare `/<name>`
 
 | Source | Use |
 |---|---|
-| `fastagent login` | Stores credentials in `.secrets/auth.json`; `-g` stores them in `~/.fastagent/.secrets/auth.json` |
+| `fastagent login` | Stores credentials locally in `.secrets/auth.json` (`-g` for `~/.fastagent/.secrets/auth.json`), or with `--url` / `--remote` stores them in the deployed instance's durable storage (SQLite / PostgreSQL / Aurora DSQL) |
 | Provider variables | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, … for servers and CI |
 | `.secrets/.env` | Values for local commands (`dev`, `start`, `invoke`, …); git-ignored. Pass `--env-file <file>` to isolate another set of values |
 

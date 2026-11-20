@@ -10,7 +10,24 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai";
+import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:net";
+import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
+import { activeWork } from "../../../packages/fastagent/src/busy.ts";
+import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-login.ts";
+import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
+import { createAuthManager } from "../../../packages/fastagent/src/harnesses/models/remote-auth.ts";
+import {
+  durableCredentialStore,
+  overlayCredentialStore,
+} from "../../../packages/fastagent/src/harnesses/pi-durable/credentials.ts";
+import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import { scriptedAgent } from "../../doubles/scripted-agent.ts";
+import { KEY, served } from "../../harnesses/http-subject.ts";
+import { openSource } from "../../harnesses/open-source.ts";
 import { type IoOption, type LoginIO, chooseLogin, loginFlow } from "../../../packages/fastagent/src/cli/login-ui.ts";
 import {
   LoginRefused,
@@ -243,5 +260,330 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 
     await expect(pending).rejects.toBeInstanceOf(SignInCancelled);
     expect((await readAuth(authPath).catch(() => ({}))).openai).toBeUndefined();
+  });
+});
+
+describe("durable instance credentials and remote Auth HTTP API", () => {
+  it("persists OAuth credentials and deviceId in instance storage across reopen and layers over fallback store", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-durable-creds-"));
+    const dbPath = join(dir, "agent.sqlite");
+    const h1 = await Harness.open(
+      await openLockedStorage(dbPath),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    const store1 = durableCredentialStore(h1, BACKGROUND_CONTEXT);
+    const deviceId1 = await store1.getOrCreateDeviceId();
+    await store1.modify("openai-codex", async () => ({
+      type: "oauth",
+      access: "acc-1",
+      refresh: "ref-1",
+      expires: Date.now() + 3_600_000,
+    }));
+    await h1.close(BACKGROUND_CONTEXT);
+
+    const h2 = await Harness.open(
+      await openLockedStorage(dbPath),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    try {
+      const store2 = durableCredentialStore(h2, BACKGROUND_CONTEXT);
+      expect(await store2.getOrCreateDeviceId()).toBe(deviceId1);
+      expect(await store2.read("openai-codex")).toMatchObject({ type: "oauth", access: "acc-1", refresh: "ref-1" });
+      expect(await store2.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
+
+      const fallbackCreds = new Map<string, Credential>([
+        ["anthropic", { type: "api_key", key: "fallback-key" }],
+        ["openai-codex", { type: "oauth", access: "stale", refresh: "stale", expires: 0 }],
+      ]);
+      const overlay = overlayCredentialStore(() => store2, {
+        read: async (id) => fallbackCreds.get(id),
+        list: async () => [...fallbackCreds.entries()].map(([providerId, c]) => ({ providerId, type: c.type })),
+        modify: async (id, fn) => {
+          const next = await fn(fallbackCreds.get(id));
+          if (next !== undefined) fallbackCreds.set(id, next);
+          return next;
+        },
+        delete: async (id) => {
+          fallbackCreds.delete(id);
+        },
+      });
+      // Durable primary outranks fallback for openai-codex, while fallback still serves anthropic.
+      expect(await overlay.read("openai-codex")).toMatchObject({ access: "acc-1" });
+      expect(await overlay.read("anthropic")).toEqual({ type: "api_key", key: "fallback-key" });
+      await overlay.delete("openai-codex");
+      expect(await store2.read("openai-codex")).toBeUndefined();
+    } finally {
+      await h2.close(BACKGROUND_CONTEXT);
+    }
+  });
+
+  it("drives OAuth auth_url + manual_code, device_code polling, cancel, and logout over HTTP via connectAuth", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-"));
+    const harness = await Harness.open(
+      await openLockedStorage(join(dir, "agent.sqlite")),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    const durableStore = durableCredentialStore(harness, BACKGROUND_CONTEXT);
+
+    let finishDevice!: () => void;
+    const deviceReady = new Promise<void>((resolve) => {
+      finishDevice = resolve;
+    });
+    const oauthProvider: Provider = {
+      ...fauxProvider({ provider: "remote-oauth", models: [{ id: "m1" }] }).provider,
+      name: "Remote OAuth",
+      auth: {
+        oauth: {
+          name: "Sign in with Remote OAuth",
+          login: async (interaction: AuthInteraction, opts?: { getDeviceId?: () => string }): Promise<Credential> => {
+            const devId = opts?.getDeviceId?.() ?? "none";
+            interaction.notify({
+              type: "auth_url",
+              url: "https://auth.example.com/authorize?redirect_uri=http://localhost:1455/cb",
+              instructions: "Paste the redirect URL",
+            });
+            const pasted = await interaction.prompt({ type: "manual_code", message: "Paste callback URL" });
+            return {
+              type: "oauth",
+              access: `tok-${pasted}-${devId}`,
+              refresh: "ref-remote",
+              expires: Date.now() + 3_600_000,
+            };
+          },
+          refresh: async (credential: Credential) => credential,
+          toAuth: (credential: { access: string }) => ({ apiKey: credential.access }),
+        },
+      },
+    } as unknown as Provider;
+
+    const deviceProvider: Provider = {
+      ...fauxProvider({ provider: "device-oauth", models: [{ id: "m1" }] }).provider,
+      name: "Device OAuth",
+      auth: {
+        oauth: {
+          name: "Device Sign-in",
+          login: async (interaction: AuthInteraction): Promise<Credential> => {
+            interaction.notify({
+              type: "device_code",
+              userCode: "ABCD-1234",
+              verificationUri: "https://device.example.com/activate",
+            });
+            await deviceReady;
+            return { type: "oauth", access: "dev-tok", refresh: "dev-ref", expires: Date.now() + 3_600_000 };
+          },
+          refresh: async (credential: Credential) => credential,
+          toAuth: (credential: { access: string }) => ({ apiKey: credential.access }),
+        },
+      },
+    } as unknown as Provider;
+
+    const customProviders = [oauthProvider, deviceProvider];
+    const models = await modelEnvironment(undefined, { authPath: null }, customProviders, {
+      offline: true,
+      credentialStore: () => durableStore,
+    });
+    const authManager = createAuthManager({ models, durableStore, providers: customProviders });
+    const http = await served(
+      scriptedAgent(() => []),
+      { auth: authManager },
+    );
+    try {
+      const client = connectAuth(http.url, { apiKey: KEY });
+      const initial = await client.providers();
+      expect(initial.find((p) => p.provider === "remote-oauth")).toMatchObject({
+        authenticated: false,
+        methods: ["oauth"],
+      });
+
+      // 1. OAuth auth_url + manual_code flow
+      const started = await client.startLogin({ provider: "remote-oauth", method: "oauth" });
+      expect(started.status).toBe("awaiting_input");
+      expect(started.authUrl?.url).toContain("https://auth.example.com/authorize");
+      expect(started.prompt?.type).toBe("manual_code");
+
+      // Wrong promptId is refused cleanly.
+      await expect(client.submitInput(started.flowId, { promptId: "wrong-id", value: "code-1" })).rejects.toMatchObject(
+        { code: "invalid_request" },
+      );
+
+      const done = await client.submitInput(started.flowId, { promptId: started.prompt!.id, value: "code-42" });
+      expect(done.status).toBe("completed");
+      const stored = await durableStore.read("remote-oauth");
+      expect(stored?.type).toBe("oauth");
+      expect((stored as { access: string }).access).toMatch(/^tok-code-42-/);
+
+      const afterLogin = await client.providers();
+      expect(afterLogin.find((p) => p.provider === "remote-oauth")).toMatchObject({
+        authenticated: true,
+        stored: "oauth",
+        source: "OAuth",
+      });
+
+      // 2. Device code polling flow
+      const devStarted = await client.startLogin({ provider: "device-oauth" });
+      expect(devStarted.deviceCode).toMatchObject({
+        userCode: "ABCD-1234",
+        verificationUri: "https://device.example.com/activate",
+      });
+      const polled = client.getLogin(devStarted.flowId, { wait: 10 });
+      finishDevice();
+      expect((await polled).status).toBe("completed");
+
+      // 3. Cancel an in-flight flow
+      const toCancel = await client.startLogin({ provider: "remote-oauth", method: "oauth" });
+      expect(toCancel.status).toBe("awaiting_input");
+      await client.cancelLogin(toCancel.flowId);
+      expect((await client.getLogin(toCancel.flowId)).status).toBe("canceled");
+
+      // 4. Remote logout removes durable credential
+      expect(await client.logout("remote-oauth")).toEqual({ removed: true });
+      expect(await client.logout("remote-oauth")).toEqual({ removed: false });
+      expect(await durableStore.read("remote-oauth")).toBeUndefined();
+    } finally {
+      authManager.close();
+      await http.close();
+      await harness.close(BACKGROUND_CONTEXT);
+    }
+  });
+
+  it("lets a served agent answer turns using a credential logged in via connectAuth and survives restart", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-turn-"));
+    await writeFile(
+      join(dir, "fastagent.config.ts"),
+      `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+const faux = fauxProvider({ provider: "remote-keyed", models: [{ id: "m1" }] });
+faux.setResponses([fauxAssistantMessage("verify-ok"), fauxAssistantMessage("first-ok"), fauxAssistantMessage("second-ok")]);
+const provider = {
+  ...faux.provider,
+  name: "Remote Keyed",
+  auth: {
+    apiKey: {
+      name: "Remote Keyed API key",
+      login: async (interaction) => {
+        const key = await interaction.prompt({ type: "secret", message: "API key" });
+        return { type: "api_key", key };
+      },
+      resolve: async ({ credential }) =>
+        credential?.type === "api_key" && credential.key === "sk-live"
+          ? { auth: { apiKey: credential.key }, source: "stored credential" }
+          : undefined,
+    },
+  },
+};
+export default { model: "remote-keyed/m1", providers: [provider] };
+`,
+    );
+
+    const first = await openSource(dir, { secrets: {} });
+    const svc1 = await first.serve({ apiKeys: [KEY] });
+    const port1 = await svc1.listen(0, "127.0.0.1");
+    try {
+      const auth = connectAuth(`http://127.0.0.1:${port1}`, { apiKey: KEY });
+      const started = await auth.startLogin({ provider: "remote-keyed", method: "api_key" });
+      expect(started.status).toBe("awaiting_input");
+      const completed = await auth.submitInput(started.flowId, { promptId: started.prompt!.id, value: "sk-live" });
+      expect(completed.status).toBe("completed");
+      expect(completed.verified).toBe("ok");
+
+      const agentClient = connectAgent(`http://127.0.0.1:${port1}`, { apiKey: KEY });
+      const session = await agentClient.sessions.create();
+      const msg = await agentClient.messages.send({ sessionId: session.id, content: "hi" }, { wait: 15 });
+      expect(msg.status).toBe("completed");
+    } finally {
+      await first.close();
+    }
+
+    // Reopen on the same root (no local .secrets/auth.json): credential persists in instance SQLite storage.
+    const second = await openSource(dir, { secrets: {} });
+    const svc2 = await second.serve({ apiKeys: [KEY] });
+    const port2 = await svc2.listen(0, "127.0.0.1");
+    try {
+      const auth2 = connectAuth(`http://127.0.0.1:${port2}`, { apiKey: KEY });
+      expect((await auth2.providers()).find((p) => p.provider === "remote-keyed")).toMatchObject({
+        authenticated: true,
+        stored: "api_key",
+      });
+      const agentClient2 = connectAgent(`http://127.0.0.1:${port2}`, { apiKey: KEY });
+      const session2 = await agentClient2.sessions.create();
+      const msg2 = await agentClient2.messages.send({ sessionId: session2.id, content: "again" }, { wait: 15 });
+      expect(msg2.status).toBe("completed");
+    } finally {
+      await second.close();
+    }
+  });
+
+  it("tracks active login flows in busy() and auto-cancels them on TTL expiry, and listenLocalRedirect enforces OAuth state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-ttl-"));
+    const harness = await Harness.open(
+      await openLockedStorage(join(dir, "agent.sqlite")),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    const durableStore = durableCredentialStore(harness, BACKGROUND_CONTEXT);
+    const slowProvider: Provider = {
+      ...fauxProvider({ provider: "slow-oauth", models: [{ id: "m1" }] }).provider,
+      name: "Slow OAuth",
+      auth: {
+        oauth: {
+          name: "Slow OAuth",
+          login: async (interaction: AuthInteraction): Promise<Credential> => {
+            await interaction.prompt({ type: "manual_code", message: "Paste code" });
+            return { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+          },
+          refresh: async (credential: Credential) => credential,
+          toAuth: (credential: { access: string }) => ({ apiKey: credential.access }),
+        },
+      },
+    } as unknown as Provider;
+    const models = await modelEnvironment(undefined, { authPath: null }, [slowProvider], {
+      offline: true,
+      credentialStore: () => durableStore,
+    });
+    const manager = createAuthManager({ models, durableStore, providers: [slowProvider], activeFlowTtlMs: 80 });
+    const baseline = activeWork();
+    try {
+      const started = await manager.startLogin({ provider: "slow-oauth", method: "oauth" });
+      expect(started.status).toBe("awaiting_input");
+      expect(activeWork()).toBeGreaterThan(baseline);
+
+      await vi.waitFor(async () => {
+        expect((await manager.getLogin(started.flowId)).status).toBe("canceled");
+      });
+      expect(activeWork()).toBe(baseline);
+    } finally {
+      manager.close();
+      await harness.close(BACKGROUND_CONTEXT);
+    }
+
+    // Reserve a free ephemeral port, close it, then verify listenLocalRedirect enforces GET + matching state.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createServer();
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", () => {
+        const addr = probe.address();
+        const bound = typeof addr === "object" && addr ? addr.port : 0;
+        probe.close(() => resolve(bound));
+      });
+    });
+    const abort = new AbortController();
+    const authUrl = `https://auth.example.com/authorize?state=expected-123&redirect_uri=${encodeURIComponent(`http://localhost:${port}/cb`)}`;
+    const captured = listenLocalRedirect(authUrl, abort.signal);
+    await new Promise((r) => setTimeout(r, 25));
+    try {
+      const postRes = await fetch(`http://127.0.0.1:${port}/cb?state=expected-123&code=ok`, { method: "POST" });
+      expect(postRes.status).toBe(405);
+
+      const wrongState = await fetch(`http://127.0.0.1:${port}/cb?state=wrong&code=ok`);
+      expect(wrongState.status).toBe(400);
+
+      const good = await fetch(`http://127.0.0.1:${port}/cb?state=expected-123&code=ok`);
+      expect(good.status).toBe(200);
+      expect(await captured).toBe(`http://localhost:${port}/cb?state=expected-123&code=ok`);
+    } finally {
+      abort.abort();
+    }
   });
 });

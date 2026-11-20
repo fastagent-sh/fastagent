@@ -295,19 +295,26 @@ const login: CommandSpec = {
     JSON_FLAG,
     { flags: "--timeout <seconds>", description: "interactive sign-in timeout" },
     NO_INPUT,
+    ...URL_FLAGS,
+    ENV_FILE_FLAG,
   ],
   examples: [
     { cmd: "fastagent login" },
     { cmd: "fastagent login openai", note: "ChatGPT or API key" },
+    { cmd: "fastagent login openai-codex --url https://agent.example.com", note: "sign in on a deployment" },
     { cmd: "fastagent login openai/gpt-5.5 --check --json", note: "is the model's provider ready?" },
   ],
   run: async (args, f) => {
+    const remote = urlOptions(f);
+    const envFile = typeof f.envFile === "string" ? { envFile: f.envFile } : undefined;
     if (f.check === true) {
       if (f.method !== undefined || f.timeout !== undefined)
         failUsage("--check signs nothing in: drop --method and --timeout");
       return (await import("./commands/login-check.ts")).runLoginCheck(args[0] as string | undefined, {
         global: f.global === true,
         json: f.json === true,
+        ...remote,
+        ...(envFile === undefined ? {} : { instance: envFile }),
       });
     }
     return (await import("./commands/login.ts")).runLogin(args[0] as string | undefined, {
@@ -316,6 +323,8 @@ const login: CommandSpec = {
       json: f.json === true,
       ...(f.method !== undefined ? { method: f.method as string } : {}),
       ...(f.timeout !== undefined ? { timeout: f.timeout as string } : {}),
+      ...remote,
+      ...(envFile === undefined ? {} : { instance: envFile }),
     });
   },
 };
@@ -324,13 +333,21 @@ const logout: CommandSpec = {
   name: "logout",
   summary: "remove a provider's stored credential",
   args: [{ name: "[provider]", description: "provider id or name" }],
-  flags: [GLOBAL_AUTH, NO_INPUT],
-  examples: [{ cmd: "fastagent logout" }, { cmd: "fastagent logout openai-codex" }],
-  run: async (args, f) =>
-    (await import("./commands/logout.ts")).runLogout(args[0] as string | undefined, {
+  flags: [GLOBAL_AUTH, NO_INPUT, ...URL_FLAGS, ENV_FILE_FLAG],
+  examples: [
+    { cmd: "fastagent logout" },
+    { cmd: "fastagent logout openai-codex" },
+    { cmd: "fastagent logout openai-codex --url https://agent.example.com", note: "remove on a deployment" },
+  ],
+  run: async (args, f) => {
+    const envFile = typeof f.envFile === "string" ? { envFile: f.envFile } : undefined;
+    return (await import("./commands/logout.ts")).runLogout(args[0] as string | undefined, {
       global: f.global === true,
       input: f.input !== false,
-    }),
+      ...urlOptions(f),
+      ...(envFile === undefined ? {} : { instance: envFile }),
+    });
+  },
 };
 
 const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, schedules, build, start, deploy];

@@ -12,8 +12,11 @@ import { HttpApiClient } from "effect/http-api";
 import {
   type Agent,
   AgentError,
+  type AuthApi,
+  AuthLoginInput,
   type ClockApi,
   CompactOptions,
+  StartAuthLoginRequest,
   CreateSessionOptions,
   EntriesOptions,
   LIMITS,
@@ -418,6 +421,47 @@ export function connectClock(url: string, options: ConnectOptions): ClockApi {
       cancel: (id) => request(client.cancelWakeup({ params: { id } })),
       list: async () => [...(await request(client.listWakeups()))],
     },
+  };
+}
+
+/** Connect to the served instance's remote authentication API over HTTP. */
+export function connectAuth(url: string, options: ConnectOptions): AuthApi {
+  const { api, request } = createTransport(url, options);
+  const client = api.auth;
+  return {
+    providers: async () => [...(await request(client.listAuthProviders()))],
+    startLogin: (startRequest, startOptions) =>
+      request(
+        client.startAuthLogin({
+          payload: checked(StartAuthLoginRequest, startRequest, "auth.startLogin"),
+        }),
+        startOptions?.signal,
+      ),
+    getLogin: (flowId, getOptions) => {
+      const wait =
+        getOptions?.wait === undefined
+          ? undefined
+          : Math.min(checked(Wait, getOptions.wait, "wait"), LIMITS.httpWaitSeconds);
+      return request(
+        client.getAuthLogin({
+          params: { flowId },
+          query: wait === undefined ? {} : { wait },
+        }),
+        getOptions?.signal,
+      );
+    },
+    submitInput: (flowId, input, submitOptions) =>
+      request(
+        client.submitAuthInput({
+          params: { flowId },
+          payload: checked(AuthLoginInput, input, "auth.submitInput"),
+        }),
+        submitOptions?.signal,
+      ),
+    cancelLogin: async (flowId) => {
+      await request(client.cancelAuthLogin({ params: { flowId } }));
+    },
+    logout: (provider) => request(client.logoutAuthProvider({ params: { provider } })),
   };
 }
 

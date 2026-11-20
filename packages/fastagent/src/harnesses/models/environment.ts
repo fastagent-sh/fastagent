@@ -78,6 +78,8 @@ export async function modelEnvironment(
     env?: Readonly<Record<string, string | undefined>>;
     /** Refresh the lists without the network. Default: `FASTAGENT_OFFLINE` is `1` in this process's environment. */
     offline?: boolean;
+    /** Optional wrapper around the resolved file store (e.g. layering instance-durable storage ahead of local files). */
+    credentialStore?: (fallback: CredentialStore | undefined) => CredentialStore;
   } = {},
 ): Promise<ModelEnvironment> {
   const environment = options.environment ?? {};
@@ -89,7 +91,8 @@ export async function modelEnvironment(
         ? resolveAuthLayers(agentDir, source.authPath)
         : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, environment);
-  const credentials: CredentialStore = store ?? new InMemoryCredentialStore();
+  const credentials: CredentialStore =
+    options.credentialStore !== undefined ? options.credentialStore(store) : (store ?? new InMemoryCredentialStore());
   const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir, env));
   const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
   const models = modelsOver(credentials, providers, catalogs, environment);

@@ -416,6 +416,95 @@ export interface Agent {
   };
 }
 
+export const AuthMethod = Schema.Literals(["oauth", "api_key"]);
+export type AuthMethod = typeof AuthMethod.Type;
+
+export class AuthProviderStatus extends Schema.Opaque<AuthProviderStatus>()(
+  Schema.Struct({
+    provider: Schema.String,
+    name: Schema.String,
+    methods: Schema.Array(AuthMethod),
+    authenticated: Schema.Boolean,
+    source: Schema.optionalKey(Schema.String),
+    stored: Schema.optionalKey(AuthMethod),
+    error: Schema.optionalKey(Schema.String),
+  }),
+) {}
+
+const AuthPromptOption = Schema.Struct({
+  id: Schema.String,
+  label: Schema.String,
+  description: Schema.optionalKey(Schema.String),
+});
+
+export class AuthPromptInfo extends Schema.Opaque<AuthPromptInfo>()(
+  Schema.Struct({
+    id: Schema.String,
+    type: Schema.Literals(["text", "secret", "select", "manual_code"]),
+    message: Schema.String,
+    placeholder: Schema.optionalKey(Schema.String),
+    options: Schema.optionalKey(Schema.Array(AuthPromptOption)),
+  }),
+) {}
+
+export const AuthFlowStatus = Schema.Literals(["pending", "awaiting_input", "completed", "failed", "canceled"]);
+export type AuthFlowStatus = typeof AuthFlowStatus.Type;
+
+export class AuthFlowState extends Schema.Opaque<AuthFlowState>()(
+  Schema.Struct({
+    flowId: Schema.String,
+    provider: Schema.String,
+    method: AuthMethod,
+    status: AuthFlowStatus,
+    authUrl: Schema.optionalKey(
+      Schema.Struct({
+        url: Schema.String,
+        instructions: Schema.optionalKey(Schema.String),
+      }),
+    ),
+    deviceCode: Schema.optionalKey(
+      Schema.Struct({
+        userCode: Schema.String,
+        verificationUri: Schema.String,
+        intervalSeconds: Schema.optionalKey(Schema.Number),
+        expiresInSeconds: Schema.optionalKey(Schema.Number),
+      }),
+    ),
+    prompt: Schema.optionalKey(AuthPromptInfo),
+    messages: Schema.Array(Schema.String),
+    verified: Schema.optionalKey(Schema.Literals(["ok", "unknown", "n/a"])),
+    error: Schema.optionalKey(Schema.String),
+  }),
+) {}
+
+export const StartAuthLoginRequest = Schema.Struct({
+  provider: Schema.String.check(Schema.isMinLength(1)),
+  method: Schema.optional(AuthMethod),
+});
+export type StartAuthLoginRequest = typeof StartAuthLoginRequest.Type;
+
+export const AuthLoginInput = Schema.Struct({
+  promptId: Schema.String.check(Schema.isMinLength(1)),
+  value: Schema.String,
+});
+export type AuthLoginInput = typeof AuthLoginInput.Type;
+
+/** Remote model-provider authentication API backed by the instance's durable storage. */
+export interface AuthApi {
+  /** List providers the instance supports and their current authentication state. */
+  providers(): Promise<AuthProviderStatus[]>;
+  /** Start an interactive OAuth or API-key login flow on the instance. */
+  startLogin(request: StartAuthLoginRequest, options?: { signal?: AbortSignal }): Promise<AuthFlowState>;
+  /** Read (or long-poll with `wait`) an in-flight or settled login flow. */
+  getLogin(flowId: string, options?: WaitOptions): Promise<AuthFlowState>;
+  /** Supply user input (code, callback URL, API key, selection) for the flow's active prompt. */
+  submitInput(flowId: string, input: AuthLoginInput, options?: { signal?: AbortSignal }): Promise<AuthFlowState>;
+  /** Cancel an in-flight login flow. */
+  cancelLogin(flowId: string): Promise<void>;
+  /** Remove the stored credential for `provider` from the instance's durable storage. */
+  logout(provider: string): Promise<{ removed: boolean }>;
+}
+
 /** The agent's clock, operated by its Caller: schedules and self-scheduled wake-ups. */
 export interface ClockApi {
   schedules: {

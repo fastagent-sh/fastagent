@@ -13,7 +13,7 @@ import {
   InvokeAgentRuntimeCommand,
   type InvokeAgentRuntimeCommandOutput,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { type Agent, type ClockApi, type ErrorCode, agentError, errorData } from "./agent-api.ts";
+import { type Agent, type AuthApi, type ClockApi, type ErrorCode, agentError, errorData } from "./agent-api.ts";
 import {
   type EnvelopedResponse,
   SESSION_ID_PATTERN,
@@ -21,7 +21,7 @@ import {
   isEventStream,
   unwrapResponse,
 } from "./agentcore/contract.ts";
-import { connectAgent, connectClock } from "./http/client.ts";
+import { connectAgent, connectAuth, connectClock } from "./http/client.ts";
 import { statusOf } from "./http/contract.ts";
 
 /** @public */
@@ -30,6 +30,13 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
+  AuthApi,
+  AuthFlowState,
+  AuthFlowStatus,
+  AuthLoginInput,
+  AuthMethod,
+  AuthPromptInfo,
+  AuthProviderStatus,
   ClockApi,
   CompactOptions,
   ContentPart,
@@ -56,6 +63,7 @@ export type {
   SessionEvent,
   SessionSettings,
   SessionStatus,
+  StartAuthLoginRequest,
   ThinkingLevel,
   Tokens,
   Usage,
@@ -65,7 +73,7 @@ export type {
 /** @public */
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 /** @public */
-export { type ConnectOptions, connectAgent, connectClock } from "./http/client.ts";
+export { type ConnectOptions, connectAgent, connectAuth, connectClock } from "./http/client.ts";
 
 /** @public */
 export interface AgentCoreConnection {
@@ -193,4 +201,13 @@ export function connectAgentCore(connection: AgentCoreConnection): Agent {
 export function connectAgentCoreClock(connection: AgentCoreConnection): ClockApi {
   const { url, fetch } = agentCoreTransport(connection);
   return connectClock(url, { fetch });
+}
+
+/**
+ * The Auth API (remote model-provider login and logout) of the session `sessionId` on the runtime `runtimeArn`.
+ * @public
+ */
+export function connectAgentCoreAuth(connection: AgentCoreConnection): AuthApi {
+  const { url, fetch } = agentCoreTransport(connection);
+  return connectAuth(url, { fetch });
 }

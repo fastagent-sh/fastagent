@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess, withRepoModules } from "../../doubles/cli-run.ts";
+import { connectAuth } from "../../../packages/client/src/http/client.ts";
+import { openSource } from "../../harnesses/open-source.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
 
 // enterAgentEnv installs the proxy fetch, which swaps this process's fetch with no way back.
@@ -202,5 +204,100 @@ describe("logout: removing what login stored, as pi's /logout does", () => {
         `[fastagent] removed the stored API key for Anthropic from ${join(agent, ".secrets", "auth.json")}; ` +
         "environment variables are unchanged\n",
     );
+  });
+});
+
+describe("cli: remote login / check / logout via --url", () => {
+  it("reports need_user_action, checks readiness, and logs out a remote deployment over HTTP without local files", async () => {
+    const dir = await agentWorkspace("fa-cli-remote-auth-", {
+      "fastagent.config.ts": `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
+const faux = fauxProvider({ provider: "remote-prov", models: [{ id: "m1" }] });
+faux.setResponses([fauxAssistantMessage("ok")]);
+const provider = {
+  ...faux.provider,
+  name: "Remote Prov",
+  auth: {
+    apiKey: {
+      name: "Remote Prov API key",
+      login: async (interaction) => {
+        const key = await interaction.prompt({ type: "secret", message: "API key" });
+        return { type: "api_key", key };
+      },
+      resolve: async ({ credential }) =>
+        credential?.type === "api_key" && credential.key
+          ? { auth: { apiKey: credential.key }, source: "stored credential" }
+          : undefined,
+    },
+  },
+};
+export default { model: "remote-prov/m1", providers: [provider] };
+`,
+    });
+    const opened = await openSource(dir);
+    const service = await opened.serve({ apiKeys: ["remote-secret"] });
+    const port = await service.listen(0, "127.0.0.1");
+    const url = `http://127.0.0.1:${port}`;
+    const env = { ...process.env, FASTAGENT_API_KEY: "remote-secret" };
+    try {
+      // -g conflicts with --url
+      const conflict = await runInProcess(["login", "-g", "--url", url], dir, env);
+      expect(conflict.code).toBe(2);
+      expect(conflict.stderr).toContain("cannot be combined with --url or --remote");
+
+      // Non-interactive login returns structured need_user_action (exit 2)
+      const action = await runInProcess(["login", "remote-prov", "--url", url, "--json"], dir, env);
+      expect(action.code).toBe(2);
+      expect(JSON.parse(action.stdout)).toMatchObject({
+        status: "need_user_action",
+        provider: "remote-prov",
+        method: "api-key",
+        command: `fastagent login remote-prov --method api-key --url ${url}`,
+      });
+
+      // --check refuses unknown modelId with exit 2 and reports unknown provider as not_ready (exit 1)
+      const badModel = await runInProcess(["login", "remote-prov/typo", "--check", "--url", url], dir, env);
+      expect(badModel.code).toBe(2);
+      expect(badModel.stderr).toContain('unknown model "remote-prov/typo"');
+
+      const missingProv = await runInProcess(["login", "nope", "--check", "--url", url, "--json"], dir, env);
+      expect(missingProv.code).toBe(1);
+      expect(JSON.parse(missingProv.stdout)).toMatchObject({
+        status: "not_ready",
+        reason: "provider_not_found",
+      });
+
+      // --check reports not_ready (exit 1) before login
+      const before = await runInProcess(["login", "remote-prov", "--check", "--url", url, "--json"], dir, env);
+      expect(before.code).toBe(1);
+      expect(JSON.parse(before.stdout)).toMatchObject({
+        status: "not_ready",
+        provider: "remote-prov",
+        reason: "credentials_not_configured",
+      });
+
+      // Complete login via Auth API
+      const auth = connectAuth(url, { apiKey: "remote-secret" });
+      const started = await auth.startLogin({ provider: "remote-prov", method: "api_key" });
+      await auth.submitInput(started.flowId, { promptId: started.prompt!.id, value: "sk-remote" });
+
+      // --check reports ready (exit 0) after login
+      const after = await runInProcess(["login", "remote-prov", "--check", "--url", url, "--json"], dir, env);
+      expect(after.code).toBe(0);
+      expect(JSON.parse(after.stdout)).toMatchObject({
+        status: "ready",
+        provider: "remote-prov",
+        stored: "api_key",
+      });
+
+      // logout --url removes the stored durable credential
+      const loggedOut = await runInProcess(["logout", "remote-prov", "--url", url], dir, env);
+      expect(loggedOut.code, loggedOut.stderr).toBe(0);
+      expect(loggedOut.stderr).toContain("removed the stored API key for Remote Prov");
+
+      const afterLogout = await runInProcess(["login", "remote-prov", "--check", "--url", url, "--json"], dir, env);
+      expect(afterLogout.code).toBe(1);
+    } finally {
+      await opened.close();
+    }
   });
 });

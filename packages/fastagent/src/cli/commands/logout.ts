@@ -8,10 +8,26 @@ import { GLOBAL_AUTH_PATH, fastagentCredentialStore, resolveAuthPath } from "../
 import { loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { globalHome } from "../../paths.ts";
+import { type RemoteTargetFlags, resolveRemoteTarget } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import type { InstanceFlags } from "../instance.ts";
 import { isInteractive, terminalLoginIO } from "../login-ui.ts";
+import { runRemoteLogout } from "../remote-login.ts";
 
-export async function runLogout(provider: string | undefined, opts: { global?: boolean; input?: boolean }) {
+export async function runLogout(
+  provider: string | undefined,
+  opts: RemoteTargetFlags & { global?: boolean; input?: boolean; instance?: InstanceFlags },
+) {
+  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  if (remoteTarget !== undefined) {
+    if (opts.global === true) {
+      failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
+    }
+    await runRemoteLogout(remoteTarget.auth, remoteTarget.label, provider, {
+      ...(opts.input === undefined ? {} : { input: opts.input }),
+    });
+    return;
+  }
   const agentDir = opts.global ? undefined : optionalAgentDirOrExit(process.cwd());
   enterAgentEnv(agentDir ?? globalHome());
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(agentDir ?? globalHome());

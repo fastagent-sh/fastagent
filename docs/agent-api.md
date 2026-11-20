@@ -192,6 +192,12 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `POST /v1/schedules/{name}/run?wait` | `schedules.run` |
 | `GET /v1/wakeups` | `wakeups.list` |
 | `DELETE /v1/wakeups/{id}` | `wakeups.cancel` |
+| `GET /v1/auth/providers` | `auth.providers` |
+| `POST /v1/auth/login` | `auth.startLogin` |
+| `GET /v1/auth/login/{flowId}?wait` | `auth.getLogin` |
+| `POST /v1/auth/login/{flowId}/input` | `auth.submitInput` |
+| `DELETE /v1/auth/login/{flowId}` | `auth.cancelLogin` |
+| `DELETE /v1/auth/providers/{provider}` | `auth.logout` |
 
 A send's body is `{ content, whenBusy?, metadata?, wait?, stream? }`, and its key the `Idempotency-Key` header, percent-encoded.
 An event stream sends each event as `event: <type>` with its JSON as `data`, and a comment at least every 15 seconds so

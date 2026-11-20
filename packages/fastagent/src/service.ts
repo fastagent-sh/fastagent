@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import type { Agent, ClockApi } from "@fastagent-sh/client/agent-api";
+import type { Agent, AuthApi, ClockApi } from "@fastagent-sh/client/agent-api";
 import { type Handler, serveHandler, totalFetch } from "./http/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -48,6 +48,8 @@ export interface Service {
   listen(port: number, host?: string): Promise<number>;
   /** The instance's clock operations (schedules and wake-ups), when opened on durable storage. */
   readonly clock?: ClockApi;
+  /** The instance's remote authentication API, when opened on durable storage. */
+  readonly auth?: AuthApi;
   /**
    * Claim and start whatever is due on the clock right now (`since` stamps schedules seen for the first time, as a
    * deploy's alarm carries), resume due sleeps, and re-arm any external alarm: what a platform alarm calls.
@@ -135,10 +137,11 @@ export interface ServeOptions {
   onClose?: () => void;
 }
 
-/** What the assembly serves: the opened agent, its optional external clock runner, and its schedules. */
+/** What the assembly serves: the opened agent, its optional external clock runner and auth manager, and its schedules. */
 interface ServableAgent {
   agent: Agent;
   clock?: ClockRunner;
+  auth?: AuthApi;
   schedules: readonly Schedule[];
 }
 
@@ -156,9 +159,13 @@ function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
 
 /** The assembly itself: the schedules, optional alarm watcher, and the Agent API with a key, composed into one handler. */
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
-  const { agent, clock, schedules } = opened;
+  const { agent, clock, auth, schedules } = opened;
   const api = options.apiKeys?.length
-    ? apiHandler(agent, { keys: options.apiKeys, ...(clock === undefined ? {} : { clock: clock.api }) })
+    ? apiHandler(agent, {
+        keys: options.apiKeys,
+        ...(clock === undefined ? {} : { clock: clock.api }),
+        ...(auth === undefined ? {} : { auth }),
+      })
     : undefined;
   return Effect.runPromise(
     Effect.gen(function* () {
@@ -208,6 +215,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
             async () => api?.endStreams(),
           ),
           ...(clock === undefined ? {} : { clock: clock.api }),
+          ...(auth === undefined ? {} : { auth }),
           tick: async (tickOptions?: { since?: Date }) => {
             options.beforeTick?.();
             await scheduled?.tick(tickOptions);
