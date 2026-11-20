@@ -14,7 +14,10 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:net";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
+import { activeWork } from "../../../packages/fastagent/src/busy.ts";
+import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-login.ts";
 import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
 import { createAuthManager } from "../../../packages/fastagent/src/harnesses/models/remote-auth.ts";
 import {
@@ -509,6 +512,78 @@ export default { model: "remote-keyed/m1", providers: [provider] };
       expect(msg2.status).toBe("completed");
     } finally {
       await second.close();
+    }
+  });
+
+  it("tracks active login flows in busy() and auto-cancels them on TTL expiry, and listenLocalRedirect enforces OAuth state", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-ttl-"));
+    const harness = await Harness.open(
+      await openLockedStorage(join(dir, "agent.sqlite")),
+      { models: createModels(), registry: createRegistry() },
+      BACKGROUND_CONTEXT,
+    );
+    const durableStore = durableCredentialStore(harness, BACKGROUND_CONTEXT);
+    const slowProvider: Provider = {
+      ...fauxProvider({ provider: "slow-oauth", models: [{ id: "m1" }] }).provider,
+      name: "Slow OAuth",
+      auth: {
+        oauth: {
+          name: "Slow OAuth",
+          login: async (interaction: AuthInteraction): Promise<Credential> => {
+            await interaction.prompt({ type: "manual_code", message: "Paste code" });
+            return { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+          },
+          refresh: async (credential: Credential) => credential,
+          toAuth: (credential: { access: string }) => ({ apiKey: credential.access }),
+        },
+      },
+    } as unknown as Provider;
+    const models = await modelEnvironment(undefined, { authPath: null }, [slowProvider], {
+      offline: true,
+      credentialStore: () => durableStore,
+    });
+    const manager = createAuthManager({ models, durableStore, providers: [slowProvider], activeFlowTtlMs: 80 });
+    const baseline = activeWork();
+    try {
+      const started = await manager.startLogin({ provider: "slow-oauth", method: "oauth" });
+      expect(started.status).toBe("awaiting_input");
+      expect(activeWork()).toBeGreaterThan(baseline);
+
+      await vi.waitFor(async () => {
+        expect((await manager.getLogin(started.flowId)).status).toBe("canceled");
+      });
+      expect(activeWork()).toBe(baseline);
+    } finally {
+      manager.close();
+      await harness.close(BACKGROUND_CONTEXT);
+    }
+
+    // Reserve a free ephemeral port, close it, then verify listenLocalRedirect enforces GET + matching state.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createServer();
+      probe.once("error", reject);
+      probe.listen(0, "127.0.0.1", () => {
+        const addr = probe.address();
+        const bound = typeof addr === "object" && addr ? addr.port : 0;
+        probe.close(() => resolve(bound));
+      });
+    });
+    const abort = new AbortController();
+    const authUrl = `https://auth.example.com/authorize?state=expected-123&redirect_uri=${encodeURIComponent(`http://localhost:${port}/cb`)}`;
+    const captured = listenLocalRedirect(authUrl, abort.signal);
+    await new Promise((r) => setTimeout(r, 25));
+    try {
+      const postRes = await fetch(`http://127.0.0.1:${port}/cb?state=expected-123&code=ok`, { method: "POST" });
+      expect(postRes.status).toBe(405);
+
+      const wrongState = await fetch(`http://127.0.0.1:${port}/cb?state=wrong&code=ok`);
+      expect(wrongState.status).toBe(400);
+
+      const good = await fetch(`http://127.0.0.1:${port}/cb?state=expected-123&code=ok`);
+      expect(good.status).toBe(200);
+      expect(await captured).toBe(`http://localhost:${port}/cb?state=expected-123&code=ok`);
+    } finally {
+      abort.abort();
     }
   });
 });

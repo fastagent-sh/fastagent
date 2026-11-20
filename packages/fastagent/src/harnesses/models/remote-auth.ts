@@ -14,6 +14,7 @@ import {
   type StartAuthLoginRequest,
   agentError,
 } from "@fastagent-sh/client/agent-api";
+import { beginWork } from "../../busy.ts";
 import type { DurableCredentialStore } from "../pi-durable/credentials.ts";
 import type { ModelEnvironment } from "./environment.ts";
 import { SignInCancelled, loginOver } from "./login.ts";
@@ -43,6 +44,8 @@ interface FlowRecord {
   readonly method: AuthMethod;
   readonly abort: AbortController;
   readonly startedAt: number;
+  readonly release: () => void;
+  timeoutTimer?: ReturnType<typeof setTimeout>;
   updatedAt: number;
   settledAt?: number;
   version: number;
@@ -143,22 +146,39 @@ export function createAuthManager(options: {
   durableStore: DurableCredentialStore;
   providers?: readonly Provider[];
   environment?: Readonly<Record<string, string>>;
+  activeFlowTtlMs?: number;
 }): AuthManager {
-  const { models, durableStore, providers = [], environment } = options;
+  const { models, durableStore, providers = [], environment, activeFlowTtlMs = ACTIVE_FLOW_TTL_MS } = options;
   const flows = new Map<string, FlowRecord>();
   let closed = false;
+
+  const finishResources = (flow: FlowRecord): void => {
+    if (flow.timeoutTimer !== undefined) {
+      clearTimeout(flow.timeoutTimer);
+      flow.timeoutTimer = undefined;
+    }
+    flow.release();
+  };
+
+  const cancelFlow = (flow: FlowRecord, reason: string, now = Date.now()): void => {
+    if (isTerminal(flow.status)) return;
+    flow.status = "canceled";
+    flow.error = reason;
+    flow.settledAt = now;
+    const pending = flow.pending;
+    flow.pending = undefined;
+    finishResources(flow);
+    flow.abort.abort(new SignInCancelled(reason));
+    pending?.reject(new SignInCancelled(reason));
+    notifyWaiters(flow);
+  };
 
   const prune = (now = Date.now()): void => {
     for (const [id, flow] of flows) {
       if (flow.settledAt !== undefined) {
         if (now - flow.settledAt >= SETTLED_FLOW_TTL_MS) flows.delete(id);
-      } else if (now - flow.startedAt >= ACTIVE_FLOW_TTL_MS) {
-        flow.status = "canceled";
-        flow.error = "login flow timed out";
-        flow.settledAt = now;
-        flow.pending = undefined;
-        flow.abort.abort(new SignInCancelled("timed out"));
-        notifyWaiters(flow);
+      } else if (now - flow.startedAt >= activeFlowTtlMs) {
+        cancelFlow(flow, "login flow timed out", now);
         flows.delete(id);
       }
     }
@@ -233,18 +253,29 @@ export function createAuthManager(options: {
       }
       const { provider, method } = resolveProviderAndMethod(request);
       const now = Date.now();
+      const doneWork = beginWork();
+      let released = false;
       const flow: FlowRecord = {
         flowId: randomUUID(),
         provider: provider.id,
         method,
         abort: new AbortController(),
         startedAt: now,
+        release: () => {
+          if (released) return;
+          released = true;
+          doneWork();
+        },
         updatedAt: now,
         version: 0,
         status: "pending",
         messages: [],
         waiters: new Set(),
       };
+      flow.timeoutTimer = setTimeout(() => {
+        cancelFlow(flow, "login flow timed out");
+      }, activeFlowTtlMs);
+      flow.timeoutTimer.unref?.();
       flows.set(flow.flowId, flow);
 
       const pushMessage = (text: string): void => {
@@ -318,13 +349,16 @@ export function createAuthManager(options: {
         },
       ).then(
         (result) => {
+          if (isTerminal(flow.status)) return;
           flow.pending = undefined;
           flow.status = "completed";
           flow.verified = result.verified;
           flow.settledAt = Date.now();
+          finishResources(flow);
           notifyWaiters(flow);
         },
         (error: unknown) => {
+          if (isTerminal(flow.status)) return;
           flow.pending = undefined;
           if (error instanceof SignInCancelled || flow.abort.signal.aborted) {
             flow.status = "canceled";
@@ -334,6 +368,7 @@ export function createAuthManager(options: {
             flow.error = error instanceof Error ? error.message : String(error);
           }
           flow.settledAt = Date.now();
+          finishResources(flow);
           notifyWaiters(flow);
         },
       );
@@ -393,16 +428,7 @@ export function createAuthManager(options: {
       prune();
       const flow = flows.get(flowId);
       if (flow === undefined) throw agentError("not_found", `no auth login flow "${flowId}"`);
-      if (!isTerminal(flow.status)) {
-        flow.status = "canceled";
-        flow.error = "login cancelled";
-        flow.settledAt = Date.now();
-        const pending = flow.pending;
-        flow.pending = undefined;
-        flow.abort.abort(new SignInCancelled("cancelled"));
-        pending?.reject(new SignInCancelled("cancelled"));
-        notifyWaiters(flow);
-      }
+      cancelFlow(flow, "login cancelled");
     },
 
     async logout(provider): Promise<{ removed: boolean }> {
@@ -420,16 +446,7 @@ export function createAuthManager(options: {
     close(): void {
       closed = true;
       for (const flow of flows.values()) {
-        if (!isTerminal(flow.status)) {
-          flow.status = "canceled";
-          flow.error = "agent closed";
-          flow.settledAt = Date.now();
-          const pending = flow.pending;
-          flow.pending = undefined;
-          flow.abort.abort(new SignInCancelled("agent closed"));
-          pending?.reject(new SignInCancelled("agent closed"));
-          notifyWaiters(flow);
-        }
+        cancelFlow(flow, "agent closed");
       }
       flows.clear();
     },

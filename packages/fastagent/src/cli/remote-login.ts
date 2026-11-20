@@ -4,6 +4,7 @@
  */
 import { createServer } from "node:http";
 import {
+  type Agent,
   AgentError,
   type AuthApi,
   type AuthFlowState,
@@ -34,10 +35,13 @@ function statusHint(provider: AuthProviderStatus): string {
  * If the port is free, captures the browser redirect on the operator's machine and resolves with the full redirect URL;
  * if the port is unavailable or the signal aborts, settles to `undefined` so the manual prompt continues seamlessly.
  */
-function listenLocalRedirect(authUrl: string, signal: AbortSignal): Promise<string | undefined> {
+export function listenLocalRedirect(authUrl: string, signal: AbortSignal): Promise<string | undefined> {
   let redirect: URL;
+  let expectedState: string | null = null;
   try {
-    const raw = new URL(authUrl).searchParams.get("redirect_uri");
+    const parsedAuth = new URL(authUrl);
+    expectedState = parsedAuth.searchParams.get("state");
+    const raw = parsedAuth.searchParams.get("redirect_uri");
     if (!raw) return Promise.resolve(undefined);
     redirect = new URL(raw);
   } catch {
@@ -60,9 +64,17 @@ function listenLocalRedirect(authUrl: string, signal: AbortSignal): Promise<stri
     };
     const onAbort = () => finish(undefined);
     const server = createServer((req, res) => {
+      if (req.method !== "GET") {
+        res.writeHead(405).end("Method not allowed");
+        return;
+      }
       const reqUrl = new URL(req.url ?? "/", `http://${redirect.host}`);
       if (reqUrl.pathname !== redirect.pathname) {
         res.writeHead(404).end("Not found");
+        return;
+      }
+      if (expectedState !== null && reqUrl.searchParams.get("state") !== expectedState) {
+        res.writeHead(400).end("Invalid OAuth state");
         return;
       }
       res
@@ -281,14 +293,19 @@ export async function runRemoteLogin(
           const promptSignal = timeout ? AbortSignal.any([timeout, raceAbort.signal]) : raceAbort.signal;
           const callbackPromise = listenLocalRedirect(flow.authUrl.url, raceAbort.signal);
           const promptPromise = io.prompt(activePrompt.message, { redirect: true, signal: promptSignal });
-          const winner = await Promise.race([
-            callbackPromise.then((value) =>
-              value === undefined ? new Promise<never>(() => {}) : { kind: "cb" as const, value },
-            ),
-            promptPromise.then((value) => ({ kind: "prompt" as const, value })),
-          ]);
-          raceAbort.abort();
-          answer = winner.value;
+          // Suppress expected abort rejection if the local callback wins the race.
+          void promptPromise.catch(() => undefined);
+          try {
+            const winner = await Promise.race([
+              callbackPromise.then((value) =>
+                value === undefined ? new Promise<never>(() => {}) : { kind: "cb" as const, value },
+              ),
+              promptPromise.then((value) => ({ kind: "prompt" as const, value })),
+            ]);
+            answer = winner.value;
+          } finally {
+            raceAbort.abort();
+          }
         } else {
           answer = await io.prompt(activePrompt.message, {
             hidden: activePrompt.type === "secret",
@@ -364,6 +381,7 @@ export async function runRemoteLogout(
 }
 
 export async function runRemoteLoginCheck(
+  agent: Pick<Agent, "info">,
   auth: AuthApi,
   label: string,
   target: string | undefined,
@@ -372,16 +390,37 @@ export async function runRemoteLoginCheck(
   if (target === undefined || target.trim() === "") {
     failUsage("pass a provider id or provider/modelId to --check");
   }
-  const slash = target.indexOf("/");
-  const providerNeedle = (slash > 0 ? target.slice(0, slash) : target).trim().toLowerCase();
+  let providerNeedle = target.trim().toLowerCase();
+  if (target.includes("/")) {
+    const slash = target.indexOf("/");
+    const providerId = target.slice(0, slash);
+    const modelId = target.slice(slash + 1);
+    const info = await agent.info().catch((error: unknown) => failStartup(refusal(error)));
+    if (
+      providerId === "" ||
+      modelId === "" ||
+      !info.models.some((model) => model.provider === providerId && model.modelId === modelId)
+    ) {
+      failUsage(`unknown model "${target}" on ${label}`);
+    }
+    providerNeedle = providerId.toLowerCase();
+  }
   const providers = await auth.providers().catch((error: unknown) => failStartup(refusal(error)));
   const found = providers.find(
     (p) => p.provider.toLowerCase() === providerNeedle || p.name.toLowerCase() === providerNeedle,
   );
   if (found === undefined) {
-    printReport(opts.json, { status: "invalid", target, remote: label, message: `unknown provider "${target}"` }, [
-      `invalid: unknown provider "${target}" on ${label}`,
+    printReport(opts.json, { status: "not_ready", provider: target, reason: "provider_not_found", remote: label }, [
+      `not_ready: unknown provider "${target}" on ${label}`,
     ]);
+    process.exit(1);
+  }
+  if (found.error !== undefined) {
+    printReport(
+      opts.json,
+      { status: "invalid", provider: found.provider, reason: "invalid_state", error: found.error, remote: label },
+      [`invalid: ${found.name} on ${label} (${found.error})`],
+    );
     process.exit(2);
   }
   if (found.authenticated) {
@@ -404,14 +443,11 @@ export async function runRemoteLoginCheck(
     {
       status: "not_ready",
       provider: found.provider,
-      ...(found.error === undefined ? {} : { error: found.error }),
+      reason: "credentials_not_configured",
       remote: label,
       next: `fastagent login ${found.provider} ${flag}`,
     },
-    [
-      `not_ready: ${found.name} on ${label}${found.error ? ` (${found.error})` : ""}`,
-      `  fastagent login ${found.provider} ${flag}`,
-    ],
+    [`not_ready: ${found.name} on ${label}`, `  fastagent login ${found.provider} ${flag}`],
   );
   process.exit(1);
 }

@@ -37,7 +37,7 @@ export async function runLoginCheck(
     if (opts.global === true) {
       failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
     }
-    await runRemoteLoginCheck(remoteTarget.auth, remoteTarget.label, target, {
+    await runRemoteLoginCheck(remoteTarget.agent, remoteTarget.auth, remoteTarget.label, target, {
       ...(opts.json === undefined ? {} : { json: opts.json }),
       ...(opts.url === undefined ? {} : { url: opts.url }),
       ...(opts.remote === undefined ? {} : { remote: opts.remote }),

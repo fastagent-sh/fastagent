@@ -254,10 +254,26 @@ export default { model: "remote-prov/m1", providers: [provider] };
         command: `fastagent login remote-prov --method api-key --url ${url}`,
       });
 
+      // --check refuses unknown modelId with exit 2 and reports unknown provider as not_ready (exit 1)
+      const badModel = await runInProcess(["login", "remote-prov/typo", "--check", "--url", url], dir, env);
+      expect(badModel.code).toBe(2);
+      expect(badModel.stderr).toContain('unknown model "remote-prov/typo"');
+
+      const missingProv = await runInProcess(["login", "nope", "--check", "--url", url, "--json"], dir, env);
+      expect(missingProv.code).toBe(1);
+      expect(JSON.parse(missingProv.stdout)).toMatchObject({
+        status: "not_ready",
+        reason: "provider_not_found",
+      });
+
       // --check reports not_ready (exit 1) before login
       const before = await runInProcess(["login", "remote-prov", "--check", "--url", url, "--json"], dir, env);
       expect(before.code).toBe(1);
-      expect(JSON.parse(before.stdout)).toMatchObject({ status: "not_ready", provider: "remote-prov" });
+      expect(JSON.parse(before.stdout)).toMatchObject({
+        status: "not_ready",
+        provider: "remote-prov",
+        reason: "credentials_not_configured",
+      });
 
       // Complete login via Auth API
       const auth = connectAuth(url, { apiKey: "remote-secret" });
