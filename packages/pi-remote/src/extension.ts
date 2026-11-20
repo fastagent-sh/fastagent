@@ -156,30 +156,45 @@ interface RemoteEditorCallbacks {
 class RemoteEditor extends CustomEditor {
   private readonly kb: KeybindingsManager;
   private readonly callbacks: RemoteEditorCallbacks;
+  private hostOnSubmit?: (text: string) => void;
+  private wrappedOnSubmit?: (text: string) => void;
 
   constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, callbacks: RemoteEditorCallbacks) {
     super(tui, theme, keybindings);
     this.kb = keybindings;
     this.callbacks = callbacks;
+    // Wrap host-assigned onSubmit so every submit path (including slash-command autocomplete fall-through)
+    // rewrites intercepted built-in commands (/model, /name, /new, /resume, /fork, /thinking) to /fa.
+    Object.defineProperty(this, "onSubmit", {
+      configurable: true,
+      enumerable: true,
+      get: (): ((text: string) => void) | undefined => this.wrappedOnSubmit,
+      set: (fn: ((text: string) => void) | undefined) => {
+        this.hostOnSubmit = fn;
+        this.wrappedOnSubmit = fn
+          ? (text: string) => {
+              if (this.callbacks.isConnected()) {
+                const builtin = parseInterceptedRemoteBuiltin(text);
+                if (builtin) {
+                  const line = builtin.args ? `/fa ${builtin.command} ${builtin.args}` : `/fa ${builtin.command}`;
+                  fn(line);
+                  return;
+                }
+              }
+              fn(text);
+            }
+          : undefined;
+      },
+    });
   }
 
   private submitFa(command: string, args = ""): void {
     const line = args ? `/fa ${command} ${args}` : `/fa ${command}`;
-    this.onSubmit?.(line);
+    this.hostOnSubmit?.(line);
   }
 
   override handleInput(data: string): void {
     if (this.callbacks.isConnected() && !this.isShowingAutocomplete()) {
-      if (this.kb.matches(data, "tui.input.submit")) {
-        const text = this.getExpandedText?.() ?? this.getText();
-        const builtin = parseInterceptedRemoteBuiltin(text);
-        if (builtin) {
-          this.addToHistory?.(text);
-          this.setText("");
-          this.submitFa(builtin.command, builtin.args);
-          return;
-        }
-      }
       if (this.kb.matches(data, "app.message.followUp") && this.callbacks.isRunning()) {
         const text = (this.getExpandedText?.() ?? this.getText()).trim();
         if (text) {
