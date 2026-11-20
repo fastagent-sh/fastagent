@@ -43,7 +43,7 @@ that API from outside the runtime: channels are not part of it.
   `skills/` come from the bundle, never from the machine (no skill or prompt from `~/.pi/agent`). The box supplies
   only commands and variables, the way `bash` inherits `PATH`.
 - **A session id belongs to the Agent; a conversation id belongs to the Caller.** A Caller maps its conversations onto
-  sessions (`packages/fastagent/src/conversation-sessions.ts`). A tool that asks which session it runs in gets the id the Agent handed out
+  sessions (`packages/fastagent/src/schedule/conversation-sessions.ts`). A tool that asks which session it runs in gets the id the Agent handed out
   (`sessionIdOf`).
 - **The CLI serves a person and a coding agent alike.** Nothing waits on a terminal. A choice not given exits 2 and
   names what to pass. A step only a person can take returns at once (`need_user_action`, a check command), and a

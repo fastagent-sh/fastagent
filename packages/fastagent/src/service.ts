@@ -1,6 +1,7 @@
 /** The product, as one call: an opened agent becomes a live service: its schedules and wake-ups, `GET /health`, and the
  * Agent API under `/v1` when it has a key. */
 import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
@@ -10,10 +11,25 @@ import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
 import { text } from "./http/respond.ts";
 import { log } from "./log.ts";
-import { once } from "./once.ts";
 import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
 import type { ClockStore } from "./schedule/clock.ts";
 import type { Schedule } from "./schedule/schedule.ts";
+
+/** Run `work` at most once uninterruptibly; every caller shares its outcome (Effect 4.0 `cached` does not). */
+function once<A, E, R>(work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+  const outcome = Deferred.makeUnsafe<A, E>();
+  let started = false;
+  return Effect.suspend(() => {
+    if (started) return Deferred.await(outcome);
+    started = true;
+    return work.pipe(
+      Effect.exit,
+      Effect.flatMap((exit) => Deferred.done(outcome, exit)),
+      Effect.uninterruptible,
+      Effect.andThen(Deferred.await(outcome)),
+    );
+  });
+}
 
 /** The port a serve binds when neither a flag nor `PORT` (start only) names one. */
 export const DEFAULT_HTTP_PORT = 8787;

@@ -1,6 +1,28 @@
 /** Render one message's answer, as `messages.stream` delivers it, plus an exit code: 0 only for `completed`. */
-import { AgentError, type Message, type MessageStreamEvent, errorData } from "@fastagent-sh/client/agent-api";
-import { answerText } from "../answer-text.ts";
+import {
+  AgentError,
+  type Message,
+  type MessageStreamEvent,
+  type SessionEvent,
+  errorData,
+} from "@fastagent-sh/client/agent-api";
+
+/** Live deltas plus any assistant entry text missed before subscribing. */
+function answerText(): (event: SessionEvent) => string {
+  let streamed = "";
+  return (event) => {
+    if (event.type === "delta") {
+      if (event.channel !== "text") return "";
+      streamed += event.text;
+      return event.text;
+    }
+    if (event.type !== "entry" || event.entry.kind !== "assistant") return "";
+    const text = String((event.entry.data as { text?: unknown }).text ?? "");
+    const missing = text.startsWith(streamed) ? text.slice(streamed.length) : "";
+    streamed = "";
+    return missing;
+  };
+}
 
 /** A command that sends a message exits 0 only when it completed. */
 export const exitCodeOf = (message: Pick<Message, "status">): number => (message.status === "completed" ? 0 : 1);

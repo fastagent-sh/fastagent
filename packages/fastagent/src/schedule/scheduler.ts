@@ -6,7 +6,7 @@ import * as Result from "effect/Result";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
 import { type Agent, AgentError, type Message, type SendRequest } from "@fastagent-sh/client/agent-api";
-import { conversationSessions } from "../conversation-sessions.ts";
+import { conversationSessions } from "./conversation-sessions.ts";
 import { PromiseFailure } from "../promise-bridge.ts";
 import { beginWork } from "../busy.ts";
 import { log } from "../log.ts";
@@ -657,14 +657,36 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       launch(s.name, cronLoop(s, due));
     };
 
+    /** Stamp armed schedules, catch up every schedule and wake-up due by now, and optionally arm timers. */
+    async function catchUpDue(
+      lastFires: ReadonlyMap<string, string>,
+      sinceOption: Date | undefined,
+      shouldArm: boolean,
+    ): Promise<void> {
+      const current = now();
+      const since = sinceOption !== undefined && sinceOption.getTime() < current.getTime() ? sinceOption : current;
+      const armed = await recordArmed(store, schedules, lastFires, since);
+      for (const s of schedules) {
+        if (stopped) break;
+        const due = dueFor(s, lastFires.get(s.name), armed[s.name], current);
+        if (due && due.getTime() <= current.getTime()) {
+          log.info(`[schedule] ${s.name}: catching up a missed run`);
+          await run(startDueFire(s, due));
+          if (shouldArm && !stopped) {
+            arm(s, nextRun(s.cron, s.tz, new Date(Math.max(now().getTime(), due.getTime()))));
+          }
+          continue;
+        }
+        if (shouldArm) arm(s, due);
+      }
+      while (!stopped && (await run(wakeOnce))) {}
+    }
+
     return {
       async start(startOptions) {
         stopped = false;
-        // ONE claim read per schedule — the newest — for the two planes that must agree about it: the reconciler
-        // (was that fire ever reported?) and catch-up (where does the next run resume?). A read fault on it stays
-        // synchronous, before any timers or turns are started: a schedule whose newest claim cannot be read is not
-        // one to run blind, it is a boot failure. The rest of the window is history, and history does not gate a
-        // boot (`latestFire`).
+        // ONE claim read per schedule — the newest — for reconciliation and catch-up. A read fault stays synchronous
+        // before any timers start so a schedule is never run blind.
         const lastFires = new Map<string, string>();
         for (const s of schedules) {
           const fire = await latestFire(store, s.name);
@@ -674,7 +696,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           const accounted = accountForUnreportedFire(agent, store, s.name, fire).pipe(
             Effect.catchTag("PromiseFailure", (error) =>
               Effect.sync(() =>
-                // Unsettled still, so the next boot reads it again.
                 log.error(
                   `[schedule] ${s.name}: could not account for the fire claimed at ${fire.firedAt}: ${String(error.cause)}`,
                 ),
@@ -683,26 +704,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           );
           launch(s.name, accounted);
         }
-        const current = now();
-        const since =
-          startOptions?.since !== undefined && startOptions.since.getTime() < current.getTime()
-            ? startOptions.since
-            : current;
-        const armed = await recordArmed(store, schedules, lastFires, since);
-        for (const s of schedules) {
-          if (stopped) break;
-          // FROM THE LAST FIRE, or from when this schedule was first armed (`armed`), or from now on its very first
-          // open: an idle machine woken a few seconds past its first cron slot catches it up instead of skipping a day.
-          const due = dueFor(s, lastFires.get(s.name), armed[s.name], current);
-          if (due && due.getTime() <= current.getTime()) {
-            log.info(`[schedule] ${s.name}: catching up a missed run`);
-            await run(startDueFire(s, due));
-            if (!stopped) arm(s, nextRun(s.cron, s.tz, new Date(Math.max(now().getTime(), due.getTime()))));
-            continue;
-          }
-          arm(s, due);
-        }
-        while (!stopped && (await run(wakeOnce))) {}
+        await catchUpDue(lastFires, startOptions?.since, true);
         if (!stopped) launch("wake-up poll", wakeLoop);
       },
       async tick(tickOptions) {
@@ -712,21 +714,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           const fire = await latestFire(store, s.name);
           if (fire !== undefined) lastFires.set(s.name, fire.firedAt);
         }
-        const current = now();
-        const since =
-          tickOptions?.since !== undefined && tickOptions.since.getTime() < current.getTime()
-            ? tickOptions.since
-            : current;
-        const armed = await recordArmed(store, schedules, lastFires, since);
-        for (const s of schedules) {
-          if (stopped) break;
-          const due = dueFor(s, lastFires.get(s.name), armed[s.name], current);
-          if (due && due.getTime() <= current.getTime()) {
-            log.info(`[schedule] ${s.name}: catching up a missed run`);
-            await run(startDueFire(s, due));
-          }
-        }
-        while (!stopped && (await run(wakeOnce))) {}
+        await catchUpDue(lastFires, tickOptions?.since, false);
       },
       async nextDue(at = now()) {
         const [armed, wakeups, fires] = await Promise.all([

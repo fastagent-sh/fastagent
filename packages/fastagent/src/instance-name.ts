@@ -4,7 +4,14 @@
  * default is the definition's name made into one (`@scope/pkg` is not one), so two instances of one definition on one
  * machine take distinct names only by being given them.
  */
-import { stripEdges } from "./strip-edges.ts";
+/** Index-based edge trim (avoids quadratic regex backtracking on long runs). */
+function stripEdges(text: string, isEdge: (char: string) => boolean): string {
+  let start = 0;
+  while (start < text.length && isEdge(text[start] as string)) start++;
+  let end = text.length;
+  while (end > start && isEdge(text[end - 1] as string)) end--;
+  return text.slice(start, end);
+}
 
 export const INSTANCE_NAME_ENV = "FASTAGENT_NAME";
 
