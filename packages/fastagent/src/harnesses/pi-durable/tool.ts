@@ -97,7 +97,7 @@ export type ToolDefinition<
   TDetails extends JsonValue = JsonValue,
 > = Omit<ToolRegistration<Record<string, unknown>, TDetails>, "parameters" | "execute" | "prepareArguments"> & {
   readonly parameters: TParameters;
-  prepareArguments?(args: unknown): InferToolArgs<TParameters>;
+  prepareArguments?(args: unknown): unknown;
   execute(
     args: InferToolArgs<TParameters>,
     api: ToolExecutionApi<TDetails>,
@@ -150,8 +150,17 @@ function resolveParameters(
     let raw: unknown;
     try {
       raw = std.jsonSchema.input({ target: "draft-2020-12" });
-    } catch {
-      raw = std.jsonSchema.input({ target: "draft-07" });
+    } catch (firstError) {
+      try {
+        raw = std.jsonSchema.input({ target: "draft-07" });
+      } catch (secondError) {
+        const firstMsg = firstError instanceof Error ? firstError.message : String(firstError);
+        const secondMsg = secondError instanceof Error ? secondError.message : String(secondError);
+        throw new Error(
+          `tool "${name}": failed to convert parameters to JSON Schema (draft-2020-12: ${firstMsg}; draft-07: ${secondMsg})`,
+          { cause: firstError },
+        );
+      }
     }
     if (!isPlainObject(raw) || raw.type !== "object") {
       throw new Error(
