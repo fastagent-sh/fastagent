@@ -387,7 +387,7 @@ function accountForUnreportedFire(
     if (sessionId === undefined || taken === undefined) {
       log.warn(
         `[schedule] ${name}: the fire claimed at ${fire.firedAt} never sent its message — the process stopped ` +
-          `before it, and that slot stays skipped (see \`fastagent info\`)`,
+          `before it, and that slot stays skipped (see \`fastagent schedules list\`)`,
       );
       // No duration: this fire was never timed, and the process that could have timed it is gone.
       yield* Effect.promise(() => settleClaim(clock, name, slot, "interrupted"));
