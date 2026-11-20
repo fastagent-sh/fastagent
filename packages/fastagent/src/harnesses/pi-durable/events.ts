@@ -100,21 +100,35 @@ export function sessionEvents(
         (attached) => Effect.sync(() => attached.detach()),
       );
 
+      let latestMeta: SessionMetaState | undefined;
       yield* Effect.acquireRelease(
         Effect.sync(() =>
           harness.observeCommits({
             advance: ({ changes }) => {
               if (behind) return;
+              let metaChange: SessionMetaState | undefined;
+              let hasAgentChange = false;
               for (const change of changes) {
                 if (
-                  change.type === "document" &&
-                  change.kind === "change" &&
-                  change.record.kind === SessionMetaDoc.definition.kind &&
-                  change.conversationId === conversation.id
+                  change.type !== "document" ||
+                  change.kind !== "change" ||
+                  change.conversationId !== conversation.id
                 ) {
-                  behind = Queue.sizeUnsafe(pending) >= UNREAD_REVISIONS;
-                  Queue.offerUnsafe(pending, behind ? { behind } : { meta: change.value as SessionMetaState });
+                  continue;
                 }
+                if (change.record.kind === SessionMetaDoc.definition.kind) {
+                  metaChange = change.value as SessionMetaState;
+                } else if (change.record.kind === AgentDoc.definition.kind) {
+                  hasAgentChange = true;
+                }
+              }
+              if (metaChange === undefined) return;
+              latestMeta = metaChange;
+              // When the same commit also updated AgentDoc, observeConversation emits a view that reads latestMeta,
+              // avoiding torn/duplicate state events. Deletions are always queued immediately.
+              if (!hasAgentChange || metaChange.deleted) {
+                behind = Queue.sizeUnsafe(pending) >= UNREAD_REVISIONS;
+                Queue.offerUnsafe(pending, behind ? { behind } : { meta: metaChange });
               }
             },
             end: () => {},
@@ -125,6 +139,10 @@ export function sessionEvents(
 
       const snapshot = observation.value;
       const meta = yield* fromPromise(() => harness.snapshot(SessionMetaDoc, conversation.id, context));
+      if (meta?.deleted || latestMeta?.deleted) {
+        return yield* agentError("not_found", `No session ${sessionId}`);
+      }
+      if (latestMeta === undefined) latestMeta = meta;
       const newest = newestEntry(snapshot);
       const live = liveTranslator(
         harness,
@@ -134,7 +152,8 @@ export function sessionEvents(
         context,
         maxRetries,
         snapshot,
-        meta,
+        latestMeta,
+        () => latestMeta,
         contextUsageOf,
       );
       const replay =
@@ -150,7 +169,7 @@ export function sessionEvents(
           docOf(snapshot, UsageDoc),
           initialAgent,
           docOf(snapshot, InboxDoc),
-          meta,
+          latestMeta,
           ids,
           contextUsageOf?.(conversation.id, initialAgent),
         ),
@@ -259,6 +278,7 @@ function liveTranslator(
   maxRetries: number,
   snapshot: ConversationView,
   initialMeta: SessionMetaState | undefined,
+  getLatestMeta: () => SessionMetaState | undefined,
   contextUsageOf: ContextUsageOf | undefined,
 ) {
   const first = liveOf(snapshot);
@@ -456,6 +476,7 @@ function liveTranslator(
         // pi-durable places the next queued message in the commit that ends a run: its message's `done` goes first.
         const next = published.findIndex((entry) => entry.kind === "user");
         const at = next === -1 ? published.length : next;
+        currentMeta = getLatestMeta() ?? currentMeta;
         const nextPropsKey = sessionPropsKey(docOf(view, AgentDoc), currentMeta);
         const stateUpdate = nextPropsKey === propsKey ? [] : [currentStateEvent()];
         propsKey = nextPropsKey;

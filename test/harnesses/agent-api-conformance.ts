@@ -1171,6 +1171,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
 
         agent = await subject.restart();
         expect((await agent.sessions.get(sessionId)).contextUsage?.tokens).toBe(afterOne.contextUsage?.tokens);
+        expect((await agent.sessions.get(fork.id)).contextUsage?.tokens).toBe(afterOne.contextUsage?.tokens);
 
         for (const word of ["two", "three"]) await ended(agent, await send({ sessionId, content: word }));
         await agent.sessions.compact(sessionId);
@@ -1195,13 +1196,16 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         );
         expect(afterTitle.at(-1)).toMatchObject({ type: "state", session: { id: sessionId, title: "Release triage" } });
 
-        await agent.sessions.update(sessionId, { thinkingLevel: "high" });
-        const afterSettings = await watching.until(
+        await agent.sessions.update(sessionId, { title: "Combined update", thinkingLevel: "high" });
+        const afterCombined = await watching.until(
           (event) => event.type === "state" && event.session.thinkingLevel === "high",
         );
-        expect(afterSettings.at(-1)).toMatchObject({
+        // Updating title and settings in one commit must emit a single non-torn state event.
+        const stateEvents = afterCombined.filter((event) => event.type === "state");
+        expect(stateEvents).toHaveLength(1);
+        expect(stateEvents[0]).toMatchObject({
           type: "state",
-          session: { id: sessionId, title: "Release triage", thinkingLevel: "high" },
+          session: { id: sessionId, title: "Combined update", thinkingLevel: "high" },
         });
 
         await agent.sessions.delete(sessionId);

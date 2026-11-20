@@ -497,11 +497,24 @@ export class RemoteController {
     switch (event.type) {
       case "state": {
         const reply = event.session.reply;
+        const prevReply = this.state.liveReply;
+        let liveReply: LiveReply | undefined;
+        if (event.session.status !== "idle") {
+          const incoming = reply ? { text: reply.text, thinking: reply.thinking ?? "" } : undefined;
+          if (incoming && prevReply) {
+            liveReply = {
+              text: prevReply.text.startsWith(incoming.text) ? prevReply.text : incoming.text,
+              thinking: prevReply.thinking.startsWith(incoming.thinking) ? prevReply.thinking : incoming.thinking,
+            };
+          } else {
+            liveReply = incoming ?? prevReply;
+          }
+        }
         this.setState({
           ...this.state,
           status: "connected",
           session: event.session,
-          liveReply: reply ? { text: reply.text, thinking: reply.thinking ?? "" } : undefined,
+          liveReply,
           activeTools: mergeActiveTools(this.state.activeTools, event.session),
           queuedMessages: event.session.queuedMessages ?? [],
           compacting: event.session.compacting === true,

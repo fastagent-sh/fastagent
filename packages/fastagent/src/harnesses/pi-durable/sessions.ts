@@ -18,7 +18,7 @@ import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { SessionMetaDoc, type SessionMetaState } from "./messages.ts";
 
 const SCAN_PAGE = 500;
-const CONTEXT_SCAN_LIMIT = 20;
+const CONTEXT_SCAN_LIMIT = 50;
 
 export const isSession = (record: ConversationRecord): boolean => record.owner === undefined;
 
@@ -46,6 +46,14 @@ function assistantContextTokens(record: EntryRecord): number | undefined {
   return total > 0 ? total : undefined;
 }
 
+function hasContextBoundary(recordsDescending: readonly EntryRecord[]): boolean {
+  for (const record of recordsDescending) {
+    if (record.kind === "pi.compaction" || record.kind === "pi.reset") return true;
+    if (assistantContextTokens(record) !== undefined) return true;
+  }
+  return false;
+}
+
 export function latestContextTokens(recordsDescending: readonly EntryRecord[]): number | undefined {
   for (const record of recordsDescending) {
     if (record.kind === "pi.compaction" || record.kind === "pi.reset") return undefined;
@@ -63,7 +71,7 @@ const conversations = (storage: Storage, context: Context) =>
   ).pipe(Stream.flattenIterable);
 
 /** What the storage holds before the cache follows commits: latest activity id and active-branch context tokens. */
-const storedSessionState = (storage: Storage, context: Context, conversation: ConversationRecord) =>
+const storedSessionState = (harness: Harness, storage: Storage, context: Context, conversation: ConversationRecord) =>
   Effect.all(
     [
       fromPromise(() =>
@@ -80,11 +88,20 @@ const storedSessionState = (storage: Storage, context: Context, conversation: Co
     ],
     { concurrency: "unbounded" },
   ).pipe(
-    // An entry a fork shares is older than the fork, so the fork-aware entry scan cannot overstate it.
-    Effect.map(([entries, submissions]) => ({
-      activity: Math.max(conversation.id, entries.items[0]?.id ?? 0, submissions.items[0]?.id ?? 0),
-      contextTokens: latestContextTokens(entries.items),
-    })),
+    Effect.flatMap(([entries, submissions]) => {
+      // An entry a fork shares is older than the fork, so the fork-aware entry scan cannot overstate activity.
+      const activity = Math.max(conversation.id, entries.items[0]?.id ?? 0, submissions.items[0]?.id ?? 0);
+      if (hasContextBoundary(entries.items) || conversation.parent === undefined) {
+        return Effect.succeed({ activity, contextTokens: latestContextTokens(entries.items) });
+      }
+      // A fork with no own assistant/compaction entries inherits active context from its parent chain.
+      return fromPromise(async () => {
+        const conv = await harness.conversation(conversation.id, context);
+        if (conv === undefined) return undefined;
+        const inherited = await conv.entries({ order: "descending" }, CONTEXT_SCAN_LIMIT, undefined, context);
+        return latestContextTokens(inherited.items);
+      }).pipe(Effect.map((contextTokens) => ({ activity, contextTokens })));
+    }),
   );
 
 /** The cache, following commits until the scope closes. */
@@ -160,7 +177,7 @@ export const trackSessions = (
       Stream.runForEach((conversation) =>
         Effect.all(
           [
-            storedSessionState(storage, context, conversation),
+            storedSessionState(harness, storage, context, conversation),
             fromPromise(() => harness.snapshot(SessionMetaDoc, conversation.id, context)),
           ],
           { concurrency: "unbounded" },
