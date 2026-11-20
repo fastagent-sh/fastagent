@@ -80,7 +80,7 @@ The runner needs neither Docker nor ARM64. An account whose CDK bootstrap someon
 
 ### Schedules and wake-ups
 
-Each session has one EventBridge Scheduler alarm. When a session sets a `wake` or has schedules in `src/schedules/`, it
+Each session has one EventBridge Scheduler alarm. When a session sets a `wake` (with `wakeTools: true` in `fastagent.config.ts`) or has schedules in `src/schedules/`, it
 arms its next due time before AgentCore stops the idle microVM; when the alarm fires, AgentCore wakes the session, holds
 its microVM until the turn finishes, and sets the next alarm (or deletes it when nothing remains). Deploying a new or
 earlier schedule updates existing instances' alarms without starting their microVMs.

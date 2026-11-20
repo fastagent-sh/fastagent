@@ -31,19 +31,31 @@ export function createClockRunner(options: {
     { store, schedules },
   );
   let scheduler: Scheduler | undefined;
+  let runSeq = 0;
   return {
     api,
     async start(startOptions) {
+      const seq = ++runSeq;
+      scheduler?.stop();
+      scheduler = undefined;
       const created = Effect.runSync(
         createScheduler({ agent, clock: store, schedules, ...(now === undefined ? {} : { now }) }),
       );
-      await created.start(startOptions).catch((error: unknown) => {
-        created.stop();
-        throw error;
-      });
       scheduler = created;
+      try {
+        await created.start(startOptions);
+      } catch (error) {
+        created.stop();
+        if (scheduler === created) scheduler = undefined;
+        throw error;
+      }
+      if (seq !== runSeq) {
+        created.stop();
+        if (scheduler === created) scheduler = undefined;
+      }
     },
     stop() {
+      runSeq += 1;
       scheduler?.stop();
       scheduler = undefined;
     },
