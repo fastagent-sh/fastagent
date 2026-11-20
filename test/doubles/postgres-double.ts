@@ -75,7 +75,12 @@ export async function servedPostgres(): Promise<ServedPostgres> {
               });
             }
           }
-          txOwner = !closing && db.isInTransaction() ? item.conn : undefined;
+          if (!closing && item.conn.closed && db.isInTransaction()) {
+            await db.runExclusive(async () => {
+              if (db.isInTransaction()) await db.exec("ROLLBACK");
+            });
+          }
+          txOwner = !closing && !item.conn.closed && db.isInTransaction() ? item.conn : undefined;
         }
       } finally {
         processing = false;
@@ -92,14 +97,16 @@ export async function servedPostgres(): Promise<ServedPostgres> {
       if (queue[i]?.conn === conn) queue.splice(i, 1);
     }
     if (txOwner === conn && !closing) {
-      void activeDrain.finally(async () => {
-        if (closing || txOwner !== conn) return;
-        await db.runExclusive(async () => {
-          if (db.isInTransaction()) await db.exec("ROLLBACK");
-        });
-        if (txOwner === conn) txOwner = undefined;
-        drain();
-      });
+      activeDrain = activeDrain
+        .finally(async () => {
+          if (closing || txOwner !== conn) return;
+          await db.runExclusive(async () => {
+            if (db.isInTransaction()) await db.exec("ROLLBACK");
+          });
+          if (txOwner === conn) txOwner = undefined;
+          drain();
+        })
+        .catch(() => undefined);
     }
   };
 
