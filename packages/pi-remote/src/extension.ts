@@ -11,6 +11,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   type KeybindingsManager,
+  copyToClipboard,
 } from "@earendil-works/pi-coding-agent";
 import {
   type AutocompleteItem,
@@ -71,6 +72,8 @@ const PRIMARY_SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "fork", description: "Fork the current remote session" },
   { name: "model", description: "Select remote model [provider/modelId]" },
   { name: "clock", description: "View/run remote schedules and manage wake-ups" },
+  { name: "login", description: "Update remote server API key [remote]" },
+  { name: "logout", description: "Clear saved remote server API key [remote]" },
   { name: "remotes", description: "Add, remove, or switch saved remotes" },
   { name: "off", description: "Disconnect and return to local Pi" },
 ];
@@ -85,8 +88,14 @@ const RESERVED_SUBCOMMANDS = new Set([
   "delete",
   "new",
   "fork",
+  "clone",
+  "copy",
+  "login",
+  "logout",
   "model",
+  "model-cycle",
   "thinking",
+  "thinking-cycle",
   "compact",
   "cancel",
   "clock",
@@ -134,14 +143,23 @@ export function parseInterceptedRemoteBuiltin(raw: string): { command: string; a
       return { command: "model", args };
     case "name":
       return { command: "title", args };
+    case "session":
+      return { command: "status", args };
+    case "copy":
+      return { command: "copy", args };
     case "new":
       return { command: "new", args };
     case "resume":
       return { command: "sessions", args };
     case "fork":
+    case "clone":
       return { command: "fork", args };
     case "thinking":
       return { command: "thinking", args };
+    case "login":
+      return { command: "login", args };
+    case "logout":
+      return { command: "logout", args };
     default:
       return undefined;
   }
@@ -206,6 +224,22 @@ class RemoteEditor extends CustomEditor {
       }
       if (this.kb.matches(data, "app.model.select")) {
         this.submitFa("model");
+        return;
+      }
+      if (this.kb.matches(data, "app.model.cycleForward")) {
+        this.submitFa("model-cycle", "next");
+        return;
+      }
+      if (this.kb.matches(data, "app.model.cycleBackward")) {
+        this.submitFa("model-cycle", "prev");
+        return;
+      }
+      if (this.kb.matches(data, "app.thinking.cycle")) {
+        this.submitFa("thinking-cycle");
+        return;
+      }
+      if (this.kb.matches(data, "app.message.copy")) {
+        this.submitFa("copy");
         return;
       }
       if (this.kb.matches(data, "app.session.new")) {
@@ -713,7 +747,10 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       { label: "Thinking level (/thinking)", cmd: "thinking" },
       { label: "Compact session (/compact)", cmd: "compact" },
       { label: "Clock: schedules & wake-ups (/fa clock)", cmd: "clock" },
+      { label: "Copy last assistant reply (/copy)", cmd: "copy" },
       { label: "Delete a session (/fa delete)", cmd: "delete" },
+      { label: "Update remote credentials (/login)", cmd: "login" },
+      { label: "Clear remote credentials (/logout)", cmd: "logout" },
       { label: "Switch / manage remotes (/fa remotes)", cmd: "remotes" },
       { label: "Disconnect to local Pi (/fa off)", cmd: "off" },
     ];
@@ -1037,6 +1074,189 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         }
         return;
       }
+      case "copy": {
+        if (!controller.isConnected()) {
+          ctx.ui.notify("Connect first with /fa", "warning");
+          return;
+        }
+        const text = controller.getLastAssistantText();
+        if (!text) {
+          ctx.ui.notify("No remote assistant reply to copy yet", "warning");
+          return;
+        }
+        try {
+          await copyToClipboard(text);
+          ctx.ui.notify("Copied last remote assistant reply to clipboard", "info");
+        } catch (error) {
+          ctx.ui.notify(`Failed to copy to clipboard: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      case "login": {
+        const loaded = loadConfigSafe(ctx);
+        if (!loaded) return;
+        const targetName = rest[0]?.trim() || controller.getState().remoteName;
+        if (!targetName) {
+          ctx.ui.notify("No remote connected or specified. Usage: /fa login <remote>", "warning");
+          return;
+        }
+        const savedRemote = loaded.config.remotes[targetName];
+        const currentRemote =
+          savedRemote ?? (targetName === controller.getState().remoteName ? activeRemoteConfig : undefined);
+        if (!currentRemote) {
+          ctx.ui.notify(`Unknown remote "${targetName}". Use /fa remotes add to save one first.`, "error");
+          return;
+        }
+        if (currentRemote.type === "agentcore") {
+          ctx.ui.notify(
+            `Remote "${targetName}" uses AWS AgentCore (IAM credentials). Refresh credentials via AWS CLI (e.g. aws sso login).`,
+            "info",
+          );
+          return;
+        }
+        const entered = await ctx.ui.input(
+          `API key for remote "${targetName}"`,
+          currentRemote.apiKey?.startsWith("$")
+            ? `Current: ${currentRemote.apiKey} — enter new $ENV_VAR or raw key`
+            : "$FASTAGENT_API_KEY or raw API key",
+        );
+        if (entered === undefined) return;
+        const nextKey = entered.trim();
+        if (!nextKey) {
+          ctx.ui.notify("API key unchanged (use /logout to clear a stored key)", "info");
+          return;
+        }
+        const updatedRemote: HttpRemoteConfig = { ...currentRemote, apiKey: nextKey };
+        try {
+          const { agent } = await connectRemote(targetName, updatedRemote);
+          await agent.info();
+          if (savedRemote) {
+            saveRemote(targetName, updatedRemote);
+          }
+          if (controller.isConnected() && controller.getState().remoteName === targetName) {
+            const currentState = controller.getState();
+            const currentSessionId = currentState.session?.id;
+            await connectResolved(ctx, targetName, updatedRemote, {
+              ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
+              ...(currentState.lastEntryId !== undefined ? { after: currentState.lastEntryId } : {}),
+              seenEntryIds: controller.getSeenEntryIds(),
+              persistBinding: false,
+              allowHandoff: false,
+              showBanner: false,
+            });
+            ctx.ui.notify(`Verified credentials and reconnected to "${targetName}"`, "info");
+          } else {
+            ctx.ui.notify(`Verified and updated API key for "${targetName}" in ${loaded.path}`, "info");
+          }
+        } catch (error) {
+          ctx.ui.notify(
+            `Failed to authenticate "${targetName}" (existing config unchanged): ${errorText(error)}`,
+            "error",
+          );
+        }
+        return;
+      }
+      case "logout": {
+        const loaded = loadConfigSafe(ctx);
+        if (!loaded) return;
+        const targetName = rest[0]?.trim() || controller.getState().remoteName;
+        if (!targetName) {
+          ctx.ui.notify("No remote connected or specified. Usage: /fa logout <remote>", "warning");
+          return;
+        }
+        const savedRemote = loaded.config.remotes[targetName];
+        const isCurrent = controller.isConnected() && controller.getState().remoteName === targetName;
+        if (!savedRemote && !isCurrent) {
+          ctx.ui.notify(`Unknown remote "${targetName}"`, "error");
+          return;
+        }
+        if (savedRemote?.type === "agentcore" || (!savedRemote && activeRemoteConfig?.type === "agentcore")) {
+          if (isCurrent) {
+            activeRemoteConfig = undefined;
+            controller.disconnect();
+          }
+          ctx.ui.notify(
+            isCurrent
+              ? `Disconnected from AgentCore remote "${targetName}". AWS IAM credentials are managed by AWS CLI.`
+              : `AgentCore remote "${targetName}" uses AWS IAM credentials managed by AWS CLI.`,
+            "info",
+          );
+          return;
+        }
+        let clearedSaved = false;
+        if (savedRemote && savedRemote.type === "http" && savedRemote.apiKey !== undefined) {
+          const { apiKey: _dropped, ...withoutKey } = savedRemote;
+          try {
+            saveRemote(targetName, withoutKey);
+            clearedSaved = true;
+          } catch (error) {
+            ctx.ui.notify(`Failed to clear saved key: ${errorText(error)}`, "error");
+            return;
+          }
+        }
+        if (isCurrent) {
+          activeRemoteConfig = undefined;
+          controller.disconnect();
+        }
+        ctx.ui.notify(
+          clearedSaved
+            ? `Cleared saved API key for "${targetName}"${isCurrent ? " and disconnected" : ""}`
+            : `No stored API key for "${targetName}" (env FASTAGENT_API_KEY applies)${isCurrent ? "; disconnected" : ""}`,
+          "info",
+        );
+        return;
+      }
+      case "model-cycle": {
+        if (!controller.isConnected()) return;
+        const models = controller.getState().agentInfo?.models ?? [];
+        if (models.length <= 1) {
+          ctx.ui.notify(
+            models.length === 0 ? "Remote reports no selectable models" : "Only one model available on this remote",
+            models.length === 0 ? "warning" : "info",
+          );
+          return;
+        }
+        const current = controller.getState().session?.model ?? controller.getState().agentInfo?.defaultModel;
+        const idx = current
+          ? models.findIndex((m) => m.provider === current.provider && m.modelId === current.modelId)
+          : -1;
+        const delta = rest[0] === "prev" ? -1 : 1;
+        const nextIdx = idx === -1 ? 0 : (idx + delta + models.length) % models.length;
+        const next = models[nextIdx];
+        if (!next) return;
+        try {
+          await controller.updateSession({ model: { provider: next.provider, modelId: next.modelId } });
+          ctx.ui.notify(`Remote model: ${next.provider}/${next.modelId}`, "info");
+        } catch (error) {
+          ctx.ui.notify(`Failed to switch remote model: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      case "thinking-cycle": {
+        if (!controller.isConnected()) return;
+        const info = controller.getState().agentInfo;
+        const current = controller.getState().session?.model ?? info?.defaultModel;
+        const declared = current
+          ? info?.models.find((m) => m.provider === current.provider && m.modelId === current.modelId)?.thinkingLevels
+          : undefined;
+        const levels = declared && declared.length > 0 ? declared : THINKING_LEVELS;
+        if (levels.length <= 1) {
+          ctx.ui.notify("Current remote model does not support changing thinking level", "info");
+          return;
+        }
+        const activeLevel = controller.getState().session?.thinkingLevel ?? levels[0];
+        const idx = activeLevel ? levels.indexOf(activeLevel) : -1;
+        const next = levels[(idx + 1) % levels.length];
+        if (!next) return;
+        try {
+          await controller.updateSession({ thinkingLevel: next });
+          ctx.ui.notify(`Remote thinking level: ${next}`, "info");
+        } catch (error) {
+          ctx.ui.notify(`Failed to update remote thinking level: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      case "clone":
       case "fork": {
         if (!controller.isConnected()) {
           ctx.ui.notify("Connect first with /fa", "warning");
@@ -1406,7 +1626,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         return items.length > 0 ? items : null;
       }
       const [sub, arg = ""] = trimmed.split(/\s+/, 2);
-      if (sub === "connect" || sub === "remove") {
+      if (sub === "connect" || sub === "remove" || sub === "login" || sub === "logout") {
         try {
           const { config } = loadRemotes();
           const items = Object.keys(config.remotes)

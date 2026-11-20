@@ -872,8 +872,13 @@ describe("rendering and native builtin interception", () => {
     });
     expect(parseInterceptedRemoteBuiltin("/name Deploy check")).toEqual({ command: "title", args: "Deploy check" });
     expect(parseInterceptedRemoteBuiltin("/new")).toEqual({ command: "new", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/session")).toEqual({ command: "status", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/copy")).toEqual({ command: "copy", args: "" });
     expect(parseInterceptedRemoteBuiltin("/resume")).toEqual({ command: "sessions", args: "" });
     expect(parseInterceptedRemoteBuiltin("/fork")).toEqual({ command: "fork", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/clone")).toEqual({ command: "fork", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/login ops")).toEqual({ command: "login", args: "ops" });
+    expect(parseInterceptedRemoteBuiltin("/logout")).toEqual({ command: "logout", args: "" });
     expect(parseInterceptedRemoteBuiltin("/compact")).toBeUndefined();
     expect(parseInterceptedRemoteBuiltin("/quit")).toBeUndefined();
     expect(parseInterceptedRemoteBuiltin("/fa off")).toBeUndefined();
@@ -999,8 +1004,11 @@ describe("Pi extension host integration", () => {
     const compactedSessions: string[] = [];
     const deletedSessions: string[] = [];
 
+    const validKeys = new Set(["test-key", "rotated-key"]);
     const server = createServer((req, res) => {
-      if (req.headers.authorization !== "Bearer test-key") {
+      const authHeader = req.headers.authorization ?? "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      if (!validKeys.has(token)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { code: "unauthorized", message: "bad key", retryable: false } }));
         return;
@@ -1020,7 +1028,11 @@ describe("Pi extension host integration", () => {
               agent: { name: "ops" },
               commands: [{ name: "deploy", description: "Deploy" }],
               tools: [],
-              models: [{ provider: "anthropic", modelId: "claude-sonnet-4-6", thinkingLevels: ["off", "high"] }],
+              models: [
+                { provider: "anthropic", modelId: "claude-sonnet-4-6", thinkingLevels: ["off", "medium", "high"] },
+                { provider: "openai", modelId: "gpt-6-luna", thinkingLevels: ["off", "high"] },
+              ],
+              defaultModel: { provider: "anthropic", modelId: "claude-sonnet-4-6" },
             }),
           );
           return;
@@ -1036,9 +1048,16 @@ describe("Pi extension host integration", () => {
           return;
         }
         if (req.method === "PATCH" && url.pathname === "/v1/sessions/sess-live") {
-          const title = (body as { title?: string | null } | null)?.title;
+          const patch = (body as { title?: string | null; model?: any; thinkingLevel?: any } | null) ?? {};
           res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ ...makeSession("sess-live"), ...(title ? { title } : {}) }));
+          res.end(
+            JSON.stringify({
+              ...makeSession("sess-live"),
+              ...(patch.title ? { title: patch.title } : {}),
+              ...(patch.model ? { model: patch.model } : {}),
+              ...(patch.thinkingLevel ? { thinkingLevel: patch.thinkingLevel } : {}),
+            }),
+          );
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/sessions") {
@@ -1154,6 +1173,34 @@ describe("Pi extension host integration", () => {
       // /fa title updates the remote session title.
       await fa.handler("title Deploy review", mock.ctx);
       expect(mock.notifications.at(-1)?.message).toContain("Deploy review");
+
+      // /fa model-cycle & /fa thinking-cycle cycle across remote models and their declared thinking levels.
+      await fa.handler("model-cycle next", mock.ctx);
+      expect(mock.notifications.at(-1)?.message).toContain("openai/gpt-6-luna");
+      await fa.handler("thinking-cycle", mock.ctx);
+      expect(mock.notifications.at(-1)?.message).toContain("Remote thinking level: high");
+
+      // /fa login verifies the new API key before saving; invalid keys keep existing config intact.
+      mock.ctx.ui.input = async () => "wrong-key";
+      await fa.handler("login ops", mock.ctx);
+      expect(mock.notifications.at(-1)?.type).toBe("error");
+      expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("test-key");
+
+      const entriesBeforeLogin = mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length;
+      mock.ctx.ui.input = async () => "rotated-key";
+      await fa.handler("login ops", mock.ctx);
+      await waitFor(() => mock.notifications.some((n) => n.message.includes("Verified credentials")));
+      expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("rotated-key");
+      // Reconnecting the same session after /login must not duplicate already-rendered remote entries.
+      expect(mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length).toBe(entriesBeforeLogin);
+
+      // /fa logout clears the stored API key and disconnects; restore test-key for subsequent assertions.
+      await fa.handler("logout ops", mock.ctx);
+      expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBeUndefined();
+      expect(mock.getFooter()).toBeUndefined();
+      saveRemote("ops", { type: "http", url: `http://127.0.0.1:${port}`, apiKey: "test-key" }, { path: cfgPath });
+      await fa.handler("connect ops", mock.ctx);
+      expect(mock.getFooter()).toBeDefined();
 
       // /tree is blocked while connected.
       const treeHandler = mock.handlers.get("session_before_tree")![0]!;
