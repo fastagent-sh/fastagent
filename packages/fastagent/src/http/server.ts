@@ -224,6 +224,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       .handle("updateSession", ({ params, payload }) =>
         call("sessions.update", () => agent.sessions.update(params.sessionId, payload)),
       )
+      .handle("deleteSession", ({ params }) => call("sessions.delete", () => agent.sessions.delete(params.sessionId)))
       .handle("entries", ({ params, query }) =>
         call("sessions.entries", () => agent.sessions.entries(params.sessionId, query)),
       )

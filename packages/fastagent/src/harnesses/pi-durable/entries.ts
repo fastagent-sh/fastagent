@@ -76,6 +76,7 @@ function published(
           toolName: model.toolName,
           isError: model.isError,
           content: contentParts(model.content, ref) as Json,
+          ...(model.details === undefined ? {} : { details: model.details as Json }),
         },
       };
     default:

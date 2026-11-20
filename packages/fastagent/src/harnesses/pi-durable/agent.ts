@@ -70,7 +70,15 @@ import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
 import { type Ids, storageIds } from "./ids.ts";
-import { type InputRecord, MetadataDoc, isInput, queuedInputs, requestIdFor, usageOfState } from "./messages.ts";
+import {
+  type InputRecord,
+  MetadataDoc,
+  SessionMetaDoc,
+  isInput,
+  queuedInputs,
+  requestIdFor,
+  usageOfState,
+} from "./messages.ts";
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, trackSessions } from "./sessions.ts";
@@ -483,6 +491,7 @@ function durableAgent(
             if (request.metadata !== undefined) {
               (await tx.doc(MetadataDoc, String(id), null)).metadata = { ...request.metadata };
             }
+            (await tx.doc(SessionMetaDoc, conversation.id)).updatedAt = Date.now();
             return { kind: "admitted", id } as const;
           }, context),
         ).pipe(
@@ -612,8 +621,22 @@ function durableAgent(
   const create = (createOptions?: CreateSessionOptions): Promise<Session> =>
     settle(
       Effect.gen(function* () {
-        const { forkFrom, ...settings } = yield* decode(CreateSessionOptions, createOptions ?? {}, "sessions.create");
-        const creation = { ...OWNERLESS, agent: yield* changeOf(settings) };
+        const { forkFrom, title, ...settings } = yield* decode(
+          CreateSessionOptions,
+          createOptions ?? {},
+          "sessions.create",
+        );
+        const now = Date.now();
+        const initMeta = async (
+          tx: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[0],
+          id: Parameters<NonNullable<Parameters<Harness["createConversation"]>[0]["init"]>>[1],
+        ) => {
+          const meta = await tx.doc(SessionMetaDoc, id);
+          meta.createdAt = now;
+          meta.updatedAt = now;
+          if (title !== undefined) meta.title = title;
+        };
+        const creation = { ...OWNERLESS, agent: yield* changeOf(settings), init: initMeta };
         if (forkFrom === undefined) {
           return yield* reads.session(yield* fromPromise(() => harness.createConversation(creation, context)));
         }
@@ -638,6 +661,7 @@ function durableAgent(
                     init: async (tx, id) => {
                       Object.assign(await tx.doc(AgentDoc, id), inherited);
                       await configure(tx, id, creation.agent);
+                      await initMeta(tx, id);
                     },
                   },
                   context,
@@ -655,13 +679,39 @@ function durableAgent(
         if (Object.values(decoded).every((value) => value === undefined)) {
           return yield* agentError(
             "invalid_request",
-            "Nothing to update: give a model, a thinking level, instructions or tools",
+            "Nothing to update: give a title, a model, a thinking level, instructions or tools",
           );
         }
         const conversation = yield* conversationOf(sessionId);
-        const change = yield* changeOf(decoded);
-        yield* fromPromise(() => conversation.configure(change, context));
+        const { title, ...agentChanges } = decoded;
+        const hasAgentChange = Object.values(agentChanges).some((value) => value !== undefined);
+        const change = hasAgentChange ? yield* changeOf(agentChanges) : undefined;
+        yield* fromPromise(() =>
+          harness.commit(async (tx) => {
+            if (change !== undefined) await configure(tx, conversation.id, change);
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (title !== undefined) meta.title = title;
+            meta.updatedAt = Date.now();
+          }, context),
+        );
         return yield* reads.session(conversation);
+      }),
+    );
+
+  const remove = (sessionId: string): Promise<void> =>
+    settle(
+      Effect.gen(function* () {
+        const conversation = yield* conversationOf(sessionId);
+        yield* fromPromise(async () => {
+          await conversation.abort(context).catch((error: unknown) => {
+            if (!closing) log.warn(`[fastagent] aborting session ${sessionId} during delete failed: ${String(error)}`);
+          });
+          await harness.commit(async (tx) => {
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            meta.deleted = true;
+            meta.updatedAt = Date.now();
+          }, context);
+        });
       }),
     );
 
@@ -832,6 +882,7 @@ function durableAgent(
       get: getSession,
       list,
       update,
+      delete: remove,
       entries,
       events,
       cancel,

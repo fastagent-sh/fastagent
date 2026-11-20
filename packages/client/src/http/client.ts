@@ -285,6 +285,9 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
         request(
           client.updateSession({ params: { sessionId }, payload: checked(SessionChanges, changes, "sessions.update") }),
         ),
+      delete: async (sessionId) => {
+        await request(client.deleteSession({ params: { sessionId } }));
+      },
       entries: async (sessionId, entriesOptions) =>
         (await request(
           client.entries({

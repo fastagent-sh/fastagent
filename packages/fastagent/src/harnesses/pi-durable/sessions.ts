@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
+import { SessionMetaDoc, type SessionMetaState } from "./messages.ts";
 
 const SCAN_PAGE = 500;
 
@@ -64,6 +65,7 @@ export const trackSessions = (
 ): Effect.Effect<Sessions, PromiseFailure, Scope.Scope> =>
   Effect.gen(function* () {
     const sessions = new Set<ConversationId>();
+    const deleted = new Set<ConversationId>();
     const newest = new Map<ConversationId, number>();
     const touch = (id: ConversationId, value: number) => {
       if (value > (newest.get(id) ?? 0)) newest.set(id, value);
@@ -76,10 +78,23 @@ export const trackSessions = (
           advance: ({ changes }) => {
             for (const change of changes) {
               if (change.type === "conversation") {
-                if (isSession(change.value)) sessions.add(change.value.id);
+                if (isSession(change.value) && !deleted.has(change.value.id)) sessions.add(change.value.id);
                 touch(change.value.id, change.value.id);
               } else if (change.type === "entry" || change.type === "submission") {
-                touch(change.value.conversationId, change.value.id);
+                if (!deleted.has(change.value.conversationId)) {
+                  touch(change.value.conversationId, change.value.id);
+                }
+              } else if (
+                change.type === "document" &&
+                change.kind === "change" &&
+                change.record.kind === SessionMetaDoc.definition.kind &&
+                change.conversationId !== undefined
+              ) {
+                const meta = change.value as SessionMetaState;
+                if (meta.deleted) {
+                  deleted.add(change.conversationId);
+                  sessions.delete(change.conversationId);
+                }
               }
             }
           },
@@ -91,9 +106,20 @@ export const trackSessions = (
     yield* conversations(storage, context).pipe(
       Stream.filter(isSession),
       Stream.runForEach((conversation) =>
-        storedActivity(storage, context, conversation).pipe(
-          Effect.tap((activity) =>
+        Effect.all(
+          [
+            storedActivity(storage, context, conversation),
+            fromPromise(() => harness.snapshot(SessionMetaDoc, conversation.id, context)),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.tap(([activity, meta]) =>
             Effect.sync(() => {
+              if (meta?.deleted || deleted.has(conversation.id)) {
+                deleted.add(conversation.id);
+                sessions.delete(conversation.id);
+                return;
+              }
               sessions.add(conversation.id);
               touch(conversation.id, activity);
             }),

@@ -19,6 +19,7 @@ import {
 import {
   type RemoteEntryPayload,
   createLiveWidgetComponent,
+  formatRelativeTime,
   hasLiveContent,
   renderRemoteEntry,
   renderRemoteFooterLine,
@@ -50,6 +51,8 @@ const SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "disconnect", description: "Disconnect and return to local Pi" },
   { name: "status", description: "Show current remote connection and session status" },
   { name: "sessions", description: "List and switch remote sessions" },
+  { name: "title", description: "Set or clear the current remote session title [title|--clear]" },
+  { name: "delete", description: "Delete a remote session [sessionId]" },
   { name: "new", description: "Create a new session on the connected remote" },
   { name: "model", description: "Select remote model [provider/modelId]" },
   { name: "thinking", description: "Set remote thinking level [off|minimal|low|medium|high|xhigh|max]" },
@@ -656,8 +659,11 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           const currentId = controller.getState().session?.id;
           const labels = sessions.map((s) => {
             const mark = s.id === currentId ? "* " : "  ";
+            const title = s.title ? `${s.title} · ` : "";
+            const age = formatRelativeTime(s.updatedAt ?? s.createdAt);
+            const agePart = age ? ` · ${age}` : "";
             const model = s.model ? ` [${s.model.provider}/${s.model.modelId}]` : "";
-            return `${mark}${s.id} (${s.status})${model}`;
+            return `${mark}${title}${shortId(s.id)} (${s.status}${agePart})${model}`;
           });
           const picked = await ctx.ui.select("Switch remote session", labels);
           if (!picked) return;
@@ -677,6 +683,74 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`Switched to session ${shortId(chosen.id)}`, "info");
         } catch (error) {
           ctx.ui.notify(`Failed to list sessions: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      case "title": {
+        if (!controller.isConnected()) {
+          ctx.ui.notify("Connect first with /fa connect <name>", "warning");
+          return;
+        }
+        let nextTitle: string | null | undefined;
+        if (rest[0] === "--clear") {
+          nextTitle = null;
+        } else if (rest.length > 0) {
+          nextTitle = rest.join(" ").trim();
+        } else {
+          const entered = await ctx.ui.input(
+            "Session title",
+            controller.getState().session?.title ?? "Enter a title (leave empty to clear)",
+          );
+          if (entered === undefined) return;
+          nextTitle = entered.trim() === "" ? null : entered.trim();
+        }
+        try {
+          const updated = await controller.updateSession({ title: nextTitle });
+          ctx.ui.notify(updated.title ? `Session title set to "${updated.title}"` : "Session title cleared", "info");
+        } catch (error) {
+          ctx.ui.notify(`Failed to update title: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+      case "delete": {
+        if (!controller.isConnected()) {
+          ctx.ui.notify("Connect first with /fa connect <name>", "warning");
+          return;
+        }
+        let targetId = rest[0]?.trim() || undefined;
+        if (!targetId) {
+          try {
+            const sessions = await controller.listSessions(30);
+            if (sessions.length === 0) {
+              ctx.ui.notify("No remote sessions to delete", "info");
+              return;
+            }
+            const currentId = controller.getState().session?.id;
+            const labels = sessions.map((s) => {
+              const mark = s.id === currentId ? "* " : "  ";
+              const title = s.title ? `${s.title} · ` : "";
+              return `${mark}${title}${shortId(s.id)} (${s.status})`;
+            });
+            const picked = await ctx.ui.select("Delete remote session", labels);
+            if (!picked) return;
+            targetId = sessions[labels.indexOf(picked)]?.id;
+          } catch (error) {
+            ctx.ui.notify(`Failed to list sessions: ${errorText(error)}`, "error");
+            return;
+          }
+        }
+        if (!targetId) return;
+        const confirmed = ctx.hasUI
+          ? await ctx.ui.confirm("Delete remote session", `Delete remote session ${targetId}?`)
+          : true;
+        if (!confirmed) return;
+        try {
+          const deletingCurrent = controller.getState().session?.id === targetId;
+          await controller.deleteSession(targetId);
+          if (deletingCurrent) activeRemoteConfig = undefined;
+          ctx.ui.notify(`Deleted remote session ${shortId(targetId)}`, "info");
+        } catch (error) {
+          ctx.ui.notify(`Failed to delete session: ${errorText(error)}`, "error");
         }
         return;
       }

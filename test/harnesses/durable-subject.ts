@@ -209,7 +209,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       parameters: obj({}),
       execute: async () => {
         effects++;
-        return { output: [{ type: "text", text: `effect ${effects}` }] };
+        return { output: [{ type: "text", text: `effect ${effects}` }], details: { count: effects } };
       },
     }),
     defineTool({

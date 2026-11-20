@@ -146,10 +146,12 @@ function makeFakeAgent(options?: {
         updated.push({ sessionId, changes });
         return {
           ...makeSession(sessionId),
+          ...(changes.title ? { title: changes.title } : {}),
           ...(changes.model ? { model: changes.model } : {}),
           ...(changes.thinkingLevel ? { thinkingLevel: changes.thinkingLevel } : {}),
         };
       },
+      async delete() {},
       async entries() {
         return { data: [] };
       },
@@ -576,6 +578,66 @@ describe("RemoteController", () => {
     expect(controller.getState().status).toBe("disconnected");
   });
 
+  it("hydrates activeTools, queuedMessages, and compacting from state snapshot and handles compaction events", async () => {
+    const stream = createEventStream();
+    const deleted: string[] = [];
+    const { agent } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    agent.sessions.delete = async (id) => {
+      deleted.push(id);
+    };
+    const errors: Error[] = [];
+    const controller = new RemoteController({ onError: (err) => errors.push(err) }, { sleep: async () => {} });
+
+    await controller.connect("ops", agent);
+    stream.control.push({
+      type: "state",
+      session: {
+        ...makeSession("sess-1", "running"),
+        title: "Investigate prod",
+        activeTools: [{ toolCallId: "tc-9", name: "bash", status: "running", progress: "running tests" }],
+        queuedMessages: [{ id: "m-2", mode: "queue" }],
+        compacting: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(controller.getState().activeTools).toEqual([
+      { toolCallId: "tc-9", name: "bash", progress: "running tests" },
+    ]);
+    expect(controller.getState().queuedMessages).toEqual([{ id: "m-2", mode: "queue" }]);
+    expect(controller.getState().compacting).toBe(true);
+
+    stream.control.push({
+      type: "tool_progress",
+      toolCallId: "tc-9",
+      text: "line 2",
+      output: "line 1\nline 2",
+    });
+    stream.control.push({ type: "compaction_failed", error: "provider timeout" });
+    await flushMicrotasks();
+
+    expect(controller.getState().activeTools[0]?.output).toBe("line 1\nline 2");
+    expect(controller.getState().compacting).toBe(false);
+    expect(errors[0]?.message).toContain("provider timeout");
+
+    stream.control.push({ type: "compaction_started", trigger: "manual" });
+    await flushMicrotasks();
+    expect(controller.getState().compacting).toBe(true);
+
+    stream.control.push({
+      type: "entry",
+      entry: { id: "e-c", timestamp: 5, kind: "compaction", data: { summary: "condensed" } },
+    });
+    await flushMicrotasks();
+    expect(controller.getState().compacting).toBe(false);
+
+    await controller.deleteSession("sess-1");
+    expect(deleted).toEqual(["sess-1"]);
+    expect(controller.getState().status).toBe("disconnected");
+  });
+
   it("builds text and image ContentParts for send", () => {
     expect(buildSendContent("hello")).toBe("hello");
     expect(buildSendContent("check this", [{ mimeType: "image/png", data: "abc" }])).toEqual([
@@ -654,6 +716,7 @@ describe("Pi extension host integration", () => {
           notifications.push({ message, type });
         },
         input: async () => undefined,
+        confirm: async () => true,
         select: async (_title: string, options: string[]) => options[0],
         setWidget(key: string, content: unknown) {
           if (content === undefined) widgets.delete(key);
@@ -747,6 +810,17 @@ describe("Pi extension host integration", () => {
         if (req.method === "GET" && url.pathname === "/v1/sessions/sess-live") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify(makeSession("sess-live")));
+          return;
+        }
+        if (req.method === "PATCH" && url.pathname === "/v1/sessions/sess-live") {
+          const title = (body as { title?: string | null } | null)?.title;
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ ...makeSession("sess-live"), ...(title ? { title } : {}) }));
+          return;
+        }
+        if (req.method === "DELETE" && url.pathname === "/v1/sessions/sess-live") {
+          res.writeHead(204);
+          res.end();
           return;
         }
         if (req.method === "GET" && url.pathname === "/v1/sessions/sess-live/events") {
@@ -844,6 +918,10 @@ describe("Pi extension host integration", () => {
       expect(compactRes).toEqual({ cancel: true });
       expect(compactedSessions).toEqual(["sess-live"]);
 
+      // /fa title updates the remote session title.
+      await fa.handler("title Deploy review", mock.ctx);
+      expect(mock.notifications.at(-1)?.message).toContain("Deploy review");
+
       // /tree is blocked while connected.
       const treeHandler = mock.handlers.get("session_before_tree")![0]!;
       expect(treeHandler({}, mock.ctx)).toEqual({ cancel: true });
@@ -906,7 +984,8 @@ describe("Pi extension host integration", () => {
       expect(mock.getFooter()).toBeUndefined();
       await sessionStart({ type: "session_start", reason: "startup" }, mock.ctx);
       expect(mock.getFooter()).toBeDefined();
-      await fa.handler("disconnect", mock.ctx);
+      await fa.handler("delete sess-live", mock.ctx);
+      expect(mock.getFooter()).toBeUndefined();
     } finally {
       if (prevPath === undefined) delete process.env.FASTAGENT_REMOTES_PATH;
       else process.env.FASTAGENT_REMOTES_PATH = prevPath;

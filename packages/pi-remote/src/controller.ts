@@ -12,6 +12,7 @@ import {
   type Entry,
   type Json,
   type Message,
+  type QueuedMessage,
   type ScheduleRun,
   type ScheduleState,
   type SendRequest,
@@ -24,8 +25,9 @@ import {
 export interface ActiveTool {
   toolCallId: string;
   name: string;
-  args: Json;
+  args?: Json;
   progress?: string;
+  output?: string;
 }
 
 export interface LiveReply {
@@ -49,6 +51,8 @@ export interface RemoteViewState {
   session?: Session;
   liveReply?: LiveReply;
   activeTools: readonly ActiveTool[];
+  queuedMessages: readonly QueuedMessage[];
+  compacting: boolean;
   retrying?: RetryNotice;
   lastEntryId?: string;
   lastError?: string;
@@ -106,7 +110,12 @@ export class RemoteController {
   private generation = 0;
   private eventSeq = 0;
   private seenEntryIds = new Set<string>();
-  private state: RemoteViewState = { status: "disconnected", activeTools: [] };
+  private state: RemoteViewState = {
+    status: "disconnected",
+    activeTools: [],
+    queuedMessages: [],
+    compacting: false,
+  };
 
   constructor(callbacks: RemoteControllerCallbacks = {}, options: RemoteControllerOptions = {}) {
     this.callbacks = callbacks;
@@ -135,6 +144,8 @@ export class RemoteController {
         status: "connecting",
         remoteName,
         activeTools: [],
+        queuedMessages: [],
+        compacting: false,
       });
     }
 
@@ -156,7 +167,9 @@ export class RemoteController {
         remoteName,
         agentInfo: info,
         session,
-        activeTools: [],
+        activeTools: activeToolsFromSession(session),
+        queuedMessages: session.queuedMessages ?? [],
+        compacting: session.compacting === true,
         ...(options.after && options.after !== "start" ? { lastEntryId: options.after } : {}),
       });
       this.startEventLoop(gen, agent, session.id, options.after ?? "start");
@@ -167,6 +180,8 @@ export class RemoteController {
         this.setState({
           status: "disconnected",
           activeTools: [],
+          queuedMessages: [],
+          compacting: false,
           lastError: errorMessageOf(error),
         });
       }
@@ -181,6 +196,8 @@ export class RemoteController {
     this.setState({
       status: "disconnected",
       activeTools: [],
+      queuedMessages: [],
+      compacting: false,
     });
   }
 
@@ -202,7 +219,9 @@ export class RemoteController {
       ...(remoteName !== undefined ? { remoteName } : {}),
       ...(agentInfo !== undefined ? { agentInfo } : {}),
       session,
-      activeTools: [],
+      activeTools: activeToolsFromSession(session),
+      queuedMessages: session.queuedMessages ?? [],
+      compacting: session.compacting === true,
     });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
@@ -226,7 +245,9 @@ export class RemoteController {
       ...(remoteName !== undefined ? { remoteName } : {}),
       ...(agentInfo !== undefined ? { agentInfo } : {}),
       session,
-      activeTools: [],
+      activeTools: activeToolsFromSession(session),
+      queuedMessages: session.queuedMessages ?? [],
+      compacting: session.compacting === true,
     });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
@@ -303,6 +324,14 @@ export class RemoteController {
   async listSessions(limit = 30): Promise<Session[]> {
     const page = await this.requireAgent().sessions.list({ limit });
     return page.data;
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    const agent = this.requireAgent();
+    await agent.sessions.delete(sessionId);
+    if (this.state.session?.id === sessionId) {
+      this.disconnect();
+    }
   }
 
   async listSchedules(): Promise<ScheduleState[]> {
@@ -399,6 +428,8 @@ export class RemoteController {
             status: "disconnected",
             liveReply: undefined,
             activeTools: [],
+            queuedMessages: [],
+            compacting: false,
             retrying: undefined,
             lastError: fatalStreamError.message,
           });
@@ -424,7 +455,16 @@ export class RemoteController {
       .then((fresh) => {
         if (this.generation !== gen || this.state.session?.id !== sessionId) return;
         const session = this.eventSeq === seqAtStart ? fresh : { ...this.state.session, usage: fresh.usage };
-        this.setState({ ...this.state, session });
+        this.setState({
+          ...this.state,
+          session,
+          ...(this.eventSeq === seqAtStart
+            ? {
+                queuedMessages: fresh.queuedMessages ?? [],
+                compacting: fresh.compacting === true,
+              }
+            : {}),
+        });
       })
       .catch(() => {
         // Ignore transient refresh failures; the active event stream or reconnect snapshot will resync state.
@@ -441,8 +481,10 @@ export class RemoteController {
           status: "connected",
           session: event.session,
           liveReply: reply ? { text: reply.text, thinking: reply.thinking ?? "" } : undefined,
+          activeTools: mergeActiveTools(this.state.activeTools, event.session),
+          queuedMessages: event.session.queuedMessages ?? [],
+          compacting: event.session.compacting === true,
           retrying: undefined,
-          ...(event.session.status === "idle" ? { activeTools: [] } : {}),
         });
         return;
       }
@@ -467,16 +509,19 @@ export class RemoteController {
       case "tool_started": {
         const existing = this.state.activeTools.some((t) => t.toolCallId === event.toolCallId);
         const activeTools = existing
-          ? this.state.activeTools
+          ? this.state.activeTools.map((t) =>
+              t.toolCallId === event.toolCallId ? { ...t, name: event.name, args: event.args } : t,
+            )
           : [...this.state.activeTools, { toolCallId: event.toolCallId, name: event.name, args: event.args }];
         this.setState({ ...this.state, activeTools });
         return;
       }
       case "tool_progress": {
         const found = this.state.activeTools.some((t) => t.toolCallId === event.toolCallId);
+        const patch = { progress: event.text, ...(event.output === undefined ? {} : { output: event.output }) };
         const activeTools = found
-          ? this.state.activeTools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, progress: event.text } : t))
-          : [...this.state.activeTools, { toolCallId: event.toolCallId, name: "tool", args: {}, progress: event.text }];
+          ? this.state.activeTools.map((t) => (t.toolCallId === event.toolCallId ? { ...t, ...patch } : t))
+          : [...this.state.activeTools, { toolCallId: event.toolCallId, name: "tool", ...patch }];
         this.setState({ ...this.state, activeTools });
         return;
       }
@@ -492,6 +537,15 @@ export class RemoteController {
         });
         return;
       }
+      case "compaction_started": {
+        this.setState({ ...this.state, compacting: true });
+        return;
+      }
+      case "compaction_failed": {
+        this.setState({ ...this.state, compacting: false, lastError: event.error });
+        this.callbacks.onError?.(new Error(`Compaction failed: ${event.error}`));
+        return;
+      }
       case "entry": {
         const entry = event.entry;
         let nextLiveReply = this.state.liveReply;
@@ -499,6 +553,7 @@ export class RemoteController {
         let nextRetrying = this.state.retrying;
 
         let nextSession = this.state.session;
+        let nextCompacting = this.state.compacting;
         if (entry.kind === "user" && !replayed && nextSession?.status === "idle") {
           nextSession = { ...nextSession, status: "running" };
         } else if (entry.kind === "assistant") {
@@ -509,6 +564,8 @@ export class RemoteController {
           if (data && typeof data.toolCallId === "string") {
             nextActiveTools = this.state.activeTools.filter((t) => t.toolCallId !== data.toolCallId);
           }
+        } else if (entry.kind === "compaction") {
+          nextCompacting = false;
         }
 
         this.setState({
@@ -517,6 +574,7 @@ export class RemoteController {
           lastEntryId: entry.id,
           liveReply: nextLiveReply,
           activeTools: nextActiveTools,
+          compacting: nextCompacting,
           retrying: nextRetrying,
         });
 
@@ -545,6 +603,33 @@ export class RemoteController {
         return;
     }
   }
+}
+
+function activeToolsFromSession(session: Session): ActiveTool[] {
+  return (session.activeTools ?? []).map((tool) => ({
+    toolCallId: tool.toolCallId,
+    name: tool.name,
+    ...(tool.progress === undefined ? {} : { progress: tool.progress }),
+  }));
+}
+
+function mergeActiveTools(previous: readonly ActiveTool[], session: Session): ActiveTool[] {
+  if (session.status === "idle") return [];
+  const prevById = new Map(previous.map((tool) => [tool.toolCallId, tool]));
+  return (session.activeTools ?? []).map((tool) => {
+    const existing = prevById.get(tool.toolCallId);
+    return {
+      toolCallId: tool.toolCallId,
+      name: tool.name,
+      ...(existing?.args !== undefined ? { args: existing.args } : {}),
+      ...(tool.progress !== undefined
+        ? { progress: tool.progress }
+        : existing?.progress !== undefined
+          ? { progress: existing.progress }
+          : {}),
+      ...(existing?.output !== undefined ? { output: existing.output } : {}),
+    };
+  });
 }
 
 export function buildSendContent(

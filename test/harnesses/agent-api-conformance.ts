@@ -1035,15 +1035,103 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
       });
 
-      it("compacts a session on request, and its summary arrives as a compaction entry", async () => {
+      it("compacts a session on request, emits compaction_started, and lands a compaction entry", async () => {
         const sessionId = await newSession(agent);
         for (const word of ["one", "two", "three"]) await ended(agent, await send({ sessionId, content: word }));
+        const watching = attach(agent, sessionId);
+        await watching.until(isState);
         await agent.sessions.compact(sessionId, { instructions: "Keep the numbers." });
-        await vi.waitFor(
-          async () => expect((await history(agent, sessionId)).some((entry) => entry.kind === "compaction")).toBe(true),
-          { interval: 20 },
-        );
+        const events = await watching.until((event) => event.type === "entry" && event.entry.kind === "compaction");
+        await watching.close();
+        expect(events).toContainEqual({ type: "compaction_started", trigger: "manual" });
+        expect((await history(agent, sessionId)).some((entry) => entry.kind === "compaction")).toBe(true);
         await expect(agent.sessions.compact("nope")).rejects.toMatchObject({ code: "not_found" });
+      });
+
+      it("tracks session title and timestamps, and deletes sessions durably across restarts", async () => {
+        const created = await agent.sessions.create({ title: "Deploy v2" });
+        expect(created).toMatchObject({
+          title: "Deploy v2",
+          createdAt: expect.any(Number),
+          updatedAt: expect.any(Number),
+        });
+
+        const renamed = await agent.sessions.update(created.id, { title: "Deploy v3" });
+        expect(renamed.title).toBe("Deploy v3");
+        expect(renamed.updatedAt).toBeGreaterThanOrEqual(created.updatedAt as number);
+
+        const fork = await agent.sessions.create({ forkFrom: { sessionId: created.id } });
+        expect(fork).not.toHaveProperty("title");
+
+        const cleared = await agent.sessions.update(created.id, { title: null });
+        expect(cleared).not.toHaveProperty("title");
+
+        await expect(agent.sessions.create({ title: "" })).rejects.toMatchObject({ code: "invalid_request" });
+        await expect(agent.sessions.update(created.id, { title: "" })).rejects.toMatchObject({
+          code: "invalid_request",
+        });
+
+        // Deleting a busy session aborts its active work and removes it from every read and write surface.
+        await send({ sessionId: created.id, content: "hold" });
+        await holding();
+        await agent.sessions.delete(created.id);
+        expect(subject.signalled()).toBeGreaterThan(0);
+
+        await expect(agent.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
+        await expect(agent.sessions.delete(created.id)).rejects.toMatchObject({ code: "not_found" });
+        await expect(agent.sessions.delete("no-such-session")).rejects.toMatchObject({ code: "not_found" });
+        await expect(send({ sessionId: created.id, content: "after delete" })).rejects.toMatchObject({
+          code: "not_found",
+        });
+        expect((await agent.sessions.list()).data.map((s) => s.id)).not.toContain(created.id);
+
+        // Deletion survives process restart.
+        agent = await subject.restart();
+        await expect(agent.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
+        expect((await agent.sessions.list()).data.map((s) => s.id)).not.toContain(created.id);
+      });
+
+      it("surfaces activeTools and queuedMessages on sessions.get and state snapshots, and tool_result details", async () => {
+        const sessionId = await newSession(agent);
+        const running = await send({ sessionId, content: "hold" });
+        await holding();
+        const queued = await send({ sessionId, content: "after hold", whenBusy: "queue" });
+
+        const snap = await agent.sessions.get(sessionId);
+        expect(snap.activeTools).toEqual([
+          expect.objectContaining({ name: "hold", status: "running", toolCallId: expect.any(String) }),
+        ]);
+        expect(snap.queuedMessages).toEqual([{ id: queued.id, mode: "queue" }]);
+
+        const watching = attach(agent, sessionId);
+        const [stateEvent] = await watching.until(isState);
+        await watching.close();
+        expect(stateEvent).toMatchObject({
+          type: "state",
+          session: {
+            status: "running",
+            activeTools: [expect.objectContaining({ name: "hold", status: "running" })],
+            queuedMessages: [{ id: queued.id, mode: "queue" }],
+          },
+        });
+
+        subject.release();
+        await ended(agent, running);
+        await ended(agent, queued);
+        const idle = await agent.sessions.get(sessionId);
+        expect(idle).not.toHaveProperty("activeTools");
+        expect(idle).not.toHaveProperty("queuedMessages");
+
+        await ended(agent, await send({ sessionId, content: "effect" }));
+        const entries = await history(agent, sessionId);
+        const effectResult = entries.find(
+          (entry) => entry.kind === "tool_result" && (entry.data as { toolName?: string }).toolName === "effect",
+        );
+        expect(effectResult?.data).toMatchObject({
+          toolName: "effect",
+          isError: false,
+          details: { count: 1 },
+        });
       });
     });
 
