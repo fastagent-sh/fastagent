@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import type { Agent } from "@fastagent-sh/client/agent-api";
 import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
-import { selectAgentEnvironment, isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
+import { isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
@@ -29,7 +29,6 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const portFlag = parsePort(opts.port, "--port", "flag");
   const bindFlag = parseBind(opts.bind);
   setLogLevel("info");
-  selectAgentEnvironment("production");
   unmarkDevServe();
   // Deployed storage refusals (no mount, a held lease, a missing `flock`, another agent's storage) are the operator's only
   // clue in a crash-looping container.
@@ -62,7 +61,10 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Sta
   let built: Promise<AgentDefinition> | undefined;
   const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
-  const opened = await openServing(await loadBuilt(agentDir), { model: modelSpec, ...instanceInputs(agentDir) });
+  const opened = await openServing(await loadBuilt(agentDir), {
+    model: modelSpec,
+    ...instanceInputs(agentDir, { mode: "start" }),
+  });
   const { stateRoot } = opened;
   await reportAssembly(opened, modelSpec);
   if (isUnderDir(stateRoot, agentDir)) {

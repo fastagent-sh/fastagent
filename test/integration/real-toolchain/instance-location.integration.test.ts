@@ -12,7 +12,7 @@ describe("commands that open an instance", () => {
   it("with no flags, start runs from .fastagent/start/, apart from dev's .fastagent/dev/", async () => {
     const dir = await agentWorkspace("fa-instance-default-start-", {
       "fastagent.config.ts": `export default { model: "openai/gpt-4o-mini" };\n`,
-      ".secrets/production/.env": "OPENAI_API_KEY=sk-test\n",
+      ".secrets/.env": "OPENAI_API_KEY=sk-test\n",
     });
     await built(dir);
     const realDir = realpathSync(dir);

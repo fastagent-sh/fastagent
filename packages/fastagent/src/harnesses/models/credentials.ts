@@ -177,14 +177,11 @@ export function fastagentCredentialStore(
 // ── Which files an agent reads ───────────────────────────────────────────────
 
 /** The effective auth file for an agent: the `authPath` a caller names, else `<secrets dir>/auth.json`. */
-export function resolveAuthPath(dir: string, authPath?: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(authPath) ?? join(resolveSecretsDir(dir, env), "auth.json");
+export function resolveAuthPath(dir: string, authPath?: string): string {
+  return resolveOverridePath(authPath) ?? join(resolveSecretsDir(dir), "auth.json");
 }
 
-/**
- * Which credentials files an agent reads: `path` first, then, per provider, `fallback`. One value because it is one
- * decision, read through `agentModels` (agent-models.ts) by everything that reads an agent's credentials.
- */
+/** Which credentials files an agent reads: `path` first, then, per provider, `fallback`. */
 export interface AuthLayers {
   path: string;
   fallback?: string;
@@ -195,11 +192,7 @@ export interface AuthLayers {
  * user-global store, because a login is a PERSON on a machine and not a project — one `login -g` then serves every
  * agent here. No fallback when a path was named: "use this file" is an instruction, not a preference.
  */
-export function resolveAuthLayers(
-  agentDir: string,
-  authPath?: string,
-  env: NodeJS.ProcessEnv = process.env,
-): AuthLayers {
-  const path = resolveAuthPath(agentDir, authPath, env);
+export function resolveAuthLayers(agentDir: string, authPath?: string): AuthLayers {
+  const path = resolveAuthPath(agentDir, authPath);
   return authPath === undefined ? { path, fallback: GLOBAL_AUTH_PATH } : { path };
 }

@@ -14,8 +14,6 @@ import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/
 import { openSource } from "../../harnesses/open-source.ts";
 import { keepCatalog } from "../../doubles/kept-catalog.ts";
 
-vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
-
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();

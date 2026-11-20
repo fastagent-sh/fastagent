@@ -18,17 +18,6 @@ export function globalHome(): string {
  * ignore templates spell it out as literal text, so renaming this constant means editing them too.
  */
 export const SECRETS_DIRNAME = ".secrets";
-const AGENT_ENVIRONMENT_ENV = "FASTAGENT_ENVIRONMENT";
-type AgentEnvironment = "dev" | "production";
-
-export function selectAgentEnvironment(environment: AgentEnvironment, env: NodeJS.ProcessEnv = process.env): void {
-  env[AGENT_ENVIRONMENT_ENV] = environment;
-}
-
-function environmentPath(dir: string, segment: string, env: NodeJS.ProcessEnv): string {
-  const root = join(resolve(dir), segment);
-  return env[AGENT_ENVIRONMENT_ENV] === "production" ? join(root, "production") : root;
-}
 
 /** The state segment inside an agent dir — same rule and same template caveat as {@link SECRETS_DIRNAME}. */
 export const STATE_DIRNAME = ".state";
@@ -145,31 +134,34 @@ export const DATABASE_URL_ENV = "FASTAGENT_DATABASE_URL";
 /** Where fastagent keeps what it makes for a local instance of the project in `dir`, one directory per environment. */
 export const INSTANCES_DIRNAME = ".fastagent";
 
+/** Local instance directory under `.fastagent/`: `dev` for development, `start` for local build trials. */
+export type InstanceMode = "dev" | "start";
+
 /**
- * The instance root of the project in `dir` when none is given: `.fastagent/dev/` for `dev`,
- * and `.fastagent/start/` for the commands that run what `start` runs, kept apart so a trial of the production build
- * never reads or writes the development sessions.
+ * The instance root of the project in `dir` when none is given: `.fastagent/dev/` for `dev` and one-shot commands,
+ * and `.fastagent/start/` for `start`, kept apart so a trial of the production build never reads or writes dev sessions.
  */
-function defaultInstanceRoot(dir: string, env: NodeJS.ProcessEnv): string {
-  return join(resolve(dir), INSTANCES_DIRNAME, env[AGENT_ENVIRONMENT_ENV] === "production" ? "start" : "dev");
+function defaultInstanceRoot(dir: string, mode: InstanceMode): string {
+  return join(resolve(dir), INSTANCES_DIRNAME, mode);
 }
 
 /** The agent's working directory: the instance root, else the project's default one. */
-export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, env);
+export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env, mode: InstanceMode = "dev"): string {
+  return resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, mode);
 }
 
 /** The durable machine-state home (sessions, schedules' state): `.state` in the instance root. */
-export function resolveStateRoot(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return join(resolveWorkdir(dir, env), STATE_DIRNAME);
+export function resolveStateRoot(
+  dir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  mode: InstanceMode = "dev",
+): string {
+  return join(resolveWorkdir(dir, env, mode), STATE_DIRNAME);
 }
 
-/**
- * The resolved secrets dir — everything fastagent manages that must NEVER leave the machine (the agent's `.env` +
- * auth.json): `.secrets/production` for production, `.secrets` for dev.
- */
-export function resolveSecretsDir(dir: string, env: NodeJS.ProcessEnv = process.env): string {
-  return environmentPath(dir, SECRETS_DIRNAME, env);
+/** The agent's secrets directory (`.secrets`), which must never leave the machine. */
+export function resolveSecretsDir(dir: string): string {
+  return join(resolve(dir), SECRETS_DIRNAME);
 }
 
 /**

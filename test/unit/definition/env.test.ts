@@ -7,12 +7,9 @@ import { dotEnvPath, loadEnvValues } from "../../../packages/fastagent/src/value
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe("dotEnvPath (follows the resolved secrets dir)", () => {
-  it("is <root>/.secrets/.env, and <root>/.secrets/production/.env for production", () => {
-    expect(dotEnvPath("/w", {} as NodeJS.ProcessEnv)).toBe(join("/w", ".secrets", ".env"));
-    expect(dotEnvPath("/w", { FASTAGENT_ENVIRONMENT: "production" } as NodeJS.ProcessEnv)).toBe(
-      join("/w", ".secrets", "production", ".env"),
-    );
+describe("dotEnvPath", () => {
+  it("is <root>/.secrets/.env", () => {
+    expect(dotEnvPath("/w")).toBe(join("/w", ".secrets", ".env"));
   });
 });
 

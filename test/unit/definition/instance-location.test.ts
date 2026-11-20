@@ -1,10 +1,8 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
-
-vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 const scratch = () => mkdtemp(join(tmpdir(), "fa-instance-"));
 

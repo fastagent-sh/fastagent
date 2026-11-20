@@ -1,12 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
-
-vi.mock("../../../packages/fastagent/src/git.ts", () => import("../../doubles/git-double.ts"));
 
 describe("cli: deploy init", () => {
   it("writes docker container files (with EXPOSE 8787), prints commands, and never replaces author-owned files", async () => {

@@ -86,7 +86,7 @@ export async function modelEnvironment(
     source.authPath === null
       ? undefined
       : agentDir
-        ? resolveAuthLayers(agentDir, source.authPath, env)
+        ? resolveAuthLayers(agentDir, source.authPath)
         : { path: source.authPath ?? GLOBAL_AUTH_PATH };
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, environment);
   const credentials: CredentialStore = store ?? new InMemoryCredentialStore();

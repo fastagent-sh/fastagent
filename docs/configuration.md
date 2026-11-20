@@ -104,8 +104,7 @@ Prompt templates (`prompts/<name>.md`) run on a message that is a bare `/<name>`
 |---|---|
 | `fastagent login` | Stores credentials in `.secrets/auth.json`; `-g` stores them in `~/.fastagent/.secrets/auth.json` |
 | Provider variables | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, … for servers and CI |
-| `.secrets/.env` | Values for local commands; git-ignored |
-| `.secrets/production/.env` | Values for `start` |
+| `.secrets/.env` | Values for local commands (`dev`, `start`, `invoke`, …); git-ignored. Pass `--env-file <file>` to isolate another set of values |
 
 A provider's credential comes from the agent's `auth.json`, then the provider's variable, then the global file. A
 container never reads your files: give it its values as environment variables. `--env-file <file>` works on `dev`,
