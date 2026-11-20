@@ -117,7 +117,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
   let autocompleteInstalled = false;
   let widgetMounted = false;
   let footerMounted = false;
-  let startupFlagConsumed = false;
 
   const terminalStatus = new TerminalStatusReporter();
 
@@ -287,11 +286,21 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     ctx: ExtensionContext,
     name: string,
     remote: RemoteConfig,
-    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string>; persistBinding?: boolean } = {},
+    options: {
+      sessionId?: string;
+      after?: string;
+      seenEntryIds?: Iterable<string>;
+      persistBinding?: boolean;
+      allowHandoff?: boolean;
+    } = {},
   ): Promise<void> => {
     const { agent, defaultSessionId } = await connectRemote(name, remote);
     const targetSession = options.sessionId ?? defaultSessionId;
-    if (controller.isConnected() && typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function") {
+    if (
+      options.allowHandoff !== false &&
+      controller.isConnected() &&
+      typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function"
+    ) {
       const session = targetSession ? await agent.sessions.get(targetSession) : await agent.sessions.create();
       const outcome = await handoffToCleanView(ctx, { remoteName: name, remote, sessionId: session.id });
       if (outcome !== "unsupported") return;
@@ -455,6 +464,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         await connectResolved(ctx, handoff.remoteName, handoff.remote, {
           sessionId: handoff.sessionId,
           persistBinding: false,
+          allowHandoff: false,
         });
       } catch (error) {
         ctx.ui.notify(`Failed to connect to ${handoff.remoteName}: ${errorText(error)}`, "error");
@@ -494,6 +504,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             after: seen.at(-1) ?? "start",
             seenEntryIds: seen,
             persistBinding: false,
+            allowHandoff: false,
           });
         } catch (error) {
           ctx.ui.notify(`Failed to resume ${latestBinding.remoteName}: ${errorText(error)}`, "error");
@@ -502,8 +513,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       }
     }
 
-    if (startupFlagConsumed) return;
-    startupFlagConsumed = true;
+    if (event.reason !== "startup") return;
     const startupRemote = pi.getFlag("fa");
     if (typeof startupRemote === "string" && startupRemote.trim() !== "") {
       await connectByName(ctx, startupRemote.trim());
@@ -601,7 +611,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         return;
       }
       case "disconnect": {
-        if (!controller.isConnected()) {
+        if (controller.getState().status === "disconnected") {
           ctx.ui.notify("Not connected to any remote", "info");
           return;
         }

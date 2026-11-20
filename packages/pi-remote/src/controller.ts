@@ -104,6 +104,7 @@ export class RemoteController {
   private agent?: Agent;
   private streamAbort?: AbortController;
   private generation = 0;
+  private eventSeq = 0;
   private seenEntryIds = new Set<string>();
   private state: RemoteViewState = { status: "disconnected", activeTools: [] };
 
@@ -143,7 +144,9 @@ export class RemoteController {
         throw new Error("Connection canceled");
       }
       const session = options.sessionId ? await agent.sessions.get(options.sessionId) : await agent.sessions.create();
-      if (this.generation !== beforeGen) return session;
+      if (this.generation !== beforeGen) {
+        throw new Error("Connection canceled");
+      }
 
       const gen = wasConnected ? this.nextGeneration() : beforeGen;
       this.agent = agent;
@@ -188,7 +191,9 @@ export class RemoteController {
     const beforeGen = this.generation;
 
     const session = await agent.sessions.get(sessionId);
-    if (this.generation !== beforeGen) return session;
+    if (this.generation !== beforeGen) {
+      throw new Error("Session transition superseded");
+    }
 
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
@@ -210,7 +215,9 @@ export class RemoteController {
     const beforeGen = this.generation;
 
     const session = await agent.sessions.create(options);
-    if (this.generation !== beforeGen) return session;
+    if (this.generation !== beforeGen) {
+      throw new Error("Session transition superseded");
+    }
 
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
@@ -261,6 +268,7 @@ export class RemoteController {
       whenBusy,
     });
     if (this.state.session?.id === session.id && this.state.session.status === "idle") {
+      this.eventSeq += 1;
       this.setState({
         ...this.state,
         session: { ...this.state.session, status: "running" },
@@ -410,11 +418,13 @@ export class RemoteController {
   }
 
   private refreshSession(gen: number, agent: Agent, sessionId: string): void {
+    const seqAtStart = this.eventSeq;
     void agent.sessions
       .get(sessionId)
       .then((fresh) => {
         if (this.generation !== gen || this.state.session?.id !== sessionId) return;
-        this.setState({ ...this.state, session: fresh });
+        const session = this.eventSeq === seqAtStart ? fresh : { ...this.state.session, usage: fresh.usage };
+        this.setState({ ...this.state, session });
       })
       .catch(() => {
         // Ignore transient refresh failures; the active event stream or reconnect snapshot will resync state.
@@ -422,6 +432,7 @@ export class RemoteController {
   }
 
   private applyEvent(gen: number, agent: Agent, sessionId: string, event: SessionEvent, replayed: boolean): void {
+    this.eventSeq += 1;
     switch (event.type) {
       case "state": {
         const reply = event.session.reply;

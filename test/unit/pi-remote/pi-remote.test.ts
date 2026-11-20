@@ -519,6 +519,63 @@ describe("RemoteController", () => {
     controller.disconnect();
   });
 
+  it("does not overwrite newer running status when a stale done refresh resolves later", async () => {
+    const stream = createEventStream();
+    const { agent } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    let resolveRefresh!: (session: Session) => void;
+    agent.sessions.get = () =>
+      new Promise<Session>((resolve) => {
+        resolveRefresh = resolve;
+      });
+
+    const controller = new RemoteController({}, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+    stream.control.push({
+      type: "done",
+      message: { id: "m-1", sessionId: "sess-1", status: "completed" },
+    });
+    await flushMicrotasks();
+
+    // Next queued turn starts before the slow sessions.get() resolves.
+    stream.control.push({ type: "delta", channel: "text", text: "next turn" });
+    await flushMicrotasks();
+    expect(controller.getState().session?.status).toBe("running");
+
+    resolveRefresh({
+      id: "sess-1",
+      status: "idle",
+      usage: { models: { "openai/gpt-6-luna": { inputTokens: 50, outputTokens: 20, cost: 0.005 } }, tools: {} },
+    });
+    await flushMicrotasks();
+
+    // Status remains running while usage is still merged.
+    expect(controller.getState().session?.status).toBe("running");
+    expect(controller.getState().session?.usage.models["openai/gpt-6-luna"]?.outputTokens).toBe(20);
+    controller.disconnect();
+  });
+
+  it("rejects connect and switchSession if superseded by disconnect while in flight", async () => {
+    const { agent } = makeFakeAgent();
+    let resolveGet!: (session: Session) => void;
+    agent.sessions.get = () =>
+      new Promise<Session>((resolve) => {
+        resolveGet = resolve;
+      });
+
+    const controller = new RemoteController({}, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+
+    const switchPromise = controller.switchSession("sess-2");
+    await flushMicrotasks();
+    controller.disconnect();
+    resolveGet(makeSession("sess-2"));
+
+    await expect(switchPromise).rejects.toThrow(/Session transition superseded/);
+    expect(controller.getState().status).toBe("disconnected");
+  });
+
   it("builds text and image ContentParts for send", () => {
     expect(buildSendContent("hello")).toBe("hello");
     expect(buildSendContent("check this", [{ mimeType: "image/png", data: "abc" }])).toEqual([
@@ -687,6 +744,11 @@ describe("Pi extension host integration", () => {
           res.end(JSON.stringify(makeSession("sess-live")));
           return;
         }
+        if (req.method === "GET" && url.pathname === "/v1/sessions/sess-live") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(makeSession("sess-live")));
+          return;
+        }
         if (req.method === "GET" && url.pathname === "/v1/sessions/sess-live/events") {
           res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
           res.write(
@@ -822,7 +884,7 @@ describe("Pi extension host integration", () => {
       expect(loadRemotes({ path: join(dir, "empty-remotes.json") }).config.remotes["two-arg"]?.type).toBe("http");
       await fa.handler("disconnect", mock.ctx);
 
-      // /fa new triggers ctx.newSession() handoff when supported to isolate transcripts.
+      // /fa new triggers ctx.newSession() handoff cleanly without recursion or 404 errors.
       let newSessionCalls = 0;
       mock.ctx.newSession = async (opts: any) => {
         newSessionCalls += 1;
@@ -831,8 +893,19 @@ describe("Pi extension host integration", () => {
         return { cancelled: false };
       };
       await fa.handler("connect two-arg", mock.ctx);
+      const errorsBeforeNew = mock.notifications.filter((n) => n.type === "error").length;
       await fa.handler("new", mock.ctx);
       expect(newSessionCalls).toBe(1);
+      expect(mock.notifications.filter((n) => n.type === "error").length).toBe(errorsBeforeNew);
+      expect(mock.getFooter()).toBeDefined();
+      await fa.handler("disconnect", mock.ctx);
+
+      // --fa startup flag only auto-connects on reason === "startup", never on local /new after disconnect.
+      mock.pi.getFlag = (name: string) => (name === "fa" ? "two-arg" : undefined);
+      await sessionStart({ type: "session_start", reason: "new" }, mock.ctx);
+      expect(mock.getFooter()).toBeUndefined();
+      await sessionStart({ type: "session_start", reason: "startup" }, mock.ctx);
+      expect(mock.getFooter()).toBeDefined();
       await fa.handler("disconnect", mock.ctx);
     } finally {
       if (prevPath === undefined) delete process.env.FASTAGENT_REMOTES_PATH;
