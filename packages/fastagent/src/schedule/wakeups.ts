@@ -152,6 +152,17 @@ export function removeAnyWakeup(clock: ClockStore, id: string): Promise<Wakeup |
   return removeWhere(clock, (w) => w.id === id);
 }
 
+/** Remove every pending wake-up belonging to `session` (e.g. when the session is deleted). */
+export async function removeSessionWakeups(clock: ClockStore, session: string): Promise<number> {
+  if (!(await clock.stored.wakeups()).some((w) => w.session === session)) return 0;
+  return clock.wakeups((current) => {
+    const all = valid(current);
+    const kept = all.filter((w) => w.session !== session);
+    const removed = all.length - kept.length;
+    return removed === 0 ? { result: 0 } : { next: kept, result: removed };
+  });
+}
+
 async function removeWhere(clock: ClockStore, match: (w: Wakeup) => boolean): Promise<Wakeup | undefined> {
   // Nothing to remove is answered from what is stored, committing nothing.
   if (!(await clock.stored.wakeups()).some(match)) return undefined;

@@ -86,6 +86,7 @@ import { messageStream } from "./stream.ts";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type ClockState, clockOperations } from "../../schedule/operations.ts";
 import type { ClockStore } from "../../schedule/clock.ts";
+import { removeSessionWakeups } from "../../schedule/wakeups.ts";
 import { clockStore } from "./clock.ts";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
@@ -469,6 +470,8 @@ function durableAgent(
         let submitting = false;
         const admitted = yield* fromPromise(() =>
           conversation.commit(async (tx) => {
+            const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return { kind: "deleted" } as const;
             if (request.idempotencyKey !== undefined) {
               const seen = await tx.submissionByRequest(conversation.id, requestId);
               if (isInput(seen)) return { kind: "seen", seen } as const;
@@ -491,7 +494,7 @@ function durableAgent(
             if (request.metadata !== undefined) {
               (await tx.doc(MetadataDoc, String(id), null)).metadata = { ...request.metadata };
             }
-            (await tx.doc(SessionMetaDoc, conversation.id)).updatedAt = Date.now();
+            meta.updatedAt = Date.now();
             return { kind: "admitted", id } as const;
           }, context),
         ).pipe(
@@ -504,6 +507,9 @@ function durableAgent(
             return submitting ? Effect.fail(unconfirmed(conversation, undefined, error)) : Effect.failCause(cause);
           }),
         );
+        if (admitted.kind === "deleted") {
+          return yield* agentError("not_found", `No session ${request.sessionId}`);
+        }
         if (admitted.kind === "seen") return { message: yield* reads.message(admitted.seen), replayed: true };
         if (admitted.kind === "capacity") {
           return yield* agentError("busy", `This agent already holds ${LIMITS.inFlightPerProcess} messages`, {
@@ -686,31 +692,47 @@ function durableAgent(
         const { title, ...agentChanges } = decoded;
         const hasAgentChange = Object.values(agentChanges).some((value) => value !== undefined);
         const change = hasAgentChange ? yield* changeOf(agentChanges) : undefined;
-        yield* fromPromise(() =>
+        const updated = yield* fromPromise(() =>
           harness.commit(async (tx) => {
-            if (change !== undefined) await configure(tx, conversation.id, change);
             const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return false;
+            if (change !== undefined) await configure(tx, conversation.id, change);
             if (title !== undefined) meta.title = title;
             meta.updatedAt = Date.now();
+            return true;
           }, context),
         );
+        if (!updated) return yield* agentError("not_found", `No session ${sessionId}`);
         return yield* reads.session(conversation);
       }),
     );
+
+  const clock =
+    options.clock === undefined
+      ? undefined
+      : { store: clockStore(harness, context), schedules: options.clock.schedules };
 
   const remove = (sessionId: string): Promise<void> =>
     settle(
       Effect.gen(function* () {
         const conversation = yield* conversationOf(sessionId);
-        yield* fromPromise(async () => {
-          await conversation.abort(context).catch((error: unknown) => {
-            if (!closing) log.warn(`[fastagent] aborting session ${sessionId} during delete failed: ${String(error)}`);
-          });
-          await harness.commit(async (tx) => {
+        const marked = yield* fromPromise(() =>
+          harness.commit(async (tx) => {
             const meta = await tx.doc(SessionMetaDoc, conversation.id);
+            if (meta.deleted) return false;
             meta.deleted = true;
             meta.updatedAt = Date.now();
-          }, context);
+            return true;
+          }, context),
+        );
+        if (!marked) return yield* agentError("not_found", `No session ${sessionId}`);
+        yield* fromPromise(async () => {
+          if (clock !== undefined) await removeSessionWakeups(clock.store, sessionId);
+          try {
+            await conversation.abort(context);
+          } catch (error: unknown) {
+            if (!closing) throw error;
+          }
         });
       }),
     );
@@ -867,10 +889,6 @@ function durableAgent(
   const getSession = (sessionId: string): Promise<Session> =>
     settle(conversationOf(sessionId).pipe(Effect.flatMap(reads.session)));
   const messages = { send, stream, get };
-  const clock =
-    options.clock === undefined
-      ? undefined
-      : { store: clockStore(harness, context), schedules: options.clock.schedules };
   return {
     harness,
     ...(clock === undefined ? {} : { clock: clock.store }),

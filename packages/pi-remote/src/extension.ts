@@ -663,7 +663,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             const age = formatRelativeTime(s.updatedAt ?? s.createdAt);
             const agePart = age ? ` · ${age}` : "";
             const model = s.model ? ` [${s.model.provider}/${s.model.modelId}]` : "";
-            return `${mark}${title}${shortId(s.id)} (${s.status}${agePart})${model}`;
+            return `${mark}${title}${s.id} (${s.status}${agePart})${model}`;
           });
           const picked = await ctx.ui.select("Switch remote session", labels);
           if (!picked) return;
@@ -729,7 +729,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             const labels = sessions.map((s) => {
               const mark = s.id === currentId ? "* " : "  ";
               const title = s.title ? `${s.title} · ` : "";
-              return `${mark}${title}${shortId(s.id)} (${s.status})`;
+              return `${mark}${title}${s.id} (${s.status})`;
             });
             const picked = await ctx.ui.select("Delete remote session", labels);
             if (!picked) return;

@@ -288,13 +288,25 @@ export class RemoteController {
       content,
       whenBusy,
     });
-    if (this.state.session?.id === session.id && this.state.session.status === "idle") {
-      this.eventSeq += 1;
-      this.setState({
-        ...this.state,
-        session: { ...this.state.session, status: "running" },
-        lastError: undefined,
-      });
+    if (this.state.session?.id === session.id) {
+      const nextSession =
+        this.state.session.status === "idle"
+          ? { ...this.state.session, status: "running" as const }
+          : this.state.session;
+      let nextQueued = this.state.queuedMessages;
+      if (message.status === "queued" && !nextQueued.some((q) => q.id === message.id)) {
+        const mode: QueuedMessage["mode"] = whenBusy === "steer" ? "steer" : "queue";
+        nextQueued = [...nextQueued, { id: message.id, mode }];
+      }
+      if (nextSession !== this.state.session || nextQueued !== this.state.queuedMessages) {
+        this.eventSeq += 1;
+        this.setState({
+          ...this.state,
+          session: nextSession,
+          queuedMessages: nextQueued,
+          lastError: undefined,
+        });
+      }
     }
     return message;
   }
@@ -302,7 +314,16 @@ export class RemoteController {
   async cancel(): Promise<{ stopped: string[] }> {
     const agent = this.requireAgent();
     const session = this.requireSession();
-    return agent.sessions.cancel(session.id);
+    const result = await agent.sessions.cancel(session.id);
+    if (this.state.session?.id === session.id && result.stopped.length > 0) {
+      const stoppedSet = new Set(result.stopped);
+      const remaining = this.state.queuedMessages.filter((q) => !stoppedSet.has(q.id));
+      if (remaining.length !== this.state.queuedMessages.length) {
+        this.eventSeq += 1;
+        this.setState({ ...this.state, queuedMessages: remaining });
+      }
+    }
+    return result;
   }
 
   async compact(instructions?: string): Promise<void> {
@@ -553,9 +574,16 @@ export class RemoteController {
         let nextRetrying = this.state.retrying;
 
         let nextSession = this.state.session;
+        let nextQueued = this.state.queuedMessages;
         let nextCompacting = this.state.compacting;
-        if (entry.kind === "user" && !replayed && nextSession?.status === "idle") {
-          nextSession = { ...nextSession, status: "running" };
+        if (entry.kind === "user") {
+          const data = entry.data as { messageId?: unknown } | null;
+          if (data && typeof data.messageId === "string") {
+            nextQueued = nextQueued.filter((q) => q.id !== data.messageId);
+          }
+          if (!replayed && nextSession?.status === "idle") {
+            nextSession = { ...nextSession, status: "running" };
+          }
         } else if (entry.kind === "assistant") {
           nextLiveReply = undefined;
           nextRetrying = undefined;
@@ -574,6 +602,7 @@ export class RemoteController {
           lastEntryId: entry.id,
           liveReply: nextLiveReply,
           activeTools: nextActiveTools,
+          queuedMessages: nextQueued,
           compacting: nextCompacting,
           retrying: nextRetrying,
         });
@@ -592,6 +621,7 @@ export class RemoteController {
           ...(session !== undefined ? { session } : {}),
           liveReply: undefined,
           activeTools: [],
+          queuedMessages: this.state.queuedMessages.filter((q) => q.id !== event.message.id),
           retrying: undefined,
           ...(failed !== undefined ? { lastError: failed } : {}),
         });

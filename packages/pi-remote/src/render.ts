@@ -149,7 +149,12 @@ function formatUsageTotals(usage: Usage | undefined): string {
 }
 
 export function shortId(id: string): string {
-  return id.length <= 12 ? id : `${id.slice(0, 8)}…`;
+  if (id.length <= 12) return id;
+  const dot = id.lastIndexOf(".");
+  if (dot > 0 && dot < id.length - 1) {
+    return `${id.slice(0, 4)}…${id.slice(dot)}`;
+  }
+  return `${id.slice(0, 4)}…${id.slice(-4)}`;
 }
 
 export function formatRelativeTime(timestamp: number | undefined, now = Date.now()): string {

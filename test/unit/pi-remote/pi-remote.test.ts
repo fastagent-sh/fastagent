@@ -638,6 +638,33 @@ describe("RemoteController", () => {
     expect(controller.getState().status).toBe("disconnected");
   });
 
+  it("tracks queuedMessages live when send() returns queued and removes them when placed or canceled", async () => {
+    const stream = createEventStream();
+    const { agent } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    const controller = new RemoteController({}, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+    stream.control.push({ type: "state", session: makeSession("sess-1", "running") });
+    await flushMicrotasks();
+
+    const msg = await controller.send("follow up", { whenBusy: "queue" });
+    expect(controller.getState().queuedMessages).toEqual([{ id: msg.id, mode: "queue" }]);
+
+    stream.control.push({
+      type: "entry",
+      entry: {
+        id: "e-q",
+        timestamp: 10,
+        kind: "user",
+        data: { content: [{ type: "text", text: "follow up" }], messageId: msg.id },
+      },
+    });
+    await flushMicrotasks();
+    expect(controller.getState().queuedMessages).toEqual([]);
+    controller.disconnect();
+  });
+
   it("builds text and image ContentParts for send", () => {
     expect(buildSendContent("hello")).toBe("hello");
     expect(buildSendContent("check this", [{ mimeType: "image/png", data: "abc" }])).toEqual([
@@ -775,6 +802,7 @@ describe("Pi extension host integration", () => {
     const sentPayloads: Array<{ path: string; body: unknown }> = [];
     const canceledSessions: string[] = [];
     const compactedSessions: string[] = [];
+    const deletedSessions: string[] = [];
 
     const server = createServer((req, res) => {
       if (req.headers.authorization !== "Bearer test-key") {
@@ -818,7 +846,17 @@ describe("Pi extension host integration", () => {
           res.end(JSON.stringify({ ...makeSession("sess-live"), ...(title ? { title } : {}) }));
           return;
         }
-        if (req.method === "DELETE" && url.pathname === "/v1/sessions/sess-live") {
+        if (req.method === "GET" && url.pathname === "/v1/sessions") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              data: [makeSession("ml3sHksQuVE.25"), makeSession("ml3sHksQuVE.3")],
+            }),
+          );
+          return;
+        }
+        if (req.method === "DELETE" && url.pathname.startsWith("/v1/sessions/")) {
+          deletedSessions.push(url.pathname.slice("/v1/sessions/".length));
           res.writeHead(204);
           res.end();
           return;
@@ -984,7 +1022,15 @@ describe("Pi extension host integration", () => {
       expect(mock.getFooter()).toBeUndefined();
       await sessionStart({ type: "session_start", reason: "startup" }, mock.ctx);
       expect(mock.getFooter()).toBeDefined();
+
+      // Interactive /fa delete with shared FastAgent incarnation prefix must delete the selected second session, not index 0.
+      mock.ctx.ui.select = async (_title: string, options: string[]) => options[1];
+      await fa.handler("delete", mock.ctx);
+      expect(deletedSessions).toEqual(["ml3sHksQuVE.3"]);
+      expect(mock.getFooter()).toBeDefined();
+
       await fa.handler("delete sess-live", mock.ctx);
+      expect(deletedSessions).toEqual(["ml3sHksQuVE.3", "sess-live"]);
       expect(mock.getFooter()).toBeUndefined();
     } finally {
       if (prevPath === undefined) delete process.env.FASTAGENT_REMOTES_PATH;

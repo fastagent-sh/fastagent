@@ -660,12 +660,20 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const started = events.find((event) => event.type === "tool_started");
         expect(started).toMatchObject({ type: "tool_started", name: "stream", args: {} });
         const callId = (started as { toolCallId: string }).toolCallId;
-        const lines = events.flatMap((event) =>
-          event.type === "tool_progress" && event.toolCallId === callId ? [event.text] : [],
+        const progressEvents = events.filter(
+          (event): event is Extract<SessionEvent, { type: "tool_progress" }> =>
+            event.type === "tool_progress" && event.toolCallId === callId,
         );
+        const lines = progressEvents.map((event) => event.text);
         expect(lines.length).toBeGreaterThan(0);
         expect(lines.every((line) => ["one", "two", "three of the lines"].includes(line))).toBe(true);
         expect(new Set(lines).size).toBe(lines.length);
+        // When multiple lines accumulate before the tool finishes, optional multi-line output is included.
+        if (lines.length > 1) {
+          expect(progressEvents.some((event) => typeof event.output === "string" && event.output.includes("\n"))).toBe(
+            true,
+          );
+        }
         const result = events.findIndex((event) => event.type === "entry" && event.entry.kind === "tool_result");
         expect(events.indexOf(started as SessionEvent)).toBeLessThan(result);
         expect(events.slice(result).some((event) => event.type === "tool_progress")).toBe(false);
@@ -1071,11 +1079,26 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           code: "invalid_request",
         });
 
-        // Deleting a busy session aborts its active work and removes it from every read and write surface.
+        // Deleting a busy session aborts active work, clears pending wakeups, and removes it atomically.
+        const wake = await addWakeup(subject.clock(), {
+          session: created.id,
+          prompt: "follow up",
+          fireAt: new Date(Date.now() + 3_600_000),
+        });
+        expect(wake.ok).toBe(true);
         await send({ sessionId: created.id, content: "hold" });
         await holding();
-        await agent.sessions.delete(created.id);
+        const [firstDelete, secondDelete] = await Promise.allSettled([
+          agent.sessions.delete(created.id),
+          agent.sessions.delete(created.id),
+        ]);
+        const fulfilled = [firstDelete, secondDelete].filter((r) => r.status === "fulfilled");
+        const rejected = [firstDelete, secondDelete].filter((r) => r.status === "rejected");
+        expect(fulfilled).toHaveLength(1);
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "not_found" });
         expect(subject.signalled()).toBeGreaterThan(0);
+        expect((await agent.wakeups.list()).filter((w) => w.sessionId === created.id)).toEqual([]);
 
         await expect(agent.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
         await expect(agent.sessions.delete(created.id)).rejects.toMatchObject({ code: "not_found" });
