@@ -122,33 +122,44 @@ export class RemoteController {
     return this.agent !== undefined && this.state.session !== undefined && this.state.status !== "disconnected";
   }
 
-  async connect(remoteName: string, agent: Agent, options: { sessionId?: string } = {}): Promise<Session> {
-    const gen = this.nextGeneration();
-    this.agent = agent;
-    this.seenEntryIds.clear();
-    this.setState({
-      status: "connecting",
-      remoteName,
-      activeTools: [],
-    });
+  async connect(
+    remoteName: string,
+    agent: Agent,
+    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string> } = {},
+  ): Promise<Session> {
+    const wasConnected = this.isConnected();
+    const beforeGen = wasConnected ? this.generation : this.nextGeneration();
+    if (!wasConnected) {
+      this.setState({
+        status: "connecting",
+        remoteName,
+        activeTools: [],
+      });
+    }
 
     try {
       const info = await agent.info();
-      if (this.generation !== gen) return this.requireSession();
+      if (this.generation !== beforeGen) {
+        throw new Error("Connection canceled");
+      }
       const session = options.sessionId ? await agent.sessions.get(options.sessionId) : await agent.sessions.create();
-      if (this.generation !== gen) return session;
+      if (this.generation !== beforeGen) return session;
 
+      const gen = wasConnected ? this.nextGeneration() : beforeGen;
+      this.agent = agent;
+      this.seenEntryIds = new Set(options.seenEntryIds ?? []);
       this.setState({
         status: "connected",
         remoteName,
         agentInfo: info,
         session,
         activeTools: [],
+        ...(options.after && options.after !== "start" ? { lastEntryId: options.after } : {}),
       });
-      this.startEventLoop(gen, agent, session.id, options.sessionId ? "start" : undefined);
+      this.startEventLoop(gen, agent, session.id, options.after ?? "start");
       return session;
     } catch (error) {
-      if (this.generation === gen) {
+      if (!wasConnected && this.generation === beforeGen) {
         this.agent = undefined;
         this.setState({
           status: "disconnected",
@@ -174,12 +185,13 @@ export class RemoteController {
     const agent = this.requireAgent();
     const remoteName = this.state.remoteName;
     const agentInfo = this.state.agentInfo;
-    const gen = this.nextGeneration();
-    this.seenEntryIds.clear();
+    const beforeGen = this.generation;
 
     const session = await agent.sessions.get(sessionId);
-    if (this.generation !== gen) return session;
+    if (this.generation !== beforeGen) return session;
 
+    const gen = this.nextGeneration();
+    this.seenEntryIds.clear();
     this.setState({
       status: "connected",
       ...(remoteName !== undefined ? { remoteName } : {}),
@@ -195,12 +207,13 @@ export class RemoteController {
     const agent = this.requireAgent();
     const remoteName = this.state.remoteName;
     const agentInfo = this.state.agentInfo;
-    const gen = this.nextGeneration();
-    this.seenEntryIds.clear();
+    const beforeGen = this.generation;
 
     const session = await agent.sessions.create(options);
-    if (this.generation !== gen) return session;
+    if (this.generation !== beforeGen) return session;
 
+    const gen = this.nextGeneration();
+    this.seenEntryIds.clear();
     this.setState({
       status: "connected",
       ...(remoteName !== undefined ? { remoteName } : {}),
@@ -208,13 +221,29 @@ export class RemoteController {
       session,
       activeTools: [],
     });
-    this.startEventLoop(gen, agent, session.id, options?.forkFrom ? "start" : undefined);
+    this.startEventLoop(gen, agent, session.id, "start");
     return session;
   }
 
   async forkSession(entryId?: string): Promise<Session> {
     const session = this.requireSession();
     return this.createSession({
+      forkFrom: {
+        sessionId: session.id,
+        ...(entryId !== undefined ? { entryId } : {}),
+      },
+    });
+  }
+
+  /** Create a remote session without switching this controller's active stream. */
+  async createRemoteSession(options?: CreateSessionOptions): Promise<Session> {
+    return this.requireAgent().sessions.create(options);
+  }
+
+  /** Fork the active remote session on the server without switching this controller's active stream. */
+  async forkRemoteSession(entryId?: string): Promise<Session> {
+    const session = this.requireSession();
+    return this.createRemoteSession({
       forkFrom: {
         sessionId: session.id,
         ...(entryId !== undefined ? { entryId } : {}),
@@ -341,7 +370,7 @@ export class RemoteController {
               }
               break;
             }
-            this.applyEvent(event, !sawSnapshot);
+            this.applyEvent(gen, agent, sessionId, event, !sawSnapshot);
           }
         } catch (error) {
           if (this.generation !== gen || abort.signal.aborted) return;
@@ -380,7 +409,19 @@ export class RemoteController {
     })();
   }
 
-  private applyEvent(event: SessionEvent, replayed: boolean): void {
+  private refreshSession(gen: number, agent: Agent, sessionId: string): void {
+    void agent.sessions
+      .get(sessionId)
+      .then((fresh) => {
+        if (this.generation !== gen || this.state.session?.id !== sessionId) return;
+        this.setState({ ...this.state, session: fresh });
+      })
+      .catch(() => {
+        // Ignore transient refresh failures; the active event stream or reconnect snapshot will resync state.
+      });
+  }
+
+  private applyEvent(gen: number, agent: Agent, sessionId: string, event: SessionEvent, replayed: boolean): void {
     switch (event.type) {
       case "state": {
         const reply = event.session.reply;
@@ -446,7 +487,10 @@ export class RemoteController {
         let nextActiveTools = this.state.activeTools;
         let nextRetrying = this.state.retrying;
 
-        if (entry.kind === "assistant") {
+        let nextSession = this.state.session;
+        if (entry.kind === "user" && !replayed && nextSession?.status === "idle") {
+          nextSession = { ...nextSession, status: "running" };
+        } else if (entry.kind === "assistant") {
           nextLiveReply = undefined;
           nextRetrying = undefined;
         } else if (entry.kind === "tool_result") {
@@ -458,6 +502,7 @@ export class RemoteController {
 
         this.setState({
           ...this.state,
+          ...(nextSession !== undefined ? { session: nextSession } : {}),
           lastEntryId: entry.id,
           liveReply: nextLiveReply,
           activeTools: nextActiveTools,
@@ -482,6 +527,7 @@ export class RemoteController {
           ...(failed !== undefined ? { lastError: failed } : {}),
         });
         this.callbacks.onDone?.(event.message);
+        this.refreshSession(gen, agent, sessionId);
         return;
       }
       case "stream_error":

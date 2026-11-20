@@ -2,7 +2,8 @@
  * Local remote-agent configuration (`~/.config/fastagent/remotes.json`) and connection factory for HTTP and
  * Amazon Bedrock AgentCore deployments.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
@@ -67,6 +68,16 @@ function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
     if (typeof obj.url !== "string" || obj.url.trim() === "") {
       throw new Error(`Remote "${name}" requires a non-empty "url"`);
     }
+    const trimmedUrl = obj.url.trim();
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(trimmedUrl);
+    } catch {
+      throw new Error(`Remote "${name}" has invalid URL "${trimmedUrl}" (expected http:// or https://)`);
+    }
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      throw new Error(`Remote "${name}" has invalid URL "${trimmedUrl}" (expected http:// or https://)`);
+    }
     if (obj.apiKey !== undefined && typeof obj.apiKey !== "string") {
       throw new Error(`Remote "${name}" field "apiKey" must be a string`);
     }
@@ -75,7 +86,7 @@ function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
     }
     return {
       type: "http",
-      url: obj.url.trim(),
+      url: trimmedUrl,
       ...(obj.apiKey !== undefined ? { apiKey: obj.apiKey } : {}),
       ...(obj.sessionId !== undefined ? { sessionId: obj.sessionId } : {}),
     };
@@ -143,10 +154,15 @@ export function loadRemotes(options: LoadRemotesOptions = {}): { path: string; c
 
 function writeRemotesFile(path: string, config: RemotesFile): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, path);
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch (error) {
+    rmSync(tmp, { force: true });
+    throw error;
+  }
 }
 
 export function saveRemote(
@@ -198,7 +214,7 @@ export async function connectRemote(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ agent: Agent; defaultSessionId?: string }> {
   if (remote.type === "http") {
-    const rawKey = remote.apiKey ?? env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
+    const rawKey = remote.apiKey?.trim() || env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
     if (!rawKey) {
       throw new Error(`Remote "${name}" has no apiKey configured and FASTAGENT_API_KEY is not set`);
     }

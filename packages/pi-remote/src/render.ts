@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, type Component, Container, Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContentPart, Entry, Json, Tokens, Usage } from "@fastagent-sh/client";
-import type { ActiveTool, RemoteViewState } from "./controller.ts";
+import type { ActiveTool, LiveReply, RemoteViewState } from "./controller.ts";
 
 export interface RemoteEntryPayload {
   remoteName: string;
@@ -240,11 +240,20 @@ function renderActiveToolLine(tool: ActiveTool, theme: Theme): string {
 
 export function createLiveWidgetComponent(getState: () => RemoteViewState, theme: Theme): Component {
   const markdownTheme = getMarkdownTheme();
+  let msgComp: AssistantMessageComponent | undefined;
+  let lastReply: LiveReply | undefined;
+
   return {
-    invalidate() {},
+    invalidate() {
+      msgComp?.invalidate();
+    },
     render(width: number): string[] {
       const state = getState();
-      if (!hasLiveContent(state)) return [];
+      if (!hasLiveContent(state)) {
+        msgComp = undefined;
+        lastReply = undefined;
+        return [];
+      }
 
       const container = new Container();
       const label = state.remoteName ?? "remote";
@@ -271,22 +280,30 @@ export function createLiveWidgetComponent(getState: () => RemoteViewState, theme
       }
 
       if (state.liveReply && (state.liveReply.text.length > 0 || state.liveReply.thinking.length > 0)) {
-        const content: AssistantMessage["content"] = [];
-        if (state.liveReply.thinking) content.push({ type: "thinking", thinking: state.liveReply.thinking });
-        if (state.liveReply.text) content.push({ type: "text", text: state.liveReply.text });
-        const partial: AssistantMessage = {
-          role: "assistant",
-          content,
-          api: "fastagent-remote",
-          provider: "fastagent",
-          model: state.session?.model?.modelId ?? "remote",
-          usage: ZERO_USAGE,
-          stopReason: "pending",
-          timestamp: Date.now(),
-        };
-        const msgComp = new AssistantMessageComponent(partial, false, markdownTheme, undefined, 1);
-        msgComp.updateContent(partial, true);
+        if (!msgComp) {
+          msgComp = new AssistantMessageComponent(undefined, false, markdownTheme, undefined, 1);
+        }
+        if (state.liveReply !== lastReply) {
+          lastReply = state.liveReply;
+          const content: AssistantMessage["content"] = [];
+          if (state.liveReply.thinking) content.push({ type: "thinking", thinking: state.liveReply.thinking });
+          if (state.liveReply.text) content.push({ type: "text", text: state.liveReply.text });
+          const partial: AssistantMessage = {
+            role: "assistant",
+            content,
+            api: "fastagent-remote",
+            provider: "fastagent",
+            model: state.session?.model?.modelId ?? "remote",
+            usage: ZERO_USAGE,
+            stopReason: "pending",
+            timestamp: Date.now(),
+          };
+          msgComp.updateContent(partial, true);
+        }
         container.addChild(msgComp);
+      } else {
+        msgComp = undefined;
+        lastReply = undefined;
       }
 
       for (const tool of state.activeTools) {

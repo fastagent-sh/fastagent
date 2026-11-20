@@ -206,6 +206,16 @@ async function flushMicrotasks(turns = 6): Promise<void> {
   }
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("remotes config", () => {
   it("returns empty remotes when config file does not exist", () => {
     const dir = makeTempDir();
@@ -261,6 +271,13 @@ describe("remotes config", () => {
 
     writeFileSync(cfgPath, JSON.stringify({ remotes: { bad: { type: "grpc", url: "http://localhost" } } }));
     expect(() => loadRemotes({ path: cfgPath })).toThrow(/unsupported type "grpc"/);
+
+    writeFileSync(cfgPath, JSON.stringify({ remotes: { badUrl: { url: "not-a-url" } } }));
+    expect(() => loadRemotes({ path: cfgPath })).toThrow(/invalid URL "not-a-url"/);
+
+    expect(() => saveRemote("ftp-bad", { type: "http", url: "ftp://example.com" }, { path: cfgPath })).toThrow(
+      /invalid URL "ftp:\/\/example\.com"/,
+    );
   });
 
   it("saves and removes remotes with 0600 permissions and maintains default", () => {
@@ -377,7 +394,10 @@ describe("RemoteController", () => {
     });
     await flushMicrotasks(12);
 
-    expect(eventCalls).toEqual([{ sessionId: "sess-1" }, { sessionId: "sess-1", after: "e-1" }]);
+    expect(eventCalls).toEqual([
+      { sessionId: "sess-1", after: "start" },
+      { sessionId: "sess-1", after: "e-1" },
+    ]);
 
     // Server replays e-1 again plus new e-2: e-1 must not be emitted twice.
     streams[1]!.control.push({
@@ -444,6 +464,61 @@ describe("RemoteController", () => {
     controller.disconnect();
   });
 
+  it("keeps the existing session stream alive when switchSession fails", async () => {
+    const stream = createEventStream();
+    const { agent } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    agent.sessions.get = async (id) => {
+      if (id === "missing") throw new AgentError({ code: "not_found", message: "no such session", retryable: false });
+      return makeSession(id);
+    };
+
+    const received: string[] = [];
+    const controller = new RemoteController({ onEntry: (entry) => received.push(entry.id) }, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+
+    await expect(controller.switchSession("missing")).rejects.toThrow(/no such session/);
+
+    // Original session stream must still be active and delivering events.
+    stream.control.push({
+      type: "entry",
+      entry: { id: "still-alive", timestamp: 3, kind: "assistant", data: { text: "ok" } },
+    });
+    await flushMicrotasks();
+
+    expect(controller.getState().session?.id).toBe("sess-1");
+    expect(received).toEqual(["still-alive"]);
+    controller.disconnect();
+  });
+
+  it("refreshes session usage from server when a turn finishes", async () => {
+    const stream = createEventStream();
+    const { agent } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    agent.sessions.get = async (id) => ({
+      id,
+      status: "idle",
+      usage: { models: { "openai/gpt-6-luna": { inputTokens: 120, outputTokens: 45, cost: 0.012 } }, tools: {} },
+    });
+
+    const controller = new RemoteController({}, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+    stream.control.push({
+      type: "done",
+      message: { id: "m-1", sessionId: "sess-1", status: "completed" },
+    });
+    await flushMicrotasks(10);
+
+    expect(controller.getState().session?.usage.models["openai/gpt-6-luna"]).toEqual({
+      inputTokens: 120,
+      outputTokens: 45,
+      cost: 0.012,
+    });
+    controller.disconnect();
+  });
+
   it("builds text and image ContentParts for send", () => {
     expect(buildSendContent("hello")).toBe("hello");
     expect(buildSendContent("check this", [{ mimeType: "image/png", data: "abc" }])).toEqual([
@@ -487,6 +562,8 @@ describe("Pi extension host integration", () => {
     const notifications: Array<{ message: string; type?: string }> = [];
     const widgets = new Map<string, unknown>();
     let footer: unknown;
+    let footerSetCount = 0;
+    let autocompleteCount = 0;
     let terminalListener: ((data: string) => any) | undefined;
 
     const pi: any = {
@@ -527,9 +604,12 @@ describe("Pi extension host integration", () => {
         },
         setFooter(factory: unknown) {
           footer = factory;
+          if (factory !== undefined) footerSetCount += 1;
         },
         setStatus() {},
-        addAutocompleteProvider() {},
+        addAutocompleteProvider() {
+          autocompleteCount += 1;
+        },
         onTerminalInput(fn: (data: string) => any) {
           terminalListener = fn;
           return () => {
@@ -550,6 +630,8 @@ describe("Pi extension host integration", () => {
       notifications,
       widgets,
       getFooter: () => footer,
+      getFooterSetCount: () => footerSetCount,
+      getAutocompleteCount: () => autocompleteCount,
       sendTerminalInput: (data: string) => terminalListener?.(data),
     };
   }
@@ -662,12 +744,24 @@ describe("Pi extension host integration", () => {
       const fa = mock.commands.get("fa")!;
       await fa.handler("connect ops", mock.ctx);
 
-      // Wait briefly for the loopback SSE state + entry frames to arrive.
-      await new Promise((resolve) => setTimeout(resolve, 60));
+      await waitFor(() => mock.appendedEntries.some((entry) => entry.customType === REMOTE_ENTRY_TYPE));
 
       expect(mock.getFooter()).toBeDefined();
-      expect(mock.appendedEntries).toHaveLength(1);
-      expect(mock.appendedEntries[0]?.customType).toBe(REMOTE_ENTRY_TYPE);
+      const remoteEntries = mock.appendedEntries.filter((entry) => entry.customType === REMOTE_ENTRY_TYPE);
+      expect(remoteEntries).toHaveLength(1);
+      // Persisted remote binding must not contain raw API keys.
+      const bindings = mock.appendedEntries.filter((entry) => entry.customType === "fastagent-remote-binding");
+      expect(bindings).toEqual([
+        { customType: "fastagent-remote-binding", data: { remoteName: "ops", sessionId: "sess-live" } },
+      ]);
+
+      // Re-entering session_start (e.g. after local /new) must re-mount footer and autocomplete.
+      const beforeFooterCount = mock.getFooterSetCount();
+      const beforeAutocompleteCount = mock.getAutocompleteCount();
+      const sessionStart = mock.handlers.get("session_start")![0]!;
+      await sessionStart({ type: "session_start", reason: "new" }, mock.ctx);
+      expect(mock.getFooterSetCount()).toBeGreaterThan(beforeFooterCount);
+      expect(mock.getAutocompleteCount()).toBeGreaterThan(beforeAutocompleteCount);
 
       // User input is intercepted and forwarded to remote agent.
       const inputHandler = mock.handlers.get("input")![0]!;
@@ -679,7 +773,7 @@ describe("Pi extension host integration", () => {
       // Esc while running triggers remote cancel.
       const escResult = mock.sendTerminalInput("\x1b");
       expect(escResult).toEqual({ consume: true });
-      await new Promise((resolve) => setTimeout(resolve, 40));
+      await waitFor(() => canceledSessions.length >= 1);
       expect(canceledSessions).toEqual(["sess-live"]);
 
       // /compact is intercepted and forwarded to remote compact.
@@ -716,6 +810,29 @@ describe("Pi extension host integration", () => {
         url: `http://127.0.0.1:${port}`,
         apiKey: "test-key",
       });
+      await fa.handler("disconnect", mock.ctx);
+      // /fa add with name and url (2 args) still prompts for optional API key.
+      let keyPrompted = false;
+      mock.ctx.ui.input = async () => {
+        keyPrompted = true;
+        return "test-key";
+      };
+      await fa.handler(`add two-arg http://127.0.0.1:${port}`, mock.ctx);
+      expect(keyPrompted).toBe(true);
+      expect(loadRemotes({ path: join(dir, "empty-remotes.json") }).config.remotes["two-arg"]?.type).toBe("http");
+      await fa.handler("disconnect", mock.ctx);
+
+      // /fa new triggers ctx.newSession() handoff when supported to isolate transcripts.
+      let newSessionCalls = 0;
+      mock.ctx.newSession = async (opts: any) => {
+        newSessionCalls += 1;
+        await opts?.setup?.({ appendCustomEntry() {} });
+        await sessionStart({ type: "session_start", reason: "new" }, mock.ctx);
+        return { cancelled: false };
+      };
+      await fa.handler("connect two-arg", mock.ctx);
+      await fa.handler("new", mock.ctx);
+      expect(newSessionCalls).toBe(1);
       await fa.handler("disconnect", mock.ctx);
     } finally {
       if (prevPath === undefined) delete process.env.FASTAGENT_REMOTES_PATH;

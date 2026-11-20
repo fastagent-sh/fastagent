@@ -8,6 +8,7 @@ import type { Entry, ModelRef, ThinkingLevel } from "@fastagent-sh/client";
 import { RemoteController, type RemoteViewState, buildSendContent } from "./controller.ts";
 import {
   type HttpRemoteConfig,
+  type RemoteConfig,
   type RemotesFile,
   connectRemote,
   isHttpUrl,
@@ -26,7 +27,21 @@ import {
 import { TerminalStatusReporter } from "./terminal-status.ts";
 
 export const REMOTE_ENTRY_TYPE = "fastagent-remote-entry";
+const REMOTE_BINDING_TYPE = "fastagent-remote-binding";
 const LIVE_WIDGET_KEY = "fastagent-remote-live";
+
+interface RemoteBinding {
+  remoteName: string;
+  sessionId: string;
+}
+
+interface PendingHandoff extends RemoteBinding {
+  remote: RemoteConfig;
+}
+
+// Plain data handed across Pi's ctx.newSession() replacement boundary (new extension instance runs session_start
+// before options.setup executes). Never holds session-bound Pi objects or writes secrets to session JSONL.
+let pendingHandoff: PendingHandoff | undefined;
 
 const SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "connect", description: "Connect to a remote FastAgent [name|url] [sessionId|apiKey]" },
@@ -98,9 +113,11 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
   let unsubscribeTerminalInput: (() => void) | undefined;
   let requestFooterRender: (() => void) | undefined;
   let requestWidgetRender: (() => void) | undefined;
+  let activeRemoteConfig: RemoteConfig | undefined;
   let autocompleteInstalled = false;
   let widgetMounted = false;
   let footerMounted = false;
+  let startupFlagConsumed = false;
 
   const terminalStatus = new TerminalStatusReporter();
 
@@ -241,6 +258,56 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
   };
 
+  const handoffToCleanView = async (
+    ctx: ExtensionContext,
+    handoff: PendingHandoff,
+  ): Promise<"handed_off" | "cancelled" | "unsupported"> => {
+    const cmdCtx = ctx as Partial<ExtensionCommandContext>;
+    if (typeof cmdCtx.newSession !== "function") return "unsupported";
+    pendingHandoff = handoff;
+    try {
+      const res = await cmdCtx.newSession({
+        setup: async (sessionManager) => {
+          const binding: RemoteBinding = { remoteName: handoff.remoteName, sessionId: handoff.sessionId };
+          sessionManager.appendCustomEntry(REMOTE_BINDING_TYPE, binding);
+        },
+      });
+      if (res.cancelled) {
+        pendingHandoff = undefined;
+        return "cancelled";
+      }
+      return "handed_off";
+    } catch (error) {
+      pendingHandoff = undefined;
+      throw error;
+    }
+  };
+
+  const connectResolved = async (
+    ctx: ExtensionContext,
+    name: string,
+    remote: RemoteConfig,
+    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string>; persistBinding?: boolean } = {},
+  ): Promise<void> => {
+    const { agent, defaultSessionId } = await connectRemote(name, remote);
+    const targetSession = options.sessionId ?? defaultSessionId;
+    if (controller.isConnected() && typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function") {
+      const session = targetSession ? await agent.sessions.get(targetSession) : await agent.sessions.create();
+      const outcome = await handoffToCleanView(ctx, { remoteName: name, remote, sessionId: session.id });
+      if (outcome !== "unsupported") return;
+    }
+    const session = await controller.connect(name, agent, {
+      ...(targetSession !== undefined ? { sessionId: targetSession } : {}),
+      ...(options.after !== undefined ? { after: options.after } : {}),
+      ...(options.seenEntryIds !== undefined ? { seenEntryIds: options.seenEntryIds } : {}),
+    });
+    activeRemoteConfig = remote;
+    if (options.persistBinding !== false) {
+      pi.appendEntry<RemoteBinding>(REMOTE_BINDING_TYPE, { remoteName: name, sessionId: session.id });
+    }
+    ctx.ui.notify(`Connected to ${name} (session ${shortId(session.id)})`, "info");
+  };
+
   const connectDirectUrl = async (ctx: ExtensionContext, url: string, explicitKey?: string): Promise<void> => {
     let apiKey = explicitKey?.trim() || undefined;
     if (!apiKey && !process.env.FASTAGENT_API_KEY?.trim() && ctx.hasUI) {
@@ -263,9 +330,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       ...(apiKey !== undefined ? { apiKey } : {}),
     };
     try {
-      const { agent } = await connectRemote(displayName, remote);
-      const session = await controller.connect(displayName, agent);
-      ctx.ui.notify(`Connected to ${displayName} (session ${shortId(session.id)})`, "info");
+      await connectResolved(ctx, displayName, remote);
     } catch (error) {
       ctx.ui.notify(`Failed to connect to ${displayName}: ${errorText(error)}`, "error");
     }
@@ -292,7 +357,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
 
     let apiKey = argKey?.trim() || undefined;
-    if (argKey === undefined && !argUrl) {
+    if (argKey === undefined && ctx.hasUI) {
       const entered = await ctx.ui.input(
         `API key for "${name}" (optional)`,
         "$FASTAGENT_API_KEY, raw key, or leave empty to use env FASTAGENT_API_KEY",
@@ -357,12 +422,9 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
 
     try {
-      const { agent, defaultSessionId } = await connectRemote(name, remote);
-      const targetSession = secondArg ?? defaultSessionId;
-      const session = await controller.connect(name, agent, {
-        ...(targetSession !== undefined ? { sessionId: targetSession } : {}),
+      await connectResolved(ctx, name, remote, {
+        ...(secondArg !== undefined ? { sessionId: secondArg } : {}),
       });
-      ctx.ui.notify(`Connected to ${name} (session ${shortId(session.id)})`, "info");
     } catch (error) {
       ctx.ui.notify(`Failed to connect to ${name}: ${errorText(error)}`, "error");
     }
@@ -378,8 +440,70 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     return renderRemoteEntry(entry.data, options, theme);
   });
 
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
+    autocompleteInstalled = false;
+    widgetMounted = false;
+    footerMounted = false;
+    requestFooterRender = undefined;
+    requestWidgetRender = undefined;
     attachContext(ctx);
+
+    if (pendingHandoff) {
+      const handoff = pendingHandoff;
+      pendingHandoff = undefined;
+      try {
+        await connectResolved(ctx, handoff.remoteName, handoff.remote, {
+          sessionId: handoff.sessionId,
+          persistBinding: false,
+        });
+      } catch (error) {
+        ctx.ui.notify(`Failed to connect to ${handoff.remoteName}: ${errorText(error)}`, "error");
+      }
+      return;
+    }
+
+    if (controller.isConnected()) {
+      syncUi(controller.getState());
+      return;
+    }
+
+    if (event.reason === "resume" && typeof ctx.sessionManager?.getEntries === "function") {
+      const entries = ctx.sessionManager.getEntries();
+      let latestBinding: RemoteBinding | undefined;
+      for (const item of entries) {
+        if (item.type === "custom" && item.customType === REMOTE_BINDING_TYPE && item.data) {
+          latestBinding = item.data as RemoteBinding;
+        }
+      }
+      if (latestBinding) {
+        const loaded = loadConfigSafe(ctx);
+        const remote = loaded?.config.remotes[latestBinding.remoteName];
+        if (!remote) return;
+        const seen: string[] = [];
+        for (const item of entries) {
+          if (item.type === "custom" && item.customType === REMOTE_ENTRY_TYPE && item.data) {
+            const payload = item.data as RemoteEntryPayload;
+            if (payload.sessionId === latestBinding.sessionId && payload.entry?.id) {
+              seen.push(payload.entry.id);
+            }
+          }
+        }
+        try {
+          await connectResolved(ctx, latestBinding.remoteName, remote, {
+            sessionId: latestBinding.sessionId,
+            after: seen.at(-1) ?? "start",
+            seenEntryIds: seen,
+            persistBinding: false,
+          });
+        } catch (error) {
+          ctx.ui.notify(`Failed to resume ${latestBinding.remoteName}: ${errorText(error)}`, "error");
+        }
+        return;
+      }
+    }
+
+    if (startupFlagConsumed) return;
+    startupFlagConsumed = true;
     const startupRemote = pi.getFlag("fa");
     if (typeof startupRemote === "string" && startupRemote.trim() !== "") {
       await connectByName(ctx, startupRemote.trim());
@@ -482,6 +606,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           return;
         }
         const name = controller.getState().remoteName;
+        activeRemoteConfig = undefined;
         controller.disconnect();
         ctx.ui.notify(`Disconnected from ${name ?? "remote"}`, "info");
         return;
@@ -529,6 +654,15 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           const idx = labels.indexOf(picked);
           const chosen = sessions[idx];
           if (!chosen || chosen.id === currentId) return;
+          const remoteName = controller.getState().remoteName;
+          if (remoteName && activeRemoteConfig) {
+            const outcome = await handoffToCleanView(ctx, {
+              remoteName,
+              remote: activeRemoteConfig,
+              sessionId: chosen.id,
+            });
+            if (outcome !== "unsupported") return;
+          }
           await controller.switchSession(chosen.id);
           ctx.ui.notify(`Switched to session ${shortId(chosen.id)}`, "info");
         } catch (error) {
@@ -542,6 +676,16 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           return;
         }
         try {
+          const remoteName = controller.getState().remoteName;
+          if (remoteName && activeRemoteConfig && typeof ctx.newSession === "function") {
+            const created = await controller.createRemoteSession();
+            const outcome = await handoffToCleanView(ctx, {
+              remoteName,
+              remote: activeRemoteConfig,
+              sessionId: created.id,
+            });
+            if (outcome !== "unsupported") return;
+          }
           const session = await controller.createSession();
           ctx.ui.notify(`Started new remote session ${shortId(session.id)}`, "info");
         } catch (error) {
@@ -555,6 +699,16 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           return;
         }
         try {
+          const remoteName = controller.getState().remoteName;
+          if (remoteName && activeRemoteConfig && typeof ctx.newSession === "function") {
+            const forked = await controller.forkRemoteSession();
+            const outcome = await handoffToCleanView(ctx, {
+              remoteName,
+              remote: activeRemoteConfig,
+              sessionId: forked.id,
+            });
+            if (outcome !== "unsupported") return;
+          }
           const forked = await controller.forkSession();
           ctx.ui.notify(`Forked into session ${shortId(forked.id)}`, "info");
         } catch (error) {
