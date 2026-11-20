@@ -52,7 +52,12 @@ export {
   type ServeAgentOptions,
 } from "./harnesses/pi-durable/serve.ts";
 export type { Service } from "./service.ts";
-export type { PostgresDatabase } from "./harnesses/pi-durable/postgres/storage.ts";
+export {
+  openPostgresDatabase,
+  type PostgresDatabase,
+  type SharedPostgresDatabase,
+} from "./harnesses/pi-durable/postgres/storage.ts";
+export type { PostgresPoolOptions } from "./harnesses/pi-durable/postgres/database.ts";
 export { McpError, type McpErrorCode } from "./mcp-api.ts";
 export { baseEnv } from "./child-env.ts";
 

@@ -177,9 +177,7 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
         ),
       );
     }
-    const { url, ...reached } = database;
-    return openPostgresStorage(url, place.name, {
-      ...reached,
+    return openPostgresStorage(database, place.name, {
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),

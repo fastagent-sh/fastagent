@@ -44,14 +44,32 @@ async function retrying<T>(attempt: () => Promise<T>): Promise<T> {
   }
 }
 
+export interface PostgresPoolOptions {
+  /** Maximum number of clients in the underlying PostgreSQL pool (node-postgres default: 10). */
+  max?: number;
+  /** Milliseconds an idle client stays open before being closed (node-postgres default: 10,000). */
+  idleTimeoutMillis?: number;
+}
+
 /**
  * A pool on `connectionString` (`postgres://user:password@host:port/database?sslmode=require`); `password`, when given,
  * makes the password of each new connection (a token that expires).
  */
 export function openPgDatabase(
   connectionString: string,
-  options: { password?: () => Promise<string> } = {},
+  options: PostgresPoolOptions & { password?: () => Promise<string> } = {},
 ): PgDatabase {
+  if (options.max !== undefined && (!Number.isInteger(options.max) || options.max <= 0)) {
+    throw new Error(`Postgres pool max must be a positive integer, got ${String(options.max)}`);
+  }
+  if (
+    options.idleTimeoutMillis !== undefined &&
+    (!Number.isFinite(options.idleTimeoutMillis) || options.idleTimeoutMillis < 0)
+  ) {
+    throw new Error(
+      `Postgres pool idleTimeoutMillis must be a non-negative number, got ${String(options.idleTimeoutMillis)}`,
+    );
+  }
   // A connection string's own password, even an empty one, would win over `password`: parsed here, it gives way.
   const connection =
     options.password === undefined
@@ -59,6 +77,8 @@ export function openPgDatabase(
       : { ...(parseIntoClientConfig(connectionString) as pg.PoolConfig), password: options.password };
   const pool = new pg.Pool({
     ...connection,
+    ...(options.max === undefined ? {} : { max: options.max }),
+    ...(options.idleTimeoutMillis === undefined ? {} : { idleTimeoutMillis: options.idleTimeoutMillis }),
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     // Ids and seqs are below 2^53: as numbers, as pi-durable keeps them.
     types: {

@@ -14,7 +14,7 @@
  * may resume them.
  */
 import { Unavailable } from "../../../unavailable.ts";
-import type { Context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
 import type { JsonValue } from "@earendil-works/chord/json";
 import {
@@ -60,7 +60,13 @@ import {
   prepareDocumentActions,
   scopeColumns,
 } from "./commit.ts";
-import { type PgDatabase, type PgExecutor, describeDatabase, openPgDatabase } from "./database.ts";
+import {
+  type PgDatabase,
+  type PgExecutor,
+  type PostgresPoolOptions,
+  describeDatabase,
+  openPgDatabase,
+} from "./database.ts";
 import { type CreateIndex, migrate } from "./schema.ts";
 import { type StoredText, type ValueKind, readTexts } from "./values.ts";
 
@@ -164,6 +170,84 @@ export interface PostgresOptions {
 /** A PostgreSQL database an instance's storage is in: its URL (`postgres://…`), and how it is reached. */
 export interface PostgresDatabase extends PostgresOptions {
   url: string;
+}
+
+const SHARED_DB = Symbol("fastagent.sharedPostgres");
+
+interface SharedPostgresHandle {
+  readonly borrowed: PgDatabase;
+  isClosed(): boolean;
+  assertOpen(): void;
+  ensureMigrated(): Promise<void>;
+}
+
+/**
+ * A shared PostgreSQL connection pool handle reusable across multiple `openAgent` instances in one process:
+ * schema migration runs once (single-flight), and each `agent.close()` releases only that instance's lease without
+ * closing the underlying pool. Call `close()` once on host shutdown.
+ */
+export interface SharedPostgresDatabase extends PostgresDatabase {
+  close(): Promise<void>;
+}
+
+type SharedPostgresInternal = SharedPostgresDatabase & { readonly [SHARED_DB]: SharedPostgresHandle };
+
+function sharedHandleOf(database: PostgresDatabase): SharedPostgresHandle | undefined {
+  return (database as Partial<SharedPostgresInternal>)[SHARED_DB];
+}
+
+/**
+ * Open a shared PostgreSQL connection pool for reuse across multiple `openAgent` instances in one process.
+ * Accepts any {@link PostgresDatabase}, including `{ url }` or `dsqlDatabase({ endpoint })`.
+ */
+export function openPostgresDatabase(
+  database: PostgresDatabase,
+  options: PostgresPoolOptions = {},
+): SharedPostgresDatabase {
+  const { url, password, limits, createIndex } = database;
+  const db = openPgDatabase(url, {
+    ...options,
+    ...(password === undefined ? {} : { password }),
+  });
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  let migrated: Promise<void> | undefined;
+
+  const assertOpen = () => {
+    if (closed) throw new Error(`the shared database ${describeDatabase(url)} is closed`);
+  };
+  const borrowed: PgDatabase = {
+    query: (text, params) => db.query(text, params),
+    transaction: (work) => db.transaction(work),
+    close: async () => {},
+  };
+  const handle: SharedPostgresHandle = {
+    borrowed,
+    isClosed: () => closed,
+    assertOpen,
+    ensureMigrated() {
+      assertOpen();
+      migrated ??= migrate(db, createIndex).catch((error) => {
+        migrated = undefined;
+        throw error;
+      });
+      return migrated;
+    },
+  };
+
+  const shared: SharedPostgresInternal = {
+    [SHARED_DB]: handle,
+    url,
+    ...(password === undefined ? {} : { password }),
+    ...(limits === undefined ? {} : { limits }),
+    ...(createIndex === undefined ? {} : { createIndex }),
+    close() {
+      closed = true;
+      closing ??= db.close();
+      return closing;
+    },
+  };
+  return shared;
 }
 
 const KINDS: Record<string, ValueKind> = {
@@ -975,26 +1059,52 @@ export class PostgresStorage implements Storage {
 }
 
 /**
- * Open `instance` in the database `connectionString` names, making its tables first when it has none. A database that
- * cannot be reached, or refuses, is named in the error, without its credentials.
+ * Open `instance` in `database` (a connection string, `PostgresDatabase`, or reusable `SharedPostgresDatabase`),
+ * making its tables first when it has none. A database that cannot be reached, or refuses, is named in the error,
+ * without its credentials.
  */
 export async function openPostgresStorage(
-  connectionString: string,
+  database: string | PostgresDatabase,
   instance: string,
   options: Omit<OpenOptions, "lease" | "limits"> & PostgresOptions = {},
 ): Promise<PostgresStorage> {
-  const { password, createIndex, ...open } = options;
-  const db = openPgDatabase(connectionString, password === undefined ? {} : { password });
+  const url = typeof database === "string" ? database : database.url;
+  const shared = typeof database === "string" ? undefined : sharedHandleOf(database);
+  const limits = options.limits ?? (typeof database === "string" ? undefined : database.limits);
+  const password = options.password ?? (typeof database === "string" ? undefined : database.password);
+  const createIndex = options.createIndex ?? (typeof database === "string" ? undefined : database.createIndex);
+  const { password: _p, createIndex: _c, ...open } = options;
+  const openOpts: OpenOptions = { ...open, ...(limits === undefined ? {} : { limits }) };
+
+  if (shared !== undefined) {
+    shared.assertOpen();
+    try {
+      await shared.ensureMigrated();
+      shared.assertOpen();
+      const storage = await PostgresStorage.open(shared.borrowed, instance, openOpts);
+      if (shared.isClosed()) {
+        await storage.close(BACKGROUND_CONTEXT).catch(() => undefined);
+        shared.assertOpen();
+      }
+      return storage;
+    } catch (error) {
+      if (error instanceof InstanceHeld || shared.isClosed()) throw error;
+      const failed = passes(error) ? Unavailable : Error;
+      throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, { cause: error });
+    }
+  }
+
+  const db = openPgDatabase(url, password === undefined ? {} : { password });
   try {
     await migrate(db, createIndex);
-    return await PostgresStorage.open(db, instance, open);
+    return await PostgresStorage.open(db, instance, openOpts);
   } catch (error) {
     await db
       .close()
       .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
     if (error instanceof InstanceHeld) throw error;
     const failed = passes(error) ? Unavailable : Error;
-    throw new failed(`the database ${describeDatabase(connectionString)}: ${(error as Error).message}`, {
+    throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, {
       cause: error,
     });
   }
@@ -1006,7 +1116,9 @@ export async function openPostgresStorage(
  */
 export async function listPostgresInstances(database: PostgresDatabase, agent: string): Promise<string[]> {
   const { url, password } = database;
-  const db = openPgDatabase(url, password === undefined ? {} : { password });
+  const shared = sharedHandleOf(database);
+  if (shared !== undefined) shared.assertOpen();
+  const db = shared !== undefined ? shared.borrowed : openPgDatabase(url, password === undefined ? {} : { password });
   try {
     const rows = await db
       .query<{ instance: string }>("SELECT instance FROM durable_metadata WHERE agent = $1 ORDER BY instance", [agent])
@@ -1019,8 +1131,10 @@ export async function listPostgresInstances(database: PostgresDatabase, agent: s
     const failed = passes(error) ? Unavailable : Error;
     throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, { cause: error });
   } finally {
-    await db
-      .close()
-      .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
+    if (shared === undefined) {
+      await db
+        .close()
+        .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
+    }
   }
 }
