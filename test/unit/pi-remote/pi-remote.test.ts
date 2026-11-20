@@ -1182,6 +1182,21 @@ describe("Pi extension host integration", () => {
       expect(bannerIdx).toBeLessThan(entryIdx);
 
       expect(mock.getEditorComponent()).not.toBe(priorEditor);
+      // Verify wrapped onSubmit rewrites /model (including autocomplete fall-through submits) to /fa model.
+      const editorFactory = mock.getEditorComponent() as any;
+      const submitted: string[] = [];
+      const editorInstance = editorFactory(
+        { requestRender() {} },
+        { borderColor: (t: string) => t, selectList: {} },
+        { matches: () => false },
+      );
+      editorInstance.onSubmit = (text: string) => submitted.push(text);
+      editorInstance.onSubmit("/model");
+      editorInstance.onSubmit("/name New Title");
+      editorInstance.onSubmit("/resume");
+      editorInstance.onSubmit("/compact");
+      expect(submitted).toEqual(["/fa model", "/fa title New Title", "/fa sessions", "/compact"]);
+
       expect(mock.getWindowTitle()).toContain("☁ ops");
       await fa.handler("off", mock.ctx);
       expect(mock.getEditorComponent()).toBe(priorEditor);
