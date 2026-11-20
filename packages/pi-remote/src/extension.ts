@@ -157,6 +157,7 @@ class RemoteEditor extends CustomEditor {
   private readonly kb: KeybindingsManager;
   private readonly callbacks: RemoteEditorCallbacks;
   private hostOnSubmit?: (text: string) => void;
+  private wrappedOnSubmit?: (text: string) => void;
 
   constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, callbacks: RemoteEditorCallbacks) {
     super(tui, theme, keybindings);
@@ -167,22 +168,22 @@ class RemoteEditor extends CustomEditor {
     Object.defineProperty(this, "onSubmit", {
       configurable: true,
       enumerable: true,
-      get: (): ((text: string) => void) | undefined => {
-        if (!this.hostOnSubmit) return undefined;
-        return (text: string) => {
-          if (this.callbacks.isConnected()) {
-            const builtin = parseInterceptedRemoteBuiltin(text);
-            if (builtin) {
-              const line = builtin.args ? `/fa ${builtin.command} ${builtin.args}` : `/fa ${builtin.command}`;
-              this.hostOnSubmit?.(line);
-              return;
-            }
-          }
-          this.hostOnSubmit?.(text);
-        };
-      },
+      get: (): ((text: string) => void) | undefined => this.wrappedOnSubmit,
       set: (fn: ((text: string) => void) | undefined) => {
         this.hostOnSubmit = fn;
+        this.wrappedOnSubmit = fn
+          ? (text: string) => {
+              if (this.callbacks.isConnected()) {
+                const builtin = parseInterceptedRemoteBuiltin(text);
+                if (builtin) {
+                  const line = builtin.args ? `/fa ${builtin.command} ${builtin.args}` : `/fa ${builtin.command}`;
+                  fn(line);
+                  return;
+                }
+              }
+              fn(text);
+            }
+          : undefined;
       },
     });
   }

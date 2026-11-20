@@ -1191,11 +1191,16 @@ describe("Pi extension host integration", () => {
         { matches: () => false },
       );
       editorInstance.onSubmit = (text: string) => submitted.push(text);
+      expect(editorInstance.onSubmit).toBe(editorInstance.onSubmit);
       editorInstance.onSubmit("/model");
       editorInstance.onSubmit("/name New Title");
       editorInstance.onSubmit("/resume");
       editorInstance.onSubmit("/compact");
-      expect(submitted).toEqual(["/fa model", "/fa title New Title", "/fa sessions", "/compact"]);
+      // Composing another wrapper over editor.onSubmit must not recurse.
+      const prevOnSubmit = editorInstance.onSubmit;
+      editorInstance.onSubmit = (text: string) => prevOnSubmit(text);
+      editorInstance.onSubmit("/fork");
+      expect(submitted).toEqual(["/fa model", "/fa title New Title", "/fa sessions", "/compact", "/fa fork"]);
 
       expect(mock.getWindowTitle()).toContain("☁ ops");
       await fa.handler("off", mock.ctx);
