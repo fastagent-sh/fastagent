@@ -14,7 +14,7 @@
  * may resume them.
  */
 import { Unavailable } from "../../../unavailable.ts";
-import type { Context } from "@earendil-works/chord/context";
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { apply } from "@earendil-works/chord/delta";
 import type { JsonValue } from "@earendil-works/chord/json";
 import {
@@ -176,6 +176,7 @@ const SHARED_DB = Symbol("fastagent.sharedPostgres");
 
 interface SharedPostgresHandle {
   readonly borrowed: PgDatabase;
+  isClosed(): boolean;
   assertOpen(): void;
   ensureMigrated(): Promise<void>;
 }
@@ -222,6 +223,7 @@ export function openPostgresDatabase(
   };
   const handle: SharedPostgresHandle = {
     borrowed,
+    isClosed: () => closed,
     assertOpen,
     ensureMigrated() {
       assertOpen();
@@ -1079,9 +1081,14 @@ export async function openPostgresStorage(
     try {
       await shared.ensureMigrated();
       shared.assertOpen();
-      return await PostgresStorage.open(shared.borrowed, instance, openOpts);
+      const storage = await PostgresStorage.open(shared.borrowed, instance, openOpts);
+      if (shared.isClosed()) {
+        await storage.close(BACKGROUND_CONTEXT).catch(() => undefined);
+        shared.assertOpen();
+      }
+      return storage;
     } catch (error) {
-      if (error instanceof InstanceHeld) throw error;
+      if (error instanceof InstanceHeld || shared.isClosed()) throw error;
       const failed = passes(error) ? Unavailable : Error;
       throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, { cause: error });
     }
