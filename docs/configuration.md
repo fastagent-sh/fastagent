@@ -117,9 +117,8 @@ container never reads your files: give it its values as environment variables. `
 Code declares the secrets it reads, in the module that reads them:
 
 ```ts
-import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
-import { needs } from "@fastagent-sh/fastagent";
+import { z } from "zod"; // or plain JSON Schema, or @earendil-works/pi-schema
+import { defineTool, needs } from "@fastagent-sh/fastagent";
 
 export default needs(
   ["WEATHER_API_KEY", { name: "WEATHER_UNITS", description: "metric or imperial", optional: true }],
@@ -127,8 +126,8 @@ export default needs(
     defineTool({
       name: "weather",
       description: "Current weather for a city.",
-      parameters: obj({ city: str() }),
-      execute: async ({ city }) => ({ output: [{ type: "text", text: await lookup(city, WEATHER_API_KEY, WEATHER_UNITS) }] }),
+      parameters: z.object({ city: z.string() }),
+      execute: async ({ city }) => await lookup(city, WEATHER_API_KEY, WEATHER_UNITS),
     }),
 );
 ```
@@ -212,7 +211,7 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 
 | Directory | Each file default-exports |
 |---|---|
-| `src/tools/` | a tool: `defineTool` from `@earendil-works/pi-durable` |
+| `src/tools/` | a tool: `defineTool` from `@fastagent-sh/fastagent` (Zod v4 / Standard JSON Schema, plain JSON Schema, or `pi-schema`) or `@earendil-works/pi-durable` |
 | `src/extensions/` | an extension: `defineExtension` |
 | `src/schedules/` | a schedule: `defineSchedule` |
 
