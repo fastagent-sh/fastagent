@@ -52,6 +52,9 @@ export interface RemoteViewState {
   liveReply?: LiveReply;
   activeTools: readonly ActiveTool[];
   queuedMessages: readonly QueuedMessage[];
+  queuedPreviews: Readonly<Record<string, string>>;
+  sending: boolean;
+  canceling: boolean;
   compacting: boolean;
   retrying?: RetryNotice;
   lastEntryId?: string;
@@ -60,6 +63,7 @@ export interface RemoteViewState {
 
 export interface RemoteControllerCallbacks {
   onStateChange?: (state: RemoteViewState) => void;
+  onSessionReady?: (state: RemoteViewState, meta: { fresh: boolean; resumed: boolean }) => void;
   onEntry?: (entry: Entry, meta: { replayed: boolean }) => void;
   onDone?: (message: Message) => void;
   onError?: (error: Error) => void;
@@ -110,10 +114,16 @@ export class RemoteController {
   private generation = 0;
   private eventSeq = 0;
   private seenEntryIds = new Set<string>();
+  private toolCallArgs = new Map<string, Json>();
+  private autoTitleAttempted = false;
+  private inFlightSends = 0;
   private state: RemoteViewState = {
     status: "disconnected",
     activeTools: [],
     queuedMessages: [],
+    queuedPreviews: {},
+    sending: false,
+    canceling: false,
     compacting: false,
   };
 
@@ -128,6 +138,10 @@ export class RemoteController {
     return this.state;
   }
 
+  getToolCallArgs(toolCallId: string): Json | undefined {
+    return this.toolCallArgs.get(toolCallId);
+  }
+
   isConnected(): boolean {
     return this.agent !== undefined && this.state.session !== undefined && this.state.status !== "disconnected";
   }
@@ -135,7 +149,7 @@ export class RemoteController {
   async connect(
     remoteName: string,
     agent: Agent,
-    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string> } = {},
+    options: { sessionId?: string; after?: string; seenEntryIds?: Iterable<string>; resumed?: boolean } = {},
   ): Promise<Session> {
     const wasConnected = this.isConnected();
     const beforeGen = wasConnected ? this.generation : this.nextGeneration();
@@ -145,6 +159,9 @@ export class RemoteController {
         remoteName,
         activeTools: [],
         queuedMessages: [],
+        queuedPreviews: {},
+        sending: false,
+        canceling: false,
         compacting: false,
       });
     }
@@ -162,6 +179,9 @@ export class RemoteController {
       const gen = wasConnected ? this.nextGeneration() : beforeGen;
       this.agent = agent;
       this.seenEntryIds = new Set(options.seenEntryIds ?? []);
+      this.toolCallArgs.clear();
+      this.inFlightSends = 0;
+      this.autoTitleAttempted = Boolean(session.title || options.sessionId);
       this.setState({
         status: "connected",
         remoteName,
@@ -169,8 +189,15 @@ export class RemoteController {
         session,
         activeTools: activeToolsFromSession(session),
         queuedMessages: session.queuedMessages ?? [],
+        queuedPreviews: {},
+        sending: false,
+        canceling: false,
         compacting: session.compacting === true,
         ...(options.after && options.after !== "start" ? { lastEntryId: options.after } : {}),
+      });
+      this.callbacks.onSessionReady?.(this.state, {
+        fresh: options.sessionId === undefined,
+        resumed: options.resumed === true,
       });
       this.startEventLoop(gen, agent, session.id, options.after ?? "start");
       return session;
@@ -181,6 +208,9 @@ export class RemoteController {
           status: "disconnected",
           activeTools: [],
           queuedMessages: [],
+          queuedPreviews: {},
+          sending: false,
+          canceling: false,
           compacting: false,
           lastError: errorMessageOf(error),
         });
@@ -193,10 +223,16 @@ export class RemoteController {
     this.nextGeneration();
     this.agent = undefined;
     this.seenEntryIds.clear();
+    this.toolCallArgs.clear();
+    this.inFlightSends = 0;
+    this.autoTitleAttempted = false;
     this.setState({
       status: "disconnected",
       activeTools: [],
       queuedMessages: [],
+      queuedPreviews: {},
+      sending: false,
+      canceling: false,
       compacting: false,
     });
   }
@@ -214,6 +250,9 @@ export class RemoteController {
 
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
+    this.toolCallArgs.clear();
+    this.inFlightSends = 0;
+    this.autoTitleAttempted = true;
     this.setState({
       status: "connected",
       ...(remoteName !== undefined ? { remoteName } : {}),
@@ -221,8 +260,12 @@ export class RemoteController {
       session,
       activeTools: activeToolsFromSession(session),
       queuedMessages: session.queuedMessages ?? [],
+      queuedPreviews: {},
+      sending: false,
+      canceling: false,
       compacting: session.compacting === true,
     });
+    this.callbacks.onSessionReady?.(this.state, { fresh: false, resumed: false });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
   }
@@ -240,6 +283,9 @@ export class RemoteController {
 
     const gen = this.nextGeneration();
     this.seenEntryIds.clear();
+    this.toolCallArgs.clear();
+    this.inFlightSends = 0;
+    this.autoTitleAttempted = Boolean(session.title || options?.forkFrom);
     this.setState({
       status: "connected",
       ...(remoteName !== undefined ? { remoteName } : {}),
@@ -247,8 +293,12 @@ export class RemoteController {
       session,
       activeTools: activeToolsFromSession(session),
       queuedMessages: session.queuedMessages ?? [],
+      queuedPreviews: {},
+      sending: false,
+      canceling: false,
       compacting: session.compacting === true,
     });
+    this.callbacks.onSessionReady?.(this.state, { fresh: !options?.forkFrom, resumed: false });
     this.startEventLoop(gen, agent, session.id, "start");
     return session;
   }
@@ -282,21 +332,40 @@ export class RemoteController {
   async send(content: SendRequest["content"], options: { whenBusy?: SendRequest["whenBusy"] } = {}): Promise<Message> {
     const agent = this.requireAgent();
     const session = this.requireSession();
+    const gen = this.generation;
     const whenBusy = options.whenBusy ?? (session.status === "running" ? "steer" : "queue");
-    const message = await agent.messages.send({
-      sessionId: session.id,
-      content,
-      whenBusy,
-    });
-    if (this.state.session?.id === session.id) {
+    const preview = previewOfContent(content);
+    this.inFlightSends += 1;
+    this.setState({ ...this.state, sending: true, lastError: undefined });
+
+    let message: Message;
+    try {
+      message = await agent.messages.send({
+        sessionId: session.id,
+        content,
+        whenBusy,
+      });
+    } finally {
+      if (this.generation === gen) {
+        this.inFlightSends = Math.max(0, this.inFlightSends - 1);
+        const stillSending = this.inFlightSends > 0;
+        if (this.state.sending !== stillSending) {
+          this.setState({ ...this.state, sending: stillSending });
+        }
+      }
+    }
+
+    if (this.generation === gen && this.state.session?.id === session.id) {
       const nextSession =
         this.state.session.status === "idle"
           ? { ...this.state.session, status: "running" as const }
           : this.state.session;
       let nextQueued = this.state.queuedMessages;
+      let nextPreviews = this.state.queuedPreviews;
       if (message.status === "queued" && !nextQueued.some((q) => q.id === message.id)) {
         const mode: QueuedMessage["mode"] = whenBusy === "steer" ? "steer" : "queue";
         nextQueued = [...nextQueued, { id: message.id, mode }];
+        if (preview) nextPreviews = { ...nextPreviews, [message.id]: preview };
       }
       if (nextSession !== this.state.session || nextQueued !== this.state.queuedMessages) {
         this.eventSeq += 1;
@@ -304,8 +373,27 @@ export class RemoteController {
           ...this.state,
           session: nextSession,
           queuedMessages: nextQueued,
+          queuedPreviews: nextPreviews,
+          sending: this.inFlightSends > 0,
           lastError: undefined,
         });
+      }
+      if (!this.autoTitleAttempted && !this.state.session.title) {
+        const autoTitle = autoTitleOf(preview);
+        if (autoTitle) {
+          this.autoTitleAttempted = true;
+          void agent.sessions
+            .update(session.id, { title: autoTitle })
+            .then((updated) => {
+              if (this.generation !== gen || this.state.session?.id !== session.id) return;
+              if (!this.state.session.title && updated.title) {
+                this.setState({ ...this.state, session: { ...this.state.session, title: updated.title } });
+              }
+            })
+            .catch(() => {
+              // Older servers without title support reject silently without interrupting chat.
+            });
+        }
       }
     }
     return message;
@@ -314,13 +402,23 @@ export class RemoteController {
   async cancel(): Promise<{ stopped: string[] }> {
     const agent = this.requireAgent();
     const session = this.requireSession();
-    const result = await agent.sessions.cancel(session.id);
-    if (this.state.session?.id === session.id && result.stopped.length > 0) {
+    const gen = this.generation;
+    this.setState({ ...this.state, canceling: true });
+    let result: { stopped: string[] };
+    try {
+      result = await agent.sessions.cancel(session.id);
+    } finally {
+      if (this.generation === gen && this.state.canceling) {
+        this.setState({ ...this.state, canceling: false });
+      }
+    }
+    if (this.generation === gen && this.state.session?.id === session.id && result.stopped.length > 0) {
       const stoppedSet = new Set(result.stopped);
       const remaining = this.state.queuedMessages.filter((q) => !stoppedSet.has(q.id));
+      const nextPreviews = omitKeys(this.state.queuedPreviews, stoppedSet);
       if (remaining.length !== this.state.queuedMessages.length) {
         this.eventSeq += 1;
-        this.setState({ ...this.state, queuedMessages: remaining });
+        this.setState({ ...this.state, queuedMessages: remaining, queuedPreviews: nextPreviews });
       }
     }
     return result;
@@ -444,12 +542,16 @@ export class RemoteController {
         if (this.generation !== gen || abort.signal.aborted) return;
 
         if (fatalStreamError) {
+          this.inFlightSends = 0;
           this.setState({
             ...this.state,
             status: "disconnected",
             liveReply: undefined,
             activeTools: [],
             queuedMessages: [],
+            queuedPreviews: {},
+            sending: false,
+            canceling: false,
             compacting: false,
             retrying: undefined,
             lastError: fatalStreamError.message,
@@ -588,16 +690,24 @@ export class RemoteController {
 
         let nextSession = this.state.session;
         let nextQueued = this.state.queuedMessages;
+        let nextPreviews = this.state.queuedPreviews;
         let nextCompacting = this.state.compacting;
         if (entry.kind === "user") {
           const data = entry.data as { messageId?: unknown } | null;
           if (data && typeof data.messageId === "string") {
             nextQueued = nextQueued.filter((q) => q.id !== data.messageId);
+            if (data.messageId in nextPreviews) nextPreviews = omitKeys(nextPreviews, new Set([data.messageId]));
           }
           if (!replayed && nextSession?.status === "idle") {
             nextSession = { ...nextSession, status: "running" };
           }
         } else if (entry.kind === "assistant") {
+          const data = entry.data as { toolCalls?: Array<{ id?: unknown; args?: Json }> } | null;
+          for (const call of data?.toolCalls ?? []) {
+            if (typeof call.id === "string" && call.args !== undefined) {
+              this.toolCallArgs.set(call.id, call.args);
+            }
+          }
           nextLiveReply = undefined;
           nextRetrying = undefined;
         } else if (entry.kind === "tool_result") {
@@ -616,6 +726,7 @@ export class RemoteController {
           liveReply: nextLiveReply,
           activeTools: nextActiveTools,
           queuedMessages: nextQueued,
+          queuedPreviews: nextPreviews,
           compacting: nextCompacting,
           retrying: nextRetrying,
         });
@@ -635,6 +746,8 @@ export class RemoteController {
           liveReply: undefined,
           activeTools: [],
           queuedMessages: this.state.queuedMessages.filter((q) => q.id !== event.message.id),
+          queuedPreviews: omitKeys(this.state.queuedPreviews, new Set([event.message.id])),
+          canceling: false,
           retrying: undefined,
           ...(failed !== undefined ? { lastError: failed } : {}),
         });
@@ -673,6 +786,32 @@ function mergeActiveTools(previous: readonly ActiveTool[], session: Session): Ac
       ...(existing?.output !== undefined ? { output: existing.output } : {}),
     };
   });
+}
+
+function previewOfContent(content: SendRequest["content"]): string {
+  const text =
+    typeof content === "string"
+      ? content
+      : content
+          .filter((part): part is { type: "text"; text: string } => part.type === "text")
+          .map((part) => part.text)
+          .join(" ");
+  const singleLine = text.replace(/\s+/g, " ").trim();
+  return singleLine.length > 60 ? `${singleLine.slice(0, 59)}…` : singleLine;
+}
+
+function autoTitleOf(text: string): string | undefined {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned || cleaned.startsWith("/")) return undefined;
+  return cleaned.length > 48 ? `${cleaned.slice(0, 47)}…` : cleaned;
+}
+
+function omitKeys(record: Readonly<Record<string, string>>, remove: ReadonlySet<string>): Record<string, string> {
+  const next: Record<string, string> = {};
+  for (const [k, v] of Object.entries(record)) {
+    if (!remove.has(k)) next[k] = v;
+  }
+  return next;
 }
 
 export function buildSendContent(

@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type Agent,
@@ -23,6 +25,8 @@ import {
   removeRemote,
   saveRemote,
 } from "@fastagent-sh/pi-remote";
+import { parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/extension";
+import { renderRemoteEntry, renderRemoteFooterLines } from "@fastagent-sh/pi-remote/render";
 
 const tempDirs: string[] = [];
 
@@ -682,6 +686,53 @@ describe("RemoteController", () => {
     controller.disconnect();
   });
 
+  it("auto-titles an untitled session from the first non-command text message and tracks concurrent sends, queuedPreviews, and toolCallArgs", async () => {
+    const stream = createEventStream();
+    const { agent, updated } = makeFakeAgent({
+      onEvents: () => stream.iterable,
+    });
+    const resolvers: Array<() => void> = [];
+    const origSend = agent.messages.send;
+    agent.messages.send = (req) =>
+      new Promise<Message>((resolve) => {
+        resolvers.push(() => void origSend(req).then(resolve));
+      });
+
+    const controller = new RemoteController({}, { sleep: async () => {} });
+    await controller.connect("ops", agent);
+
+    // Concurrent sends keep sending=true until all in-flight sends settle; leading slash commands do not burn auto-title.
+    const slashPromise = controller.send("/skill:deploy");
+    const firstPromise = controller.send("Investigate checkout 502 errors in production");
+    expect(controller.getState().sending).toBe(true);
+    resolvers.shift()!();
+    await slashPromise;
+    expect(controller.getState().sending).toBe(true);
+    expect(updated).toEqual([]);
+
+    resolvers.shift()!();
+    const first = await firstPromise;
+    await flushMicrotasks();
+    expect(controller.getState().sending).toBe(false);
+    expect(updated).toEqual([
+      { sessionId: "sess-1", changes: { title: "Investigate checkout 502 errors in production" } },
+    ]);
+    expect(controller.getState().queuedPreviews[first.id]).toBe("Investigate checkout 502 errors in production");
+
+    stream.control.push({
+      type: "entry",
+      entry: {
+        id: "e-call",
+        timestamp: 20,
+        kind: "assistant",
+        data: { text: "", toolCalls: [{ id: "tc-42", name: "bash", args: { command: "ls" } }] },
+      },
+    });
+    await flushMicrotasks();
+    expect(controller.getToolCallArgs("tc-42")).toEqual({ command: "ls" });
+    controller.disconnect();
+  });
+
   it("builds text and image ContentParts for send", () => {
     expect(buildSendContent("hello")).toBe("hello");
     expect(buildSendContent("check this", [{ mimeType: "image/png", data: "abc" }])).toEqual([
@@ -715,6 +766,120 @@ describe("TerminalStatusReporter", () => {
   });
 });
 
+describe("rendering and native builtin interception", () => {
+  const plainTheme: any = {
+    fg: (_c: string, t: string) => t,
+    bg: (_c: string, t: string) => t,
+    bold: (t: string) => t,
+    italic: (t: string) => t,
+    underline: (t: string) => t,
+    dim: (t: string) => t,
+  };
+
+  it("renders a 2-line Pi-native footer without clipping model info at 80 cols and preserves extension statuses", () => {
+    initTheme();
+    const lines = renderRemoteFooterLines(
+      {
+        status: "connected",
+        remoteName: "fly",
+        agentInfo: { name: "fastagent-fly-demo", agent: { name: "demo" }, commands: [], tools: [], models: [] },
+        session: {
+          ...makeSession("HydCkn6Qe_w.3", "running"),
+          title: "Prod Build Investigation",
+          model: { provider: "openai", modelId: "gpt-6-luna" },
+          thinkingLevel: "high",
+          contextUsage: { tokens: 51_200, contextWindow: 200_000 },
+          usage: {
+            models: { "openai/gpt-6-luna": { inputTokens: 12_000, outputTokens: 1_800, cost: 0.042 } },
+            tools: {},
+          },
+        },
+        activeTools: [],
+        queuedMessages: [{ id: "m-2", mode: "queue" }],
+        queuedPreviews: {},
+        sending: false,
+        canceling: false,
+        compacting: false,
+      },
+      80,
+      plainTheme,
+      { getExtensionStatuses: () => new Map([["other", "ext:ok"]]) } as any,
+    ).map((l) => stripTerminalSequences(l));
+
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toContain("fly (fastagent-fly-demo)");
+    expect(lines[0]).toContain("HydC….3");
+    expect(lines[1]).toContain("25.6%/200k");
+    expect(lines[1]).toContain("gpt-6-luna • high");
+    expect(lines[2]).toBe("ext:ok");
+  });
+
+  it("skips tool-only assistant entries, merges toolArgs into tool_result, and renders clean compaction cards", () => {
+    initTheme();
+    const opts = { expanded: false, keyText: () => "ctrl+o", keyHint: (_k: any, d: string) => `ctrl+o ${d}` };
+    const toolOnly = renderRemoteEntry(
+      {
+        remoteName: "fly",
+        sessionId: "s1",
+        entry: {
+          id: "e1",
+          timestamp: 1,
+          kind: "assistant",
+          data: { text: "", toolCalls: [{ id: "c1", name: "bash", args: { cmd: "ls" } }] },
+        },
+      },
+      opts,
+      plainTheme,
+    );
+    expect(toolOnly).toBeUndefined();
+
+    const toolResult = renderRemoteEntry(
+      {
+        remoteName: "fly",
+        sessionId: "s1",
+        toolArgs: { cmd: "ls" },
+        entry: {
+          id: "e2",
+          timestamp: 2,
+          kind: "tool_result",
+          data: { toolCallId: "c1", toolName: "bash", isError: false, content: [{ type: "text", text: "a.txt" }] },
+        },
+      },
+      opts,
+      plainTheme,
+    );
+    const resultText = toolResult!.render(80).map(stripTerminalSequences).join("\n");
+    expect(resultText).toContain("bash cmd=ls");
+
+    const compaction = renderRemoteEntry(
+      {
+        remoteName: "fly",
+        sessionId: "s1",
+        entry: { id: "e3", timestamp: 3, kind: "compaction", data: { summary: "Condensed." } },
+      },
+      opts,
+      plainTheme,
+    );
+    const compactionText = compaction!.render(80).map(stripTerminalSequences).join("\n");
+    expect(compactionText).toContain("Context summarized (ctrl+o to expand)");
+    expect(compactionText).not.toContain("0 tokens");
+  });
+
+  it("maps native Pi slash commands to remote equivalents without hijacking /compact, /quit, or /fa", () => {
+    expect(parseInterceptedRemoteBuiltin("/model openai/gpt-6-luna")).toEqual({
+      command: "model",
+      args: "openai/gpt-6-luna",
+    });
+    expect(parseInterceptedRemoteBuiltin("/name Deploy check")).toEqual({ command: "title", args: "Deploy check" });
+    expect(parseInterceptedRemoteBuiltin("/new")).toEqual({ command: "new", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/resume")).toEqual({ command: "sessions", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/fork")).toEqual({ command: "fork", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/compact")).toBeUndefined();
+    expect(parseInterceptedRemoteBuiltin("/quit")).toBeUndefined();
+    expect(parseInterceptedRemoteBuiltin("/fa off")).toBeUndefined();
+  });
+});
+
 describe("Pi extension host integration", () => {
   function createMockPi() {
     const handlers = new Map<string, Array<(...args: any[]) => any>>();
@@ -727,6 +892,8 @@ describe("Pi extension host integration", () => {
     let footer: unknown;
     let footerSetCount = 0;
     let autocompleteCount = 0;
+    let editorComponent: unknown;
+    let windowTitle = "";
     let terminalListener: ((data: string) => any) | undefined;
 
     const pi: any = {
@@ -770,6 +937,15 @@ describe("Pi extension host integration", () => {
           footer = factory;
           if (factory !== undefined) footerSetCount += 1;
         },
+        getEditorComponent() {
+          return editorComponent;
+        },
+        setEditorComponent(factory: unknown) {
+          editorComponent = factory;
+        },
+        setTitle(title: string) {
+          windowTitle = title;
+        },
         setStatus() {},
         addAutocompleteProvider() {
           autocompleteCount += 1;
@@ -796,6 +972,8 @@ describe("Pi extension host integration", () => {
       getFooter: () => footer,
       getFooterSetCount: () => footerSetCount,
       getAutocompleteCount: () => autocompleteCount,
+      getEditorComponent: () => editorComponent,
+      getWindowTitle: () => windowTitle,
       sendTerminalInput: (data: string) => terminalListener?.(data),
     };
   }
@@ -988,6 +1166,27 @@ describe("Pi extension host integration", () => {
       expect(await inputHandler({ text: "back to local", source: "interactive" }, mock.ctx)).toEqual({
         action: "continue",
       });
+
+      // /fa <name> connects directly, preserves & restores any prior custom editor, emits banner before entries, and /fa off cleans up.
+      const priorEditor = () => ({});
+      mock.ctx.ui.setEditorComponent(priorEditor);
+      const entriesBeforeDirect = mock.appendedEntries.length;
+      await fa.handler("ops", mock.ctx);
+      await waitFor(() =>
+        mock.appendedEntries.slice(entriesBeforeDirect).some((entry) => entry.customType === REMOTE_ENTRY_TYPE),
+      );
+      const directBatch = mock.appendedEntries.slice(entriesBeforeDirect);
+      const bannerIdx = directBatch.findIndex((e) => e.customType === "fastagent-remote-banner");
+      const entryIdx = directBatch.findIndex((e) => e.customType === REMOTE_ENTRY_TYPE);
+      expect(bannerIdx).toBeGreaterThanOrEqual(0);
+      expect(bannerIdx).toBeLessThan(entryIdx);
+
+      expect(mock.getEditorComponent()).not.toBe(priorEditor);
+      expect(mock.getWindowTitle()).toContain("☁ ops");
+      await fa.handler("off", mock.ctx);
+      expect(mock.getEditorComponent()).toBe(priorEditor);
+      expect(mock.getWindowTitle()).toBe("");
+      mock.ctx.ui.setEditorComponent(undefined);
 
       // Direct URL connect works without any saved remotes.json.
       process.env.FASTAGENT_REMOTES_PATH = join(dir, "empty-remotes.json");
