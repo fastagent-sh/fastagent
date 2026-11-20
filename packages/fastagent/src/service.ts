@@ -5,14 +5,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import type { Agent } from "@fastagent-sh/client/agent-api";
+import type { Agent, ClockApi } from "@fastagent-sh/client/agent-api";
 import { type Handler, serveHandler, totalFetch } from "./http/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
 import { text } from "./http/respond.ts";
 import { log } from "./log.ts";
-import { type Scheduler, createScheduler } from "./schedule/scheduler.ts";
-import type { ClockStore } from "./schedule/clock.ts";
+import type { ClockRunner } from "./schedule/runner.ts";
 import type { Schedule } from "./schedule/schedule.ts";
 
 /** Run `work` at most once uninterruptibly; every caller shares its outcome (Effect 4.0 `cached` does not). */
@@ -34,20 +33,11 @@ function once<A, E, R>(work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
 /** The port a serve binds when neither a flag nor `PORT` (start only) names one. */
 export const DEFAULT_HTTP_PORT = 8787;
 
-/** Start the clock: the definition's schedules, and the wake-ups the agent sets for itself, on every serve. */
-async function startSchedules(
-  agent: Agent,
-  clock: ClockStore,
-  schedules: readonly Schedule[],
-  since?: Date,
-): Promise<Pick<Scheduler, "stop" | "tick" | "nextDue">> {
-  const scheduler = Effect.runSync(createScheduler({ agent, clock, schedules }));
-  await scheduler.start(since === undefined ? undefined : { since }).catch((error: unknown) => {
-    scheduler.stop();
-    throw error;
-  });
+/** Start the clock: the definition's schedules, and any wake-ups the agent sets for itself, on every serve. */
+async function startClock(clock: ClockRunner, schedules: readonly Schedule[], since?: Date): Promise<ClockRunner> {
+  await clock.start(since === undefined ? undefined : { since });
   if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
-  return scheduler;
+  return clock;
 }
 
 /** What `serve()` answers: the agent's schedules and wake-ups, `GET /health`, and the Agent API with a key. */
@@ -56,6 +46,8 @@ export interface Service {
   fetch(request: Request): Promise<Response>;
   /** Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
+  /** The instance's clock operations (schedules and wake-ups), when opened on durable storage. */
+  readonly clock?: ClockApi;
   /**
    * Claim and start whatever is due on the clock right now (`since` stamps schedules seen for the first time, as a
    * deploy's alarm carries), resume due sleeps, and re-arm any external alarm: what a platform alarm calls.
@@ -143,9 +135,10 @@ export interface ServeOptions {
   onClose?: () => void;
 }
 
-/** What the assembly serves: the opened agent (carrying its own clock, when it has one) and its schedules. */
+/** What the assembly serves: the opened agent, its optional external clock runner, and its schedules. */
 interface ServableAgent {
-  agent: Agent & { readonly clock?: ClockStore };
+  agent: Agent;
+  clock?: ClockRunner;
   schedules: readonly Schedule[];
 }
 
@@ -163,9 +156,10 @@ function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
 
 /** The assembly itself: the schedules, optional alarm watcher, and the Agent API with a key, composed into one handler. */
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
-  const { agent, schedules } = opened;
-  const clock = agent.clock;
-  const api = options.apiKeys?.length ? apiHandler(agent, { keys: options.apiKeys }) : undefined;
+  const { agent, clock, schedules } = opened;
+  const api = options.apiKeys?.length
+    ? apiHandler(agent, { keys: options.apiKeys, ...(clock === undefined ? {} : { clock: clock.api }) })
+    : undefined;
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -190,7 +184,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
             ? undefined
             : yield* Effect.acquireRelease(
                 Effect.tryPromise({
-                  try: () => startSchedules(agent, clock, schedules, options.since),
+                  try: () => startClock(clock, schedules, options.since),
                   catch: (error) => error,
                 }),
                 (started) => Effect.sync(started.stop),
@@ -213,6 +207,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
             () => Effect.runPromise(shutdown),
             async () => api?.endStreams(),
           ),
+          ...(clock === undefined ? {} : { clock: clock.api }),
           tick: async (tickOptions?: { since?: Date }) => {
             options.beforeTick?.();
             await scheduled?.tick(tickOptions);

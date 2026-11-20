@@ -69,6 +69,12 @@ may write into one session, so the session's status says it is busy, not whether
 | `messages.send` | Send a message; answers once it is recorded, or with `wait` (seconds) once it has ended |
 | `messages.stream` | Send a message and receive it as it is written |
 | `messages.get` | A message by id or by its key, with `wait` too |
+
+Clock operations are separate from the core `Agent` interface (`ClockApi`, via `connectClock` / `connectAgentCoreClock`
+over HTTP, or `service.clock` in process):
+
+| Clock operation | Does |
+|---|---|
 | `schedules.run(name, { wait? })` | Fire a schedule now, as its clock would, in the schedule's own session: `{ status: "sent", message }`, or `{ status: "skipped", reason }` while its previous run still holds that session |
 | `schedules.list()` | Every schedule: `name`, `cron`, `tz`, when it fires `next`, and its `last` occurrence (`slot`, `firedAt`, `outcome`: `completed`, `failed`, `skipped` or `interrupted`, absent while it runs, and `ms`) |
 | `wakeups.cancel(id)` | Cancel a wake-up the agent set for itself (`wake`), whichever session set it; answers what it was |

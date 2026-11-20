@@ -414,7 +414,10 @@ export interface Agent {
     stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
     get(key: MessageKey, options?: WaitOptions): Promise<Message>;
   };
-  /** The agent's clock, operated by its Caller: what the process serving the agent runs. */
+}
+
+/** The agent's clock, operated by its Caller: schedules and self-scheduled wake-ups. */
+export interface ClockApi {
   schedules: {
     /**
      * Fire the schedule `name` now, as its clock would: one occurrence, in the schedule's own session. Answers once its

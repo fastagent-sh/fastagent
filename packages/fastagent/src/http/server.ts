@@ -15,6 +15,7 @@ import { HttpApiBuilder, HttpApiError, OpenApi } from "effect/http-api";
 import {
   type Agent,
   AgentError,
+  type ClockApi,
   LIMITS,
   type SessionEvent,
   agentError,
@@ -64,6 +65,8 @@ export interface ApiHandler {
 
 export interface ApiOptions {
   keys: readonly string[];
+  /** Optional clock operations mounted under `/v1/schedules` and `/v1/wakeups`. */
+  clock?: ClockApi;
   /** For tests: the longest a request waits, and how often a quiet stream says it is open. */
   waitCapSeconds?: number;
   keepAliveMs?: number;
@@ -259,13 +262,28 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("getMessageByKey", ({ params, query }) =>
         call("messages.get", (signal) => agent.messages.get(params, { wait: capped(query.wait), signal })),
-      )
+      ),
+  );
+
+  const { clock } = options;
+  const clockHandlers = HttpApiBuilder.group(AgentHttpApi, "clock", (handle) =>
+    handle
       .handle("runSchedule", ({ params, query }) =>
-        call("schedules.run", (signal) => agent.schedules.run(params.name, { wait: capped(query.wait), signal })),
+        clock === undefined
+          ? Effect.fail(agentError("not_found", `no schedule "${params.name}"`))
+          : call("schedules.run", (signal) => clock.schedules.run(params.name, { wait: capped(query.wait), signal })),
       )
-      .handle("listSchedules", () => call("schedules.list", () => agent.schedules.list()))
-      .handle("listWakeups", () => call("wakeups.list", () => agent.wakeups.list()))
-      .handle("cancelWakeup", ({ params }) => call("wakeups.cancel", () => agent.wakeups.cancel(params.id))),
+      .handle("listSchedules", () =>
+        clock === undefined ? Effect.succeed([]) : call("schedules.list", () => clock.schedules.list()),
+      )
+      .handle("listWakeups", () =>
+        clock === undefined ? Effect.succeed([]) : call("wakeups.list", () => clock.wakeups.list()),
+      )
+      .handle("cancelWakeup", ({ params }) =>
+        clock === undefined
+          ? Effect.fail(agentError("not_found", `no pending wake-up ${params.id}`))
+          : call("wakeups.cancel", () => clock.wakeups.cancel(params.id)),
+      ),
   );
 
   const authorization = Layer.succeed(Authorization)({
@@ -292,7 +310,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
 
   const { handler, dispose } = HttpRouter.toWebHandler(
     Layer.mergeAll(HttpApiBuilder.layer(AgentHttpApi), Edges).pipe(
-      Layer.provide(handlers),
+      Layer.provide([handlers, clockHandlers]),
       Layer.provide([authorization, malformed]),
       Layer.provide(HttpServer.layerServices),
       Layer.provide(Layer.succeed(HttpIncomingMessage.MaxBodySize)(MAX_BODY)),

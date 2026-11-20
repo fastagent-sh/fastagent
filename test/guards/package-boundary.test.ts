@@ -127,6 +127,15 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     );
     expect(offenders).toEqual([]);
   });
+
+  it("pi-durable's core agent runtime (agent.ts) does not import the scheduler or clock layer", () => {
+    const agentFile = resolve(srcOf("fastagent"), "harnesses/pi-durable/agent.ts");
+    const clockFile = resolve(srcOf("fastagent"), "harnesses/pi-durable/clock.ts");
+    const scheduleImports = importsOf(agentFile).relatives.filter(
+      (target) => target.startsWith(`${resolve(srcOf("fastagent"), "schedule")}/`) || target === clockFile,
+    );
+    expect(scheduleImports).toEqual([]);
+  });
 });
 
 describe("public entries", () => {

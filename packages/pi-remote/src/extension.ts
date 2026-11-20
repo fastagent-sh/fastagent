@@ -525,7 +525,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       showBanner?: boolean;
     } = {},
   ): Promise<void> => {
-    const { agent, defaultSessionId } = await connectRemote(name, remote);
+    const { agent, clock, defaultSessionId } = await connectRemote(name, remote);
     const targetSession = options.sessionId ?? defaultSessionId;
     if (
       options.allowHandoff !== false &&
@@ -537,6 +537,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       if (outcome !== "unsupported") return;
     }
     const session = await controller.connect(name, agent, {
+      clock,
       ...(targetSession !== undefined ? { sessionId: targetSession } : {}),
       ...(options.after !== undefined ? { after: options.after } : {}),
       ...(options.seenEntryIds !== undefined ? { seenEntryIds: options.seenEntryIds } : {}),

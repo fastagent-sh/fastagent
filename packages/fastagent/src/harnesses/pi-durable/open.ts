@@ -156,7 +156,7 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   refuseTwins("extension", [
     ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CodingTools.name }] : []),
     { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
-    { source: "FastAgent's wake tools", name: WAKE_EXTENSION },
+    ...(config.wakeTools === true ? [{ source: "FastAgent's wake tools", name: WAKE_EXTENSION }] : []),
     ...extensions,
   ]);
   refuseTwins("schedule", schedules);
@@ -232,6 +232,8 @@ export interface AssembleAgentOptions {
   clocked?: boolean;
   /** Whether that scheduler runs now: an app's `openAgent` runs one only while it serves. Default always. */
   wakeTicking?: () => boolean;
+  /** Optional hook invoked after a session is deleted (e.g. to clear wake-ups in an external clock). */
+  onSessionDelete?: (sessionId: string) => Promise<void> | void;
   unfinished?: Unfinished;
   /** The whole environment of the processes the agent starts (child-env.ts): nothing of this process's is added. */
   processEnv: Readonly<Record<string, string>>;
@@ -302,6 +304,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   }
   const selectedCodingTools = resolveCodingTools(config.codingTools);
   const builtinCoding = codingToolsExtension(selectedCodingTools);
+  const builtinWake = config.wakeTools === true && options.clocked === true && !ownWake;
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
@@ -309,7 +312,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     defineExtension({
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, {
-        wake: ownWake || options.clocked === true,
+        wake: ownWake || builtinWake,
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         source: definition.source === true,
@@ -319,7 +322,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     }),
   );
   for (const extension of code.extensions) registry.install(extension);
-  if (options.clocked === true && !ownWake) {
+  if (builtinWake) {
     registry.install(wakeExtension(options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }));
   }
   const { thinkingLevel } = config;
@@ -334,7 +337,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-    ...(options.clocked === true ? { clock: { schedules: code.schedules } } : {}),
+    ...(options.onSessionDelete === undefined ? {} : { onSessionDelete: options.onSessionDelete }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.

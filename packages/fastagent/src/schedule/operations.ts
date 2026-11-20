@@ -5,7 +5,14 @@
  * reads an instance no process serves.
  */
 import * as Effect from "effect/Effect";
-import { type Agent, type Message, type ScheduleState, type Wakeup, agentError } from "@fastagent-sh/client/agent-api";
+import {
+  type Agent,
+  type ClockApi,
+  type Message,
+  type ScheduleState,
+  type Wakeup,
+  agentError,
+} from "@fastagent-sh/client/agent-api";
 import { beginWork } from "../busy.ts";
 import { log } from "../log.ts";
 import type { ClockStore } from "./clock.ts";
@@ -60,7 +67,7 @@ export async function pendingWakeups(store: ClockStore): Promise<Wakeup[]> {
 export function clockOperations(
   agent: ScheduledAgent & Pick<Agent, "messages">,
   clock: ClockState | undefined,
-): Pick<Agent, "schedules" | "wakeups"> {
+): ClockApi {
   return {
     schedules: {
       async run(name, options = {}) {

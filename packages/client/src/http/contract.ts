@@ -260,6 +260,13 @@ const AgentGroup = HttpApiGroup.make("agent")
       success: Message,
       error: Refused,
     }),
+  )
+  .middleware(Malformed)
+  .middleware(Authorization)
+  .prefix(API_PREFIX);
+
+const ClockGroup = HttpApiGroup.make("clock")
+  .add(
     HttpApiEndpoint.post("runSchedule", "/schedules/:name/run", {
       params: { name: Schema.String },
       query: WaitQuery,
@@ -286,4 +293,5 @@ const AgentGroup = HttpApiGroup.make("agent")
 
 export class AgentHttpApi extends HttpApi.make("fastagent")
   .add(AgentGroup)
+  .add(ClockGroup)
   .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "1" })) {}

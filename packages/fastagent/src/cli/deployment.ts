@@ -5,8 +5,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Agent } from "@fastagent-sh/client/agent-api";
-import { connectAgent } from "@fastagent-sh/client";
+import type { Agent, ClockApi } from "@fastagent-sh/client/agent-api";
+import { connectAgent, connectClock } from "@fastagent-sh/client";
 import { expandRemoteEnvRef, parseRemotesJson } from "@fastagent-sh/client/remotes";
 import { applyEnvValues, enterAgentEnv } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
@@ -74,7 +74,7 @@ export async function resolveRemoteTarget(
   dirArg: string,
   target: RemoteTargetFlags,
   instance?: InstanceFlags,
-): Promise<{ agent: Agent; label: string; defaultSessionId?: string } | undefined> {
+): Promise<{ agent: Agent; clock: ClockApi; label: string; defaultSessionId?: string } | undefined> {
   if (target.url !== undefined && target.remote !== undefined) {
     failUsage("pass either --url or --remote, not both");
   }
@@ -91,7 +91,11 @@ export async function resolveRemoteTarget(
 
   if (target.url !== undefined) {
     const apiKey = target.key ?? deploymentKey(target.url);
-    return { agent: connectAgent(target.url, { apiKey }), label: target.url };
+    return {
+      agent: connectAgent(target.url, { apiKey }),
+      clock: connectClock(target.url, { apiKey }),
+      label: target.url,
+    };
   }
 
   const remoteName = target.remote?.trim();
@@ -128,6 +132,7 @@ export async function resolveRemoteTarget(
     }
     return {
       agent: connectAgent(entry.url, { apiKey }),
+      clock: connectClock(entry.url, { apiKey }),
       label: `${remoteName} (${entry.url})`,
       ...(entry.sessionId !== undefined ? { defaultSessionId: entry.sessionId } : {}),
     };
@@ -144,12 +149,14 @@ export async function resolveRemoteTarget(
       `remote "${remoteName}" uses AgentCore; install @aws-sdk/client-bedrock-agentcore (${error instanceof Error ? error.message : String(error)})`,
     );
   }
+  const connection = {
+    runtimeArn: entry.runtimeArn,
+    sessionId: entry.sessionId,
+    ...(entry.qualifier !== undefined ? { qualifier: entry.qualifier } : {}),
+  };
   return {
-    agent: agentcore.connectAgentCore({
-      runtimeArn: entry.runtimeArn,
-      sessionId: entry.sessionId,
-      ...(entry.qualifier !== undefined ? { qualifier: entry.qualifier } : {}),
-    }),
+    agent: agentcore.connectAgentCore(connection),
+    clock: agentcore.connectAgentCoreClock(connection),
     label: `${remoteName} (${entry.runtimeArn})`,
   };
 }

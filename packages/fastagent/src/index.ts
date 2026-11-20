@@ -5,6 +5,7 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
+  ClockApi,
   CompactOptions,
   ContentPart,
   CreateSessionOptions,

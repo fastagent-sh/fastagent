@@ -35,6 +35,7 @@ Every key is optional. An unknown key refuses the start.
 | `model` | none | `provider/modelId` ([model selection](#model-selection)) |
 | `thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `codingTools` | `true` | Built-in coding tools (`read`, `write`, `edit`, `bash`): `true`, `false`, or a subset array such as `["read"]` |
+| `wakeTools` | `false` | Opt in to built-in self-scheduling tools (`wake`, `unwake`) |
 | `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
@@ -259,7 +260,8 @@ instance's storage; `fastagent schedules run <name>` runs one now. Both go throu
 
 ### Self-scheduling
 
-Every opened instance gives the agent `wake` and `unwake`; only a serve's clock fires the wake-ups:
+Set `wakeTools: true` in `fastagent.config.ts` to give the agent `wake` and `unwake` (disabled by default); only a
+serve's clock fires the wake-ups:
 
 - `wake({ in: "30m", prompt })` or `wake({ cron: "0 9 * * *", tz?, prompt })` fires back into the same session, and
   survives restarts.

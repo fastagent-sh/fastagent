@@ -185,22 +185,6 @@ function makeFakeAgent(options?: {
         return { id: "msg-1", sessionId: "sess-1", status: "completed" };
       },
     },
-    schedules: {
-      async run(name) {
-        return { status: "sent", message: { id: `sched-${name}`, sessionId: "sess-sched", status: "queued" } };
-      },
-      async list() {
-        return [{ name: "daily", cron: "0 9 * * *" }];
-      },
-    },
-    wakeups: {
-      async cancel(id) {
-        return { id, sessionId: "sess-1", fireAt: "2026-01-01T00:00:00Z", prompt: "check" };
-      },
-      async list() {
-        return [];
-      },
-    },
   };
 
   return { agent, sent, canceled, compacted, updated, eventCalls };

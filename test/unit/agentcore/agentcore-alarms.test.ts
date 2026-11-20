@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import { Harness, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
-import { connectAgentCore } from "@fastagent-sh/client/agentcore";
+import { connectAgentCore, connectAgentCoreClock } from "@fastagent-sh/client/agentcore";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   alarmNameOf,
@@ -144,7 +144,7 @@ faux.setResponses(Array.from({ length: 30 }, () => (context) => {
   if (text.includes("slow-woken")) return new Promise((r) => setTimeout(() => r(fauxAssistantMessage("woken-reply")), 300));
   return fauxAssistantMessage("plain");
 }));
-export default { model: "gw/m1", providers: [faux.provider] };
+export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
 `,
     });
     const definition = await loadSourceDefinition(dir);
@@ -164,6 +164,7 @@ export default { model: "gw/m1", providers: [faux.provider] };
     let aws = agentCore(handler);
     try {
       const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
+      const clock = connectAgentCoreClock({ runtimeArn: RUNTIME, sessionId });
       const { id } = await agent.sessions.create();
       await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 });
       // An ordinary short chat turn with no schedules or wake-ups touches EventBridge Scheduler zero times.
@@ -173,9 +174,9 @@ export default { model: "gw/m1", providers: [faux.provider] };
       await agent.messages.send({ sessionId: id, content: "wake-me" }, { wait: 30 });
       await vi.waitFor(() => expect(sched.schedules.get(alarmName)?.ScheduleExpression).toBeDefined());
       expect(sched.schedules.get(alarmName)?.ActionAfterCompletion).toBe("NONE");
-      const pending = await agent.wakeups.list();
+      const pending = await clock.wakeups.list();
       expect(pending).toHaveLength(1);
-      await agent.wakeups.cancel(pending[0]!.id);
+      await clock.wakeups.cancel(pending[0]!.id);
       await vi.waitFor(() => expect(sched.schedules.has(alarmName)).toBe(false));
 
       // Arm again, reclaim the microVM (`close`), then deliver EventBridge Scheduler's `{ alarm: true }` to a cold handler.
@@ -359,9 +360,9 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
       });
       const aws = agentCore(checkSession);
       try {
-        const preAgent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: preconfigured });
+        const preClock = connectAgentCoreClock({ runtimeArn: RUNTIME, sessionId: preconfigured });
         await vi.waitFor(async () => {
-          const states = await preAgent.schedules.list();
+          const states = await preClock.schedules.list();
           expect(states[0]?.last?.slot).toBe("2026-11-18T11:00:00.000Z");
         });
       } finally {
@@ -460,7 +461,7 @@ faux.setResponses(Array.from({ length: 10 }, () => (context) => {
   }
   return fauxAssistantMessage("ok");
 }));
-export default { model: "gw/m1", providers: [faux.provider] };
+export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
 `,
       "src/schedules/hourly.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
 export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "set-followup" });
@@ -491,8 +492,8 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "set-follo
       const since = new Date(Date.now() - 65 * 60_000).toISOString();
       const res = await handler.fetch(invocation(sessionId, { alarm: true, since }));
       expect(res.status).toBe(200);
-      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
-      await vi.waitFor(async () => expect(await agent.wakeups.list()).toHaveLength(1));
+      const clock = connectAgentCoreClock({ runtimeArn: RUNTIME, sessionId });
+      await vi.waitFor(async () => expect(await clock.wakeups.list()).toHaveLength(1));
     } finally {
       sched.onWritten(undefined);
       await aws.close();

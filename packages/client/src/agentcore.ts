@@ -13,7 +13,7 @@ import {
   InvokeAgentRuntimeCommand,
   type InvokeAgentRuntimeCommandOutput,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { type Agent, type ErrorCode, agentError, errorData } from "./agent-api.ts";
+import { type Agent, type ClockApi, type ErrorCode, agentError, errorData } from "./agent-api.ts";
 import {
   type EnvelopedResponse,
   SESSION_ID_PATTERN,
@@ -21,7 +21,7 @@ import {
   isEventStream,
   unwrapResponse,
 } from "./agentcore/contract.ts";
-import { connectAgent } from "./http/client.ts";
+import { connectAgent, connectClock } from "./http/client.ts";
 import { statusOf } from "./http/contract.ts";
 
 /** @public */
@@ -30,6 +30,7 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
+  ClockApi,
   CompactOptions,
   ContentPart,
   ContextUsage,
@@ -64,7 +65,7 @@ export type {
 /** @public */
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 /** @public */
-export { type ConnectOptions, connectAgent } from "./http/client.ts";
+export { type ConnectOptions, connectAgent, connectClock } from "./http/client.ts";
 
 /** @public */
 export interface AgentCoreConnection {
@@ -115,7 +116,10 @@ const clientIn = (region: string): BedrockAgentCoreClient => {
  * The Agent of the session `sessionId` on the runtime `runtimeArn`.
  * @public
  */
-export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCoreConnection): Agent {
+function agentCoreTransport({ runtimeArn, sessionId, qualifier }: AgentCoreConnection): {
+  url: string;
+  fetch: typeof fetch;
+} {
   const region = RUNTIME_ARN.exec(runtimeArn)?.[1];
   if (region === undefined) {
     throw new Error(
@@ -170,5 +174,23 @@ export function connectAgentCore({ runtimeArn, sessionId, qualifier }: AgentCore
       );
     return unwrapResponse(answer.response);
   };
-  return connectAgent(`https://${sessionId}.agentcore`, { fetch: agentCoreFetch });
+  return { url: `https://${sessionId}.agentcore`, fetch: agentCoreFetch };
+}
+
+/**
+ * The Agent of the session `sessionId` on the runtime `runtimeArn`.
+ * @public
+ */
+export function connectAgentCore(connection: AgentCoreConnection): Agent {
+  const { url, fetch } = agentCoreTransport(connection);
+  return connectAgent(url, { fetch });
+}
+
+/**
+ * The Clock API (schedules and wake-ups) of the session `sessionId` on the runtime `runtimeArn`.
+ * @public
+ */
+export function connectAgentCoreClock(connection: AgentCoreConnection): ClockApi {
+  const { url, fetch } = agentCoreTransport(connection);
+  return connectClock(url, { fetch });
 }
