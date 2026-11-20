@@ -16,8 +16,10 @@ import {
   fauxToolCall,
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
+import * as EffectSchema from "effect/Schema";
 import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
-import { obj } from "@earendil-works/pi-schema";
+import { obj, str } from "@earendil-works/pi-schema";
+import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/pi-durable/tool.ts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import {
@@ -539,5 +541,179 @@ describe("startup warnings when a new version removes a tool or task with work i
     } finally {
       await v2.close();
     }
+  });
+});
+
+describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON Schema, and pi-schema", () => {
+  it("adapts Standard JSON Schema v1 (Effect Schema and custom validate/transform), plain JSON Schema, and pi-schema in real tool turns", async () => {
+    const effectTool = defineFastAgentTool({
+      name: "lookup_effect",
+      description: "Lookup via Effect Standard JSON Schema v1",
+      parameters: EffectSchema.toStandardJSONSchemaV1(
+        EffectSchema.Struct({
+          city: EffectSchema.String,
+          count: EffectSchema.optional(EffectSchema.Number),
+        }),
+      ),
+      execute: async ({ city, count }) => `${city}:${count ?? 1}`,
+    });
+    expect(effectTool.parameters).not.toHaveProperty("$schema");
+    expect(effectTool.parameters).toMatchObject({ type: "object", required: ["city"] });
+
+    // Structural Standard JSON Schema v1 matching Zod v4 (defaults, transforms, refinements, draft-07 fallback).
+    const zodLikeSchema = {
+      "~standard": {
+        version: 1 as const,
+        vendor: "zod",
+        jsonSchema: {
+          input: ({ target }: { target: string }) => {
+            if (target === "draft-2020-12") throw new Error("unsupported target");
+            return {
+              $schema: "http://json-schema.org/draft-07/schema#",
+              type: "object",
+              properties: {
+                city: { type: "string" },
+                units: { type: "string", enum: ["c", "f"] },
+              },
+              required: ["city"],
+            };
+          },
+        },
+        validate: (value: unknown) => {
+          const input = value as { city?: string; units?: "c" | "f" };
+          if (!input.city || input.city.trim() === "") {
+            return { issues: [{ message: "city must not be blank", path: [{ key: "city" }] }] };
+          }
+          return { value: { city: input.city.trim().toUpperCase(), units: input.units ?? ("c" as const) } };
+        },
+        types: undefined as unknown as {
+          input: { city: string; units?: "c" | "f" };
+          output: { city: string; units: "c" | "f" };
+        },
+      },
+    };
+    const zodLikeTool = defineFastAgentTool({
+      name: "weather_std",
+      description: "Weather with Standard Schema default/transform/refine",
+      parameters: zodLikeSchema,
+      execute: async ({ city, units }) => `${city}/${units}`,
+    });
+    expect(zodLikeTool.parameters).not.toHaveProperty("$schema");
+
+    const jsonSchemaTool = defineFastAgentTool({
+      name: "search_json",
+      description: "Search with plain JSON Schema",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          limit: { type: "integer" },
+        },
+        required: ["query"],
+      } as const,
+      execute: async ({ query, limit }) => ({
+        output: [{ type: "text", text: `q=${query} limit=${limit ?? 10}` }],
+      }),
+    });
+
+    const piSchemaTool = defineFastAgentTool({
+      name: "echo_pi",
+      description: "Echo with pi-schema",
+      parameters: obj({ text: str() }),
+      execute: async ({ text }) => `echo:${text}`,
+    });
+
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses([
+      fauxAssistantMessage(
+        [
+          fauxToolCall("lookup_effect", { city: "Tokyo" }),
+          fauxToolCall("weather_std", { city: "  paris " }),
+          fauxToolCall("weather_std", { city: "   " }),
+          fauxToolCall("search_json", { query: "agents", limit: 5 }),
+          fauxToolCall("echo_pi", { text: "ok" }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+      (context: TranscriptContext) => {
+        const results = context.messages
+          .filter((m) => m.role === "toolResult")
+          .map(
+            (m) =>
+              `${m.toolName}:${m.isError ? "err:" : ""}${m.content.map((c) => ("text" in c ? c.text : "")).join("")}`,
+          );
+        return fauxAssistantMessage(results.join(" | "));
+      },
+    ]);
+    const registry = createRegistry();
+    registry.install({
+      name: "custom",
+      tools: [effectTool, zodLikeTool, jsonSchemaTool, piSchemaTool],
+    });
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
+      registry,
+      name: "tools-test",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      const session = await agent.sessions.create();
+      const msg = await agent.messages.send({ sessionId: session.id, content: "run all" }, { wait: 15 });
+      expect(msg.status).toBe("completed");
+      expect(msg.answer?.text).toContain("lookup_effect:Tokyo:1");
+      expect(msg.answer?.text).toContain("weather_std:PARIS/c");
+      expect(msg.answer?.text).toContain("weather_std:err:Invalid arguments: city: city must not be blank");
+      expect(msg.answer?.text).toContain("search_json:q=agents limit=5");
+      expect(msg.answer?.text).toContain("echo_pi:echo:ok");
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it("fails fast on non-object schemas, Standard Schemas without JSON Schema, and raw unconverted Standard Schemas in src/tools/", async () => {
+    expect(() =>
+      defineFastAgentTool({
+        name: "bad_non_obj",
+        description: "Non-object schema",
+        parameters: EffectSchema.toStandardJSONSchemaV1(EffectSchema.String),
+        execute: async () => "no",
+      }),
+    ).toThrow(/type: "object"/);
+
+    expect(() =>
+      defineFastAgentTool({
+        name: "bad_no_json_schema",
+        description: "Standard Schema without jsonSchema",
+        parameters: {
+          "~standard": { version: 1, vendor: "legacy", validate: (v: unknown) => ({ value: v }) },
+        } as unknown as Record<string, unknown>,
+        execute: async () => "no",
+      }),
+    ).toThrow(/Standard Schema without JSON Schema support/);
+
+    expect(() =>
+      defineFastAgentTool({
+        name: "bad_raw_type",
+        description: "Plain non-object JSON schema",
+        parameters: { type: "string" },
+        execute: async () => "no",
+      }),
+    ).toThrow(/type: "object"/);
+
+    const rawStdDir = agentPackage({
+      ...FILES,
+      "src/tools/raw_std.ts": `export default {
+  name: "raw_std",
+  description: "Forgot defineTool",
+  parameters: { "~standard": { version: 1, vendor: "zod" } },
+  execute: async () => ({ output: [] }),
+};
+`,
+    });
+    const def = await loadSourceDefinition(rawStdDir);
+    expect(() => buildDefinition(def, ENV)).toThrow(
+      /unconverted Standard Schema.*defineTool from "@fastagent-sh\/fastagent"/,
+    );
   });
 });

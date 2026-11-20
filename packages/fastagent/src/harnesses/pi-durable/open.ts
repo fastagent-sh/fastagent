@@ -96,12 +96,24 @@ function built<T>(
 
 const toolProblem = (value: unknown): string | undefined => {
   const tool = value as Partial<ToolRegistration> | null;
-  return typeof tool?.name === "string" &&
-    typeof tool.description === "string" &&
-    typeof tool.parameters === "object" &&
-    typeof tool.execute === "function"
-    ? undefined
-    : "must default-export a tool (defineTool from @earendil-works/pi-durable), or needs(...) around one";
+  if (
+    tool?.parameters !== null &&
+    (typeof tool?.parameters === "object" || typeof tool?.parameters === "function") &&
+    "~standard" in tool.parameters
+  ) {
+    return 'parameters is an unconverted Standard Schema: wrap the tool with defineTool from "@fastagent-sh/fastagent"';
+  }
+  if (
+    typeof tool?.name !== "string" ||
+    typeof tool.description !== "string" ||
+    typeof tool.parameters !== "object" ||
+    tool.parameters === null ||
+    Array.isArray(tool.parameters) ||
+    typeof tool.execute !== "function"
+  ) {
+    return "must default-export a tool (defineTool from @fastagent-sh/fastagent or @earendil-works/pi-durable), or needs(...) around one";
+  }
+  return undefined;
 };
 const extensionProblem = (value: unknown): string | undefined =>
   typeof (value as Partial<Extension> | null)?.name === "string"

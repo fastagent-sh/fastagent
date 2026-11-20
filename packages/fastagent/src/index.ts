@@ -68,6 +68,13 @@ export {
   type CodingToolName,
   type CodingToolsConfig,
 } from "./harnesses/pi-durable/define.ts";
+export {
+  defineTool,
+  type InferToolArgs,
+  type StandardJSONSchemaV1,
+  type ToolDefinition,
+  type ToolParameters,
+} from "./harnesses/pi-durable/tool.ts";
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
