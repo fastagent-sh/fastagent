@@ -15,6 +15,7 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: npm
     services:
       # The server the PostgreSQL double is held against (double-parity/postgres-double.integration.test.ts).
