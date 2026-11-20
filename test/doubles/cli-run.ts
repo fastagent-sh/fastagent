@@ -140,7 +140,7 @@ async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.Proc
   const { runCli } = await import("../../packages/fastagent/src/cli/program.ts");
   // A real command is a process of its own, so what one chose of the value file (`--env-file`, no default file for a
   // deployment) is not left for the next: reset what a process starts with.
-  (await import("../../packages/fastagent/src/value-file.ts")).useValueFile(undefined);
+  useValueFile(undefined);
   const saved = {
     cwd: process.cwd(),
     env: { ...process.env },

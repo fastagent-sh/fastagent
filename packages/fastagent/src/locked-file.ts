@@ -1,9 +1,7 @@
 /**
- * The one cross-process read-modify-write for a file several processes share: fastagent's credentials file and MCP
- * grants. It
- * takes the lock pi takes for the same files (pi-coding-agent's `FileAuthStorageBackend`), so a fastagent writer and a
- * pi writer queue behind each other, and it REPLACES the file rather than rewriting it in place, which is what lets
- * every reader of these files read without the lock: a reader sees the old file or the new one, never one cut short.
+ * Cross-process read-modify-write for fastagent's credentials files (`.secrets/auth.json` and
+ * `~/.fastagent/.secrets/auth.json`). Serializes concurrent writers (such as OAuth token refresh across processes) and
+ * atomically replaces the file so unlocked readers never observe a partial write.
  */
 import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -29,8 +27,7 @@ export interface LockResult<T> {
 function writeTarget(path: string): string {
   if (existsSync(path)) return realpathSync(path);
   const link = lstatSync(path, { throwIfNoEntry: false });
-  // ponytail: one hop. A chain of dangling links would have its second link replaced; resolve iteratively if that
-  // ever shows up in a real layout.
+  // Follow one dangling symlink hop so dotfile-managed symlinks are not overwritten with a regular file.
   return link?.isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : path;
 }
 
@@ -65,11 +62,7 @@ export async function withLockedFile<T>(
   };
 
   const release = await lockfile.lock(path, {
-    // MUST match pi-coding-agent's `core/auth-storage.js`, which locks with `realpath: false`. When the file
-    // itself is a symlink (dotfile managers do this), the two settings name DIFFERENT lock files and both locks can
-    // be held at once — so `pi` and `fastagent` would refresh the same provider concurrently, and a rotated refresh
-    // token logs one of them out. Resolving the link would be the stronger rule, but only if BOTH sides did it, and
-    // we do not own the other side.
+    // Lock by logical path so symlinked dotfile targets share one lock file consistently across fastagent processes.
     realpath: false,
     retries: { retries: 10, factor: 2, minTimeout: 100, maxTimeout: 10_000, randomize: true },
     stale: 30_000,

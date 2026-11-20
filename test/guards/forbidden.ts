@@ -1,6 +1,6 @@
 /**
  * What a test tier forbids (AGENTS.md, "Tests"), installed by its setup file. A forbidden call throws where it
- * is made, and is also recorded and failed after the test: product code may catch the throw (`src/git.ts` reads a spawn
+ * is made, and is also recorded and failed after the test: product code may catch the throw (`packages/fastagent/src/git.ts` reads a spawn
  * that fails as "no git"), and work a test leaves running can make the call after the test has ended.
  */
 import childProcess from "node:child_process";
