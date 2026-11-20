@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 
 const PACKAGE_NAME = "@fastagent-sh/fastagent";
 // Every package of the workspace, in the order they build and publish; all share one version.
-const WORKSPACES = ["packages/client", "packages/fastagent", "packages/agentcore"];
+const WORKSPACES = ["packages/client", "packages/fastagent", "packages/agentcore", "packages/pi-remote"];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 

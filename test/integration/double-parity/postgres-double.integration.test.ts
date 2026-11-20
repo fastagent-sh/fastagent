@@ -141,6 +141,29 @@ describe.runIf(SERVER !== undefined)("PostgreSQL, the double against a real serv
     expect(await leaseOutcomes(double.url)).toEqual(real);
   });
 
+  it("handles concurrent parameterized queries alongside an open transaction without protocol desync", async () => {
+    const runConcurrent = async (url: string) => {
+      const db = openPgDatabase(url);
+      try {
+        const tx = db.transaction(async (client) => {
+          const [a] = await client.query<{ v: number }>("SELECT $1::int + $2::int AS v", [10, 20]);
+          const [b] = await client.query<{ v: string }>("SELECT $1::text AS v", ["in-tx"]);
+          return [a?.v, b?.v] as const;
+        });
+        const reads = Promise.all(
+          Array.from({ length: 12 }, (_, i) =>
+            db.query<{ v: number }>("SELECT $1::int AS v", [i]).then((rows) => rows[0]?.v),
+          ),
+        );
+        return { tx: await tx, reads: await reads };
+      } finally {
+        await db.close();
+      }
+    };
+    const real = await runConcurrent(database.url);
+    expect(await runConcurrent(double.url)).toEqual(real);
+  });
+
   it("makes the tables of a new database once when two instances open it together", async () => {
     const fresh = await freshDatabase(SERVER as string);
     try {
