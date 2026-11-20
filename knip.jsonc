@@ -28,9 +28,19 @@
       "project": ["src/**/*.ts"],
       // Scaffold templates are copied as files at scaffold time, never imported.
       "ignore": ["src/scaffold/templates/**"]
+    },
+    "packages/pi-remote": {
+      "project": ["src/**/*.ts"],
+      "includeEntryExports": true,
+      // Host-provided Pi packages are declared as peerDependencies.
+      "ignoreDependencies": [
+        "@earendil-works/pi-ai",
+        "@earendil-works/pi-coding-agent",
+        "@earendil-works/pi-tui"
+      ]
     }
   },
   // `tsc` is the fastagent package's devDependency, the TypeScript `fastagent build` gives an agent, installed at the
   // root for every package's build and the typecheck.
-  "ignoreBinaries": ["fastagent", "flock", "tsc"]
+  "ignoreBinaries": ["cmux", "fastagent", "flock", "tsc"]
 }
