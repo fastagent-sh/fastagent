@@ -1134,9 +1134,12 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             saveRemote(targetName, updatedRemote);
           }
           if (controller.isConnected() && controller.getState().remoteName === targetName) {
-            const currentSessionId = controller.getState().session?.id;
+            const currentState = controller.getState();
+            const currentSessionId = currentState.session?.id;
             await connectResolved(ctx, targetName, updatedRemote, {
               ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
+              ...(currentState.lastEntryId !== undefined ? { after: currentState.lastEntryId } : {}),
+              seenEntryIds: controller.getSeenEntryIds(),
               persistBinding: false,
               allowHandoff: false,
               showBanner: false,
@@ -1173,7 +1176,9 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             controller.disconnect();
           }
           ctx.ui.notify(
-            `Disconnected from AgentCore remote "${targetName}". AWS IAM credentials are managed by AWS CLI.`,
+            isCurrent
+              ? `Disconnected from AgentCore remote "${targetName}". AWS IAM credentials are managed by AWS CLI.`
+              : `AgentCore remote "${targetName}" uses AWS IAM credentials managed by AWS CLI.`,
             "info",
           );
           return;
@@ -1204,8 +1209,11 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       case "model-cycle": {
         if (!controller.isConnected()) return;
         const models = controller.getState().agentInfo?.models ?? [];
-        if (models.length === 0) {
-          ctx.ui.notify("Remote reports no selectable models", "warning");
+        if (models.length <= 1) {
+          ctx.ui.notify(
+            models.length === 0 ? "Remote reports no selectable models" : "Only one model available on this remote",
+            models.length === 0 ? "warning" : "info",
+          );
           return;
         }
         const current = controller.getState().session?.model ?? controller.getState().agentInfo?.defaultModel;

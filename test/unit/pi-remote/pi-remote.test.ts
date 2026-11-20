@@ -1186,10 +1186,13 @@ describe("Pi extension host integration", () => {
       expect(mock.notifications.at(-1)?.type).toBe("error");
       expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("test-key");
 
+      const entriesBeforeLogin = mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length;
       mock.ctx.ui.input = async () => "rotated-key";
       await fa.handler("login ops", mock.ctx);
-      expect(mock.notifications.at(-1)?.message).toContain("Verified credentials");
+      await waitFor(() => mock.notifications.some((n) => n.message.includes("Verified credentials")));
       expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("rotated-key");
+      // Reconnecting the same session after /login must not duplicate already-rendered remote entries.
+      expect(mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length).toBe(entriesBeforeLogin);
 
       // /fa logout clears the stored API key and disconnects; restore test-key for subsequent assertions.
       await fa.handler("logout ops", mock.ctx);

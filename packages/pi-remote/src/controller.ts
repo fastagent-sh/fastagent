@@ -147,6 +147,10 @@ export class RemoteController {
     return this.lastAssistantText;
   }
 
+  getSeenEntryIds(): ReadonlySet<string> {
+    return new Set(this.seenEntryIds);
+  }
+
   isConnected(): boolean {
     return this.agent !== undefined && this.state.session !== undefined && this.state.status !== "disconnected";
   }
@@ -181,11 +185,14 @@ export class RemoteController {
         throw new Error("Connection canceled");
       }
 
+      const sameSession = this.state.session?.id === session.id;
       const gen = wasConnected ? this.nextGeneration() : beforeGen;
       this.agent = agent;
       this.seenEntryIds = new Set(options.seenEntryIds ?? []);
-      this.toolCallArgs.clear();
-      this.lastAssistantText = undefined;
+      if (!sameSession) {
+        this.toolCallArgs.clear();
+        this.lastAssistantText = undefined;
+      }
       this.inFlightSends = 0;
       this.autoTitleAttempted = Boolean(session.title || options.sessionId);
       this.setState({
