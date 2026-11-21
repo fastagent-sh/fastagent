@@ -114,8 +114,6 @@ export interface DurableAgentOptions {
   thinkingLevel?: ModelThinkingLevel;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
-  /** Optional hook invoked after a session is marked deleted (e.g. for an external clock to clear its wake-ups). */
-  onSessionDelete?: (sessionId: string) => Promise<void> | void;
   /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
   telemetry?: TelemetryContext;
   /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
@@ -739,7 +737,6 @@ function durableAgent(
         );
         if (!marked) return yield* agentError("not_found", `No session ${sessionId}`);
         yield* fromPromise(async () => {
-          await options.onSessionDelete?.(sessionId);
           try {
             await conversation.abort(context);
           } catch (error: unknown) {

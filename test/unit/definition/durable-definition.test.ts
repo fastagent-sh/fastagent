@@ -172,38 +172,6 @@ describe("an agent definition on pi-durable", () => {
       return (await conversation.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name);
     };
 
-    it("omits wake and unwake by default, offers them when wakeTools: true and clocked, and yields to an authored wake tool", async () => {
-      expect(await offered((await open()).agent)).not.toContain("wake");
-      expect(await offered((await open(FILES, { clocked: true })).agent)).not.toContain("wake");
-
-      const withWake = {
-        ...FILES,
-        "fastagent.config.ts": `import { faux } from "./model.ts";
-export default { model: "fixture/m", thinkingLevel: "low", wakeTools: true, providers: [faux.provider] };
-`,
-      };
-      expect(await offered((await open(withWake, { clocked: true })).agent)).toEqual(
-        expect.arrayContaining(["wake", "unwake"]),
-      );
-      expect(await offered((await open(withWake)).agent)).not.toContain("wake");
-
-      const ownWake = {
-        ...withWake,
-        "src/tools/wake.ts": `import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
-export default defineTool({
-  name: "wake",
-  description: "The author's own",
-  parameters: obj({}),
-  execute: async () => ({ output: [{ type: "text", text: "own" }] }),
-});
-`,
-      };
-      const tools = await offered((await open(ownWake, { clocked: true })).agent);
-      expect(tools).toContain("wake");
-      expect(tools).not.toContain("unwake");
-    });
-
     it("codingTools: false disables read/write/edit/bash, refuses enabling them on a session, and omits workspace and skills prompts even with a custom read tool", async () => {
       const noCoding = {
         ...FILES,
@@ -343,12 +311,6 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         "fastagent.config.ts": 'export default { codingTools: "none" };\n',
       });
       await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
-
-      const badWake = agentPackage({
-        ...FILES,
-        "fastagent.config.ts": 'export default { wakeTools: "yes" };\n',
-      });
-      await expect(loadSourceDefinition(badWake)).rejects.toThrow(/"wakeTools" must be a boolean/);
     });
   });
 });

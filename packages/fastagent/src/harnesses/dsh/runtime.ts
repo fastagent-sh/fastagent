@@ -14,7 +14,6 @@ import type { McpClients } from "../../mcp/client.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import type { Change, ClockStore } from "../../schedule/clock.ts";
 import type { Fire } from "../../schedule/state.ts";
-import type { Wakeup } from "../../schedule/wakeups.ts";
 import { agentPresentation, resolveCodingTools } from "../pi-durable/config.ts";
 import type { DurableCredentialStore } from "../pi-durable/credentials.ts";
 import type { AgentDefinition } from "../pi-durable/definition.ts";
@@ -66,7 +65,6 @@ export interface DshModule {
       readonly description?: string;
       expand(args: string): string;
     }[];
-    readonly onSessionDelete?: (sessionId: string) => void | Promise<void>;
     readonly sandbox?: "workspace" | "read-only" | "off";
     readonly unfinished?: "resume" | "refuse";
     readonly storage?: DshKvBackend;
@@ -114,14 +112,12 @@ function dshClockStore(store: DshKvBackend): ClockStore {
 
   return {
     fires: (name, change) => mutate<readonly Fire[], ReturnType<typeof change>["result"]>(`fires:${name}`, [], change),
-    wakeups: (change) => mutate<readonly Wakeup[], ReturnType<typeof change>["result"]>("wakeups", [], change),
     sessions: (change) =>
       mutate<Readonly<Record<string, string>>, ReturnType<typeof change>["result"]>("sessions", {}, change),
     armed: (change) =>
       mutate<Readonly<Record<string, string>>, ReturnType<typeof change>["result"]>("armed", {}, change),
     stored: {
       fires: (name) => readJson<readonly Fire[]>(`fires:${name}`, []),
-      wakeups: () => readJson<readonly Wakeup[]>("wakeups", []),
       sessions: () => readJson<Readonly<Record<string, string>>>("sessions", {}),
       armed: () => readJson<Readonly<Record<string, string>>>("armed", {}),
     },
@@ -271,7 +267,6 @@ function renderSystemPrompt(
     workdir,
     source: definition.source === true,
     runsAs: options.runsAs,
-    wake: false,
     codingTools,
   });
   const texts: string[] = [];
@@ -348,7 +343,6 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
       protectedPaths: [stateRoot],
       env: processEnv,
       commands: () => readCommands(dir),
-      ...(chosen === "instance" ? { onSessionDelete: ctx.onSessionDelete } : {}),
       sandbox: selection.sandbox ?? "workspace",
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       storage: store,

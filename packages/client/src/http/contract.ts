@@ -41,7 +41,6 @@ import {
   SessionEvent,
   Usage,
   Wait,
-  Wakeup,
   errorData,
 } from "../agent-api.ts";
 
@@ -279,15 +278,6 @@ const ClockGroup = HttpApiGroup.make("clock")
     }),
     HttpApiEndpoint.get("listSchedules", "/schedules", {
       success: Schema.Array(ScheduleState),
-      error: Refused,
-    }),
-    HttpApiEndpoint.get("listWakeups", "/wakeups", {
-      success: Schema.Array(Wakeup),
-      error: Refused,
-    }),
-    HttpApiEndpoint.delete("cancelWakeup", "/wakeups/:id", {
-      params: { id: Schema.String },
-      success: Wakeup,
       error: Refused,
     }),
   )

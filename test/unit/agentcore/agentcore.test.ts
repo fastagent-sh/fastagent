@@ -89,7 +89,6 @@ async function runtimeOf(
     database,
     root: dir,
     secrets: process.env,
-    offline: true,
   });
   return { dir, handler };
 }
@@ -204,7 +203,6 @@ describe("an agent on AgentCore", () => {
       database: { url: postgres.url },
       root: dir,
       secrets: process.env,
-      offline: true,
       values: async () => {
         reads += 1;
         if (reads === 1)

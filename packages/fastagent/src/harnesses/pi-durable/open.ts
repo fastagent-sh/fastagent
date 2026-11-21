@@ -40,7 +40,6 @@ import { agentPresentation, checkProgramConfig, resolveCodingTools } from "./con
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
 import { importRegistry } from "./registry.ts";
 import { definitionSections, readCommands } from "./text.ts";
-import { WAKE_EXTENSION, WAKE_TOOLS, wakeExtension } from "./wake.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
 
@@ -168,7 +167,6 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   refuseTwins("extension", [
     ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CodingTools.name }] : []),
     { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
-    ...(config.wakeTools === true ? [{ source: "FastAgent's wake tools", name: WAKE_EXTENSION }] : []),
     ...extensions,
   ]);
   refuseTwins("schedule", schedules);
@@ -230,22 +228,11 @@ export interface AssembleAgentOptions {
   /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
   mcpTools?: ToolRegistration[];
-  /**
-   * pi-ai's built-ins and the definition's providers over the instance's credentials, lists refreshed: the model
-   * environment's (environment.ts), so the Agent runs on the lists its startup report reads.
-   */
+  /** pi-ai's built-ins and the definition's providers over the instance's credentials. */
   models: Models;
-  /** Why the lists of {@link models} are not current, when they are not: said with a default model none offers. */
-  catalogProblem?: string;
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   settings?: HarnessSettings;
-  /** Whether the instance has a clock: a serve's, which fires its schedules and the wake-ups `wake` sets. */
-  clocked?: boolean;
-  /** Whether that scheduler runs now: an app's `openAgent` runs one only while it serves. Default always. */
-  wakeTicking?: () => boolean;
-  /** Optional hook invoked after a session is deleted (e.g. to clear wake-ups in an external clock). */
-  onSessionDelete?: (sessionId: string) => Promise<void> | void;
   unfinished?: Unfinished;
   /** The whole environment of the processes the agent starts (child-env.ts): nothing of this process's is added. */
   processEnv: Readonly<Record<string, string>>;
@@ -264,13 +251,11 @@ function resolveDefaultModel(
   spec: string | undefined,
   chosen: boolean,
   models: Models,
-  catalogProblem: string | undefined,
 ): { model?: ModelRef; unusableDefault?: NonNullable<AgentInfo["unusableDefault"]> } {
   if (spec === undefined) return {};
   const model = modelRefOf(spec, "the default model");
   if (models.getModel(model.provider, model.modelId) !== undefined) return { model };
-  const stale = catalogProblem === undefined ? "" : `, and ${catalogProblem}`;
-  const reason = `no provider "${model.provider}" offers "${model.modelId}"${stale}`;
+  const reason = `no provider "${model.provider}" offers "${model.modelId}"`;
   if (chosen) throw new Error(`unknown model "${spec}": ${reason}`);
   log.warn(`[fastagent] the default model "${spec}" is unusable: ${reason}`);
   return { unusableDefault: { spec, reason } };
@@ -299,15 +284,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const { code, models } = options;
   const { config } = definition;
   const spec = options.model ?? config.model;
-  const { model, unusableDefault } = resolveDefaultModel(
-    spec,
-    options.model !== undefined,
-    models,
-    options.catalogProblem,
-  );
-  const ownWake = [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].some(({ name }) =>
-    WAKE_TOOLS.includes(name),
-  );
+  const { model, unusableDefault } = resolveDefaultModel(spec, options.model !== undefined, models);
   const authoredNames = new Set(
     [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].map((tool) => tool.name),
   );
@@ -316,7 +293,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   }
   const selectedCodingTools = resolveCodingTools(config.codingTools);
   const builtinCoding = codingToolsExtension(selectedCodingTools);
-  const builtinWake = config.wakeTools === true && options.clocked === true && !ownWake;
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
   // After the coding tools, so a tool of the definition's own with one of their names replaces it.
@@ -324,7 +300,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     defineExtension({
       name: DEFINITION_EXTENSION,
       sections: definitionSections(dir, {
-        wake: ownWake || builtinWake,
         runsAs: options.runsAs,
         workdir: options.workdir ?? dir,
         source: definition.source === true,
@@ -334,9 +309,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     }),
   );
   for (const extension of code.extensions) registry.install(extension);
-  if (builtinWake) {
-    registry.install(wakeExtension(options.wakeTicking === undefined ? {} : { ticking: options.wakeTicking }));
-  }
   const { thinkingLevel } = config;
   return openDurableAgent({
     storage: options.storage,
@@ -349,7 +321,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-    ...(options.onSessionDelete === undefined ? {} : { onSessionDelete: options.onSessionDelete }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
     // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.

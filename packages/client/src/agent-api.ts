@@ -372,20 +372,6 @@ export class ScheduleState extends Schema.Opaque<ScheduleState>()(
   }),
 ) {}
 
-/** A wake-up the agent set for itself (`wake`): the session it fires into, when, and with what. */
-export class Wakeup extends Schema.Opaque<Wakeup>()(
-  Schema.Struct({
-    id: Schema.String,
-    sessionId: Schema.String,
-    /** When it fires next (ISO 8601). */
-    fireAt: Schema.String,
-    prompt: Schema.String,
-    /** A recurring one's cron expression, and its time zone. */
-    cron: Schema.optionalKey(Schema.String),
-    tz: Schema.optionalKey(Schema.String),
-  }),
-) {}
-
 export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;
 
@@ -505,7 +491,7 @@ export interface AuthApi {
   logout(provider: string): Promise<{ removed: boolean }>;
 }
 
-/** The agent's clock, operated by its Caller: schedules and self-scheduled wake-ups. */
+/** The agent's clock, operated by its Caller: declarative schedules. */
 export interface ClockApi {
   schedules: {
     /**
@@ -516,12 +502,6 @@ export interface ClockApi {
     run(name: string, options?: WaitOptions): Promise<ScheduleRun>;
     /** Every schedule the agent defines, with when it fires next and its last occurrence. */
     list(): Promise<ScheduleState[]>;
-  };
-  wakeups: {
-    /** Cancel a pending wake-up, whichever session set it, and answer what it was. */
-    cancel(id: string): Promise<Wakeup>;
-    /** Every pending wake-up, of every session, in the order they were set. */
-    list(): Promise<Wakeup[]>;
   };
 }
 

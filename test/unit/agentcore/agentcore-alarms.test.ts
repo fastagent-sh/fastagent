@@ -132,78 +132,59 @@ describe("one EventBridge alarm per AgentCore session", () => {
     expect(rounded.expression).toBe("at(2026-11-18T09:00:01)");
   });
 
-  it("arms on a wake-up, stays HealthyBusy while a cold-woken alarm turn runs after answering 200, and disarms once done", async () => {
+  it("skips plain chat with no schedules, and wakes a cold scheduled microVM with HealthyBusy", async () => {
+    const plainDir = await fauxAgent("fa-agentcore-plain-");
+    const plainDef = await loadSourceDefinition(plainDir);
+    const plainSched = fakeScheduler();
+    const plainHandler = agentCoreHandler(plainDef, {
+      database: { url: postgres.url },
+      root: plainDir,
+      secrets: process.env,
+      alarms: createAlarmGroup({ group: "alarms-group", client: plainSched.client as never }),
+    });
+    const plainAws = agentCore(plainHandler);
+    try {
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId: freshInstance() });
+      const { id } = await agent.sessions.create();
+      await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 });
+      expect(plainSched.calls).toEqual([]);
+    } finally {
+      await plainAws.close();
+      await plainHandler.close();
+    }
+
     const dir = await fauxAgent("fa-agentcore-alarm-", {
-      "fastagent.config.ts": `import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+      "fastagent.config.ts": `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
-faux.setResponses(Array.from({ length: 30 }, () => (context) => {
-  const last = context.messages.at(-1);
-  if (last?.role === "toolResult") return fauxAssistantMessage("scheduled");
-  const text = JSON.stringify(last?.content ?? "");
-  if (text.includes("wake-me")) return fauxAssistantMessage([fauxToolCall("wake", { in: "10m", prompt: "slow-woken" })], { stopReason: "toolUse" });
-  if (text.includes("slow-woken")) return new Promise((r) => setTimeout(() => r(fauxAssistantMessage("woken-reply")), 300));
-  return fauxAssistantMessage("plain");
-}));
-export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
+faux.setResponses(
+  Array.from(
+    { length: 10 },
+    () => () => new Promise((r) => setTimeout(() => r(fauxAssistantMessage("cron-reply")), 300)),
+  ),
+);
+export default { model: "gw/m1", providers: [faux.provider] };
+`,
+      "src/schedules/hourly.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
+export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "hourly-check" });
 `,
     });
     const definition = await loadSourceDefinition(dir);
     const sched = fakeScheduler();
-    let clockNow = new Date("2026-11-18T08:00:00.250Z");
-    const makeAlarms = () =>
-      createAlarmGroup({ group: "alarms-group", client: sched.client as never, now: () => clockNow });
     const sessionId = freshInstance();
     const alarmName = alarmNameOf(sessionId);
-    let handler = agentCoreHandler(definition, {
+    const since = new Date(Date.now() - 65 * 60_000).toISOString();
+    const handler = agentCoreHandler(definition, {
       database: { url: postgres.url },
       root: dir,
       secrets: process.env,
-      offline: true,
-      alarms: makeAlarms(),
+      alarms: createAlarmGroup({ group: "alarms-group", client: sched.client as never }),
     });
-    let aws = agentCore(handler);
+    const aws = agentCore(handler);
     try {
-      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
-      const clock = connectAgentCoreClock({ runtimeArn: RUNTIME, sessionId });
-      const { id } = await agent.sessions.create();
-      await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 });
-      // An ordinary short chat turn with no schedules or wake-ups touches EventBridge Scheduler zero times.
-      expect(sched.calls).toEqual([]);
-
-      // The model calls `wake`: `observeCommits` arms the session's one EventBridge schedule, and `wakeups.cancel` disarms it.
-      await agent.messages.send({ sessionId: id, content: "wake-me" }, { wait: 30 });
-      await vi.waitFor(() => expect(sched.schedules.get(alarmName)?.ScheduleExpression).toBeDefined());
-      expect(sched.schedules.get(alarmName)?.ActionAfterCompletion).toBe("NONE");
-      const pending = await clock.wakeups.list();
-      expect(pending).toHaveLength(1);
-      await clock.wakeups.cancel(pending[0]!.id);
-      await vi.waitFor(() => expect(sched.schedules.has(alarmName)).toBe(false));
-
-      // Arm again, reclaim the microVM (`close`), then deliver EventBridge Scheduler's `{ alarm: true }` to a cold handler.
-      await agent.messages.send({ sessionId: id, content: "wake-me" }, { wait: 30 });
-      await vi.waitFor(() => expect(sched.schedules.has(alarmName)).toBe(true));
-      await aws.close();
-      await handler.close();
-
-      clockNow = new Date(Date.now() + 15 * 60_000);
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(clockNow);
-      handler = agentCoreHandler(definition, {
-        database: { url: postgres.url },
-        root: dir,
-        secrets: process.env,
-        offline: true,
-        alarms: makeAlarms(),
-      });
-      aws = agentCore(handler);
-
-      const ack = await handler.fetch(invocation(sessionId, { alarm: true }));
+      const ack = await handler.fetch(invocation(sessionId, { alarm: true, since }));
       expect([ack.status, await ack.json()]).toEqual([200, { ok: true }]);
-      // Acknowledged 200 right away while the 300ms woken turn still runs: `/ping` holds the microVM with HealthyBusy,
-      // and the one-shot EventBridge schedule is already deleted.
       const pingDuring = (await (await handler.fetch(new Request("http://runtime/ping"))).json()) as { status: string };
       expect(pingDuring.status).toBe("HealthyBusy");
-      expect(sched.schedules.has(alarmName)).toBe(false);
 
       await vi.waitFor(async () => {
         const pingAfter = (await (await handler.fetch(new Request("http://runtime/ping"))).json()) as {
@@ -211,10 +192,9 @@ export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
         };
         expect(pingAfter.status).toBe("Healthy");
       });
-      const entries = await agent.sessions.entries(id);
-      expect(JSON.stringify(entries.data)).toContain("woken-reply");
+      await vi.waitFor(() => expect(sched.schedules.get(alarmName)?.ScheduleExpression).toBeDefined());
+      expect(sched.schedules.get(alarmName)?.ActionAfterCompletion).toBe("NONE");
     } finally {
-      vi.useRealTimers();
       await aws.close();
       await handler.close();
     }
@@ -227,13 +207,11 @@ export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
       database: { url: "postgres://postgres@127.0.0.1:1/postgres" },
       root: dir,
       secrets: process.env,
-      offline: true,
     });
     const broken = agentCoreHandler(definition, {
       database: { url: postgres.url },
       root: dir,
       secrets: process.env,
-      offline: true,
       values: async () => {
         throw new Error("the secret support cannot be read: ResourceNotFoundException");
       },
@@ -270,7 +248,6 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
         database: { url: postgres.url },
         root: dir,
         secrets: process.env,
-        offline: true,
       });
       await warm.fetch(invocation(sid, { request: { method: "GET", path: "/v1/agent", headers: {} } }));
       await warm.close();
@@ -303,7 +280,6 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
       database: { url: postgres.url },
       root: dir,
       secrets: process.env,
-      offline: true,
       alarms,
     });
     try {
@@ -334,7 +310,6 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
         database: { url: postgres.url },
         root: dir,
         secrets: process.env,
-        offline: true,
         alarms,
       });
       // Simulate the process failing right after EventBridge records `at(12:00:00)`: `start({ since })` must have
@@ -355,7 +330,6 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
         database: { url: postgres.url },
         root: dir,
         secrets: process.env,
-        offline: true,
         alarms,
       });
       const aws = agentCore(checkSession);
@@ -408,7 +382,7 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
       // first `setAlarm` fails: the queued `dirty` pass must still run and disarm (with `forceClear` preserved too).
       desired = undefined;
       void alarm.sync({ forceClear: true });
-      await clock.wakeups(() => ({ next: [], result: undefined }));
+      await clock.armed(() => ({ next: {}, result: undefined }));
       releaseFirst();
       await expect(first).rejects.toThrow("ThrottlingException");
       await vi.waitFor(() => expect(seen).toEqual(["2026-11-18T10:00:00.000Z", undefined]));
@@ -447,57 +421,5 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
     await inFlightSync;
     await closePromise;
     expect(fencedWrites).toEqual([]);
-  });
-
-  it("lets a caught-up schedule call `wake` while the cold open's initial alarm write is still in flight", async () => {
-    const dir = await fauxAgent("fa-agentcore-boot-wake-", {
-      "fastagent.config.ts": `import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
-const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
-faux.setResponses(Array.from({ length: 10 }, () => (context) => {
-  const last = context.messages.at(-1);
-  if (last?.role === "toolResult") return fauxAssistantMessage("done");
-  if (JSON.stringify(last?.content ?? "").includes("set-followup")) {
-    return fauxAssistantMessage([fauxToolCall("wake", { in: "10m", prompt: "followup" })], { stopReason: "toolUse" });
-  }
-  return fauxAssistantMessage("ok");
-}));
-export default { model: "gw/m1", wakeTools: true, providers: [faux.provider] };
-`,
-      "src/schedules/hourly.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
-export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "set-followup" });
-`,
-    });
-    const definition = await loadSourceDefinition(dir);
-    const sched = fakeScheduler("alarms-group", "ENABLED");
-    const sessionId = freshInstance();
-    let delayFirstWrite = true;
-    sched.onWritten(async (name) => {
-      if (delayFirstWrite && name === alarmNameOf(sessionId)) {
-        delayFirstWrite = false;
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    });
-    const alarms = createAlarmGroup({ group: "alarms-group", client: sched.client as never });
-    const handler = agentCoreHandler(definition, {
-      database: { url: postgres.url },
-      root: dir,
-      secrets: process.env,
-      offline: true,
-      alarms,
-    });
-    const aws = agentCore(handler);
-    try {
-      // `since` an hour ago guarantees `hourly` catches up immediately inside `serve()`, while `onWritten` holds
-      // `serve()`'s initial `watcher.sync()` open for 150ms.
-      const since = new Date(Date.now() - 65 * 60_000).toISOString();
-      const res = await handler.fetch(invocation(sessionId, { alarm: true, since }));
-      expect(res.status).toBe(200);
-      const clock = connectAgentCoreClock({ runtimeArn: RUNTIME, sessionId });
-      await vi.waitFor(async () => expect(await clock.wakeups.list()).toHaveLength(1));
-    } finally {
-      sched.onWritten(undefined);
-      await aws.close();
-      await handler.close();
-    }
   });
 });

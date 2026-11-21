@@ -92,7 +92,7 @@ export async function loginOptionsOver(
   // every provider.
   const held = new Map((await storeOf(credentials).list()).map((info) => [info.providerId, info.type] as const));
   // The environment alone, over no store: what authenticates a provider nothing is stored for, here the host's own.
-  const environment = modelsOver(new InMemoryCredentialStore(), providers, undefined, definedValues(process.env));
+  const environment = modelsOver(new InMemoryCredentialStore(), providers, definedValues(process.env));
   const offered: SignInOption[] = [];
   for (const provider of loginProviders(providers)) {
     const methods = (["oauth", "api_key"] as const).filter(
@@ -217,9 +217,7 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   const trial = new InMemoryCredentialStore();
   // Only a key needs the registry: it is checked with one request before it is kept.
   const models: Models | undefined =
-    method === "api_key"
-      ? modelsOver(trial, providers, undefined, environment ?? definedValues(process.env))
-      : undefined;
+    method === "api_key" ? modelsOver(trial, providers, environment ?? definedValues(process.env)) : undefined;
   const store = "store" in request ? request.store : fastagentCredentialStore(request.authPath);
   await store.modify(provider.id, async () => undefined);
   const signal = interaction.signal ?? new AbortController().signal;

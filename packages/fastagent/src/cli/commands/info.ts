@@ -103,7 +103,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
           codingTools,
-          wakeTools: config.wakeTools === true,
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
@@ -143,7 +142,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
   const unbuilt = "(not built: a required secret has no value)";
   line("coding tools", codingTools.join(", ") || "(none)");
-  if (config.wakeTools === true) line("wake tools", "wake, unwake");
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");

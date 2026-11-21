@@ -11,5 +11,5 @@ export async function openSource(
   dir: string,
   { secrets = process.env, ...options }: SourceOptions = {},
 ): Promise<LocalAgent> {
-  return openAgent(await loadSourceDefinition(dir), { root: dir, secrets, offline: true, ...options });
+  return openAgent(await loadSourceDefinition(dir), { root: dir, secrets, ...options });
 }

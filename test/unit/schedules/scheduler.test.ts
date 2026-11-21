@@ -1,15 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
-import {
-  type Harness,
-  Harness as Harnesses,
-  MemoryStorage,
-  type ToolRegistration,
-  createRegistry,
-} from "@earendil-works/pi-durable";
+import { type Harness, Harness as Harnesses, MemoryStorage, createRegistry } from "@earendil-works/pi-durable";
 import { cronError, nextRun } from "../../../packages/fastagent/src/schedule/cron.ts";
-import { wakeExtension } from "../../../packages/fastagent/src/harnesses/pi-durable/wake.ts";
 import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
 import { clockStore } from "../../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
 import type { SendRequest } from "../../../packages/client/src/agent-api.ts";
@@ -28,12 +21,6 @@ const createScheduler = (options: Parameters<typeof scheduler>[0]) => {
   return { ...created, start: () => void created.start() };
 };
 const fireScheduleNow = (options: Parameters<typeof fire>[0]) => Effect.runPromise(fire(options));
-import {
-  addWakeup,
-  listWakeups,
-  removeAnyWakeup,
-  takeFirstDueWakeup,
-} from "../../../packages/fastagent/src/schedule/wakeups.ts";
 import { claimSlot, readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 
 /** A fake agent that records each invoke's session + text (and the whole request) and answers with the script. */
@@ -130,28 +117,6 @@ describe("schedule/scheduler: fire algorithm", () => {
     expect(calls).toHaveLength(2);
     s.stop();
   });
-
-  it("polls and fires a due self-scheduled wake-up into its session, then removes it", async () => {
-    const root = await freshRoot();
-    // Seed a wake-up that is due by the scheduler's clock (set at 10:00 for 11:00; scheduler runs at 12:00).
-    await addWakeup(
-      root,
-      { session: "conv-9", prompt: "resume", fireAt: new Date("2026-07-07T11:00:00Z") },
-      new Date("2026-07-07T10:00:00Z"),
-    );
-    const { agent, calls } = recordingAgent();
-    const s = createScheduler({ agent, clock: root, schedules: [], now: () => new Date("2026-07-07T12:00:00Z") });
-    s.start(); // polls wake-ups immediately on start
-    await vi.waitFor(() => expect(calls.length).toBe(1));
-    expect(calls[0]?.session).toBe("conv-9"); // fired back into the wake-up's session
-    // The prompt arrives ENVELOPED (id + "not a user message") so the model can tell its own alarm from
-    // the user speaking; the instruction itself rides along.
-    expect(calls[0]?.text).toMatch(
-      /^\[wake-up [0-9a-f-]+ fired — YOUR self-scheduled turn, not a user message\] resume$/,
-    );
-    expect(await listWakeups(root)).toHaveLength(0); // claimed + fired, not left pending
-    s.stop();
-  });
 });
 
 describe("schedule/claims: the decision to fire", () => {
@@ -171,7 +136,7 @@ describe("schedule/claims: the decision to fire", () => {
 });
 
 describe("schedule/clock: reading it", () => {
-  it("writes nothing: reads, a poll with nothing due and a cancel of a missing wake-up create no document", async () => {
+  it("writes nothing: read-only clock queries create no document", async () => {
     const storage = new MemoryStorage();
     const harness = await Harnesses.open(
       storage,
@@ -181,14 +146,10 @@ describe("schedule/clock: reading it", () => {
     opened.push(harness);
     const clock = clockStore(harness, BACKGROUND_CONTEXT);
     expect(await readFires(clock, "job")).toEqual([]);
-    expect(await listWakeups(clock)).toEqual([]);
-    expect(await takeFirstDueWakeup(clock, new Date("2026-07-07T12:00:00Z"))).toBeUndefined();
-    expect(await removeAnyWakeup(clock, "none")).toBeUndefined();
     expect(await scheduleSessions(clock).get("job")).toBeUndefined();
     const session = { kind: "session" } as const;
     for (const address of [
       { kind: "fastagent.schedule-fires", scope: session, key: "job" },
-      { kind: "fastagent.wakeups", scope: session },
       { kind: "fastagent.schedule-sessions", scope: session },
     ]) {
       expect(await storage.findDocument(address, "current", BACKGROUND_CONTEXT)).toBeUndefined();
@@ -247,28 +208,14 @@ describe("schedule/scheduler: scale-to-zero arming, tick and nextDue", () => {
     second.stop();
   });
 
-  it("tick drains due wake-ups and schedules stamped with `since`, and nextDue picks the earliest remaining", async () => {
+  it("tick drains schedules stamped with `since`, and nextDue advances to the next slot", async () => {
     const root = await freshRoot();
-    await addWakeup(
-      root,
-      { session: "conv-1", prompt: "due now", fireAt: new Date("2026-07-07T10:55:00Z") },
-      new Date("2026-07-07T10:00:00Z"),
-    );
-    await addWakeup(
-      root,
-      { session: "conv-1", prompt: "later", fireAt: new Date("2026-07-07T11:20:00Z") },
-      new Date("2026-07-07T10:00:00Z"),
-    );
     const { agent, calls } = recordingAgent();
     const s = Effect.runSync(
       scheduler({ agent, clock: root, schedules: [hourly()], now: () => new Date("2026-07-07T11:00:05Z") }),
     );
-    // Deployed at 10:40 (`since`): never opened before 11:00:05, yet `tick` catches up the 11:00 slot and the 10:55
-    // wake-up, leaving the 11:20 wake-up ahead of the 12:00 cron.
     await s.tick({ since: new Date("2026-07-07T10:40:00Z") });
-    expect(calls).toHaveLength(2);
-    expect((await s.nextDue(new Date("2026-07-07T11:00:05Z")))?.toISOString()).toBe("2026-07-07T11:20:00.000Z");
-    await removeAnyWakeup(root, (await listWakeups(root))[0]!.id);
+    expect(calls).toHaveLength(1);
     expect((await s.nextDue(new Date("2026-07-07T11:00:05Z")))?.toISOString()).toBe("2026-07-07T12:00:00.000Z");
     s.stop();
   });
@@ -291,32 +238,5 @@ describe("schedule/cron", () => {
     expect(cronError("0 9 * * *", "UTC")).toBeUndefined();
     expect(cronError("not a cron", undefined)).toBeTruthy();
     expect(cronError("0 9 * * *", "Not/AZone")).toBeTruthy();
-  });
-});
-
-describe("schedule/wake-tool", () => {
-  const wakeNow = new Date("2026-07-07T12:00:00Z");
-
-  it("records a wake-up into the CURRENT session, in the tool call's own commit", async () => {
-    const harness = await Harnesses.open(
-      new MemoryStorage(),
-      { models: createModels(), registry: createRegistry() },
-      BACKGROUND_CONTEXT,
-    );
-    opened.push(harness);
-    const conversation = await harness.createConversation({ ownership: { kind: "ownerless" } }, BACKGROUND_CONTEXT);
-    const tool = wakeExtension({ now: () => wakeNow }).tools?.find(({ name }) => name === "wake") as ToolRegistration;
-    // The tool's only way to its Session is its call's commit.
-    const api = {
-      conversationId: conversation.id,
-      snapshot: async () => ({ incarnation: "inc" }),
-      commit: (change: Parameters<Harness["commit"]>[0], context: Parameters<Harness["commit"]>[1]) =>
-        harness.commit(change, context),
-    };
-    await tool.execute({ in: "30m", prompt: "resume the check" } as never, api as never, BACKGROUND_CONTEXT);
-    const wakeups = await listWakeups(clockStore(harness, BACKGROUND_CONTEXT));
-    expect(wakeups).toEqual([
-      expect.objectContaining({ session: `inc.${conversation.id}`, prompt: "resume the check" }),
-    ]);
   });
 });

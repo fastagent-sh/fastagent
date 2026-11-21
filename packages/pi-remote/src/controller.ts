@@ -20,7 +20,6 @@ import {
   type Session,
   type SessionChanges,
   type SessionEvent,
-  type Wakeup,
 } from "@fastagent-sh/client";
 
 export interface ActiveTool {
@@ -486,14 +485,6 @@ export class RemoteController {
 
   async runSchedule(name: string): Promise<ScheduleRun> {
     return this.requireClock().schedules.run(name);
-  }
-
-  async listWakeups(): Promise<Wakeup[]> {
-    return this.requireClock().wakeups.list();
-  }
-
-  async cancelWakeup(id: string): Promise<Wakeup> {
-    return this.requireClock().wakeups.cancel(id);
   }
 
   private requireClock(): ClockApi {

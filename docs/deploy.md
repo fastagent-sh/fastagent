@@ -17,7 +17,7 @@ host's own tool. Pick a target:
 | Railway | `fastagent deploy init railway` | `railway init` → `railway volume add --mount-path /data` → `railway up` |
 | Amazon Bedrock AgentCore | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | `npx -y @aws/agentcore@1.0.3 deploy` ([AgentCore](agentcore.md)) |
 
-Run **one container** per instance: a second one on the same volume is refused, and schedules and wake-ups require the
+Run **one container** per instance: a second one on the same volume is refused, and schedules require the
 machine to stay running (unless on a scale-to-zero platform with external alarms, such as [AgentCore](agentcore.md)).
 
 ## Before you build

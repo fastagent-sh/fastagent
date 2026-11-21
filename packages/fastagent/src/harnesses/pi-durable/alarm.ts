@@ -76,13 +76,17 @@ export function watchInstanceAlarm(options: InstanceAlarmOptions): InstanceAlarm
       clearHeartbeat();
       return;
     }
-    if (!waitingIdle) {
+    if (harness.wake().active && !waitingIdle) {
       waitingIdle = true;
       harness.waitForIdle(BACKGROUND_CONTEXT).then(
         () => {
           waitingIdle = false;
+          // waitForIdle resolves immediately when only a reconcile pass or background task keeps wake().active true;
+          // re-entering scheduleBackground() there would spin in a microtask livelock. observeCommits covers the settle.
+          if (closed || harness.wake().active) return;
+          const hadHeartbeat = includeHeartbeat;
           clearHeartbeat();
-          scheduleBackground();
+          if (hadHeartbeat) scheduleBackground();
         },
         () => {
           waitingIdle = false;

@@ -15,7 +15,7 @@ The agent depends on its own version of FastAgent, and a `fastagent` installed g
 Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
 `npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
 
-**A running instance is operated through the process that runs it.** `invoke`, `schedules run` and `schedules unwake`
+**A running instance is operated through the process that runs it.** `invoke` and `schedules run`
 on an agent whose `dev` is running go through that `dev`, by its Agent API, so they see the same sessions and never
 contend for its storage. With no `dev` running they open the instance themselves; with `--url` they act on a
 deployment.
@@ -35,7 +35,7 @@ subdirectory, a command names the agent's root and stops.
 | `invoke [message]` | send one message (positional, `-`, or piped `stdin`) and print the answer (`--url` for a deployment) |
 | `info` | show what the agent loads, without serving |
 | `models [search]` | list model specs |
-| `schedules list\|run\|unwake` | the schedules' next and last runs and the pending wake-ups; fire a schedule now; cancel a wake-up |
+| `schedules list\|run` | each schedule's next and last run; fire a schedule now |
 | `build` | compile the agent into `dist/` |
 | `start` | serve the build |
 | `deploy init <target>` | write container and platform files (`docker`, `compose`, `fly`, `railway`, or an installed extension such as `agentcore`) ([Deploy](deploy.md)) |
@@ -61,7 +61,7 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 | `--harness <pi-durable\|dsh>` | `dev`, `start`, `invoke`, `schedules`, `info` | Runtime harness override (`--harness` > `FASTAGENT_HARNESS` > config > `pi-durable`). `dsh` requires `@fastagent-sh/harness-dsh`. |
 | `--sandbox <workspace\|read-only\|off>` | `dev`, `start`, `invoke`, `schedules`, `info` | OS sandbox mode for `harness: "dsh"` (`--sandbox` > `FASTAGENT_SANDBOX` > config > `workspace`). |
 | `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `schedules run`, `build`, `deploy check` | Machine-readable output. |
-| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `schedules list`, `schedules run`, `schedules unwake` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
+| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `schedules list`, `schedules run` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
 
 ## Exit codes
 

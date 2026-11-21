@@ -75,7 +75,7 @@ writeFileSync(
   `import { openAgent } from "@fastagent-sh/fastagent";
 import definition from ${JSON.stringify(join(agent, "dist", "index.js"))};
 
-const agent = await openAgent(definition, { root: ${JSON.stringify(join(work, "instance"))}, offline: true });
+const agent = await openAgent(definition, { root: ${JSON.stringify(join(work, "instance"))} });
 try {
   const { id } = await agent.sessions.create();
   const message = await agent.messages.send({ sessionId: id, content: "ping" }, { wait: 30 });

@@ -223,8 +223,6 @@ export interface DshHarnessOptions {
   readonly env?: Readonly<Record<string, string>>;
   /** Slash commands offered by `info().commands`. */
   readonly commands?: () => readonly DshCommand[];
-  /** Hook invoked when a session is deleted (e.g. to clear external clock wakeups). */
-  readonly onSessionDelete?: (sessionId: string) => void | Promise<void>;
   /** Retry policy for transient model failures. */
   readonly retry?: DshRetryOptions;
   /** OS sandbox posture for local shell/filesystem tools. Default: `"workspace"`. */

@@ -68,7 +68,6 @@ export type {
   Tokens,
   Usage,
   WaitOptions,
-  Wakeup,
 } from "./agent-api.ts";
 /** @public */
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";

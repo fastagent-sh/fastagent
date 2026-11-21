@@ -1,7 +1,6 @@
 /**
- * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store, kept current by
- * the catalogs (catalog.ts), and the definition's own providers; and the reads a report, a login or a picker make of
- * it. A custom model is a provider in code (`defineAgent({ providers })`), never a models file or a per-account list.
+ * pi-ai's model collection as FastAgent composes it: the built-in providers over a credential store and the
+ * definition's own providers. A custom model is a provider in code (`defineAgent({ providers })`).
  */
 import {
   type Api,
@@ -14,7 +13,6 @@ import {
   defaultProviderAuthContext,
 } from "@earendil-works/pi-ai";
 import { builtinModels, builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { Catalogs } from "./catalog.ts";
 
 /** The provider of a `"provider/modelId"` spec. */
 export function providerOf(spec: string): string {
@@ -79,23 +77,19 @@ function inEnvironment(provider: Provider, environment: Readonly<Record<string, 
 
 /**
  * The built-ins plus `providers` (a same id replaces a built-in), over any credential store, in `environment`: the
- * values a provider's auth reads its keys from, and each request is given. With
- * `catalogs`, the lists its refresh brings up to date; without, the ones this pi-ai was built with.
+ * values a provider's auth reads its keys from, and each request is given.
  */
 export function modelsOver(
   credentials: CredentialStore,
   providers: readonly Provider[] = [],
-  catalogs?: Catalogs,
   environment: Readonly<Record<string, string>> = {},
 ): Models {
   const models = createModels({
     credentials,
-    // The values given, and none of this process's: an instance's keys are its own, whoever else runs here.
     authContext: authContextIn((name) => environment[name]),
-    ...(catalogs ? { modelsStore: catalogs.fetched } : {}),
   });
   for (const builtIn of builtinProviders()) {
-    models.setProvider(inEnvironment(catalogs ? catalogs.over(builtIn) : builtIn, environment));
+    models.setProvider(inEnvironment(builtIn, environment));
   }
   for (const provider of providers) models.setProvider(inEnvironment(provider, environment));
   return models;

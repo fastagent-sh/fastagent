@@ -73,17 +73,13 @@ describe("the Agent API over HTTP", () => {
       "/v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}",
       "/v1/sessions/{sessionId}/messages/{messageId}",
       "/v1/usage",
-      "/v1/wakeups",
-      "/v1/wakeups/{id}",
     ]);
   });
 
   it("answers clock endpoints with empty lists and not_found when served without a clock", async () => {
     const clock = connectClock(server.url, { apiKey: KEY });
     expect(await clock.schedules.list()).toEqual([]);
-    expect(await clock.wakeups.list()).toEqual([]);
     await expect(clock.schedules.run("daily")).rejects.toMatchObject({ code: "not_found" });
-    await expect(clock.wakeups.cancel("missing")).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("answers auth endpoints with empty providers and not_found when served without an auth manager", async () => {

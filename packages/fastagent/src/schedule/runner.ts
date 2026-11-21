@@ -1,6 +1,6 @@
 /**
- * Composable clock runner outside the core Agent harness: runs schedules and wake-ups against any `Agent`, exposes the
- * operator `ClockApi` (`schedules`, `wakeups`), and cleans up wake-ups when a session is deleted.
+ * Composable clock runner outside the core Agent harness: runs declarative cron schedules against any `Agent` and
+ * exposes the operator `ClockApi`.
  */
 import * as Effect from "effect/Effect";
 import type { Agent, ClockApi } from "@fastagent-sh/client/agent-api";
@@ -8,7 +8,6 @@ import type { ClockStore } from "./clock.ts";
 import { clockOperations } from "./operations.ts";
 import type { Schedule } from "./schedule.ts";
 import { type Scheduler, createScheduler } from "./scheduler.ts";
-import { removeSessionWakeups } from "./wakeups.ts";
 
 export interface ClockRunner {
   readonly api: ClockApi;
@@ -16,7 +15,6 @@ export interface ClockRunner {
   stop(): void;
   tick(options?: { since?: Date }): Promise<void>;
   nextDue(at?: Date): Promise<Date | undefined>;
-  onSessionDelete(sessionId: string): Promise<void>;
 }
 
 export function createClockRunner(options: {
@@ -64,9 +62,6 @@ export function createClockRunner(options: {
     },
     nextDue(at) {
       return scheduler?.nextDue(at) ?? Promise.resolve(undefined);
-    },
-    async onSessionDelete(sessionId) {
-      await removeSessionWakeups(store, sessionId);
     },
   };
 }

@@ -28,7 +28,6 @@ import {
 import type { Change, ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
 import { type ClockRunner, createClockRunner } from "../../packages/fastagent/src/schedule/runner.ts";
 import type { Fire } from "../../packages/fastagent/src/schedule/state.ts";
-import type { Wakeup } from "../../packages/fastagent/src/schedule/wakeups.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -121,7 +120,6 @@ function subjectModels(signedOut: boolean) {
 
 function memoryClockStore(): ClockStore {
   const firesMap = new Map<string, readonly Fire[]>();
-  let wakeupsState: readonly Wakeup[] = [];
   let sessionsState: Readonly<Record<string, string>> = {};
   let armedState: Readonly<Record<string, string>> = {};
 
@@ -130,11 +128,6 @@ function memoryClockStore(): ClockStore {
       const current = firesMap.get(name) ?? [];
       const { next, result } = change(structuredClone(current));
       if (next !== undefined) firesMap.set(name, structuredClone(next));
-      return result;
-    },
-    async wakeups<T>(change: Change<readonly Wakeup[], T>): Promise<T> {
-      const { next, result } = change(structuredClone(wakeupsState));
-      if (next !== undefined) wakeupsState = structuredClone(next);
       return result;
     },
     async sessions<T>(change: Change<Readonly<Record<string, string>>, T>): Promise<T> {
@@ -149,7 +142,6 @@ function memoryClockStore(): ClockStore {
     },
     stored: {
       fires: async (name) => structuredClone(firesMap.get(name) ?? []),
-      wakeups: async () => structuredClone(wakeupsState),
       sessions: async () => structuredClone(sessionsState),
       armed: async () => structuredClone(armedState),
     },
@@ -365,7 +357,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       model,
       tools: allTools.filter((tool) => !without.includes(tool.name)),
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
-      onSessionDelete: (sessionId) => currentClock?.onSessionDelete(sessionId),
       retry: { maxRetries: 1, baseDelayMs: 1 },
       sandbox: "off",
       storage: wrapped.backend,

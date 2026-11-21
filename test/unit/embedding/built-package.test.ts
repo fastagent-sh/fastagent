@@ -83,7 +83,7 @@ describe("an installed package, opened as instances", () => {
 
   it("refuses a package built in another definition format, naming the FastAgent that built it", async () => {
     const older = { ...definition, format: DEFINITION_FORMAT - 1, builtWith: "0.31.0" };
-    await expect(openAgent(older, { root: scratch(tmpdir(), "fa-older-format-"), offline: true })).rejects.toThrow(
+    await expect(openAgent(older, { root: scratch(tmpdir(), "fa-older-format-") })).rejects.toThrow(
       `@acme/probe was built as definition format ${DEFINITION_FORMAT - 1}, and this FastAgent opens format ` +
         `${DEFINITION_FORMAT}: install @fastagent-sh/fastagent 0.31.0`,
     );
@@ -93,8 +93,8 @@ describe("an installed package, opened as instances", () => {
     const before = snapshot(installed as string);
     const rootA = scratch(tmpdir(), "fa-instance-a-");
     const rootB = scratch(tmpdir(), "fa-instance-b-");
-    const a = await openAgent(definition, { root: rootA, offline: true });
-    const b = await openAgent(definition, { root: rootB, offline: true });
+    const a = await openAgent(definition, { root: rootA });
+    const b = await openAgent(definition, { root: rootB });
     agents.push(a, b);
     // A path relative to the working directory, which is the instance's own.
     await ask(a, "write", { path: "out.txt", content: "from a" });

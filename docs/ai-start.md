@@ -25,7 +25,7 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | Facts about the project it works on | the project's own files, which the agent reads with its tools |
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
-| Timed work | `src/schedules/`, and the `wake` tool |
+| Timed work | `src/schedules/` |
 | Model, providers, MCP servers | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
 
@@ -216,12 +216,12 @@ A schedule's plain reply reaches no one, so its prompt names the tool that deliv
 schedule's own session.
 
 ```bash
-fastagent schedules list               # next run, last outcome, pending wake-ups
+fastagent schedules list               # next run and last outcome
 fastagent schedules run daily-review   # a real run now, through dev when it runs
 ```
 
-Set `wakeTools: true` in `fastagent.config.ts` to let the agent schedule its own follow-ups with `wake`; test one while
-serving. A schedule fires only while the agent runs, so run its container without scaling it to zero.
+A schedule fires only while the agent runs, so run its container without scaling it to zero (or use an alarm-backed host
+like AgentCore).
 
 ## 7. Embed it in an app (optional)
 
@@ -252,7 +252,7 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions, schedule runs and wake-ups | on the container's volume at `/data`, or in PostgreSQL (`FASTAGENT_DATABASE_URL`) |
+| Sessions and schedule runs | on the container's volume at `/data`, or in PostgreSQL (`FASTAGENT_DATABASE_URL`) |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
 An accepted message is answered at least once across a restart, so tools with side effects must tolerate a repeat.

@@ -255,7 +255,6 @@ const fileText = (path: string): string | undefined => {
 export function definitionSections(
   agentDir: string,
   options: {
-    wake: boolean;
     runsAs: RunsAs;
     workdir?: string;
     source?: boolean;
@@ -281,16 +280,12 @@ export function definitionSections(
           })
         : undefined,
     ),
-    section("self_change", () =>
-      options.runsAs.deployed ? selfChangeSection(options.wake, { canWrite, canExec }) : undefined,
-    ),
+    section("self_change", () => (options.runsAs.deployed ? selfChangeSection({ canWrite, canExec }) : undefined)),
   ];
 }
 
-function selfChangeSection(wake: boolean, capabilities: { canWrite: boolean; canExec: boolean }): string | undefined {
-  if (!capabilities.canWrite) {
-    return wake ? "To schedule your own follow-up work, use the wake tool." : undefined;
-  }
+function selfChangeSection(capabilities: { canWrite: boolean; canExec: boolean }): string | undefined {
+  if (!capabilities.canWrite) return undefined;
   const install = capabilities.canExec
     ? "A tool you install yourself (apt-get, npm install -g) belongs to this machine and is gone when its container is replaced. "
     : "";
@@ -299,9 +294,7 @@ function selfChangeSection(wake: boolean, capabilities: { canWrite: boolean; can
     "storage and survives deployments of a new version. " +
     `Your definition (SYSTEM.md, AGENTS.md, skills/, prompts/, src/ and the configuration) is the author's release, ` +
     `read as it was built from where it is installed: a copy of it you make in your directory is not read. ${install}A ` +
-    `capability that should outlast a deployment belongs in the author's release: propose it to them.` +
-    // Named only when it has the tool: naming a tool the model does not have invites calls to it.
-    (wake ? " To schedule your own follow-up work, use the wake tool." : "")
+    `capability that should outlast a deployment belongs in the author's release: propose it to them.`
   );
 }
 

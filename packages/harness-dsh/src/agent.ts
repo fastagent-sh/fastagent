@@ -1476,7 +1476,6 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           live.instructionsDisposer?.();
           live.toolsDisposer?.();
           await persistSessionMeta(live.meta);
-          await options.onSessionDelete?.(sessionId);
           liveSessions.delete(sessionId);
           await live.dshHandle?.dispose().catch(() => {});
         })();

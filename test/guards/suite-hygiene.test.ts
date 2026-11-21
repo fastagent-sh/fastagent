@@ -105,7 +105,6 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts and cor
     ["deploy", "check"],
     ["schedules", "list"],
     ["schedules", "run"],
-    ["schedules", "unwake"],
     ["agentcore", "start"],
     ["agentcore", "invoke"],
   ];
