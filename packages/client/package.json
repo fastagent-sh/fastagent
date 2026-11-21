@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/client",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "The FastAgent Agent API and its client: talk to an agent FastAgent serves, over HTTP or on Amazon Bedrock AgentCore.",
   "keywords": [
     "agent",
