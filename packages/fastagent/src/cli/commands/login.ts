@@ -22,15 +22,14 @@ import {
   type SignInMethod,
   type SignInOption,
   loginOptionsOver,
-  loginStatusText,
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
-import { type RemoteTargetFlags, resolveRemoteTarget } from "../deployment.ts";
+import type { RemoteTargetFlags } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";
-import { chooseLogin, isInteractive, loginFlow, printReport, terminalLoginIO } from "../login-ui.ts";
-import { runRemoteLogin } from "../remote-login.ts";
+import { chooseLogin, isInteractive, loginFlow, printReport, reportNeedChoice, terminalLoginIO } from "../login-ui.ts";
+import { resolveRemoteAuthTarget, runRemoteLogin } from "../remote-login.ts";
 
 export interface LoginOptions extends RemoteTargetFlags {
   /** `-g`: store in the user-global file, which an agent reads for a provider it has no other credential for. */
@@ -49,11 +48,8 @@ export interface LoginOptions extends RemoteTargetFlags {
 export async function runLogin(provider: string | undefined, opts: LoginOptions): Promise<void> {
   const method = opts.method === undefined ? undefined : methodOf(opts.method);
   const givenTimeout = opts.timeout === undefined ? undefined : secondsOf(opts.timeout);
-  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  const remoteTarget = await resolveRemoteAuthTarget(opts);
   if (remoteTarget !== undefined) {
-    if (opts.global === true) {
-      failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
-    }
     await runRemoteLogin(remoteTarget.auth, remoteTarget.label, provider, {
       ...(method === undefined ? {} : { method }),
       ...(opts.input === undefined ? {} : { input: opts.input }),
@@ -158,8 +154,6 @@ function methodOf(value: string): SignInMethod {
   return failUsage(`--method must be account or api-key, not "${value}"`);
 }
 
-const methodWord = (method: SignInMethod) => (method === "oauth" ? "account" : "api-key");
-
 function secondsOf(value: string): number {
   const seconds = Number(value);
   if (!Number.isInteger(seconds) || seconds <= 0)
@@ -199,7 +193,7 @@ async function requestLogin(
     choice = await chooseLogin(offered, given, undefined);
   } catch (error) {
     if (!(error instanceof LoginRefused)) throw error;
-    return choiceNotGiven(error, opts, { flags: global, statuses: true });
+    return reportNeedChoice(error, opts, { flags: global, statuses: true });
   }
   if (choice.method === "api_key") return keyNeeded(choice, opts, target);
   const terminal = `fastagent login ${choice.provider} --method account${global}`;
@@ -286,34 +280,6 @@ async function keyNeeded(
     ],
   );
   process.exit(2);
-}
-
-/**
- * A sign-in not chosen with no one to ask (exit 2): with `--json`, the choices and the command for each, `flags`
- * added to it. `statuses`: what authenticates each provider here is worth showing (it is not, for a deployment).
- */
-function choiceNotGiven(error: LoginRefused, opts: LoginOptions, how: { flags: string; statuses: boolean }): never {
-  if (opts.json) {
-    const choices = error.choices.map((o) => ({
-      provider: o.provider,
-      name: o.name,
-      method: methodWord(o.method),
-      label: o.label,
-      ...(how.statuses ? { status: loginStatusText(o) } : {}),
-      command: `fastagent login ${o.provider} --method ${methodWord(o.method)}${how.flags} --json`,
-    }));
-    printReport(
-      true,
-      {
-        status: "need_choice",
-        message: error.message,
-        choices,
-        agent_next_steps: "Ask the user which of these to sign in with, then run that choice's command.",
-      },
-      [],
-    );
-  }
-  return failUsage(error.message);
 }
 
 /** The variables `choice`'s key is read from, and how to tell the person to set it. */

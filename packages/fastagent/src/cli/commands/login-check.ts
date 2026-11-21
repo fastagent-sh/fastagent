@@ -11,10 +11,10 @@ import { type ModelEnvironment, modelEnvironment } from "../../harnesses/models/
 import { providerOf } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { installProxyFetch } from "../../proxy.ts";
-import { type RemoteTargetFlags, resolveRemoteTarget } from "../deployment.ts";
+import type { RemoteTargetFlags } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";
-import { runRemoteLoginCheck } from "../remote-login.ts";
+import { resolveRemoteAuthTarget, runRemoteLoginCheck } from "../remote-login.ts";
 
 type AuthCheck =
   | { status: "ready"; provider: string; authType: "oauth" | "api_key"; source: string; path?: string }
@@ -32,11 +32,8 @@ export async function runLoginCheck(
   target: string | undefined,
   opts: RemoteTargetFlags & { global?: boolean; json?: boolean; instance?: InstanceFlags },
 ) {
-  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  const remoteTarget = await resolveRemoteAuthTarget(opts);
   if (remoteTarget !== undefined) {
-    if (opts.global === true) {
-      failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
-    }
     await runRemoteLoginCheck(remoteTarget.agent, remoteTarget.auth, remoteTarget.label, target, {
       ...(opts.json === undefined ? {} : { json: opts.json }),
       ...(opts.url === undefined ? {} : { url: opts.url }),

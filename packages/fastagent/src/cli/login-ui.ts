@@ -15,10 +15,14 @@ import {
   loginStatusText,
 } from "../harnesses/models/login.ts";
 import { openExternalUrl } from "../open-url.ts";
+import { failStartup, failUsage } from "./fail.ts";
 
 const ACCOUNT_LABEL = "Sign in with an account";
 const API_KEY_LABEL = "Sign in with an API key";
 const METHOD_FLAGS = "--method account or --method api-key";
+
+/** CLI spelling for a sign-in method: `--method account` or `--method api-key`. */
+export const methodWord = (method: SignInMethod): "account" | "api-key" => (method === "oauth" ? "account" : "api-key");
 
 /** Both stdin and stdout are a terminal — the precondition for an interactive prompt. */
 export function isInteractive(): boolean {
@@ -77,42 +81,141 @@ export function terminalLoginIO(): LoginIO {
   };
 }
 
+export function presentAuthUrl(io: LoginIO, url: string, instructions?: string): void {
+  io.note(`Open this URL to authorize:\n  ${url}`);
+  if (instructions) io.note(instructions);
+  io.openUrl(url);
+}
+
+export function presentDeviceCode(io: LoginIO, verificationUri: string, userCode: string): void {
+  io.note(`Go to ${verificationUri} and enter the code:  ${userCode}`);
+  io.openUrl(verificationUri, userCode);
+}
+
+export function promptAuthInput(
+  io: LoginIO,
+  prompt: {
+    readonly type: "text" | "secret" | "manual_code" | "select";
+    readonly message: string;
+    readonly options?: ReadonlyArray<{ readonly id: string; readonly label: string; readonly description?: string }>;
+  },
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (prompt.type === "select") {
+    return io.select(
+      prompt.message,
+      (prompt.options ?? []).map((o) => ({
+        value: o.id,
+        label: o.label,
+        ...(o.description ? { hint: o.description } : {}),
+      })),
+    );
+  }
+  return io.prompt(prompt.message, {
+    hidden: prompt.type === "secret",
+    redirect: prompt.type === "manual_code",
+    ...(signal ? { signal } : {}),
+  });
+}
+
 /** {@link LoginIO} as pi-ai's `AuthInteraction`: what {@link loginOver} drives for the terminal. */
 function terminalInteraction(io: LoginIO, signal: AbortSignal | undefined): AuthInteraction {
   return {
     ...(signal ? { signal } : {}),
     prompt: async (p: AuthPrompt): Promise<string> => {
-      const v =
-        p.type === "select"
-          ? await io.select(
-              p.message,
-              p.options.map((o) => ({
-                value: o.id,
-                label: o.label,
-                ...(o.description ? { hint: o.description } : {}),
-              })),
-            )
-          : await io.prompt(p.message, {
-              hidden: p.type === "secret",
-              redirect: p.type === "manual_code",
-              ...(p.signal ? { signal: p.signal } : {}),
-            });
+      const v = await promptAuthInput(io, p, p.signal);
       if (v === undefined) throw new SignInCancelled("cancelled");
       return v;
     },
     notify: (e: AuthEvent): void => {
-      if (e.type === "auth_url") {
-        io.note(`Open this URL to authorize:\n  ${e.url}`);
-        if (e.instructions) io.note(e.instructions);
-        io.openUrl(e.url);
-      } else if (e.type === "device_code") {
-        io.note(`Go to ${e.verificationUri} and enter the code:  ${e.userCode}`);
-        io.openUrl(e.verificationUri, e.userCode);
-      } else {
-        io.note(e.message);
-      }
+      if (e.type === "auth_url") presentAuthUrl(io, e.url, e.instructions);
+      else if (e.type === "device_code") presentDeviceCode(io, e.verificationUri, e.userCode);
+      else io.note(e.message);
     },
   };
+}
+
+/**
+ * Report a missing non-interactive login choice (exit 2), used by both local and remote `fastagent login`.
+ */
+export function reportNeedChoice(
+  error: LoginRefused,
+  opts: { json?: boolean },
+  how: { flags: string; statuses: boolean },
+): never {
+  if (opts.json) {
+    const choices = error.choices.map((o) => ({
+      provider: o.provider,
+      name: o.name,
+      method: methodWord(o.method),
+      label: o.label,
+      ...(how.statuses ? { status: loginStatusText(o) } : {}),
+      command: `fastagent login ${o.provider} --method ${methodWord(o.method)}${how.flags} --json`,
+    }));
+    printReport(
+      true,
+      {
+        status: "need_choice",
+        message: error.message,
+        choices,
+        agent_next_steps: "Ask the user which of these to sign in with, then run that choice's command.",
+      },
+      [],
+    );
+  }
+  return failUsage(error.message);
+}
+
+export interface StoredLogoutEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly type: SignInMethod;
+}
+
+/**
+ * Shared 4-branch logout flow for local credential files and remote Auth API targets.
+ */
+export async function logoutFlow(
+  target: {
+    readonly where: string;
+    readonly stored: readonly StoredLogoutEntry[];
+    readonly selectMessage: string;
+    readonly delete: (providerId: string) => Promise<boolean>;
+    readonly removedMessage: (chosen: StoredLogoutEntry) => string;
+  },
+  givenProvider: string | undefined,
+  opts: { input?: boolean },
+  io: LoginIO = terminalLoginIO(),
+): Promise<void> {
+  const { stored, where } = target;
+  const held = stored.length === 0 ? "it holds none" : `it holds ${stored.map(({ id }) => id).join(", ")}`;
+
+  let chosen: StoredLogoutEntry | undefined;
+  if (givenProvider !== undefined) {
+    const named = givenProvider.trim().toLowerCase();
+    chosen = stored.find(({ id, name }) => id.toLowerCase() === named || name.toLowerCase() === named);
+    if (chosen === undefined) {
+      failStartup(new Error(`no credential for "${givenProvider}" is stored ${where}: ${held}`));
+    }
+  } else if (stored.length === 0) {
+    console.error(`[fastagent] no credential is stored ${where}; environment variables are not login's to remove`);
+    return;
+  } else if (opts.input === false || !isInteractive()) {
+    failUsage(`name the provider to log out of: ${held} (${where})`);
+  } else {
+    const value = await io.select(
+      target.selectMessage,
+      stored.map(({ id, name, type }) => ({ value: id, label: name, hint: type === "oauth" ? "account" : "API key" })),
+    );
+    chosen = stored.find(({ id }) => id === value);
+    if (chosen === undefined) {
+      console.error("[fastagent] logout cancelled");
+      process.exit(1);
+    }
+  }
+  const removed = await target.delete(chosen.id);
+  if (!removed) failStartup(new Error(`no credential for "${chosen.id}" is stored ${where}`));
+  console.error(target.removedMessage(chosen));
 }
 
 /**
