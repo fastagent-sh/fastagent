@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/pi-remote",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Pi extension for connecting directly to deployed FastAgent instances over HTTP or Amazon Bedrock AgentCore.",
   "keywords": [
     "pi-package",
@@ -54,7 +54,7 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "@fastagent-sh/client": "0.32.0"
+    "@fastagent-sh/client": "0.33.0"
   },
   "peerDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
