@@ -78,7 +78,7 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "effect": "^4.0.7"
+    "effect": "^4.1.4"
   },
   "peerDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0"
