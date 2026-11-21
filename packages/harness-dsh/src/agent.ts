@@ -216,6 +216,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           const live = state.liveSessions.get(sessionId);
           if (live !== undefined) live.pendingCosts.push(record.cost);
         },
+        ...(options.telemetry !== undefined ? { telemetry: options.telemetry } : {}),
       });
       ctx.llm.registerAdapter(providerIds, adapter);
     }
@@ -223,6 +224,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
 
   const toolRuntime = {
     toolsByName: state.toolsByName,
+    ...(options.telemetry !== undefined ? { telemetry: options.telemetry } : {}),
     onProgress: (progress: { sessionId: string; toolCallId: string; text: string; output?: string }) => {
       const live = state.liveSessions.get(progress.sessionId);
       if (live === undefined) return;

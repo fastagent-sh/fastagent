@@ -67,6 +67,7 @@ export interface DshModule {
     }[];
     readonly sandbox?: "workspace" | "read-only" | "off";
     readonly unfinished?: "resume" | "refuse";
+    readonly telemetry?: unknown;
     readonly storage?: DshKvBackend;
   }): Promise<Agent & { busy(): boolean; close(): Promise<void> }>;
 }
@@ -293,6 +294,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     processEnv,
     code,
     models,
+    traces,
   } = ctx;
   const { dir, config } = definition;
 
@@ -345,6 +347,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
       commands: () => readCommands(dir),
       sandbox: selection.sandbox ?? "workspace",
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+      ...(traces === undefined ? {} : { telemetry: traces.context }),
       storage: store,
     });
   } catch (error) {
@@ -352,6 +355,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
     await store.close?.().catch((cleanup: unknown) => failures.push(cleanup));
     await ownedPgClose?.().catch((cleanup: unknown) => failures.push(cleanup));
+    await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "DSH agent open and cleanup failed");
   }
 
@@ -370,6 +374,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
         await mcp?.close().catch((error: unknown) => failures.push(error));
         await store.close?.().catch((error: unknown) => failures.push(error));
         await ownedPgClose?.().catch((error: unknown) => failures.push(error));
+        await traces?.close();
         if (failures.length > 0) throw new AggregateError(failures, "DSH agent close failed");
       })()),
   };

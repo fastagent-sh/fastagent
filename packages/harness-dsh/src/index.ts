@@ -44,6 +44,8 @@ export type {
   DshStoredAttachment,
   DshStoredMessage,
   DshStoredSession,
+  DshTelemetryContext,
+  DshTelemetrySpan,
   DshToolDefinition,
   FastAgentToolApi,
   FastAgentToolLike,

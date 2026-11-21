@@ -190,6 +190,34 @@ export interface DshCommand {
   expand(args: string): string;
 }
 
+/** Minimal structural telemetry span compatible with `@earendil-works/pi-telemetry` without depending on it. */
+export interface DshTelemetrySpan {
+  startSpan<T>(
+    options: {
+      readonly name: string;
+      readonly attributes?: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>;
+    },
+    callback: (span: DshTelemetrySpan) => T | Promise<T>,
+  ): Promise<T>;
+  setAttributes(attributes: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>): void;
+  setStatus(
+    status:
+      | { readonly status: "ok" }
+      | { readonly status: "error"; readonly error?: { readonly name: string; readonly message: string } },
+  ): void;
+}
+
+/** Minimal structural telemetry context compatible with `@earendil-works/pi-telemetry` without depending on it. */
+export interface DshTelemetryContext {
+  startSpan<T>(
+    options: {
+      readonly name: string;
+      readonly attributes?: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>;
+    },
+    callback: (span: DshTelemetrySpan) => T | Promise<T>,
+  ): Promise<T>;
+}
+
 /** Retry policy for transient model call failures. */
 export interface DshRetryOptions {
   readonly maxRetries?: number;
@@ -231,6 +259,8 @@ export interface DshHarnessOptions {
   readonly sandboxNetwork?: boolean;
   /** What becomes of unsettled messages from an earlier process on startup. Default: `"resume"`. */
   readonly unfinished?: "resume" | "refuse";
+  /** Optional telemetry context for exporting content-free model and tool run spans. */
+  readonly telemetry?: DshTelemetryContext;
   /** Event log + ledger storage backend. Defaults to in-memory storage when omitted. */
   readonly storage?: DshEventStoreBackend;
 }

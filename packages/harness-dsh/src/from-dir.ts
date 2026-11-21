@@ -16,6 +16,7 @@ import type {
   DshEventStoreBackend,
   DshRetryOptions,
   DshSandboxMode,
+  DshTelemetryContext,
   FastAgentToolLike,
 } from "./types.ts";
 
@@ -37,6 +38,8 @@ export interface DshFromDirOptions {
   readonly sandbox?: DshSandboxMode;
   /** Sanitized environment variables passed to sandboxed shell commands. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Optional telemetry context for exporting content-free model and tool run spans. */
+  readonly telemetry?: DshTelemetryContext;
   readonly retry?: DshRetryOptions;
   /** Custom storage backend. Defaults to SQLite at `<dir>/.fastagent/dsh.sqlite`. */
   readonly storage?: DshEventStoreBackend;
@@ -156,6 +159,7 @@ export async function openDshAgentFromDir(dir: string, options: DshFromDirOption
       sandbox: options.sandbox ?? "workspace",
       ...(commands.length > 0 ? { commands: () => commands } : {}),
       ...(options.retry !== undefined ? { retry: options.retry } : {}),
+      ...(options.telemetry !== undefined ? { telemetry: options.telemetry } : {}),
       storage,
     });
     if (ownedSqlite === undefined) return agent;

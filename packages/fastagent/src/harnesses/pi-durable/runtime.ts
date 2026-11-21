@@ -10,10 +10,8 @@ import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { ClockStore } from "../../schedule/clock.ts";
-import { fastagentVersion } from "../../version.ts";
 import type { HarnessOpenContext, InstancePlace, OpenedHarnessRuntime, ServingStorage } from "../serving.ts";
 import type { PostgresDatabase } from "./postgres/storage.ts";
-import { otlpTraces } from "../telemetry/otlp.ts";
 import type { DurableAgent } from "./agent.ts";
 import { clockStore } from "./clock.ts";
 import { durableCredentialStore } from "./credentials.ts";
@@ -89,12 +87,11 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ope
     place,
     database,
     storageDescription,
-    env,
     processEnv,
     code,
     models,
+    traces,
   } = ctx;
-  const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const maxMessageBytes = messageBytesFor(database?.limits);
 
   let stopRuns: ((error: Error) => void) | undefined;
