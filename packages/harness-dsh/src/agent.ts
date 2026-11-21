@@ -909,6 +909,11 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     if (runningMsgs.length > 0) {
       const target = runningMsgs[0] as DshStoredMessage;
       live.activeTurnMessageIds.push(...runningMsgs.map((m) => m.id));
+      // Clear any inbox items that survived SIGKILL so the recovery turn runs strictly
+      // BEFORE queued follow-up turns (DSH claims `next-turn` before `next-step` at turn start).
+      if (dshAgent.inbox.nextStep.length > 0 || dshAgent.inbox.nextTurn.length > 0) {
+        dshAgent.inbox.clear();
+      }
       const hasUserLogged = dshAgent.session
         .snapshotEvents()
         .some(
@@ -922,7 +927,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           content: [{ type: "text", text: "" }],
           source: { kind: "fastagent-recovery", messageId: target.id },
         });
-        dshAgent.steer(recoveryMsg);
+        dshAgent.followup(recoveryMsg);
       } else {
         const dshUser = createUserMessage({
           content: toDshBlocks(target.modelContent),
@@ -932,17 +937,26 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             displayContent: target.displayContent,
           },
         });
-        dshAgent.steer(dshUser);
+        dshAgent.followup(dshUser);
       }
-    }
-
-    if (queuedMsgs.length > 0) {
-      const missingQueued = queuedMsgs.filter((q) => !pendingInDsh.has(q.id));
-      if (runningMsgs.length === 0 && dshAgent.inbox.nextTurn.length > 0) {
+      for (const q of queuedMsgs) {
+        const dshUser = createUserMessage({
+          content: toDshBlocks(q.modelContent),
+          source: {
+            kind: "fastagent-user",
+            messageId: q.id,
+            displayContent: q.displayContent,
+          },
+        });
+        dshAgent.followup(dshUser);
+      }
+    } else if (queuedMsgs.length > 0) {
+      if (dshAgent.inbox.nextTurn.length > 0) {
         const existing = [...dshAgent.inbox.nextTurn];
         dshAgent.inbox.clear();
         for (const item of existing) dshAgent.followup(item);
       }
+      const missingQueued = queuedMsgs.filter((q) => !pendingInDsh.has(q.id));
       for (const q of missingQueued) {
         const dshUser = createUserMessage({
           content: toDshBlocks(q.modelContent),
@@ -1528,6 +1542,9 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             watcher.end();
           };
 
+          if (live.pendingSettlement !== undefined) {
+            await live.pendingSettlement.catch(() => {});
+          }
           let rawEvents: readonly DshSessionEventRecord[];
           if (live.dshAgent !== undefined) {
             rawEvents = live.dshAgent.session.snapshotEvents();
@@ -1550,6 +1567,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             }
             replay = all.slice(idx + 1);
           }
+          const replayedIds = new Set(replay.map((entry) => entry.id));
           const snapshot = buildSessionSnapshotFromEvents(live, rawEvents);
 
           for (const entry of replay) {
@@ -1559,6 +1577,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
 
           for await (const item of iterable) {
             if (item.seq <= watermark) continue;
+            if (item.event.type === "entry" && replayedIds.has(item.event.entry.id)) continue;
             yield item.event;
           }
         }
