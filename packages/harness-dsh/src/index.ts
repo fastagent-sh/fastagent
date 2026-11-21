@@ -13,14 +13,20 @@ export { toDshToolDefinition } from "./tools.ts";
 /** @public */
 export type {
   DshAgent,
+  DshCommand,
   DshEventStoreBackend,
   DshHarnessOptions,
+  DshRetryOptions,
   DshSandboxMode,
   DshSandboxPolicy,
   DshSessionEvent,
   DshSessionHandle,
   DshSessionHeader,
   DshSessionSnapshot,
+  DshStoredAttachment,
+  DshStoredMessage,
+  DshStoredSession,
   DshToolDefinition,
+  FastAgentToolApi,
   FastAgentToolLike,
 } from "./types.ts";

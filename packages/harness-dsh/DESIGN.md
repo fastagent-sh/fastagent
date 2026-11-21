@@ -115,7 +115,7 @@ Adapter recovery algorithm on `openDshAgent()`:
 
 ## 7. Implementation Milestones
 
-1. **Phase 0 (This PR — Skeleton & Contracts)**: package setup (`private: true`), `DshEventStoreBackend` + `MemoryDshEventStore`, `toDshToolDefinition` bridge, `buildDshSandboxPolicy`, `openDshAgent` boundary, package-boundary guard, unit tests.
-2. **Phase 1 (Live DSH Adapter MVP)**: wire Cordis `Context` + `AgentLoop` + `@deepseek-ai/dsh-llm-pi-ai` + message ledger + event streaming; pass core `agent-api-conformance.ts` (Sending, Messages, Watching, Busy, Idempotency, Sessions, Fork).
+1. **Phase 0 (Done — PR #1115)**: package setup (`private: true`), `DshEventStoreBackend` + `MemoryDshEventStore`, `toDshToolDefinition` bridge, `buildDshSandboxPolicy`, `openDshAgent` boundary, package-boundary guard, unit tests.
+2. **Phase 1 (Done — Live DSH Runtime & Full Conformance)**: wired Cordis `Context` + `AgentLoop` + `PiAiModelsAdapter` over `@earendil-works/pi-ai` `Models` + message ledger + event streaming + fork/compaction + in-memory restart recovery; passes all 61 tests in `test/harnesses/agent-api-conformance.ts`.
 3. **Phase 2 (Durable Persistence & Crash Recovery)**: implement SQLite & PostgreSQL `DshEventStoreBackend` (reusing `openPostgresDatabase`) + restart continuation/inbox wake; pass Restart conformance tests.
 4. **Phase 3 (OS Sandbox & FastAgent CLI/Config Integration)**: wire `@deepseek-ai/dsh-sandbox-local` + `dsh-bash-sandbox` / `dsh-fs-sandbox`, expose harness selection in `fastagent.config.ts` once `@deepseek-ai/dsh` exits RC, and publish `@fastagent-sh/harness-dsh`.

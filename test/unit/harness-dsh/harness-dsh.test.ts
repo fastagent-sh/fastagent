@@ -7,6 +7,8 @@ import {
   openDshAgent,
   toDshToolDefinition,
 } from "@fastagent-sh/harness-dsh";
+import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
+import { dshSubject } from "../../harnesses/dsh-subject.ts";
 
 describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
   it("MemoryDshEventStore enforces single-writer fencing, contiguous seqs, concurrent readers, and reopen", async () => {
@@ -62,7 +64,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
 
     const out = await bridged.execute({ name: "Ada" }, { signal: new AbortController().signal });
     expect(out).toEqual({ text: "Hello, Ada!" });
-    expect(bridged.output.render(out)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
+    expect(bridged.output.render({}, out)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
 
     const bad = await bridged.execute({ name: 123 }, { signal: new AbortController().signal });
     expect(bad.isError).toBe(true);
@@ -86,16 +88,84 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     expect(() => buildDshSandboxPolicy({ workdir: "relative/dir" })).toThrow(/must be an absolute path/);
   });
 
-  it("openDshAgent validates options up front and reports unavailable until Phase 1 runtime wiring", async () => {
+  it("openDshAgent validates options up front and boots a live Cordis agent", async () => {
     await expect(openDshAgent({ name: "", workdir: "/srv/agent" })).rejects.toMatchObject({
       code: "invalid_request",
     });
     await expect(openDshAgent({ name: "demo", workdir: "relative" })).rejects.toMatchObject({
       code: "invalid_request",
     });
-    await expect(openDshAgent({ name: "demo", workdir: "/srv/agent" })).rejects.toMatchObject({
-      code: "unavailable",
-      retryable: false,
+    const agent = await openDshAgent({ name: "demo", workdir: "/srv/agent" });
+    try {
+      expect(await agent.info()).toMatchObject({ name: "demo", tools: [], models: [] });
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it("enforces empty tool allowlists (tools: []) and rejects pending waiters when a session is deleted", async () => {
+    const { createFauxCore, createModels, createProvider, fauxAssistantMessage, fauxToolCall } = await import(
+      "@earendil-works/pi-ai"
+    );
+    const core = createFauxCore({ provider: "p", api: "p" });
+    let holdCalled = 0;
+    let releaseHold: (() => void) | undefined;
+    const stream = (...args: Parameters<typeof core.streamSimple>) => {
+      const last = args[1].messages.at(-1);
+      if (last?.role === "toolResult") {
+        core.appendResponses([fauxAssistantMessage(last.isError ? "denied" : "ran")]);
+      } else {
+        core.appendResponses([fauxAssistantMessage([fauxToolCall("hold", {})], { stopReason: "toolUse" })]);
+      }
+      return core.streamSimple(...args);
+    };
+    const models = createModels();
+    models.setProvider(
+      createProvider({
+        id: "p",
+        auth: { apiKey: { name: "P", resolve: async () => ({ auth: {} }) } },
+        models: core.models,
+        api: { stream, streamSimple: stream },
+      }),
+    );
+    const holdTool = defineTool({
+      name: "hold",
+      description: "blocks until released or aborted",
+      parameters: { type: "object", properties: {} } as const,
+      execute: (_args, _api, ctx) =>
+        new Promise<string>((resolve, reject) => {
+          holdCalled++;
+          releaseHold = () => resolve("done");
+          ctx.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        }),
     });
+    const agent = await openDshAgent({
+      name: "demo",
+      workdir: "/srv/agent",
+      models,
+      model: { provider: "p", modelId: core.getModel().id },
+      tools: [holdTool],
+      sandbox: "off",
+    });
+    try {
+      const noTools = await agent.sessions.create({ tools: [] });
+      const denied = await agent.messages.send({ sessionId: noTools.id, content: "hold" }, { wait: 10 });
+      expect(denied.answer?.text).toBe("denied");
+      expect(holdCalled).toBe(0);
+
+      const busy = await agent.sessions.create();
+      const waiting = agent.messages.send({ sessionId: busy.id, content: "hold" }, { wait: 10 }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await agent.sessions.delete(busy.id);
+      expect(await waiting).toMatchObject({ code: "not_found" });
+    } finally {
+      releaseHold?.();
+      await agent.close();
+    }
   });
 });
+
+agentApiConformance("dsh", dshSubject());
