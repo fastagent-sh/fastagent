@@ -54,8 +54,8 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   parsePort(opts.port, "--port", "flag");
   parseBind(opts.bind);
   if (opts.harness !== undefined || opts.sandbox !== undefined) {
+    const def = await loadSourceDefinition(agentDir).catch(failStartup);
     try {
-      const def = await loadSourceDefinition(agentDir);
       resolveHarnessSelection(def.config, {
         ...(opts.harness === undefined ? {} : { harness: opts.harness }),
         ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),

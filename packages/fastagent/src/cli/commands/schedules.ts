@@ -31,6 +31,8 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface ClockOptions {
   instance?: InstanceFlags;
+  harness?: string;
+  sandbox?: string;
   /** A served instance's Agent API, named by `--url` or `--remote`, and optional key override. */
   url?: string;
   remote?: string;
@@ -68,12 +70,23 @@ async function readClock(
   refuseUnnamedDatabaseInstance();
   const agentDir = agentDirOrExit(resolve(dirArg));
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+  const selection = (() => {
+    try {
+      return resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      return failUsage(error instanceof Error ? error.message : String(error));
+    }
+  })();
   const { schedules } = buildDefinitionShape(definition, process.env);
   const name = enteredInstanceName();
   const place = {
     stateRoot: resolveStateRoot(agentDir),
     env: process.env,
     agent: definition.name,
+    harness: selection.harness,
     ...(name === undefined ? {} : { name }),
   };
   return withInstanceClock(place, async (clock) => ({
@@ -188,9 +201,26 @@ export async function runUnwake(id: string, dirArg: string, opts: ClockOptions):
       ? await served.clock.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
       : await (async () => {
           refuseUnnamedDatabaseInstance();
-          const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));
+          const agentDir = agentDirOrExit(resolve(dirArg));
+          const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+          const selection = (() => {
+            try {
+              return resolveHarnessSelection(definition.config, {
+                ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+                ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+              });
+            } catch (error) {
+              return failUsage(error instanceof Error ? error.message : String(error));
+            }
+          })();
+          const stateRoot = resolveStateRoot(agentDir);
           const name = enteredInstanceName();
-          const place = { stateRoot, env: process.env, ...(name === undefined ? {} : { name }) };
+          const place = {
+            stateRoot,
+            env: process.env,
+            harness: selection.harness,
+            ...(name === undefined ? {} : { name }),
+          };
           const held = await withInstanceClock(place, (clock) => removeAnyWakeup(clock, id)).catch(failStartup);
           if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
           return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };

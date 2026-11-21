@@ -27,7 +27,7 @@ import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.t
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
 import { watchInstanceAlarm } from "./alarm.ts";
-import { openDshServing } from "../dsh/serving.ts";
+import { openDshServing, withDshInstanceClock } from "../dsh/serving.ts";
 import { resolveHarnessSelection } from "./config.ts";
 import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
@@ -208,7 +208,13 @@ function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => vo
  * until it is done: how a command reads or changes the clock without one. Its Session is opened and never resumed, so
  * nothing of the instance runs.
  */
-export async function withInstanceClock<T>(place: InstancePlace, work: (clock: ClockStore) => Promise<T>): Promise<T> {
+export async function withInstanceClock<T>(
+  place: InstancePlace & { readonly harness?: HarnessName },
+  work: (clock: ClockStore) => Promise<T>,
+): Promise<T> {
+  if (place.harness === "dsh") {
+    return withDshInstanceClock(place, work);
+  }
   const storage = await openInstanceStorage(place);
   // The Session closes its storage with it, also when it fails to open.
   const harness = await Harness.open(

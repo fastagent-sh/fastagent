@@ -140,14 +140,20 @@ function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
   const NS = "auth";
   const CRED_KEY = "credentials";
   const DEVICE_KEY = "device_id";
-  const queues = new Map<string, Promise<unknown>>();
-  const serialized = <T>(key: string, work: () => Promise<T>): Promise<T> => {
-    const prev = queues.get(key) ?? Promise.resolve();
+  const providerQueues = new Map<string, Promise<unknown>>();
+  let commitQueue: Promise<unknown> = Promise.resolve();
+  const perProvider = <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const prev = providerQueues.get(key) ?? Promise.resolve();
     const run = prev.catch(() => undefined).then(work);
     const tracked = run.finally(() => {
-      if (queues.get(key) === tracked) queues.delete(key);
+      if (providerQueues.get(key) === tracked) providerQueues.delete(key);
     });
-    queues.set(key, tracked);
+    providerQueues.set(key, tracked);
+    return run;
+  };
+  const serializedCommit = <T>(work: () => Promise<T>): Promise<T> => {
+    const run = commitQueue.catch(() => undefined).then(work);
+    commitQueue = run;
     return run;
   };
   const readAll = async (): Promise<Record<string, Credential>> => {
@@ -174,26 +180,31 @@ function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
       return out;
     },
     modify(providerId, fn) {
-      return serialized(providerId, async () => {
-        const all = await readAll();
-        const current = validCredential(all[providerId]);
+      return perProvider(providerId, async () => {
+        const current = validCredential((await readAll())[providerId]);
         const next = await fn(current);
         if (next === undefined) return current;
-        all[providerId] = next;
-        await store.putKv?.(NS, CRED_KEY, JSON.stringify(all));
+        // Re-read inside commitQueue so concurrent updates to distinct providers never overwrite each other.
+        await serializedCommit(async () => {
+          const latest = await readAll();
+          latest[providerId] = next;
+          await store.putKv?.(NS, CRED_KEY, JSON.stringify(latest));
+        });
         return next;
       });
     },
     async delete(providerId) {
-      await serialized(providerId, async () => {
-        const all = await readAll();
-        if (!(providerId in all)) return;
-        delete all[providerId];
-        await store.putKv?.(NS, CRED_KEY, JSON.stringify(all));
+      await perProvider(providerId, async () => {
+        await serializedCommit(async () => {
+          const latest = await readAll();
+          if (!(providerId in latest)) return;
+          delete latest[providerId];
+          await store.putKv?.(NS, CRED_KEY, JSON.stringify(latest));
+        });
       });
     },
     getOrCreateDeviceId() {
-      return serialized(DEVICE_KEY, async () => {
+      return perProvider(DEVICE_KEY, async () => {
         const existing = await store.getKv?.(NS, DEVICE_KEY);
         if (existing) return existing;
         const created = randomUUID();
@@ -202,6 +213,63 @@ function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
       });
     },
   };
+}
+
+function openSqliteWithHelpfulLockError(dsh: DshModule, filePath: string): DshKvBackend & { close(): Promise<void> } {
+  try {
+    return dsh.openSqliteDshStore(filePath);
+  } catch (error) {
+    const errcode = (error as { errcode?: unknown }).errcode;
+    const msg = error instanceof Error ? error.message : String(error);
+    if (errcode === 5 || msg.includes("database is locked")) {
+      throw new Error(
+        `the storage ${filePath} is held by another process: another fastagent dev, start or schedules command is running. Stop that one first`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Run `work` over a DSH instance's durable clock store (`dsh_kv`) without starting the runtime.
+ */
+export async function withDshInstanceClock<T>(
+  place: {
+    readonly stateRoot: string;
+    readonly env: Readonly<Record<string, string | undefined>>;
+    readonly name?: string;
+    readonly database?: { readonly url: string; readonly password?: () => Promise<string> };
+  },
+  work: (clock: ClockStore) => Promise<T>,
+): Promise<T> {
+  const dsh = await loadDshModule();
+  const dbSpec = place.database ?? (place.env[DATABASE_URL_ENV] ? { url: place.env[DATABASE_URL_ENV] } : undefined);
+  let store: DshKvBackend & { close(): Promise<void> };
+  let ownedPgClose: (() => Promise<void>) | undefined;
+  if (dbSpec !== undefined) {
+    if (place.name === undefined) {
+      throw new Error(
+        `an instance in a database is opened by its name, and none was given: set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
+      );
+    }
+    const acquired = acquirePgDatabase(dbSpec);
+    if (acquired.owned) ownedPgClose = () => acquired.db.close();
+    try {
+      store = await dsh.openPostgresDshStore(acquired.db, place.name);
+    } catch (error) {
+      await ownedPgClose?.().catch(() => {});
+      throw error;
+    }
+  } else {
+    store = openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite"));
+  }
+  try {
+    return await work(dshClockStore(store));
+  } finally {
+    await store.close().catch(() => {});
+    await ownedPgClose?.().catch(() => {});
+  }
 }
 
 function renderSystemPrompt(
@@ -285,7 +353,7 @@ export async function openDshServing(
   if (chosen === "memory") {
     store = new dsh.MemoryDshEventStore();
   } else if (chosen !== "instance") {
-    store = dsh.openSqliteDshStore(chosen.file);
+    store = openSqliteWithHelpfulLockError(dsh, chosen.file);
   } else {
     const dbSpec = options.database ?? (env[DATABASE_URL_ENV] ? { url: env[DATABASE_URL_ENV] } : undefined);
     if (dbSpec !== undefined) {
@@ -303,7 +371,7 @@ export async function openDshServing(
         throw error;
       }
     } else {
-      store = dsh.openSqliteDshStore(join(stateRoot, "agent.sqlite"));
+      store = openSqliteWithHelpfulLockError(dsh, join(stateRoot, "agent.sqlite"));
     }
   }
 
