@@ -1,6 +1,6 @@
 /**
  * Remote `fastagent login` / `logout` / `login --check` over a deployed instance's Auth HTTP API (`--url` or `--remote`).
- * Uses the same `LoginIO` and non-interactive exit-2 contract as local login, without SSH or touching local auth files.
+ * Reuses `cli/login-ui.ts` for provider/method selection, prompt presentation, and logout flow.
  */
 import { createServer } from "node:http";
 import {
@@ -11,10 +11,23 @@ import {
   type AuthMethod,
   type AuthProviderStatus,
 } from "@fastagent-sh/client/agent-api";
+import { LoginRefused, SignInCancelled, type SignInOption } from "../harnesses/models/login.ts";
+import { type RemoteTargetFlags, resolveRemoteTarget } from "./deployment.ts";
 import { failStartup, failUsage } from "./fail.ts";
-import { type LoginIO, isInteractive, printReport, terminalLoginIO } from "./login-ui.ts";
-
-const methodWord = (method: AuthMethod) => (method === "oauth" ? "account" : "api-key");
+import type { InstanceFlags } from "./instance.ts";
+import {
+  type LoginIO,
+  chooseLogin,
+  isInteractive,
+  logoutFlow,
+  methodWord,
+  presentAuthUrl,
+  presentDeviceCode,
+  printReport,
+  promptAuthInput,
+  reportNeedChoice,
+  terminalLoginIO,
+} from "./login-ui.ts";
 
 const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
@@ -24,10 +37,15 @@ function targetFlag(opts: { url?: string; remote?: string }): string {
   return `--url ${opts.url ?? ""}`;
 }
 
-function statusHint(provider: AuthProviderStatus): string {
-  if (provider.error !== undefined) return `error: ${provider.error}`;
-  if (provider.authenticated) return `✓ ${provider.source ?? "configured"}`;
-  return "not configured";
+/** Resolve `--url` / `--remote` for auth commands and reject conflicting `-g/--global`. */
+export async function resolveRemoteAuthTarget(
+  opts: RemoteTargetFlags & { global?: boolean; instance?: InstanceFlags },
+): Promise<Awaited<ReturnType<typeof resolveRemoteTarget>>> {
+  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  if (remoteTarget !== undefined && opts.global === true) {
+    failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
+  }
+  return remoteTarget;
 }
 
 /**
@@ -88,97 +106,25 @@ export function listenLocalRedirect(authUrl: string, signal: AbortSignal): Promi
   });
 }
 
-async function resolveProviderAndMethod(
-  providers: readonly AuthProviderStatus[],
-  givenProvider: string | undefined,
-  givenMethod: AuthMethod | undefined,
-  interactive: boolean,
-  target: { url?: string; remote?: string; json?: boolean },
-  io: LoginIO,
-): Promise<{ provider: AuthProviderStatus; method: AuthMethod }> {
-  const interactiveProviders = providers.filter((p) => p.methods.length > 0);
-  if (interactiveProviders.length === 0) {
-    failStartup(new Error("this instance offers no providers with interactive login"));
-  }
-
-  let provider: AuthProviderStatus | undefined;
-  if (givenProvider !== undefined) {
-    const needle = givenProvider.trim().toLowerCase();
-    provider = interactiveProviders.find((p) => p.provider.toLowerCase() === needle || p.name.toLowerCase() === needle);
-    if (provider === undefined) {
-      failUsage(`unknown provider "${givenProvider}" on this instance`);
-    }
-  } else if (!interactive) {
-    const flag = targetFlag(target);
-    const choices = interactiveProviders.flatMap((p) =>
-      p.methods.map((m) => ({
+function remoteSignInOptions(providers: readonly AuthProviderStatus[]): SignInOption[] {
+  const options: SignInOption[] = [];
+  for (const p of providers) {
+    for (const method of p.methods) {
+      const status =
+        p.authenticated && p.source !== undefined ? { type: p.stored ?? method, source: p.source } : undefined;
+      options.push({
         provider: p.provider,
         name: p.name,
-        method: methodWord(m),
-        authenticated: p.authenticated,
-        command: `fastagent login ${p.provider} --method ${methodWord(m)} ${flag}`,
-      })),
-    );
-    printReport(target.json, { status: "need_choice", message: "choose a provider to sign in to", choices }, [
-      "Choose a provider to sign in to:",
-      ...choices.map((c) => `  ${c.command}  (${c.name}, ${c.method})`),
-    ]);
-    process.exit(2);
-  } else {
-    const chosenId = await io.select(
-      "Select provider to log in to:",
-      interactiveProviders.map((p) => ({ value: p.provider, label: p.name, hint: statusHint(p) })),
-    );
-    if (chosenId === undefined) {
-      console.error("[fastagent] login cancelled");
-      process.exit(1);
+        method,
+        label: method === "oauth" ? "Sign in with an account" : "Sign in with an API key",
+        subscription: false,
+        external: false,
+        ...(status === undefined ? {} : { status }),
+        ...(p.error === undefined ? {} : { problem: p.error }),
+      });
     }
-    provider = interactiveProviders.find((p) => p.provider === chosenId);
   }
-
-  if (provider === undefined) {
-    console.error("[fastagent] login cancelled");
-    process.exit(1);
-  }
-
-  let method = givenMethod;
-  if (method !== undefined) {
-    if (!provider.methods.includes(method)) {
-      failUsage(
-        `provider "${provider.provider}" does not support --method ${methodWord(method)} (available: ${provider.methods.map(methodWord).join(", ")})`,
-      );
-    }
-  } else if (provider.methods.length === 1) {
-    method = provider.methods[0] as AuthMethod;
-  } else if (!interactive) {
-    const flag = targetFlag(target);
-    const choices = provider.methods.map((m) => ({
-      provider: provider.provider,
-      method: methodWord(m),
-      command: `fastagent login ${provider.provider} --method ${methodWord(m)} ${flag}`,
-    }));
-    printReport(
-      target.json,
-      { status: "need_choice", provider: provider.provider, message: "choose a sign-in method", choices },
-      [`Provider "${provider.provider}" offers multiple sign-in methods:`, ...choices.map((c) => `  ${c.command}`)],
-    );
-    process.exit(2);
-  } else {
-    const chosenMethod = await io.select(
-      `How would you like to sign in to ${provider.name}?`,
-      provider.methods.map((m) => ({
-        value: m,
-        label: m === "oauth" ? "Sign in with an account (OAuth)" : "Sign in with an API key",
-      })),
-    );
-    if (chosenMethod === undefined) {
-      console.error("[fastagent] login cancelled");
-      process.exit(1);
-    }
-    method = chosenMethod as AuthMethod;
-  }
-
-  return { provider, method };
+  return options;
 }
 
 export async function runRemoteLogin(
@@ -197,31 +143,48 @@ export async function runRemoteLogin(
 ): Promise<void> {
   const interactive = opts.input !== false && opts.json !== true && isInteractive();
   const providers = await auth.providers().catch((error: unknown) => failStartup(refusal(error)));
-  const { provider, method } = await resolveProviderAndMethod(
-    providers,
-    givenProvider,
-    opts.method,
-    interactive,
-    opts,
-    io,
-  );
+  const offered = remoteSignInOptions(providers);
+  if (offered.length === 0) {
+    failStartup(new Error("this instance offers no providers with interactive login"));
+  }
+
+  let choice: SignInOption;
+  try {
+    choice = await chooseLogin(
+      offered,
+      {
+        ...(givenProvider === undefined ? {} : { provider: givenProvider }),
+        ...(opts.method === undefined ? {} : { method: opts.method }),
+      },
+      interactive ? io : undefined,
+    );
+  } catch (error) {
+    if (error instanceof SignInCancelled) {
+      console.error("[fastagent] login cancelled");
+      process.exit(1);
+    }
+    if (error instanceof LoginRefused) {
+      return reportNeedChoice(error, opts, { flags: ` ${targetFlag(opts)}`, statuses: false });
+    }
+    throw error;
+  }
 
   if (!interactive) {
     const flag = targetFlag(opts);
-    const command = `fastagent login ${provider.provider} --method ${methodWord(method)} ${flag}`;
-    const check = `fastagent login ${provider.provider} --check ${flag} --json`;
+    const command = `fastagent login ${choice.provider} --method ${methodWord(choice.method)} ${flag}`;
+    const check = `fastagent login ${choice.provider} --check ${flag} --json`;
     printReport(
       opts.json,
       {
         status: "need_user_action",
-        provider: provider.provider,
-        method: methodWord(method),
+        provider: choice.provider,
+        method: methodWord(choice.method),
         target: label,
         command,
         check,
-        message: `run in a terminal to sign in to ${provider.name} on ${label}`,
+        message: `run in a terminal to sign in to ${choice.name} on ${label}`,
       },
-      [`Sign in to ${provider.name} on ${label} from a terminal:`, `  ${command}`, `Verify with:`, `  ${check}`],
+      [`Sign in to ${choice.name} on ${label} from a terminal:`, `  ${command}`, "Verify with:", `  ${check}`],
     );
     process.exit(2);
   }
@@ -229,7 +192,10 @@ export async function runRemoteLogin(
   const timeout = opts.timeoutSeconds === undefined ? undefined : AbortSignal.timeout(opts.timeoutSeconds * 1000);
   let flow: AuthFlowState;
   try {
-    flow = await auth.startLogin({ provider: provider.provider, method }, ...(timeout ? [{ signal: timeout }] : []));
+    flow = await auth.startLogin(
+      { provider: choice.provider, method: choice.method },
+      ...(timeout ? [{ signal: timeout }] : []),
+    );
   } catch (error) {
     if (timeout?.aborted) failStartup(new Error(`login timed out after ${opts.timeoutSeconds}s (--timeout)`));
     failStartup(refusal(error));
@@ -246,14 +212,11 @@ export async function runRemoteLogin(
     seenMessages = state.messages.length;
     if (state.authUrl !== undefined && state.authUrl.url !== shownAuthUrl) {
       shownAuthUrl = state.authUrl.url;
-      io.note(`Open this URL to authorize:\n  ${state.authUrl.url}`);
-      if (state.authUrl.instructions) io.note(state.authUrl.instructions);
-      io.openUrl(state.authUrl.url);
+      presentAuthUrl(io, state.authUrl.url, state.authUrl.instructions);
     }
     if (state.deviceCode !== undefined && state.deviceCode.userCode !== shownDeviceCode) {
       shownDeviceCode = state.deviceCode.userCode;
-      io.note(`Go to ${state.deviceCode.verificationUri} and enter the code:  ${state.deviceCode.userCode}`);
-      io.openUrl(state.deviceCode.verificationUri, state.deviceCode.userCode);
+      presentDeviceCode(io, state.deviceCode.verificationUri, state.deviceCode.userCode);
     }
   };
 
@@ -262,9 +225,9 @@ export async function runRemoteLogin(
       announce(flow);
       if (flow.status === "completed") {
         console.error(
-          method === "oauth"
-            ? `[fastagent] logged in to ${provider.name} on ${label} (stored in instance storage)`
-            : `[fastagent] saved the API key for ${provider.name} on ${label} (stored in instance storage)`,
+          choice.method === "oauth"
+            ? `[fastagent] logged in to ${choice.name} on ${label} (stored in instance storage)`
+            : `[fastagent] saved the API key for ${choice.name} on ${label} (stored in instance storage)`,
         );
         return;
       }
@@ -273,26 +236,17 @@ export async function runRemoteLogin(
         process.exit(1);
       }
       if (flow.status === "failed") {
-        failStartup(new Error(flow.error ?? `login to ${provider.name} failed`));
+        failStartup(new Error(flow.error ?? `login to ${choice.name} failed`));
       }
 
       if (flow.status === "awaiting_input" && flow.prompt !== undefined) {
         const activePrompt = flow.prompt;
         let answer: string | undefined;
-        if (activePrompt.type === "select") {
-          answer = await io.select(
-            activePrompt.message,
-            (activePrompt.options ?? []).map((o) => ({
-              value: o.id,
-              label: o.label,
-              ...(o.description === undefined ? {} : { hint: o.description }),
-            })),
-          );
-        } else if (activePrompt.type === "manual_code" && flow.authUrl !== undefined) {
+        if (activePrompt.type === "manual_code" && flow.authUrl !== undefined) {
           const raceAbort = new AbortController();
           const promptSignal = timeout ? AbortSignal.any([timeout, raceAbort.signal]) : raceAbort.signal;
           const callbackPromise = listenLocalRedirect(flow.authUrl.url, raceAbort.signal);
-          const promptPromise = io.prompt(activePrompt.message, { redirect: true, signal: promptSignal });
+          const promptPromise = promptAuthInput(io, activePrompt, promptSignal);
           // Suppress expected abort rejection if the local callback wins the race.
           void promptPromise.catch(() => undefined);
           try {
@@ -307,11 +261,7 @@ export async function runRemoteLogin(
             raceAbort.abort();
           }
         } else {
-          answer = await io.prompt(activePrompt.message, {
-            hidden: activePrompt.type === "secret",
-            redirect: activePrompt.type === "manual_code",
-            ...(timeout ? { signal: timeout } : {}),
-          });
+          answer = await promptAuthInput(io, activePrompt, timeout);
         }
         if (answer === undefined) {
           await auth.cancelLogin(flow.flowId).catch(() => undefined);
@@ -342,41 +292,24 @@ export async function runRemoteLogout(
   io: LoginIO = terminalLoginIO(),
 ): Promise<void> {
   const providers = await auth.providers().catch((error: unknown) => failStartup(refusal(error)));
-  const stored = providers.filter((p) => p.stored !== undefined);
-  const held = stored.length === 0 ? "it holds none" : `it holds ${stored.map((p) => p.provider).join(", ")}`;
-
-  let chosen: AuthProviderStatus | undefined;
-  if (givenProvider !== undefined) {
-    const needle = givenProvider.trim().toLowerCase();
-    chosen = stored.find((p) => p.provider.toLowerCase() === needle || p.name.toLowerCase() === needle);
-    if (chosen === undefined) {
-      failStartup(new Error(`no credential for "${givenProvider}" is stored on ${label}: ${held}`));
-    }
-  } else if (stored.length === 0) {
-    console.error(`[fastagent] no credential is stored on ${label}; environment variables are not login's to remove`);
-    return;
-  } else if (opts.input === false || !isInteractive()) {
-    failUsage(`name the provider to log out of on ${label}: ${held}`);
-  } else {
-    const picked = await io.select(
-      `Select provider to logout on ${label}:`,
-      stored.map((p) => ({ value: p.provider, label: p.name, hint: p.stored === "oauth" ? "account" : "API key" })),
-    );
-    chosen = stored.find((p) => p.provider === picked);
-    if (chosen === undefined) {
-      console.error("[fastagent] logout cancelled");
-      process.exit(1);
-    }
-  }
-
-  const { removed } = await auth.logout(chosen.provider).catch((error: unknown) => failStartup(refusal(error)));
-  if (!removed) {
-    failStartup(new Error(`no credential for "${chosen.provider}" is stored on ${label}`));
-  }
-  console.error(
-    chosen.stored === "oauth"
-      ? `[fastagent] logged out of ${chosen.name} on ${label} — removed from instance storage`
-      : `[fastagent] removed the stored API key for ${chosen.name} on ${label}; environment variables are unchanged`,
+  const stored = providers
+    .filter((p): p is AuthProviderStatus & { stored: AuthMethod } => p.stored !== undefined)
+    .map((p) => ({ id: p.provider, name: p.name, type: p.stored }));
+  await logoutFlow(
+    {
+      where: `on ${label}`,
+      stored,
+      selectMessage: `Select provider to logout on ${label}:`,
+      delete: async (providerId) =>
+        (await auth.logout(providerId).catch((error: unknown) => failStartup(refusal(error)))).removed,
+      removedMessage: (chosen) =>
+        chosen.type === "oauth"
+          ? `[fastagent] logged out of ${chosen.name} on ${label} — removed from instance storage`
+          : `[fastagent] removed the stored API key for ${chosen.name} on ${label}; environment variables are unchanged`,
+    },
+    givenProvider,
+    opts,
+    io,
   );
 }
 

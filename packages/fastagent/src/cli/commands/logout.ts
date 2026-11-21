@@ -8,21 +8,18 @@ import { GLOBAL_AUTH_PATH, fastagentCredentialStore, resolveAuthPath } from "../
 import { loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
 import { globalHome } from "../../paths.ts";
-import { type RemoteTargetFlags, resolveRemoteTarget } from "../deployment.ts";
-import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import type { RemoteTargetFlags } from "../deployment.ts";
+import { failStartup, optionalAgentDirOrExit } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";
-import { isInteractive, terminalLoginIO } from "../login-ui.ts";
-import { runRemoteLogout } from "../remote-login.ts";
+import { logoutFlow } from "../login-ui.ts";
+import { resolveRemoteAuthTarget, runRemoteLogout } from "../remote-login.ts";
 
 export async function runLogout(
   provider: string | undefined,
   opts: RemoteTargetFlags & { global?: boolean; input?: boolean; instance?: InstanceFlags },
 ) {
-  const remoteTarget = await resolveRemoteTarget(".", opts, opts.instance);
+  const remoteTarget = await resolveRemoteAuthTarget(opts);
   if (remoteTarget !== undefined) {
-    if (opts.global === true) {
-      failUsage("-g/--global is for this machine's auth file and cannot be combined with --url or --remote");
-    }
     await runRemoteLogout(remoteTarget.auth, remoteTarget.label, provider, {
       ...(opts.input === undefined ? {} : { input: opts.input }),
     });
@@ -40,36 +37,22 @@ export async function runLogout(
       name: known.find((p) => p.id === providerId)?.name ?? providerId,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  const held = stored.length === 0 ? "it holds none" : `it holds ${stored.map(({ id }) => id).join(", ")}`;
 
-  let chosen: (typeof stored)[number] | undefined;
-  if (provider !== undefined) {
-    const named = provider.trim().toLowerCase();
-    chosen = stored.find(({ id, name }) => id.toLowerCase() === named || name.toLowerCase() === named);
-    if (chosen === undefined)
-      failStartup(new Error(`no credential for "${provider}" is stored in ${authPath}: ${held}`));
-  } else if (stored.length === 0) {
-    console.error(
-      `[fastagent] no credential is stored in ${authPath}; environment variables are not login's to remove`,
-    );
-    return;
-  } else if (opts.input === false || !isInteractive()) {
-    failUsage(`name the provider to log out of: ${held} (${authPath})`);
-  } else {
-    const value = await terminalLoginIO().select(
-      "Select provider to logout:",
-      stored.map(({ id, name, type }) => ({ value: id, label: name, hint: type === "oauth" ? "account" : "API key" })),
-    );
-    chosen = stored.find(({ id }) => id === value);
-    if (chosen === undefined) {
-      console.error("[fastagent] logout cancelled");
-      process.exit(1);
-    }
-  }
-  await store.delete(chosen.id);
-  console.error(
-    chosen.type === "oauth"
-      ? `[fastagent] logged out of ${chosen.name} — removed from ${authPath}`
-      : `[fastagent] removed the stored API key for ${chosen.name} from ${authPath}; environment variables are unchanged`,
+  await logoutFlow(
+    {
+      where: `in ${authPath}`,
+      stored,
+      selectMessage: "Select provider to logout:",
+      delete: async (providerId) => {
+        await store.delete(providerId);
+        return true;
+      },
+      removedMessage: (chosen) =>
+        chosen.type === "oauth"
+          ? `[fastagent] logged out of ${chosen.name} — removed from ${authPath}`
+          : `[fastagent] removed the stored API key for ${chosen.name} from ${authPath}; environment variables are unchanged`,
+    },
+    provider,
+    opts,
   );
 }
