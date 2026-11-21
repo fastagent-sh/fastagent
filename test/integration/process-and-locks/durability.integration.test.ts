@@ -230,6 +230,8 @@ describe("@fastagent-sh/harness-dsh SIGKILL crash recovery on SQLite", () => {
         const q2 = await agent.messages.send({ sessionId: session.id, content: "after-2" });
         // Flush pending appends so SQLite has committed the open turn & queued messages before SIGKILL.
         await new Promise((resolve) => setTimeout(resolve, 60));
+        // Keep the event loop alive so Process 1 stays running until the parent sends SIGKILL.
+        setInterval(() => {}, 60_000);
         console.log(JSON.stringify({ sessionId: session.id, runningId: running.id, q1Id: q1.id, q2Id: q2.id }));
         await new Promise(() => {});
       } else {
@@ -265,8 +267,34 @@ describe("@fastagent-sh/harness-dsh SIGKILL crash recovery on SQLite", () => {
     );
 
     expect(Number(readFileSync(effectFile, "utf8").trim())).toBe(1);
+    // While Process 1 holds dsh.sqlite, a contending process opening with busyTimeoutMs: 0 must be refused.
+    const contender = await new Promise<{ code: number | null; stderr: string }>((resolve) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--conditions=@fastagent-sh/source",
+          "--input-type=module",
+          "-e",
+          `import { openSqliteDshStore } from "@fastagent-sh/harness-dsh"; openSqliteDshStore(process.argv[1], { busyTimeoutMs: 0 });`,
+          dbPath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+    expect(contender.code).not.toBe(0);
+    expect(contender.stderr).toContain("database is locked");
+    expect(crashChild.exitCode).toBeNull();
+
     crashChild.kill("SIGKILL");
-    await new Promise<void>((resolve) => crashChild.once("exit", () => resolve()));
+    const crashSignal = await new Promise<NodeJS.Signals | null>((resolve) =>
+      crashChild.once("exit", (_code, signal) => resolve(signal)),
+    );
+    expect(crashSignal).toBe("SIGKILL");
 
     // Process 2: reopen the exact same SQLite file and verify recovery!
     const recoverResult = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {

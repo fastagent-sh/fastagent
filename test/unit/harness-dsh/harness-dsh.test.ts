@@ -243,6 +243,23 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         ]),
       ).rejects.toThrow(/expected contiguous seq 1/);
       expect((await hB.read(0)).events).toEqual([]);
+      // Simulate expired lease takeover: once another owner claims the lease, the fenced holder's writes fail.
+      await db.query("UPDATE dsh_leases SET lease_until = 1 WHERE instance = $1", [instanceA]);
+      const successor = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2" });
+      await expect(hA.append([{ seq: 1, type: "turn/end", data: { turn: 1 } }])).rejects.toThrow(/lease.*lost/);
+      await expect(
+        held.putMessage?.({
+          id: "fenced-msg",
+          sessionId: "shared-id",
+          status: "queued",
+          whenBusy: "queue",
+          displayContent: [{ type: "text", text: "stale" }],
+          modelContent: [{ type: "text", text: "stale" }],
+          createdAt: 1,
+          updatedAt: 1,
+        }),
+      ).rejects.toThrow(/lease.*lost/);
+      await successor.close();
       await hA.close();
       await hB.close();
       await other.close();

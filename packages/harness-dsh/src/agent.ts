@@ -914,30 +914,31 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       if (dshAgent.inbox.nextStep.length > 0 || dshAgent.inbox.nextTurn.length > 0) {
         dshAgent.inbox.clear();
       }
-      const hasUserLogged = dshAgent.session
-        .snapshotEvents()
-        .some(
-          (ev) =>
-            ev.type === "user/message" &&
-            ev.data.source.kind === "fastagent-user" &&
-            ev.data.source.messageId === target.id,
-        );
-      if (hasUserLogged) {
+      const loggedMessageIds = new Set<string>();
+      for (const ev of dshAgent.session.snapshotEvents()) {
+        if (ev.type === "user/message" && ev.data.source.kind === "fastagent-user") {
+          loggedMessageIds.add(ev.data.source.messageId);
+        }
+      }
+      const unloggedRunning = runningMsgs.filter((m) => !loggedMessageIds.has(m.id));
+      if (unloggedRunning.length === 0) {
         const recoveryMsg = createUserMessage({
           content: [{ type: "text", text: "" }],
           source: { kind: "fastagent-recovery", messageId: target.id },
         });
         dshAgent.followup(recoveryMsg);
       } else {
-        const dshUser = createUserMessage({
-          content: toDshBlocks(target.modelContent),
-          source: {
-            kind: "fastagent-user",
-            messageId: target.id,
-            displayContent: target.displayContent,
-          },
-        });
-        dshAgent.followup(dshUser);
+        for (const msg of unloggedRunning) {
+          const dshUser = createUserMessage({
+            content: toDshBlocks(msg.modelContent),
+            source: {
+              kind: "fastagent-user",
+              messageId: msg.id,
+              displayContent: msg.displayContent,
+            },
+          });
+          dshAgent.followup(dshUser);
+        }
       }
       for (const q of queuedMsgs) {
         const dshUser = createUserMessage({

@@ -73,12 +73,27 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
   }
   const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
   const db = new DatabaseSync(filePath, { timeout: busyTimeoutMs });
-  if (filePath !== ":memory:") {
-    db.exec("PRAGMA journal_mode = WAL;");
-    db.exec("PRAGMA synchronous = FULL;");
+  try {
+    db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
+    if (filePath !== ":memory:") {
+      // Set WAL first, then acquire a kernel-managed exclusive OS lock (via a real page write)
+      // so a second process cannot open this store concurrently while SIGKILL releases it cleanly.
+      db.exec("PRAGMA journal_mode = WAL;");
+      db.exec("PRAGMA locking_mode = EXCLUSIVE;");
+      db.exec("PRAGMA synchronous = FULL;");
+    }
+    db.exec(SCHEMA_SQL);
+    if (filePath !== ":memory:") {
+      db.exec("BEGIN IMMEDIATE; PRAGMA user_version = 1; COMMIT;");
+    }
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // Ignore close error on failed open.
+    }
+    throw error;
   }
-  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
-  db.exec(SCHEMA_SQL);
 
   const writers = new Set<string>();
   let dbClosed = false;

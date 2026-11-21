@@ -102,22 +102,22 @@ async function migrateDshSchema(db: DshPgDatabase): Promise<void> {
   }
 }
 
+const PG_NOW_MS_SQL = "FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
+
 async function tryAcquireLease(
   db: DshPgDatabase,
   instance: string,
   owner: string,
   leaseMs: number,
 ): Promise<{ acquired: true } | { acquired: false; holder: string }> {
-  const now = Date.now();
-  const leaseUntil = now + leaseMs;
   const rows = await db.query<{ owner: string }>(
     `INSERT INTO dsh_leases (instance, owner, lease_until)
-     VALUES ($1, $2, $3)
+     VALUES ($1, $2, (${PG_NOW_MS_SQL}) + $3)
      ON CONFLICT (instance) DO UPDATE
-       SET owner = EXCLUDED.owner, lease_until = EXCLUDED.lease_until
-       WHERE dsh_leases.owner = $2 OR dsh_leases.lease_until <= $4
+       SET owner = EXCLUDED.owner, lease_until = (${PG_NOW_MS_SQL}) + $3
+       WHERE dsh_leases.owner = $2 OR dsh_leases.lease_until <= (${PG_NOW_MS_SQL})
      RETURNING owner`,
-    [instance, owner, leaseUntil, now],
+    [instance, owner, leaseMs],
   );
   if (rows.length > 0 && rows[0]?.owner === owner) {
     return { acquired: true };
@@ -171,14 +171,30 @@ export async function openPostgresDshStore(
     if (leaseLost) throw new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
   };
 
+  const assertLeaseInTx = async (tx: DshPgExecutor): Promise<void> => {
+    const rows = await tx.query<{ owner: string }>(
+      `UPDATE dsh_leases
+       SET lease_until = (${PG_NOW_MS_SQL}) + $3
+       WHERE instance = $1 AND owner = $2 AND lease_until > (${PG_NOW_MS_SQL})
+       RETURNING owner`,
+      [instance, owner, leaseMs],
+    );
+    if (rows.length === 0) {
+      leaseLost = true;
+      throw new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
+    }
+  };
+
   const renewIntervalMs = Math.max(100, Math.floor(leaseMs / 3));
   const renewTimer = setInterval(() => {
     if (storeClosed) return;
-    const nextUntil = Date.now() + leaseMs;
     void database
       .query<{ owner: string }>(
-        "UPDATE dsh_leases SET lease_until = $1 WHERE instance = $2 AND owner = $3 RETURNING owner",
-        [nextUntil, instance, owner],
+        `UPDATE dsh_leases
+         SET lease_until = (${PG_NOW_MS_SQL}) + $3
+         WHERE instance = $1 AND owner = $2 AND lease_until > (${PG_NOW_MS_SQL})
+         RETURNING owner`,
+        [instance, owner, leaseMs],
       )
       .then((rows) => {
         if (rows.length === 0) leaseLost = true;
@@ -239,14 +255,7 @@ export async function openPostgresDshStore(
         }
         if (events.length === 0) return;
         await database.transaction(async (tx) => {
-          const leaseRows = await tx.query<{ owner: string }>(
-            "SELECT owner FROM dsh_leases WHERE instance = $1 AND owner = $2",
-            [instance, owner],
-          );
-          if (leaseRows.length === 0) {
-            leaseLost = true;
-            throw new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
-          }
+          await assertLeaseInTx(tx);
           const countRows = await tx.query<{ count: string | number }>(
             "SELECT COUNT(*) AS count FROM dsh_events WHERE instance = $1 AND session_id = $2",
             [instance, id],
@@ -296,40 +305,59 @@ export async function openPostgresDshStore(
       if (!header.isSeeded && inheritedEventCount !== 0) {
         throw new Error(`DSH unseeded session "${header.id}" must have inheritedEventCount = 0`);
       }
-      await database.transaction(async (tx) => {
-        const existing = await tx.query<{ session_id: string }>(
-          "SELECT session_id FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
-          [instance, header.id],
-        );
-        if (existing.length > 0) {
-          throw new Error(`DSH session "${header.id}" already exists`);
-        }
-        await tx.query(
-          "INSERT INTO dsh_sessions (instance, session_id, header_json, inherited_event_count) VALUES ($1, $2, $3, $4)",
-          [instance, header.id, JSON.stringify(header), inheritedEventCount],
-        );
-      });
+      if (writers.has(header.id)) {
+        throw new Error(`DSH session "${header.id}" already exists`);
+      }
       writers.add(header.id);
+      try {
+        await database.transaction(async (tx) => {
+          await assertLeaseInTx(tx);
+          const existing = await tx.query<{ session_id: string }>(
+            "SELECT session_id FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
+            [instance, header.id],
+          );
+          if (existing.length > 0) {
+            throw new Error(`DSH session "${header.id}" already exists`);
+          }
+          await tx.query(
+            "INSERT INTO dsh_sessions (instance, session_id, header_json, inherited_event_count) VALUES ($1, $2, $3, $4)",
+            [instance, header.id, JSON.stringify(header), inheritedEventCount],
+          );
+        });
+      } catch (error) {
+        writers.delete(header.id);
+        throw error;
+      }
       return makeHandle(header.id, "write", header, inheritedEventCount);
     },
 
     async open(id, access) {
       assertStoreOpen();
-      const rows = await database.query<{ header_json: string; inherited_event_count: number }>(
-        "SELECT header_json, inherited_event_count FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
-        [instance, id],
-      );
-      const row = rows[0];
-      if (row === undefined) {
-        throw new Error(`DSH session "${id}" does not exist`);
-      }
       if (access === "write") {
         if (writers.has(id)) {
           throw new Error(`DSH session "${id}" is already owned by another writer`);
         }
         writers.add(id);
       }
-      return makeHandle(id, access, JSON.parse(row.header_json) as DshSessionHeader, Number(row.inherited_event_count));
+      try {
+        const rows = await database.query<{ header_json: string; inherited_event_count: number }>(
+          "SELECT header_json, inherited_event_count FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
+          [instance, id],
+        );
+        const row = rows[0];
+        if (row === undefined) {
+          throw new Error(`DSH session "${id}" does not exist`);
+        }
+        return makeHandle(
+          id,
+          access,
+          JSON.parse(row.header_json) as DshSessionHeader,
+          Number(row.inherited_event_count),
+        );
+      } catch (error) {
+        if (access === "write") writers.delete(id);
+        throw error;
+      }
     },
 
     async flush() {
@@ -403,12 +431,15 @@ export async function openPostgresDshStore(
         createdAt: session.createdAt,
         isSeeded: false,
       };
-      await database.query(
-        `INSERT INTO dsh_sessions (instance, session_id, header_json, inherited_event_count, meta_json)
-         VALUES ($1, $2, $3, 0, $4)
-         ON CONFLICT (instance, session_id) DO UPDATE SET meta_json = EXCLUDED.meta_json`,
-        [instance, session.id, JSON.stringify(fallbackHeader), json],
-      );
+      await database.transaction(async (tx) => {
+        await assertLeaseInTx(tx);
+        await tx.query(
+          `INSERT INTO dsh_sessions (instance, session_id, header_json, inherited_event_count, meta_json)
+           VALUES ($1, $2, $3, 0, $4)
+           ON CONFLICT (instance, session_id) DO UPDATE SET meta_json = EXCLUDED.meta_json`,
+          [instance, session.id, JSON.stringify(fallbackHeader), json],
+        );
+      });
     },
 
     async listSessionMetas() {
@@ -442,14 +473,17 @@ export async function openPostgresDshStore(
 
     async putMessage(message) {
       assertStoreOpen();
-      await database.query(
-        `INSERT INTO dsh_messages (instance, session_id, message_id, idempotency_key, message_json)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (instance, session_id, message_id) DO UPDATE SET
-           idempotency_key = EXCLUDED.idempotency_key,
-           message_json = EXCLUDED.message_json`,
-        [instance, message.sessionId, message.id, message.idempotencyKey ?? null, JSON.stringify(message)],
-      );
+      await database.transaction(async (tx) => {
+        await assertLeaseInTx(tx);
+        await tx.query(
+          `INSERT INTO dsh_messages (instance, session_id, message_id, idempotency_key, message_json)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (instance, session_id, message_id) DO UPDATE SET
+             idempotency_key = EXCLUDED.idempotency_key,
+             message_json = EXCLUDED.message_json`,
+          [instance, message.sessionId, message.id, message.idempotencyKey ?? null, JSON.stringify(message)],
+        );
+      });
     },
 
     async listMessages(sessionId) {
@@ -470,14 +504,17 @@ export async function openPostgresDshStore(
     async putAttachment(attachment) {
       assertStoreOpen();
       const b64 = Buffer.from(attachment.data).toString("base64");
-      await database.query(
-        `INSERT INTO dsh_attachments (instance, session_id, ref, mime_type, data_b64)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (instance, session_id, ref) DO UPDATE SET
-           mime_type = EXCLUDED.mime_type,
-           data_b64 = EXCLUDED.data_b64`,
-        [instance, attachment.sessionId, attachment.ref, attachment.mimeType, b64],
-      );
+      await database.transaction(async (tx) => {
+        await assertLeaseInTx(tx);
+        await tx.query(
+          `INSERT INTO dsh_attachments (instance, session_id, ref, mime_type, data_b64)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (instance, session_id, ref) DO UPDATE SET
+             mime_type = EXCLUDED.mime_type,
+             data_b64 = EXCLUDED.data_b64`,
+          [instance, attachment.sessionId, attachment.ref, attachment.mimeType, b64],
+        );
+      });
     },
 
     async getAttachment(sessionId, ref) {
