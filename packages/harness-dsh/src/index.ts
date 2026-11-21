@@ -5,6 +5,8 @@
 /** @public */
 export { openDshAgent } from "./agent.ts";
 /** @public */
+export { openDshAgentFromDir, type DshFromDirOptions } from "./from-dir.ts";
+/** @public */
 export { MemoryDshEventStore } from "./persistence.ts";
 /** @public */
 export {
@@ -16,7 +18,7 @@ export {
   type PostgresDshStoreOptions,
 } from "./postgres-store.ts";
 /** @public */
-export { buildDshSandboxPolicy } from "./sandbox.ts";
+export { buildDshSandboxPolicy, resolveConfinedPath } from "./sandbox.ts";
 /** @public */
 export {
   openSqliteDshStore,
@@ -28,6 +30,7 @@ export { toDshToolDefinition } from "./tools.ts";
 /** @public */
 export type {
   DshAgent,
+  DshCodingToolName,
   DshCommand,
   DshEventStoreBackend,
   DshHarnessOptions,

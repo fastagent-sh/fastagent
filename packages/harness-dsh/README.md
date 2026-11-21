@@ -4,7 +4,7 @@ Optional second harness for [FastAgent](https://fastagent.sh) backed by [DeepSee
 
 ## Status
 
-**Experimental Phase 2 durable runtime (private, not published to npm yet).** Boots Cordis + `AgentLoop`, bridges `@earendil-works/pi-ai` models and FastAgent tools, ships durable SQLite (`node:sqlite`) and PostgreSQL (`dsh_leases` + multi-instance) backends with `SIGKILL` crash recovery, and passes all 61 conformance tests in `test/harnesses/agent-api-conformance.ts`. See [DESIGN.md](DESIGN.md) for the architecture and Phase 3 OS sandbox roadmap.
+**Experimental Phase 3 runtime (private, not published to npm yet).** Boots Cordis + `AgentLoop`, bridges `@earendil-works/pi-ai` models and FastAgent tools, ships durable SQLite (`node:sqlite`) and PostgreSQL (`dsh_leases` + multi-instance) backends with `SIGKILL` crash recovery, enforces kernel-level OS sandboxing (`@deepseek-ai/dsh-sandbox-local`) for built-in `read`/`write`/`edit`/`bash` coding tools, supports directory loading via `openDshAgentFromDir()`, and passes all 61 conformance tests in `test/harnesses/agent-api-conformance.ts`. See [DESIGN.md](DESIGN.md) for architecture details.
 
 ## Design boundary
 

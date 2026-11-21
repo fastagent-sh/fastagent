@@ -23,6 +23,7 @@ import {
   SessionStore,
   buildForkSeed,
 } from "@deepseek-ai/dsh-session";
+import { LocalSandboxProvider } from "@deepseek-ai/dsh-sandbox-local";
 import { SessionProjectionRegistry } from "@deepseek-ai/dsh-session-projection";
 import { SystemPrompt } from "@deepseek-ai/dsh-system-prompt";
 import { NativeToolExecutor } from "@deepseek-ai/dsh-tool-executor-native";
@@ -53,6 +54,7 @@ import {
   agentError,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
+import { buildCodingTools, resolveEnabledCodingTools } from "./coding-tools.ts";
 import { IMAGE_REF_PREFIX, PiAiModelsAdapter } from "./llm-pi-ai.ts";
 import { MemoryDshEventStore, createDshPersistencePlugin } from "./persistence.ts";
 import {
@@ -312,17 +314,32 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       retryable: false,
     });
   }
+  const sandboxMode = options.sandbox ?? "workspace";
+  if (sandboxMode !== "off" && sandboxMode !== "workspace" && sandboxMode !== "read-only") {
+    throw agentError("invalid_request", `invalid sandbox mode: ${String(sandboxMode)}`);
+  }
   buildDshSandboxPolicy({
     workdir: options.workdir,
-    ...(options.sandbox === undefined ? {} : { mode: options.sandbox }),
+    mode: sandboxMode,
     ...(options.sandboxNetwork === undefined ? {} : { network: options.sandboxNetwork }),
   });
-  const toolsList = options.tools ?? [];
-  for (const tool of toolsList) toDshToolDefinition(tool);
+  let enabledCodingTools: readonly ("read" | "write" | "edit" | "bash")[];
+  try {
+    enabledCodingTools = resolveEnabledCodingTools(options.codingTools);
+  } catch (error) {
+    throw agentError("invalid_request", error instanceof Error ? error.message : String(error));
+  }
+  const userTools = options.tools ?? [];
+  for (const tool of userTools) toDshToolDefinition(tool);
+  const codingToolNames = new Set<string>(enabledCodingTools);
+  for (const tool of userTools) {
+    if (codingToolNames.has(tool.name)) {
+      throw agentError("invalid_request", `duplicate tool name "${tool.name}" conflicts with built-in coding tool`);
+    }
+  }
 
   const store: DshEventStoreBackend = options.storage ?? new MemoryDshEventStore();
   const toolsByName = new Map<string, FastAgentToolLike>();
-  for (const tool of toolsList) toolsByName.set(tool.name, tool);
   const commandsOf = () => options.commands?.() ?? [];
   const maxRetries = options.retry?.maxRetries ?? 1;
   const baseDelayMs = options.retry?.baseDelayMs ?? 1;
@@ -377,14 +394,36 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
   ctx.plugin(SystemPrompt);
   ctx.plugin(AgentRegistry);
   ctx.plugin(AgentLoop);
+  if (sandboxMode !== "off") {
+    ctx.plugin(LocalSandboxProvider);
+  }
+
+  const requiredServices = [
+    "sessions",
+    "sessionPersistence",
+    "llm",
+    "tools",
+    "systemPrompt",
+    "agents",
+    "agentLoop",
+    ...(sandboxMode !== "off" ? (["sandbox"] as const) : []),
+  ] as const;
 
   const ready = new Promise<void>((resolve) => {
-    ctx.inject(["sessions", "sessionPersistence", "llm", "tools", "systemPrompt", "agents", "agentLoop"], () => {
+    ctx.inject(requiredServices as unknown as string[], () => {
       ctx.tools.setExecutor(new NativeToolExecutor(ctx));
       resolve();
     });
   });
   await ready;
+
+  const builtInCodingTools = buildCodingTools(enabledCodingTools, {
+    workdir: options.workdir,
+    sandbox: sandboxMode,
+    getSandboxProvider: () => ctx.get("sandbox"),
+  });
+  const toolsList: FastAgentToolLike[] = [...builtInCodingTools, ...userTools];
+  for (const tool of toolsList) toolsByName.set(tool.name, tool);
 
   if (options.systemPrompt !== undefined && options.systemPrompt.length > 0) {
     ctx.systemPrompt.section({
