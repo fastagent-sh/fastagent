@@ -3,7 +3,7 @@
  * `@deepseek-ai/dsh-tools` registration contract (`output: { schema, render, presentationMeta }`).
  */
 import type { ToolDefinition as DshRuntimeToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import type { DshToolDefinition, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
+import type { DshTelemetryContext, DshToolDefinition, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
 
 type DshPresentationMeta = ReturnType<NonNullable<DshRuntimeToolDefinition["output"]["presentationMeta"]>>;
 
@@ -27,6 +27,7 @@ interface ToolProgressEvent {
 export interface ToolBridgeRuntime {
   readonly toolsByName: ReadonlyMap<string, FastAgentToolLike>;
   readonly onProgress: (event: ToolProgressEvent) => void;
+  readonly telemetry?: DshTelemetryContext;
 }
 
 function retainOutput(
@@ -203,29 +204,44 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
         },
       };
 
-      const result = await (
-        tool.execute as (
-          args: Record<string, unknown>,
-          api: FastAgentToolApi,
-          context: { abortSignal: AbortSignal; sessionId?: string },
-        ) => Promise<{
-          readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-          readonly details?: unknown;
-          readonly isError?: boolean;
-          readonly control?: { readonly terminate?: boolean };
-        }>
-      )(input, api, { abortSignal: exec.signal, ...(sessionId !== undefined ? { sessionId } : {}) });
+      const runTool = async () => {
+        const result = await (
+          tool.execute as (
+            args: Record<string, unknown>,
+            api: FastAgentToolApi,
+            context: { abortSignal: AbortSignal; sessionId?: string },
+          ) => Promise<{
+            readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+            readonly details?: unknown;
+            readonly isError?: boolean;
+            readonly control?: { readonly terminate?: boolean };
+          }>
+        )(input, api, { abortSignal: exec.signal, ...(sessionId !== undefined ? { sessionId } : {}) });
 
-      if (result?.control?.terminate === true) exec.concludeTurn();
-      const explicitText = extractResultText(result);
-      const text = explicitText.length > 0 ? explicitText : streamedOutput.trimEnd();
-      if (result?.isError === true) {
-        throw new Error(text || "Tool execution failed");
-      }
-      return {
-        text,
-        ...(result?.details !== undefined ? { details: structuredClone(result.details) } : {}),
+        if (result?.control?.terminate === true) exec.concludeTurn();
+        const explicitText = extractResultText(result);
+        const text = explicitText.length > 0 ? explicitText : streamedOutput.trimEnd();
+        if (result?.isError === true) {
+          throw new Error(text || "Tool execution failed");
+        }
+        return {
+          text,
+          ...(result?.details !== undefined ? { details: structuredClone(result.details) } : {}),
+        };
       };
+
+      if (runtime.telemetry === undefined) return runTool();
+      return runtime.telemetry.startSpan(
+        {
+          name: "fastagent.dsh.tool",
+          attributes: {
+            harness: "dsh",
+            "tool.name": tool.name,
+            ...(sessionId !== undefined ? { "session.id": sessionId } : {}),
+          },
+        },
+        () => runTool(),
+      );
     },
   };
 }

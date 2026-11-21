@@ -210,16 +210,63 @@ describe("run traces over OTLP", () => {
     ).toThrow('OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%2" is not percent-encoded');
   });
 
-  it("refuses to open on a protocol it cannot send, naming the variable", async () => {
+  it("refuses to open on a protocol it cannot send, naming the variable (both pi-durable and dsh)", async () => {
     const dir = await fauxAgent("fa-traces-grpc-");
-    await expect(
-      openSource(dir, {
+    const badSecrets = {
+      ...process.env,
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4317",
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
+    };
+    await expect(openSource(dir, { secrets: badSecrets })).rejects.toThrow(
+      'OTEL_EXPORTER_OTLP_PROTOCOL is "grpc": FastAgent exports traces as http/json only',
+    );
+    await expect(openSource(dir, { harness: "dsh", sandbox: "off", secrets: badSecrets })).rejects.toThrow(
+      'OTEL_EXPORTER_OTLP_PROTOCOL is "grpc": FastAgent exports traces as http/json only',
+    );
+  });
+
+  it("exports content-free model (GenAI) and tool spans over OTLP on harness: dsh", async () => {
+    const otlp = await collector();
+    try {
+      const dir = await fauxAgent("fa-traces-dsh-");
+      const agent = await openSource(dir, {
+        harness: "dsh",
+        sandbox: "off",
         secrets: {
           ...process.env,
-          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4317",
-          OTEL_EXPORTER_OTLP_PROTOCOL: "grpc",
+          OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url,
+          OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer%20dsh",
         },
-      }),
-    ).rejects.toThrow('OTEL_EXPORTER_OTLP_PROTOCOL is "grpc": FastAgent exports traces as http/json only');
+      });
+      const { id } = await agent.sessions.create();
+      expect((await agent.messages.send({ sessionId: id, content: "use a tool" }, { wait: 30 })).status).toBe(
+        "completed",
+      );
+      await agent.close();
+
+      expect(otlp.received.length).toBeGreaterThan(0);
+      expect(otlp.received[0]?.headers.authorization).toBe("Bearer dsh");
+      const spans = otlp.received.flatMap(({ body }) => spansOf(body));
+      expect(spans.map((span) => span.name)).toEqual(
+        expect.arrayContaining(["fastagent.dsh.step", "pi.ai.request", "fastagent.dsh.tool"]),
+      );
+      const request = spans.find((span) => span.name === "pi.ai.request") as OtlpSpan;
+      expect(attribute(request, "gen_ai.provider.name")).toEqual({ stringValue: "gw" });
+      expect(attribute(request, "gen_ai.request.model")).toEqual({ stringValue: "m1" });
+      expect(attribute(request, "gen_ai.usage.output_tokens")).toEqual({ intValue: expect.any(String) });
+      // Parent-child trace linkage: pi.ai.request hangs under fastagent.dsh.step.
+      const parentStep = spans.find((span) => span.traceId === request.traceId && span.name === "fastagent.dsh.step");
+      expect(parentStep).toBeDefined();
+      expect(request.parentSpanId).toBeDefined();
+
+      const toolSpan = spans.find((span) => span.name === "fastagent.dsh.tool") as OtlpSpan;
+      expect(attribute(toolSpan, "tool.name")).toEqual({ stringValue: "read" });
+      // Privacy invariant: prompt text and tool arguments never appear in exported OTLP JSON.
+      const exportedJson = JSON.stringify(otlp.received.map((r) => r.body));
+      expect(exportedJson).not.toContain("use a tool");
+      expect(exportedJson).not.toContain("SYSTEM.md");
+    } finally {
+      await otlp.close();
+    }
   });
 });

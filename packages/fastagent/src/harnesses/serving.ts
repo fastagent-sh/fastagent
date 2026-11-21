@@ -17,6 +17,7 @@ import type { ClockStore } from "../schedule/clock.ts";
 import { type ClockRunner, createClockRunner } from "../schedule/runner.ts";
 import { type Service, serveAgent } from "../service.ts";
 import { NOT_HOSTED, type RunsAs } from "../serving-command.ts";
+import { fastagentVersion } from "../version.ts";
 import { loadDshModule, openDshRuntime, withDshInstanceClock } from "./dsh/runtime.ts";
 import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts";
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
@@ -30,6 +31,7 @@ import { type BuiltDefinition, buildDefinition } from "./pi-durable/open.ts";
 import { describeDatabase } from "./pi-durable/postgres/database.ts";
 import type { PostgresDatabase } from "./pi-durable/postgres/storage.ts";
 import { openPiDurableRuntime, withPiDurableInstanceClock } from "./pi-durable/runtime.ts";
+import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
 
 export interface OpenServingOptions {
   /** Override the credentials file, or `null` to read no credentials file at all. */
@@ -159,6 +161,7 @@ export interface HarnessOpenContext {
   readonly processEnv: Readonly<Record<string, string>>;
   readonly code: BuiltDefinition;
   readonly models: ModelEnvironment;
+  readonly traces: Traces | undefined;
   openMcp(): Promise<McpClients>;
   setDurableCreds(creds: DurableCredentialStore): void;
   closeAuth(): void;
@@ -243,6 +246,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
       : {}),
   });
+  // Fail fast on invalid OTLP settings before opening either harness or its storage.
+  const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const place: InstancePlace = {
     stateRoot,
     env,
@@ -272,6 +277,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     processEnv,
     code,
     models,
+    traces,
     openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
     setDurableCreds: (creds) => {
       durableCreds = creds;
@@ -279,8 +285,13 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     closeAuth: () => auth?.close(),
   };
 
-  const openedRuntime =
-    dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
+  let openedRuntime: OpenedHarnessRuntime;
+  try {
+    openedRuntime = dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
+  } catch (error) {
+    await traces?.close();
+    throw error;
+  }
   if (openedRuntime.durableCreds !== undefined) {
     durableCreds = openedRuntime.durableCreds;
   }

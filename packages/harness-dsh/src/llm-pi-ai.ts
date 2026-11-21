@@ -30,7 +30,7 @@ import type {
   ToolCall as PiToolCall,
   ToolResultMessage as PiToolResultMessage,
 } from "@earendil-works/pi-ai";
-import type { DshStoredAttachment } from "./types.ts";
+import type { DshStoredAttachment, DshTelemetryContext, DshTelemetrySpan } from "./types.ts";
 
 /** Inline image marker embedded in DSH user messages so adapters can supply raw bytes to pi-ai. */
 export const IMAGE_REF_PREFIX = "__fastagent_image_ref__:";
@@ -46,6 +46,8 @@ export interface PiAiAdapterHooks {
   resolveAttachment?: (sessionId: string, ref: string) => Promise<DshStoredAttachment | undefined>;
   /** Report the exact cost of a completed model call. */
   onCallCost?: (sessionId: string | undefined, record: PiAiCostRecord) => void;
+  /** Optional telemetry context for wrapping model calls in content-free spans. */
+  telemetry?: DshTelemetryContext;
 }
 
 const VALID_REASONING: ReadonlySet<string> = new Set(["minimal", "low", "medium", "high", "xhigh"]);
@@ -269,126 +271,162 @@ export class PiAiModelsAdapter extends LlmAdapter {
       ...(piTools !== undefined && piTools.length > 0 ? { tools: piTools } : {}),
     };
 
-    const eventStream = this.models.streamSimple(model, context, {
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-      ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-      ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      ...(toPiReasoning(options.reasoningEffort) !== undefined
-        ? { reasoning: toPiReasoning(options.reasoningEffort) }
-        : {}),
-    });
-
-    const toolCallIds = new Map<number, { id: ReturnType<typeof ToolCallId>; name: string }>();
-
-    for await (const event of eventStream) {
-      switch (event.type) {
-        case "text_start":
-          yield { type: "block-start", index: event.contentIndex, blockType: "text" };
-          break;
-        case "text_delta":
-          yield { type: "text-delta", index: event.contentIndex, text: event.delta };
-          break;
-        case "text_end":
-          yield { type: "block-end", index: event.contentIndex, block: { type: "text", text: event.content } };
-          break;
-        case "thinking_start":
-          yield { type: "block-start", index: event.contentIndex, blockType: "reasoning" };
-          break;
-        case "thinking_delta":
-          yield { type: "reasoning-delta", index: event.contentIndex, text: event.delta };
-          break;
-        case "thinking_end":
-          yield {
-            type: "block-end",
-            index: event.contentIndex,
-            block: { type: "reasoning", text: event.content },
-          };
-          break;
-        case "toolcall_start": {
-          const part = event.partial.content[event.contentIndex];
-          const rawId = part?.type === "toolCall" && part.id ? part.id : `call_${event.contentIndex}`;
-          const name = part?.type === "toolCall" ? part.name : "";
-          const callId = ToolCallId(rawId);
-          toolCallIds.set(event.contentIndex, { id: callId, name });
-          yield { type: "block-start", index: event.contentIndex, blockType: "tool-call" };
-          if (name) {
-            yield { type: "tool-call-delta", index: event.contentIndex, id: callId, name, argumentsDelta: "" };
-          }
-          break;
-        }
-        case "toolcall_delta": {
-          const meta = toolCallIds.get(event.contentIndex);
-          const part = event.partial.content[event.contentIndex];
-          const callId =
-            meta?.id ?? ToolCallId(part?.type === "toolCall" && part.id ? part.id : `call_${event.contentIndex}`);
-          const name = meta?.name || (part?.type === "toolCall" ? part.name : undefined);
-          if (meta === undefined && name !== undefined) toolCallIds.set(event.contentIndex, { id: callId, name });
-          yield {
-            type: "tool-call-delta",
-            index: event.contentIndex,
-            id: callId,
-            ...(name !== undefined ? { name } : {}),
-            argumentsDelta: event.delta,
-          };
-          break;
-        }
-        case "toolcall_end": {
-          const callId = ToolCallId(event.toolCall.id);
-          yield {
-            type: "block-end",
-            index: event.contentIndex,
-            block: {
-              type: "tool-call",
-              id: callId,
-              name: event.toolCall.name,
-              arguments: JSON.stringify(event.toolCall.arguments ?? {}),
+    let finishSpan: ((err?: unknown) => void) | undefined;
+    let spanDone: Promise<void> | undefined;
+    let stepSpan: DshTelemetrySpan | undefined;
+    if (this.hooks.telemetry !== undefined) {
+      const telemetry = this.hooks.telemetry;
+      const spanReady = new Promise<DshTelemetrySpan>((resolveReady) => {
+        spanDone = telemetry
+          .startSpan(
+            {
+              name: "fastagent.dsh.step",
+              attributes: {
+                harness: "dsh",
+                ...(options.sessionId !== undefined ? { "session.id": options.sessionId } : {}),
+              },
             },
-          };
-          break;
-        }
-        case "done": {
-          const u = event.message.usage;
-          const usage: TokenUsage = {
-            inputTokens: u.input,
-            outputTokens: u.output,
-            ...(u.totalTokens > 0 ? { totalTokens: u.totalTokens } : {}),
-            ...(u.cacheRead > 0 ? { cacheReadTokens: u.cacheRead } : {}),
-            ...(u.cacheWrite > 0 ? { cacheWriteTokens: u.cacheWrite } : {}),
-          };
-          if (u.cost.total > 0) {
-            this.hooks.onCallCost?.(options.sessionId, {
-              provider: options.provider,
-              modelId: options.model,
-              cost: u.cost.total,
-            });
-          }
-          yield { type: "usage", usage };
-          const reason =
-            event.reason === "toolUse"
-              ? ({ kind: "tool-calls" } as const)
-              : event.reason === "length"
-                ? ({ kind: "max-tokens" } as const)
-                : ({ kind: "stop" } as const);
-          yield { type: "finish", reason };
-          return;
-        }
-        case "error": {
-          const errMessage = event.error.errorMessage || "Model call failed";
-          if (event.reason === "aborted") {
+            (span) =>
+              new Promise<void>((resolveSpan, rejectSpan) => {
+                finishSpan = (err) => (err === undefined ? resolveSpan() : rejectSpan(err));
+                resolveReady(span);
+              }),
+          )
+          .catch(() => {});
+      });
+      stepSpan = await spanReady;
+    }
+
+    let streamError: unknown;
+    try {
+      const eventStream = this.models.streamSimple(model, context, {
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+        ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        ...(toPiReasoning(options.reasoningEffort) !== undefined
+          ? { reasoning: toPiReasoning(options.reasoningEffort) }
+          : {}),
+        ...(stepSpan !== undefined ? { telemetry: stepSpan as never } : {}),
+      });
+
+      const toolCallIds = new Map<number, { id: ReturnType<typeof ToolCallId>; name: string }>();
+
+      for await (const event of eventStream) {
+        switch (event.type) {
+          case "text_start":
+            yield { type: "block-start", index: event.contentIndex, blockType: "text" };
+            break;
+          case "text_delta":
+            yield { type: "text-delta", index: event.contentIndex, text: event.delta };
+            break;
+          case "text_end":
+            yield { type: "block-end", index: event.contentIndex, block: { type: "text", text: event.content } };
+            break;
+          case "thinking_start":
+            yield { type: "block-start", index: event.contentIndex, blockType: "reasoning" };
+            break;
+          case "thinking_delta":
+            yield { type: "reasoning-delta", index: event.contentIndex, text: event.delta };
+            break;
+          case "thinking_end":
             yield {
-              type: "finish",
-              reason: { kind: "aborted", failure: { message: errMessage, code: "ABORTED" } },
+              type: "block-end",
+              index: event.contentIndex,
+              block: { type: "reasoning", text: event.content },
             };
+            break;
+          case "toolcall_start": {
+            const part = event.partial.content[event.contentIndex];
+            const rawId = part?.type === "toolCall" && part.id ? part.id : `call_${event.contentIndex}`;
+            const name = part?.type === "toolCall" ? part.name : "";
+            const callId = ToolCallId(rawId);
+            toolCallIds.set(event.contentIndex, { id: callId, name });
+            yield { type: "block-start", index: event.contentIndex, blockType: "tool-call" };
+            if (name) {
+              yield { type: "tool-call-delta", index: event.contentIndex, id: callId, name, argumentsDelta: "" };
+            }
+            break;
+          }
+          case "toolcall_delta": {
+            const meta = toolCallIds.get(event.contentIndex);
+            const part = event.partial.content[event.contentIndex];
+            const callId =
+              meta?.id ?? ToolCallId(part?.type === "toolCall" && part.id ? part.id : `call_${event.contentIndex}`);
+            const name = meta?.name || (part?.type === "toolCall" ? part.name : undefined);
+            if (meta === undefined && name !== undefined) toolCallIds.set(event.contentIndex, { id: callId, name });
+            yield {
+              type: "tool-call-delta",
+              index: event.contentIndex,
+              id: callId,
+              ...(name !== undefined ? { name } : {}),
+              argumentsDelta: event.delta,
+            };
+            break;
+          }
+          case "toolcall_end": {
+            const callId = ToolCallId(event.toolCall.id);
+            yield {
+              type: "block-end",
+              index: event.contentIndex,
+              block: {
+                type: "tool-call",
+                id: callId,
+                name: event.toolCall.name,
+                arguments: JSON.stringify(event.toolCall.arguments ?? {}),
+              },
+            };
+            break;
+          }
+          case "done": {
+            const u = event.message.usage;
+            const usage: TokenUsage = {
+              inputTokens: u.input,
+              outputTokens: u.output,
+              ...(u.totalTokens > 0 ? { totalTokens: u.totalTokens } : {}),
+              ...(u.cacheRead > 0 ? { cacheReadTokens: u.cacheRead } : {}),
+              ...(u.cacheWrite > 0 ? { cacheWriteTokens: u.cacheWrite } : {}),
+            };
+            if (u.cost.total > 0) {
+              this.hooks.onCallCost?.(options.sessionId, {
+                provider: options.provider,
+                modelId: options.model,
+                cost: u.cost.total,
+              });
+            }
+            yield { type: "usage", usage };
+            const reason =
+              event.reason === "toolUse"
+                ? ({ kind: "tool-calls" } as const)
+                : event.reason === "length"
+                  ? ({ kind: "max-tokens" } as const)
+                  : ({ kind: "stop" } as const);
+            yield { type: "finish", reason };
             return;
           }
-          const classified = classifyPiError(errMessage);
-          throw new LlmError(
-            errMessage,
-            classified.code,
-            classified.status ? { status: classified.status } : undefined,
-          );
+          case "error": {
+            const errMessage = event.error.errorMessage || "Model call failed";
+            if (event.reason === "aborted") {
+              yield {
+                type: "finish",
+                reason: { kind: "aborted", failure: { message: errMessage, code: "ABORTED" } },
+              };
+              return;
+            }
+            const classified = classifyPiError(errMessage);
+            throw new LlmError(
+              errMessage,
+              classified.code,
+              classified.status ? { status: classified.status } : undefined,
+            );
+          }
         }
       }
+    } catch (error) {
+      streamError = error;
+      throw error;
+    } finally {
+      finishSpan?.(streamError);
+      await spanDone;
     }
   }
 }
