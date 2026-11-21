@@ -15,6 +15,8 @@ import { type InstanceFlags, instanceInputs } from "../instance.ts";
 
 export interface InvokeOptions {
   model?: string;
+  harness?: string;
+  sandbox?: string;
   /** false ⇔ `--no-input`. */
   input?: boolean;
   json?: boolean;
@@ -194,11 +196,13 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
     const remoteTarget = await resolveRemoteTarget(dirArg, opts, opts.instance);
     if (remoteTarget !== undefined) return runRemoteInvoke(message, remoteTarget, opts);
   }
-  const [{ openServing }, { loadSourceDefinition }, { enterAgentCommand, reportAuth }] = await Promise.all([
-    import("../../harnesses/pi-durable/serve.ts"),
-    import("../../harnesses/pi-durable/open.ts"),
-    import("../shared.ts"),
-  ]);
+  const [{ openServing }, { loadSourceDefinition }, { resolveHarnessSelection }, { enterAgentCommand, reportAuth }] =
+    await Promise.all([
+      import("../../harnesses/pi-durable/serve.ts"),
+      import("../../harnesses/pi-durable/open.ts"),
+      import("../../harnesses/pi-durable/config.ts"),
+      import("../shared.ts"),
+    ]);
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
     // A running serve of this instance owns its storage and answers with its own model: the message goes through it
     // (owner.ts), before any model is asked for here.
@@ -222,8 +226,20 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
   });
   const stateRoot = resolveStateRoot(agentDir);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+  const selection = (() => {
+    try {
+      return resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      return failUsage(error instanceof Error ? error.message : String(error));
+    }
+  })();
   const { agent, models, config } = await openServing(definition, {
     model: modelSpec,
+    harness: selection.harness,
+    ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...instanceInputs(agentDir),
     // What an earlier serve accepted is a serve's to finish: this process would cut it off at its exit.
     unfinished: "refuse",

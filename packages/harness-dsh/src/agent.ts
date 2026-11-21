@@ -929,12 +929,19 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     }
   }
 
-  // Crash/restart recovery: resume every session with unsettled running or queued messages.
+  // Crash/restart recovery: resume every session with unsettled running or queued messages,
+  // or refuse cleanly when opened by a one-shot command (`unfinished: "refuse"`).
   for (const live of liveSessions.values()) {
     const sessionMsgs = [...(allMessages.get(live.meta.id)?.values() ?? [])].sort((a, b) => a.createdAt - b.createdAt);
     const runningMsgs = sessionMsgs.filter((m) => m.status === "running");
     const queuedMsgs = sessionMsgs.filter((m) => m.status === "queued");
     if (runningMsgs.length === 0 && queuedMsgs.length === 0) continue;
+    if (options.unfinished === "refuse") {
+      await ctx.fiber.dispose().catch(() => {});
+      throw new Error(
+        `this instance has ${runningMsgs.length + queuedMsgs.length} unfinished message(s) from a stopped serve; start the serve (\`fastagent dev\` or \`fastagent start\`) to finish them`,
+      );
+    }
 
     const dshAgent = await ensureDshAgent(live);
     for (const q of queuedMsgs) {
@@ -1675,6 +1682,20 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         }
         return waitForMessage(live, messageId, getOptions?.wait, getOptions?.signal);
       },
+    },
+
+    busy(): boolean {
+      for (const live of liveSessions.values()) {
+        if (
+          live.dshAgent?.status === "running" ||
+          live.activeTurnMessageIds.length > 0 ||
+          live.queuedMessages.length > 0 ||
+          live.pendingSettlement !== undefined
+        ) {
+          return true;
+        }
+      }
+      return false;
     },
 
     async close(): Promise<void> {

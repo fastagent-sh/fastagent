@@ -16,6 +16,8 @@ import {
   toDshToolDefinition,
 } from "@fastagent-sh/harness-dsh";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { dshSubject } from "../../harnesses/dsh-subject.ts";
@@ -539,6 +541,109 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       await store2.close();
     } finally {
       await db.close();
+    }
+  });
+});
+
+describe("openAgent harness switching and shared agent.sqlite coexistence", () => {
+  it("switches between pi-durable and dsh on the same agent.sqlite, warns/skips pi-durable extensions, and preserves both harnesses' sessions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-switch-harness-"));
+    const root = mkdtempSync(join(tmpdir(), "fa-switch-root-"));
+    try {
+      mkdirSync(join(dir, "src", "tools"), { recursive: true });
+      mkdirSync(join(dir, "src", "extensions"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "switch-agent", type: "module" }));
+      writeFileSync(join(dir, "SYSTEM.md"), "You are a portable agent.\n");
+      writeFileSync(
+        join(dir, "fastagent.config.ts"),
+        `import { createFauxCore, createProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { defineAgent } from "@fastagent-sh/fastagent";
+const core = createFauxCore({ provider: "sw", api: "sw" });
+const stream = (...args) => {
+  const last = args[1].messages.at(-1);
+  if (last?.role === "toolResult") {
+    const text = Array.isArray(last.content) ? (last.content[0]?.text ?? "") : String(last.content);
+    core.appendResponses([fauxAssistantMessage("tool-ok:" + text)]);
+  } else {
+    const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content) ? last.content.map((p) => p.text ?? "").join("") : "";
+    core.appendResponses([
+      text === "use-ping"
+        ? fauxAssistantMessage([fauxToolCall("ping", { msg: "hi" })], { stopReason: "toolUse" })
+        : fauxAssistantMessage("reply:" + text),
+    ]);
+  }
+  return core.streamSimple(...args);
+};
+export default defineAgent({
+  model: "sw/" + core.getModel().id,
+  codingTools: ["read"],
+  providers: [
+    createProvider({
+      id: "sw",
+      auth: { apiKey: { name: "SW", resolve: async () => ({ auth: {} }) } },
+      models: core.models,
+      api: { stream, streamSimple: stream },
+    }),
+  ],
+});
+`,
+      );
+      writeFileSync(
+        join(dir, "src", "tools", "ping.ts"),
+        `import { defineTool } from "@fastagent-sh/fastagent";
+export default defineTool({
+  name: "ping",
+  description: "Echo a ping message",
+  parameters: { type: "object", properties: { msg: { type: "string" } }, required: ["msg"] } as const,
+  execute: async ({ msg }) => "pong:" + msg,
+});
+`,
+      );
+      // A pi-durable-only extension: runs on pi-durable, warns and is skipped on dsh without blocking startup.
+      writeFileSync(
+        join(dir, "src", "extensions", "legacy.ts"),
+        `export default { name: "legacy-ext", tools: [] };
+`,
+      );
+
+      const definition = await loadSourceDefinition(dir);
+
+      // 1) Open on pi-durable and create a session in <root>/.state/agent.sqlite.
+      const piAgent1 = await openAgent(definition, { root, offline: true });
+      const piSession = await piAgent1.sessions.create({ title: "pi-session" });
+      const piMsg = await piAgent1.messages.send({ sessionId: piSession.id, content: "from-pi" }, { wait: 15 });
+      expect(piMsg.answer?.text).toBe("reply:from-pi");
+      await piAgent1.close();
+
+      // 2) Switch to dsh on the EXACT SAME <root>/.state/agent.sqlite — skips legacy-ext, runs defineTool, serves HTTP.
+      const dshAgent1 = await openAgent(definition, { root, offline: true, harness: "dsh", sandbox: "workspace" });
+      const dshInfo = await dshAgent1.info();
+      expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "ping"]);
+      const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
+      const dshMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-ping" }, { wait: 15 });
+      expect(dshMsg.answer?.text).toBe("tool-ok:pong:hi");
+      const service = await dshAgent1.serve({ apiKeys: ["k"] });
+      const health = await service.fetch(new Request("http://local/health"));
+      expect(health.status).toBe(200);
+      await dshAgent1.close();
+
+      // 3) Switch back to pi-durable on the same agent.sqlite: pi-session is intact.
+      const piAgent2 = await openAgent(definition, { root, offline: true });
+      expect((await piAgent2.sessions.get(piSession.id)).title).toBe("pi-session");
+      await piAgent2.close();
+
+      // 4) Switch back to dsh on the same agent.sqlite: dsh-session is intact, and offline withInstanceClock reads dsh_kv.
+      const dshAgent2 = await openAgent(definition, { root, offline: true, harness: "dsh", sandbox: "workspace" });
+      expect((await dshAgent2.sessions.get(dshSession.id)).title).toBe("dsh-session");
+      await dshAgent2.close();
+
+      await withInstanceClock({ stateRoot: join(root, ".state"), env: {}, harness: "dsh" }, async (clock) => {
+        await clock.sessions((current) => ({ next: { ...current, digest: dshSession.id }, result: undefined }));
+        expect(await clock.stored.sessions()).toEqual({ digest: dshSession.id });
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

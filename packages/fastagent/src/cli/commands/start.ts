@@ -5,10 +5,11 @@ import { isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
+import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 import { unmarkDevServe } from "../../serving-command.ts";
 import { cliMountOptions, parseBind, parsePort, serveService } from "../serve.ts";
 import { enterAgentCommand, reportAssembly } from "../shared.ts";
@@ -17,6 +18,8 @@ export interface StartOptions {
   port?: string;
   bind?: string;
   model?: string;
+  harness?: string;
+  sandbox?: string;
   input?: boolean;
   instance?: InstanceFlags;
 }
@@ -57,8 +60,21 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Ser
   let built: Promise<AgentDefinition> | undefined;
   const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
-  const opened = await openServing(await loadBuilt(agentDir), {
+  const definition = await loadBuilt(agentDir);
+  const selection = (() => {
+    try {
+      return resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      return failUsage(error instanceof Error ? error.message : String(error));
+    }
+  })();
+  const opened = await openServing(definition, {
     model: modelSpec,
+    harness: selection.harness,
+    ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...instanceInputs(agentDir, { mode: "start" }),
   });
   await reportAssembly(opened, modelSpec);

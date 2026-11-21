@@ -92,6 +92,13 @@ const MIGRATION_STATEMENTS: readonly string[] = [
     data_b64   TEXT NOT NULL,
     PRIMARY KEY (instance, session_id, ref)
   )`,
+  `CREATE TABLE IF NOT EXISTS dsh_kv (
+    instance   TEXT NOT NULL,
+    namespace  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value_json TEXT NOT NULL,
+    PRIMARY KEY (instance, namespace, key)
+  )`,
 ];
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -531,6 +538,37 @@ export async function openPostgresDshStore(
         mimeType: row.mime_type,
         data: new Uint8Array(Buffer.from(row.data_b64, "base64")),
       } satisfies DshStoredAttachment;
+    },
+
+    async getKv(namespace, key) {
+      assertStoreOpen();
+      const rows = await database.query<{ value_json: string }>(
+        "SELECT value_json FROM dsh_kv WHERE instance = $1 AND namespace = $2 AND key = $3",
+        [instance, namespace, key],
+      );
+      return rows[0]?.value_json;
+    },
+
+    async putKv(namespace, key, valueJson) {
+      assertStoreOpen();
+      await database.transaction(async (tx) => {
+        await assertLeaseInTx(tx);
+        await tx.query(
+          `INSERT INTO dsh_kv (instance, namespace, key, value_json)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (instance, namespace, key) DO UPDATE SET value_json = EXCLUDED.value_json`,
+          [instance, namespace, key, valueJson],
+        );
+      });
+    },
+
+    async listKv(namespace) {
+      assertStoreOpen();
+      const rows = await database.query<{ key: string; value_json: string }>(
+        "SELECT key, value_json FROM dsh_kv WHERE instance = $1 AND namespace = $2 ORDER BY key ASC",
+        [instance, namespace],
+      );
+      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
     },
 
     async close() {

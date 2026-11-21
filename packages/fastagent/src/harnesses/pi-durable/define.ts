@@ -8,17 +8,29 @@ import type { McpServerDeclaration } from "../../mcp/config.ts";
 import type { Needs } from "../../needs.ts";
 import type { ScheduleConfig } from "../../schedule/schedule.ts";
 
-/** The built-in coding tools pi-durable ships. */
+/** The built-in coding tools FastAgent ships. */
 export const CODING_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
 export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 /** Built-in coding tools to install: `true` (default) for all four, `false` for none, or an explicit subset. */
 export type CodingToolsConfig = boolean | readonly CodingToolName[];
+
+/** Supported runtime harnesses. */
+export const HARNESS_NAMES = ["pi-durable", "dsh"] as const;
+export type HarnessName = (typeof HARNESS_NAMES)[number];
+
+/** OS sandbox posture (applicable when `harness: "dsh"`). */
+export const SANDBOX_MODES = ["workspace", "read-only", "off"] as const;
+export type SandboxMode = (typeof SANDBOX_MODES)[number];
 
 /** What `fastagent.config.ts` default-exports: the agent's own settings, the same for every place it runs. */
 export interface AgentConfig {
   /** `"provider/modelId"`: what a session that names none answers with; `--model` or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
+  /** Runtime harness. Default `"pi-durable"`; pass `"dsh"` to run on `@fastagent-sh/harness-dsh`. */
+  harness?: HarnessName;
+  /** OS sandbox mode for `harness: "dsh"`: `"workspace"` (default), `"read-only"`, or `"off"`. */
+  sandbox?: SandboxMode;
   /** Built-in coding tools (`read`, `write`, `edit`, `bash`). Default `true`; pass `false` or a subset to restrict. */
   codingTools?: CodingToolsConfig;
   /** Built-in self-scheduling tools (`wake`, `unwake`). Default `false`; pass `true` to enable. */

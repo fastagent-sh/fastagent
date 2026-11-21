@@ -198,6 +198,7 @@ registerHooks({
   it("schedules list reads a deployment's clock through its Agent API with --url", async () => {
     await withServedAgent(async (dir, url, opened) => {
       // Set in the served instance only: the instance a run of the CLI here would open is another.
+      if (opened.harness === undefined) throw new Error("expected pi-durable harness");
       const clock = clockStore(opened.harness, BACKGROUND_CONTEXT);
       const added = await addWakeup(clock, {
         session: "chat:7",

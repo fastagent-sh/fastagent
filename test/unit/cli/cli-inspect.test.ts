@@ -27,6 +27,8 @@ describe("cli: info", () => {
       starters: [],
       agent: { name: expect.any(String), description: null },
     });
+    expect(info.harness).toBe("pi-durable");
+    expect(info.sandbox).toBeNull();
     expect(info.codingTools).toEqual(["read", "write", "edit", "bash"]);
     expect(info.wakeTools).toBe(false);
     expect(info.tools).toEqual(["lookup"]);
@@ -84,5 +86,29 @@ describe("cli: info's MCP servers", () => {
     expect(JSON.parse(info.stdout).mcp).toEqual([
       { name: "docs", transport: "http", url: "https://docs.example.com/mcp" },
     ]);
+  });
+
+  it("info reports harness and sandbox from config or CLI overrides, and refuses invalid combinations", async () => {
+    const dir = await agentWorkspace("fa-info-harness-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+    });
+    const dshFlag = await runInProcess(["-C", dir, "info", "--harness", "dsh", "--sandbox", "read-only", "--json"]);
+    expect(dshFlag.code, dshFlag.stderr).toBe(0);
+    expect(JSON.parse(dshFlag.stdout)).toMatchObject({ harness: "dsh", sandbox: "read-only" });
+
+    const sandboxOnPi = await runInProcess(["-C", dir, "info", "--sandbox", "workspace"]);
+    expect(sandboxOnPi.code).toBe(2);
+    expect(sandboxOnPi.stderr).toMatch(/requires harness: "dsh"/);
+
+    const unknownHarness = await runInProcess(["-C", dir, "info", "--harness", "bogus"]);
+    expect(unknownHarness.code).toBe(2);
+    expect(unknownHarness.stderr).toMatch(/unknown harness/);
+
+    const configured = await agentWorkspace("fa-info-dsh-cfg-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh", sandbox: "off" };\n',
+    });
+    const fromCfg = await runInProcess(["-C", configured, "info", "--json"]);
+    expect(fromCfg.code, fromCfg.stderr).toBe(0);
+    expect(JSON.parse(fromCfg.stdout)).toMatchObject({ harness: "dsh", sandbox: "off" });
   });
 });

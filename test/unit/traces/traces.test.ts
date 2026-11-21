@@ -164,7 +164,7 @@ describe("run traces over OTLP", () => {
       const agent = await openSource(dir, { secrets: { ...process.env, OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url } });
       const { id } = await agent.sessions.create();
       expect((await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 })).status).toBe("completed");
-      await agent.harness.close(BACKGROUND_CONTEXT);
+      await agent.harness?.close(BACKGROUND_CONTEXT);
       for (let tries = 0; otlp.received.length === 0 && tries < 100; tries++) await sleep(20);
       expect(otlp.received.length).toBeGreaterThan(0);
       await agent.close();

@@ -16,6 +16,7 @@ import {
 } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectClock } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { openServing, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -30,6 +31,8 @@ import { enterAgentCommand, reportAuth } from "../shared.ts";
 
 export interface ClockOptions {
   instance?: InstanceFlags;
+  harness?: string;
+  sandbox?: string;
   /** A served instance's Agent API, named by `--url` or `--remote`, and optional key override. */
   url?: string;
   remote?: string;
@@ -67,12 +70,23 @@ async function readClock(
   refuseUnnamedDatabaseInstance();
   const agentDir = agentDirOrExit(resolve(dirArg));
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+  const selection = (() => {
+    try {
+      return resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      return failUsage(error instanceof Error ? error.message : String(error));
+    }
+  })();
   const { schedules } = buildDefinitionShape(definition, process.env);
   const name = enteredInstanceName();
   const place = {
     stateRoot: resolveStateRoot(agentDir),
     env: process.env,
     agent: definition.name,
+    harness: selection.harness,
     ...(name === undefined ? {} : { name }),
   };
   return withInstanceClock(place, async (clock) => ({
@@ -125,7 +139,7 @@ async function reportFire(
 export async function runScheduleNow(
   name: string,
   dirArg: string,
-  opts: ClockOptions & { model?: string; input?: boolean; json?: boolean },
+  opts: ClockOptions & { model?: string; harness?: string; sandbox?: string; input?: boolean; json?: boolean },
 ): Promise<void> {
   const served = await servedOwner(dirArg, opts);
   if (served !== undefined) {
@@ -146,9 +160,19 @@ export async function runScheduleNow(
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
   const { agent, clock, models } = await loadSourceDefinition(agentDir)
-    .then((definition) =>
-      openServing(definition, { model: modelSpec, ...instanceInputs(agentDir), unfinished: "refuse" }),
-    )
+    .then((definition) => {
+      const selection = resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+      return openServing(definition, {
+        model: modelSpec,
+        harness: selection.harness,
+        ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
+        ...instanceInputs(agentDir),
+        unfinished: "refuse",
+      });
+    })
     .catch(failStartup);
   await reportAuth(models, modelSpec, agentDir);
   if (clock === undefined) {
@@ -177,9 +201,26 @@ export async function runUnwake(id: string, dirArg: string, opts: ClockOptions):
       ? await served.clock.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
       : await (async () => {
           refuseUnnamedDatabaseInstance();
-          const stateRoot = resolveStateRoot(agentDirOrExit(resolve(dirArg)));
+          const agentDir = agentDirOrExit(resolve(dirArg));
+          const definition = await loadSourceDefinition(agentDir).catch(failStartup);
+          const selection = (() => {
+            try {
+              return resolveHarnessSelection(definition.config, {
+                ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+                ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+              });
+            } catch (error) {
+              return failUsage(error instanceof Error ? error.message : String(error));
+            }
+          })();
+          const stateRoot = resolveStateRoot(agentDir);
           const name = enteredInstanceName();
-          const place = { stateRoot, env: process.env, ...(name === undefined ? {} : { name }) };
+          const place = {
+            stateRoot,
+            env: process.env,
+            harness: selection.harness,
+            ...(name === undefined ? {} : { name }),
+          };
           const held = await withInstanceClock(place, (clock) => removeAnyWakeup(clock, id)).catch(failStartup);
           if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
           return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };
