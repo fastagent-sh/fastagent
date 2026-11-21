@@ -110,8 +110,7 @@ function remoteSignInOptions(providers: readonly AuthProviderStatus[]): SignInOp
   const options: SignInOption[] = [];
   for (const p of providers) {
     for (const method of p.methods) {
-      const status =
-        p.authenticated && p.source !== undefined ? { type: p.stored ?? method, source: p.source } : undefined;
+      const status = p.authenticated ? { type: p.stored ?? method, source: p.source ?? "configured" } : undefined;
       options.push({
         provider: p.provider,
         name: p.name,
