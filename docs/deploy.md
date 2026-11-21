@@ -17,7 +17,7 @@ host's own tool. Pick a target:
 | Railway | `fastagent deploy init railway` | `railway init` → `railway volume add --mount-path /data` → `railway up` |
 | Amazon Bedrock AgentCore | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | `npx -y @aws/agentcore@1.0.3 deploy` ([AgentCore](agentcore.md)) |
 
-Run **one container** per instance: a second one on the same volume is refused, and schedules and wake-ups require the
+Run **one container** per instance: a second one on the same volume is refused, and schedules require the
 machine to stay running (unless on a scale-to-zero platform with external alarms, such as [AgentCore](agentcore.md)).
 
 ## Before you build
@@ -117,11 +117,11 @@ environment variables.
 
 ```text
 /data/
-├── .state/           # sessions, schedule runs and wake-ups
+├── .state/           # sessions and schedule runs
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 
 A new image replaces the program; the volume stays. To keep the sessions in a managed PostgreSQL database instead of
 the volume, give the container `FASTAGENT_DATABASE_URL`
-([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), which keeps the schedule runs and wake-ups too;
+([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), which keeps the schedule runs too;
 the volume then holds only the agent's working files.

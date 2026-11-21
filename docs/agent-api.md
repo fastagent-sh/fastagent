@@ -77,8 +77,6 @@ over HTTP, or `service.clock` in process):
 |---|---|
 | `schedules.run(name, { wait? })` | Fire a schedule now, as its clock would, in the schedule's own session: `{ status: "sent", message }`, or `{ status: "skipped", reason }` while its previous run still holds that session |
 | `schedules.list()` | Every schedule: `name`, `cron`, `tz`, when it fires `next`, and its `last` occurrence (`slot`, `firedAt`, `outcome`: `completed`, `failed`, `skipped` or `interrupted`, absent while it runs, and `ms`) |
-| `wakeups.cancel(id)` | Cancel a wake-up the agent set for itself (`wake`), whichever session set it; answers what it was |
-| `wakeups.list()` | Every pending wake-up, of every session, in the order they were set |
 
 A `signal` lets go of a wait or a stream, never of the work: the message goes on. Only `cancel` stops the agent. A
 `wait` is an upper bound: the answer may come before the message ends, so check `status`.
@@ -190,8 +188,6 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
 | `GET /v1/schedules` | `schedules.list` |
 | `POST /v1/schedules/{name}/run?wait` | `schedules.run` |
-| `GET /v1/wakeups` | `wakeups.list` |
-| `DELETE /v1/wakeups/{id}` | `wakeups.cancel` |
 | `GET /v1/auth/providers` | `auth.providers` |
 | `POST /v1/auth/login` | `auth.startLogin` |
 | `GET /v1/auth/login/{flowId}?wait` | `auth.getLogin` |

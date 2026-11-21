@@ -12,9 +12,6 @@ import { CHILD_REFUSALS } from "./guards/network-guard.ts";
 
 process.env.HOME = mkdtempSync(join(tmpdir(), "fa-test-home-"));
 
-// No model list is fetched from pi.dev (catalog.ts): a test that is about the refresh serves its own catalog.
-process.env.FASTAGENT_OFFLINE = "1";
-
 forbidNetwork();
 // The Node processes a test starts refuse the same, and say what they refused to this file's tests.
 process.env[CHILD_REFUSALS] = join(process.env.HOME, "refused-connections");

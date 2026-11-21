@@ -189,7 +189,7 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
 An app that runs agents for a person on their machine:
 
 - Open with a `root` of your own to run beside `fastagent dev` on the same project. Each instance has its own
-  sessions. Only one of them should `serve()`, or schedules fire twice; an instance nobody serves refuses `wake`.
+  sessions. Only one of them should `serve()`, or schedules fire twice.
 - `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
 - A configured default model that the model lists no longer have (a provider retired it, a catalog update renamed it)
   does not stop the open: `info().defaultModel` is absent, `info().unusableDefault` gives the configured `spec` and the

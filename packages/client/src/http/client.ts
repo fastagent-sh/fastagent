@@ -417,10 +417,6 @@ export function connectClock(url: string, options: ConnectOptions): ClockApi {
       },
       list: async () => [...(await request(client.listSchedules()))],
     },
-    wakeups: {
-      cancel: (id) => request(client.cancelWakeup({ params: { id } })),
-      list: async () => [...(await request(client.listWakeups()))],
-    },
   };
 }
 

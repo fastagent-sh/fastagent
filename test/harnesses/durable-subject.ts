@@ -272,7 +272,6 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       starters: ["Say hello", "What can you do?"],
       model,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
-      onSessionDelete: (sessionId) => currentClock?.onSessionDelete(sessionId),
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
       settings: {
         retry: { maxRetries: 1, baseDelayMs: 1 },

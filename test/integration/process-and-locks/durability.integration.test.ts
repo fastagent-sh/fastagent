@@ -502,7 +502,6 @@ export default needs(["DECLARED_TOKEN"], () =>
     process.env.UNDECLARED_HOST_SECRET = "host-secret-must-not-leak";
     const agent = await openAgent(definition, {
       root,
-      offline: true,
       secrets: { DECLARED_TOKEN: "declared-ok", UNDECLARED_HOST_SECRET: "undeclared-in-secrets-too" },
       env: baseEnv(process.env),
     });

@@ -26,7 +26,6 @@ import {
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
 import type { ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
-import { addWakeup, listWakeups } from "../../packages/fastagent/src/schedule/wakeups.ts";
 
 export interface AgentApiSubject {
   /** A fresh agent over fresh storage. `signedOut` leaves its model provider without a credential. */
@@ -379,19 +378,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         });
       });
 
-      it("lists the pending wake-ups of every session, in the order they were set", async () => {
-        const clock = subject.clockApi();
-        const [one, two] = [await newSession(agent), await newSession(agent)];
-        const at = new Date(Date.now() + 3_600_000);
-        const first = await addWakeup(subject.clock(), { session: two, prompt: "later", fireAt: at });
-        const second = await addWakeup(subject.clock(), { session: one, prompt: "recur", cron: "0 9 * * *" });
-        if (!first.ok || !second.ok) throw new Error("not set");
-        expect(await clock.wakeups.list()).toEqual([
-          { id: first.id, sessionId: two, fireAt: first.fireAt, prompt: "later" },
-          { id: second.id, sessionId: one, fireAt: second.fireAt, prompt: "recur", cron: "0 9 * * *" },
-        ]);
-      });
-
       it("fires a schedule now in its own session, answering once recorded or, with wait, once ended", async () => {
         const clock = subject.clockApi();
         const fired = await clock.schedules.run("digest");
@@ -413,25 +399,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await holding();
         expect(await clock.schedules.run("long")).toMatchObject({ status: "skipped", reason: expect.any(String) });
         subject.release();
-      });
-
-      it("cancels a pending wake-up whichever session set it, answering what it was, and not_found once gone", async () => {
-        const clock = subject.clockApi();
-        const sessionId = await newSession(agent);
-        const set = await addWakeup(subject.clock(), {
-          session: sessionId,
-          prompt: "check in",
-          fireAt: new Date(Date.now() + 3_600_000),
-        });
-        if (!set.ok) throw new Error(set.error);
-        expect(await clock.wakeups.cancel(set.id)).toEqual({
-          id: set.id,
-          sessionId,
-          fireAt: set.fireAt,
-          prompt: "check in",
-        });
-        expect(await listWakeups(subject.clock())).toEqual([]);
-        await expect(clock.wakeups.cancel(set.id)).rejects.toMatchObject({ code: "not_found" });
       });
     });
 
@@ -1087,13 +1054,7 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
           code: "invalid_request",
         });
 
-        // Deleting a busy session aborts active work, clears pending wakeups, and removes it atomically.
-        const wake = await addWakeup(subject.clock(), {
-          session: created.id,
-          prompt: "follow up",
-          fireAt: new Date(Date.now() + 3_600_000),
-        });
-        expect(wake.ok).toBe(true);
+        // Deleting a busy session aborts active work and removes it atomically.
         await send({ sessionId: created.id, content: "hold" });
         await holding();
         const [firstDelete, secondDelete] = await Promise.allSettled([
@@ -1106,7 +1067,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(rejected).toHaveLength(1);
         expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ code: "not_found" });
         expect(subject.signalled()).toBeGreaterThan(0);
-        expect((await subject.clockApi().wakeups.list()).filter((w) => w.sessionId === created.id)).toEqual([]);
 
         await expect(agent.sessions.get(created.id)).rejects.toMatchObject({ code: "not_found" });
         await expect(agent.sessions.delete(created.id)).rejects.toMatchObject({ code: "not_found" });

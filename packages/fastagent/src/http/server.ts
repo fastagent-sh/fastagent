@@ -66,7 +66,7 @@ export interface ApiHandler {
 
 export interface ApiOptions {
   keys: readonly string[];
-  /** Optional clock operations mounted under `/v1/schedules` and `/v1/wakeups`. */
+  /** Optional clock operations mounted under `/v1/schedules`. */
   clock?: ClockApi;
   /** Optional remote auth operations mounted under `/v1/auth`. */
   auth?: AuthApi;
@@ -278,14 +278,6 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("listSchedules", () =>
         clock === undefined ? Effect.succeed([]) : call("schedules.list", () => clock.schedules.list()),
-      )
-      .handle("listWakeups", () =>
-        clock === undefined ? Effect.succeed([]) : call("wakeups.list", () => clock.wakeups.list()),
-      )
-      .handle("cancelWakeup", ({ params }) =>
-        clock === undefined
-          ? Effect.fail(agentError("not_found", `no pending wake-up ${params.id}`))
-          : call("wakeups.cancel", () => clock.wakeups.cancel(params.id)),
       ),
   );
 

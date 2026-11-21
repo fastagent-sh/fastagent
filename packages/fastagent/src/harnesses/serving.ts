@@ -54,8 +54,6 @@ export interface OpenServingOptions {
   ownEnv: Readonly<Record<string, string | undefined>>;
   /** Who runs the instance: whether its prompt describes a deployment. */
   runsAs: RunsAs;
-  /** Whether the model lists are refreshed without the network. Default: `ownEnv`'s `FASTAGENT_OFFLINE` is `1`. */
-  offline?: boolean;
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   /** Runtime harness override (`--harness` / `FASTAGENT_HARNESS` / `fastagent.config.ts`). */
@@ -89,8 +87,6 @@ export interface OpenServingOptions {
    * app's). Default `"secrets"`.
    */
   keeps?: "secrets" | "state";
-  /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
-  wakeTicking?: () => boolean;
   /** The PostgreSQL database the instance's storage is in, over the one `FASTAGENT_DATABASE_URL` names. */
   database?: PostgresDatabase;
 }
@@ -164,7 +160,6 @@ export interface HarnessOpenContext {
   readonly code: BuiltDefinition;
   readonly models: ModelEnvironment;
   openMcp(): Promise<McpClients>;
-  onSessionDelete(sessionId: string): void;
   setDurableCreds(creds: DurableCredentialStore): void;
   closeAuth(): void;
 }
@@ -243,10 +238,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const chosen = options.storage ?? "instance";
   let durableCreds: DurableCredentialStore | undefined;
   const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
-    stateRoot,
     environment: secrets,
-    env,
-    offline: options.offline ?? env.FASTAGENT_OFFLINE === "1",
     ...(chosen === "instance"
       ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
       : {}),
@@ -281,7 +273,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     code,
     models,
     openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
-    onSessionDelete: (sessionId) => clock?.onSessionDelete(sessionId),
     setDurableCreds: (creds) => {
       durableCreds = creds;
     },
@@ -383,8 +374,6 @@ export interface OpenAgentOptions {
   harness?: HarnessName;
   /** OS sandbox mode override for `harness: "dsh"` (`"workspace"`, `"read-only"`, or `"off"`). */
   sandbox?: SandboxMode;
-  /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
-  offline?: boolean;
   /**
    * The PostgreSQL database the instance's sessions and clock are in, instead of `<root>/.state/agent.sqlite`: its URL,
    * and for a platform's own database how a connection signs in and what a transaction may hold. Over
@@ -407,7 +396,6 @@ function locationOf({ root }: { root: unknown }): { workdir: string; stateRoot: 
  */
 export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<LocalAgent> {
   const { workdir, stateRoot } = locationOf(options);
-  let ticking = false;
   const opened = await openServing(assertDefinition(definition), {
     workdir,
     stateRoot,
@@ -415,9 +403,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     env: options.env ?? {},
     ownEnv: options.env ?? {},
     runsAs: NOT_HOSTED,
-    offline: options.offline === true,
     ...(options.name === undefined ? {} : { name: options.name }),
-    wakeTicking: () => ticking,
     keeps: "state",
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.harness === undefined ? {} : { harness: options.harness }),
@@ -438,7 +424,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     serve(serveOptions = {}) {
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      ticking = true;
       const { alarm, ...rest } = serveOptions;
       const serving: Promise<Service> = serveAgent(opened, {
         ...rest,
@@ -448,21 +433,14 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
             }
           : {}),
         ...(piHarness !== undefined ? { beforeTick: () => piHarness.resume() } : {}),
-        onClose: () => {
-          ticking = false;
-        },
       });
       served = serving;
       serving.catch(() => {
-        if (served === serving) {
-          ticking = false;
-          served = undefined;
-        }
+        if (served === serving) served = undefined;
       });
       return serving;
     },
     close() {
-      ticking = false;
       closing ??= (async () => {
         const service = await served?.catch(() => undefined);
         const failures: unknown[] = [];

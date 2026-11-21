@@ -114,11 +114,8 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ope
       workdir,
       processEnv,
       models: models.models,
-      ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(chosen === "instance" ? { clocked: true, onSessionDelete: ctx.onSessionDelete } : {}),
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-      ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
       ...(traces === undefined ? {} : { telemetry: traces.context }),
       ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
     });

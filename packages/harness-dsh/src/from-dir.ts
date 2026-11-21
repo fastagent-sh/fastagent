@@ -38,7 +38,6 @@ export interface DshFromDirOptions {
   /** Sanitized environment variables passed to sandboxed shell commands. */
   readonly env?: Readonly<Record<string, string>>;
   readonly retry?: DshRetryOptions;
-  readonly onSessionDelete?: (sessionId: string) => void | Promise<void>;
   /** Custom storage backend. Defaults to SQLite at `<dir>/.fastagent/dsh.sqlite`. */
   readonly storage?: DshEventStoreBackend;
 }
@@ -157,7 +156,6 @@ export async function openDshAgentFromDir(dir: string, options: DshFromDirOption
       sandbox: options.sandbox ?? "workspace",
       ...(commands.length > 0 ? { commands: () => commands } : {}),
       ...(options.retry !== undefined ? { retry: options.retry } : {}),
-      ...(options.onSessionDelete !== undefined ? { onSessionDelete: options.onSessionDelete } : {}),
       storage,
     });
     if (ownedSqlite === undefined) return agent;

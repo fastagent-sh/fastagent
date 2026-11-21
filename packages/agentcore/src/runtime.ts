@@ -37,7 +37,7 @@ export const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
 /** AgentCore's HTTP protocol: the port its invocations and `/ping` reach. */
 const PORT = 8080;
 
-export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model" | "offline"> {
+export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model"> {
   /**
    * Where the instances are: on AWS, `dsqlDatabase(...)`. Or how to find it as an instance opens, so a runtime without
    * one says so to every invocation rather than exiting where only its log tells.

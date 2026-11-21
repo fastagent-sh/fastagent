@@ -1,10 +1,8 @@
 /**
  * An agent's MODEL ENVIRONMENT as one value: the credential store its messages authenticate through, the models they
- * resolve against (models.ts) with their lists refreshed (catalog.ts), and what authenticates a provider there. Every
- * reader builds it here (the serve, the startup report, `info`, `login`, the model list), so none can read other credential layers, another registry, or older lists than
- * the Agent does.
+ * resolve against (models.ts), and what authenticates a provider there. Every reader builds it here (the serve, the
+ * startup report, `info`, `login`, the model list), so none can read different credential layers or registries.
  */
-import { join } from "node:path";
 import {
   type Credential,
   type CredentialStore,
@@ -12,9 +10,6 @@ import {
   type Models,
   type Provider,
 } from "@earendil-works/pi-ai";
-import { log } from "../../log.ts";
-import { resolveStateRoot } from "../../paths.ts";
-import { catalogsIn } from "./catalog.ts";
 import {
   type AuthLayers,
   type FastagentAuthOptions,
@@ -48,8 +43,6 @@ export interface ModelEnvironment {
   credentials: CredentialStore;
   /** pi's built-ins and the definition's providers, over {@link credentials}. */
   models: Models;
-  /** Why a model list is not current, when one is not (logged already): each lists what it last had. */
-  catalogProblem?: string;
   /**
    * What authenticates `provider` here, resolved exactly as a message resolves it: the one answer the startup report
    * and a deployed box's `login --if-missing` both give. `modelId` picks the model to probe with; the provider's first
@@ -62,28 +55,19 @@ export interface ModelEnvironment {
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). Passing `authPath: null` reads no credentials file at all (environment variables only). `providers`
  * are the definition's. `environment` is the one source of the values a provider authenticates with and of the requests'
- * settings, which this process's environment never adds to; where its files are (`FASTAGENT_ROOT`) is still read from
- * this process's first. The model lists are refreshed before it resolves, kept in the instance's state root
- * (`stateRoot`, else the directory's); `force` asks the network even when they are fresh.
+ * settings, which this process's environment never adds to.
  */
 export async function modelEnvironment(
   agentDir: string | undefined,
   source: FastagentAuthOptions & { authPath?: string | null } = {},
   providers: readonly Provider[] = [],
   options: {
-    force?: boolean;
-    stateRoot?: string;
     environment?: Readonly<Record<string, string>>;
-    /** The environment `FASTAGENT_ROOT` is read from. Default: this process's. */
-    env?: Readonly<Record<string, string | undefined>>;
-    /** Refresh the lists without the network. Default: `FASTAGENT_OFFLINE` is `1` in this process's environment. */
-    offline?: boolean;
     /** Optional wrapper around the resolved file store (e.g. layering instance-durable storage ahead of local files). */
     credentialStore?: (fallback: CredentialStore | undefined) => CredentialStore;
   } = {},
 ): Promise<ModelEnvironment> {
   const environment = options.environment ?? {};
-  const env = { ...(options.env ?? process.env), ...environment };
   const files =
     source.authPath === null
       ? undefined
@@ -93,19 +77,11 @@ export async function modelEnvironment(
   const store = files === undefined ? undefined : layeredStore(files, providers, source.warn, environment);
   const credentials: CredentialStore =
     options.credentialStore !== undefined ? options.credentialStore(store) : (store ?? new InMemoryCredentialStore());
-  const stateRoot = options.stateRoot ?? (agentDir === undefined ? undefined : resolveStateRoot(agentDir, env));
-  const catalogs = catalogsIn(stateRoot === undefined ? undefined : join(stateRoot, "models"));
-  const models = modelsOver(credentials, providers, catalogs, environment);
-  const catalogProblem = await catalogs.refresh(models, {
-    force: options.force === true,
-    ...(options.offline === undefined ? {} : { offline: options.offline }),
-  });
-  if (catalogProblem !== undefined) log.warn(`[fastagent] ${catalogProblem}`);
+  const models = modelsOver(credentials, providers, environment);
   return {
     ...(files ? { auth: files } : {}),
     credentials,
     models,
-    ...(catalogProblem === undefined ? {} : { catalogProblem }),
     async authStatus(provider, modelId) {
       const id = modelId ?? models.getProvider(provider)?.getModels()[0]?.id;
       let resolved: { source?: string; error?: string } = {};
@@ -148,7 +124,7 @@ function layeredStore(
 ): FastagentCredentialStore {
   const own = () => fastagentCredentialStore(auth.path, { ...(warn ? { warn } : {}) });
   if (auth.fallback === undefined) return own();
-  const project = modelsOver(own(), providers, undefined, environment);
+  const project = modelsOver(own(), providers, environment);
   return fastagentCredentialStore(auth.path, {
     ...(warn ? { warn } : {}),
     fallbackPath: auth.fallback,

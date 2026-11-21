@@ -24,7 +24,7 @@ Use these shared seams instead of writing per-file mocks:
 | `doubles/tsc-double.ts` | `packages/fastagent/src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
 | `doubles/postgres-double.ts` (`servedPostgres`) | A PostgreSQL server (PGlite on a loopback port) | `integration/double-parity/postgres-double.integration.test.ts`, against `FASTAGENT_TEST_POSTGRES_URL` |
 | `doubles/storage-no-wait.ts` | `packages/fastagent/src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
-| `doubles/codex-model.ts`, `kept-catalog.ts` | Model providers and catalog refreshes | pi-ai's `fauxProvider` |
+| `doubles/codex-model.ts` | Model providers | pi-ai's `fauxProvider` |
 | `doubles/scripted-agent.ts`, `scripted-run.ts` | `Agent` for scheduler specs | Conforms to `packages/client/src/agent-api.ts` |
 | `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable` and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts` |
 

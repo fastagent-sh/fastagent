@@ -609,14 +609,14 @@ export default defineTool({
       const definition = await loadSourceDefinition(dir);
 
       // 1) Open on pi-durable and create a session in <root>/.state/agent.sqlite.
-      const piAgent1 = await openAgent(definition, { root, offline: true });
+      const piAgent1 = await openAgent(definition, { root });
       const piSession = await piAgent1.sessions.create({ title: "pi-session" });
       const piMsg = await piAgent1.messages.send({ sessionId: piSession.id, content: "from-pi" }, { wait: 15 });
       expect(piMsg.answer?.text).toBe("reply:from-pi");
       await piAgent1.close();
 
       // 2) Switch to dsh on the EXACT SAME <root>/.state/agent.sqlite — skips legacy-ext, runs defineTool, serves HTTP.
-      const dshAgent1 = await openAgent(definition, { root, offline: true, harness: "dsh", sandbox: "workspace" });
+      const dshAgent1 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       const dshInfo = await dshAgent1.info();
       expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "ping"]);
       const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
@@ -628,12 +628,12 @@ export default defineTool({
       await dshAgent1.close();
 
       // 3) Switch back to pi-durable on the same agent.sqlite: pi-session is intact.
-      const piAgent2 = await openAgent(definition, { root, offline: true });
+      const piAgent2 = await openAgent(definition, { root });
       expect((await piAgent2.sessions.get(piSession.id)).title).toBe("pi-session");
       await piAgent2.close();
 
       // 4) Switch back to dsh on the same agent.sqlite: dsh-session is intact, and offline withInstanceClock reads dsh_kv.
-      const dshAgent2 = await openAgent(definition, { root, offline: true, harness: "dsh", sandbox: "workspace" });
+      const dshAgent2 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       expect((await dshAgent2.sessions.get(dshSession.id)).title).toBe("dsh-session");
       await dshAgent2.close();
 

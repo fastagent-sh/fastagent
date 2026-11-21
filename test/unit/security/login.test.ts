@@ -382,7 +382,6 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
 
     const customProviders = [oauthProvider, deviceProvider];
     const models = await modelEnvironment(undefined, { authPath: null }, customProviders, {
-      offline: true,
       credentialStore: () => durableStore,
     });
     const authManager = createAuthManager({ models, durableStore, providers: customProviders });
@@ -539,7 +538,6 @@ export default { model: "remote-keyed/m1", providers: [provider] };
       },
     } as unknown as Provider;
     const models = await modelEnvironment(undefined, { authPath: null }, [slowProvider], {
-      offline: true,
       credentialStore: () => durableStore,
     });
     const manager = createAuthManager({ models, durableStore, providers: [slowProvider], activeFlowTtlMs: 80 });

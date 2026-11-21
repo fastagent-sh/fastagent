@@ -65,8 +65,7 @@ const init: CommandSpec = {
 const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
-  description:
-    "Open the agent and serve its schedules, wake-ups and Agent API; restarts worker on src/ or config edits.",
+  description: "Open the agent and serve its schedules and Agent API; restarts worker on src/ or config edits.",
   flags: [
     PORT,
     BIND,
@@ -158,13 +157,9 @@ const invoke: CommandSpec = {
 const models: CommandSpec = {
   name: "models",
   summary: 'list the available "provider/modelId" model specs',
-  description: "List built-in and project-declared models; --refresh fetches updated provider catalogs.",
+  description: "List built-in and project-declared models.",
   args: [{ name: "[search]", description: "case-insensitive substring filter" }],
-  flags: [
-    { flags: "-g, --global", description: "built-ins only, without the agent's providers" },
-    { flags: "--refresh", description: "fetch model lists now" },
-    JSON_FLAG,
-  ],
+  flags: [{ flags: "-g, --global", description: "built-ins only, without the agent's providers" }, JSON_FLAG],
   examples: [
     { cmd: "fastagent models", note: "all specs" },
     { cmd: "fastagent models claude", note: "filter by provider or id" },
@@ -172,7 +167,6 @@ const models: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/models.ts")).runModels(args[0] as string | undefined, {
       global: f.global === true,
-      refresh: f.refresh === true,
       json: f.json === true,
     }),
 };
@@ -247,11 +241,11 @@ const deploy: CommandSpec = {
 
 const schedules: CommandSpec = {
   name: "schedules",
-  summary: "list the schedules and wake-ups, run a schedule now, or cancel a wake-up",
+  summary: "list schedules or fire a schedule now",
   subcommands: [
     {
       name: "list",
-      summary: "what fires next, how each schedule last ran, and the pending wake-ups, from the instance",
+      summary: "what fires next and how each schedule last ran, from the instance",
       flags: [JSON_FLAG, ...HARNESS_FLAGS, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [
         { cmd: "fastagent schedules list" },
@@ -281,19 +275,6 @@ const schedules: CommandSpec = {
           model: f.model as string | undefined,
           ...harnessOptions(f),
           input: f.input !== false,
-          ...urlOptions(f),
-          instance: instanceFlags(f),
-        }),
-    },
-    {
-      name: "unwake",
-      summary: "cancel a pending wake-up, through the serve that owns the instance if one runs",
-      args: [{ name: "<id>", description: "wake-up id (fastagent schedules list lists them)" }],
-      flags: [...HARNESS_FLAGS, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
-      examples: [{ cmd: "fastagent schedules unwake 3f1c…" }],
-      run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runUnwake(args[0] as string, ".", {
-          ...harnessOptions(f),
           ...urlOptions(f),
           instance: instanceFlags(f),
         }),

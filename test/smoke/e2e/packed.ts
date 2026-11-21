@@ -14,8 +14,8 @@ const tarballs = process.argv.slice(2).map((path) => resolve(path));
 if (tarballs.length === 0) throw new Error("usage: node test/smoke/e2e/packed.ts <each tarball npm pack wrote>...");
 
 const work = mkdtempSync(join(tmpdir(), "fa-e2e-"));
-// A machine of its own: no credentials, no model catalog fetched.
-const env = { ...process.env, HOME: join(work, "home"), FASTAGENT_OFFLINE: "1" };
+// A machine of its own: no credentials.
+const env = { ...process.env, HOME: join(work, "home") };
 const sh = (command: string, args: string[], cwd: string): string => {
   console.error(`$ ${command} ${args.join(" ")}`);
   return execFileSync(command, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
@@ -75,7 +75,7 @@ writeFileSync(
   `import { openAgent } from "@fastagent-sh/fastagent";
 import definition from ${JSON.stringify(join(agent, "dist", "index.js"))};
 
-const agent = await openAgent(definition, { root: ${JSON.stringify(join(work, "instance"))}, offline: true });
+const agent = await openAgent(definition, { root: ${JSON.stringify(join(work, "instance"))} });
 try {
   const { id } = await agent.sessions.create();
   const message = await agent.messages.send({ sessionId: id, content: "ping" }, { wait: 30 });

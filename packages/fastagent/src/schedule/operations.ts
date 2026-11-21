@@ -1,8 +1,6 @@
 /**
- * The agent's clock as the Agent API offers it: fire a schedule now, cancel a wake-up, and read both. It runs in the
- * process that owns the instance, beside its resident scheduler: a fire takes its slot's claim as every clock does, so
- * the two never run one occurrence twice. What it reads is read by `scheduleStates` and `pendingWakeups`, as `info`
- * reads an instance no process serves.
+ * The agent's clock as the Agent API offers it: fire a schedule now and read schedule state. Runs in the process that
+ * owns the instance beside its resident scheduler so a fire takes its slot's claim and never runs an occurrence twice.
  */
 import * as Effect from "effect/Effect";
 import {
@@ -10,7 +8,6 @@ import {
   type ClockApi,
   type Message,
   type ScheduleState,
-  type Wakeup,
   agentError,
 } from "@fastagent-sh/client/agent-api";
 import { beginWork } from "../busy.ts";
@@ -20,7 +17,6 @@ import { nextRun } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";
 import { type ScheduledAgent, fireScheduleNow } from "./scheduler.ts";
 import { latestFire } from "./state.ts";
-import { type Wakeup as StoredWakeup, listWakeups, removeAnyWakeup } from "./wakeups.ts";
 
 /** Where the clock keeps its state, and what it fires: an instance's. Without one, the agent has no clock. */
 export interface ClockState {
@@ -47,21 +43,6 @@ export async function scheduleStates(
       } satisfies ScheduleState as ScheduleState;
     }),
   );
-}
-
-const asWakeup = ({ id, session, prompt, fireAt, cron, tz }: StoredWakeup): Wakeup =>
-  ({
-    id,
-    sessionId: session,
-    fireAt,
-    prompt,
-    ...(cron === undefined ? {} : { cron }),
-    ...(tz === undefined ? {} : { tz }),
-  }) satisfies Wakeup as Wakeup;
-
-/** The pending wake-ups as the Agent API says them. */
-export async function pendingWakeups(store: ClockStore): Promise<Wakeup[]> {
-  return (await listWakeups(store)).map(asWakeup);
 }
 
 export function clockOperations(
@@ -106,14 +87,6 @@ export function clockOperations(
         );
       },
       list: async () => (clock === undefined ? [] : scheduleStates(clock.store, clock.schedules)),
-    },
-    wakeups: {
-      async cancel(id) {
-        const removed = clock === undefined ? undefined : await removeAnyWakeup(clock.store, id);
-        if (removed === undefined) throw agentError("not_found", `no pending wake-up ${id}`);
-        return asWakeup(removed);
-      },
-      list: async () => (clock === undefined ? [] : pendingWakeups(clock.store)),
     },
   };
 }

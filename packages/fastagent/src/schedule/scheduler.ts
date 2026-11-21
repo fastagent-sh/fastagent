@@ -1,4 +1,4 @@
-/** Resident cron and wake polling. */
+/** Resident cron scheduler for declarative schedules. */
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -14,7 +14,6 @@ import { nextRun } from "./cron.ts";
 import type { Schedule } from "./schedule.ts";
 import type { ClockStore } from "./clock.ts";
 import { claimSlot, type Fire, latestFire, settleClaim } from "./state.ts";
-import { listWakeups, requeueWakeup, takeFirstDueWakeup, type Wakeup } from "./wakeups.ts";
 
 export interface Scheduler {
   /**
@@ -61,7 +60,6 @@ export interface SchedulerOptions {
  * (effect/src/internal/effect.ts, `sleepMillis`).
  */
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
-const WAKEUP_POLL_MS = 30_000;
 /**
  * ONE LINE, ALWAYS: the tail a failure contributes to its log line, as `: <text>`, or nothing when there is none.
  *
@@ -423,14 +421,6 @@ export function scheduleSessions(clock: ClockStore) {
   });
 }
 
-/** Wakes re-enter a chat session; identify the agent's own instruction and its cancellation handle. */
-function wakeEnvelope(w: Wakeup): string {
-  const tag = w.cron
-    ? `[wake-up ${w.id} fired — YOUR recurring self-scheduled turn (cron "${w.cron}"${w.tz ? ` ${w.tz}` : ""}), not a user message; unwake({ id: "${w.id}" }) stops it]`
-    : `[wake-up ${w.id} fired — YOUR self-scheduled turn, not a user message]`;
-  return `${tag} ${w.prompt}`;
-}
-
 /**
  * Stamp when each schedule with no recorded fire was first armed (`since`), and drop names no longer in `schedules`.
  * Writes nothing when nothing changed, so an instance with no schedules creates no document.
@@ -542,80 +532,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         }
       });
 
-    /**
-     * Fire the first due wake-up into its session, queued behind whatever runs there. The wake-up is taken out of the
-     * store first, so accepted is delivered: the pump goes on to the next one, and how the message ends is followed
-     * apart.
-     */
-    const wakeOnce = Effect.gen(function* () {
-      const w = yield* Effect.tryPromise({
-        try: () => takeFirstDueWakeup(store, now()),
-        catch: (cause) => new PromiseFailure(cause),
-      });
-      if (!w) return false;
-      const label = `wake ${w.id.slice(0, 8)}`;
-      const request: SendRequest = {
-        sessionId: w.session,
-        content: [{ type: "text", text: wakeEnvelope(w) }],
-        whenBusy: "queue",
-        idempotencyKey: `wake:${w.id}@${w.fireAt}`,
-      };
-      // Counted until the message is accepted: from then on the message itself is the work in flight.
-      yield* Effect.acquireUseRelease(
-        Effect.sync(beginWork),
-        () =>
-          Effect.gen(function* () {
-            const accepted = yield* Deferred.make<void>();
-            const delivered = () => void Deferred.doneUnsafe(accepted, Effect.void);
-            const followed = runTurn(agent, label, request, delivered).pipe(
-              Effect.tap((r) =>
-                // Queued, it is refused only while the process or its session's queue is full: for now. A recurring
-                // wake-up has its next occurrence; a one-shot one goes back in the store, for the next poll.
-                r.busy && w.cron === undefined
-                  ? Effect.tryPromise({
-                      try: async () => {
-                        await requeueWakeup(store, w, new Date(now().getTime() + WAKEUP_POLL_MS));
-                        log.info(`[schedule] ${label}: refused for now — retrying next poll (${r.failed})`);
-                      },
-                      catch: (cause) => new PromiseFailure(cause),
-                    }).pipe(
-                      Effect.catchTag("PromiseFailure", (error) =>
-                        Effect.sync(() =>
-                          log.error(
-                            `[schedule] ${label}: refused, and could not be kept for a retry, so it is gone: ${String(error.cause)}`,
-                          ),
-                        ),
-                      ),
-                    )
-                  : Effect.void,
-              ),
-              Effect.ensuring(Effect.sync(delivered)),
-            );
-            launch(label, Effect.asVoid(followed));
-            yield* Deferred.await(accepted);
-          }),
-        (done) => Effect.sync(done),
-      );
-      return true;
-    }).pipe(
-      // Log storage faults before a pending stop can replace the typed failure with interruption.
-      Effect.catchTag("PromiseFailure", (error) =>
-        Effect.sync(() => {
-          log.error(`[schedule] wake-up poll failed (continuing next poll): ${String(error.cause)}`);
-          return false;
-        }),
-      ),
-      Effect.uninterruptible,
-    );
-    const wakeLoop = Effect.gen(function* () {
-      for (;;) {
-        while (yield* wakeOnce) {
-          // Claim only after the preceding occurrence settles.
-        }
-        yield* Effect.sleep(WAKEUP_POLL_MS);
-      }
-    });
-
     /** Claim `slot` and admit its message before resolving, while its turn runs to completion in the background. */
     const startDueFire = (s: Schedule, slot: Date) =>
       Effect.acquireUseRelease(
@@ -679,7 +595,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         }
         if (shouldArm) arm(s, due);
       }
-      while (!stopped && (await run(wakeOnce))) {}
     }
 
     return {
@@ -705,7 +620,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
           launch(s.name, accounted);
         }
         await catchUpDue(lastFires, startOptions?.since, true);
-        if (!stopped) launch("wake-up poll", wakeLoop);
       },
       async tick(tickOptions) {
         if (stopped) return;
@@ -717,9 +631,8 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         await catchUpDue(lastFires, tickOptions?.since, false);
       },
       async nextDue(at = now()) {
-        const [armed, wakeups, fires] = await Promise.all([
+        const [armed, fires] = await Promise.all([
           store.stored.armed(),
-          listWakeups(store),
           Promise.all(schedules.map((s) => latestFire(store, s.name))),
         ]);
         let earliest: number | undefined;
@@ -729,7 +642,6 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
         for (const [i, s] of schedules.entries()) {
           consider(dueFor(s, fires[i]?.firedAt, armed[s.name], at)?.getTime());
         }
-        for (const w of wakeups) consider(new Date(w.fireAt).getTime());
         return earliest === undefined ? undefined : new Date(earliest);
       },
       stop() {

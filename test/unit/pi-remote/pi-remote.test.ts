@@ -732,10 +732,8 @@ describe("RemoteController", () => {
 
     await controller.connect("ops", agent);
     await expect(controller.listSchedules()).rejects.toThrow(/does not expose a clock API/);
-    await expect(controller.listWakeups()).rejects.toThrow(/does not expose a clock API/);
     controller.disconnect();
 
-    const canceledIds: string[] = [];
     const clock = {
       schedules: {
         list: async () => [{ name: "daily", cron: "0 9 * * *" }],
@@ -744,22 +742,12 @@ describe("RemoteController", () => {
           message: { id: `sched-${name}`, sessionId: "sess-sched", status: "queued" as const },
         }),
       },
-      wakeups: {
-        list: async () => [{ id: "w-1", sessionId: "sess-1", fireAt: "2026-01-01T00:00:00Z", prompt: "ping" }],
-        cancel: async (id: string) => {
-          canceledIds.push(id);
-          return { id, sessionId: "sess-1", fireAt: "2026-01-01T00:00:00Z", prompt: "ping" };
-        },
-      },
     };
     const stream2 = createEventStream();
     const { agent: agent2 } = makeFakeAgent({ onEvents: () => stream2.iterable });
     await controller.connect("ops", agent2, { clock });
     expect(await controller.listSchedules()).toEqual([{ name: "daily", cron: "0 9 * * *" }]);
     expect(await controller.runSchedule("daily")).toMatchObject({ status: "sent", message: { id: "sched-daily" } });
-    expect(await controller.listWakeups()).toHaveLength(1);
-    expect(await controller.cancelWakeup("w-1")).toMatchObject({ id: "w-1" });
-    expect(canceledIds).toEqual(["w-1"]);
     controller.disconnect();
   });
 });

@@ -65,24 +65,6 @@ export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" }
       await service.close();
     }
   });
-
-  it("an opened instance omits wake and unwake by default, and offers them when wakeTools: true is enabled", async () => {
-    const plain = await openSource(await agentDir());
-    try {
-      const names = (await plain.info()).tools.map(({ name }) => name);
-      expect(names).not.toContain("wake");
-      expect(names).not.toContain("unwake");
-    } finally {
-      await plain.close();
-    }
-
-    const withWake = await openSource(await agentDir({}, `{ model: "${CODEX_MODEL}", wakeTools: true }`));
-    try {
-      expect((await withWake.info()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining(["wake", "unwake"]));
-    } finally {
-      await withWake.close();
-    }
-  });
 });
 
 describe("openAgent: an agent directory opened in an app", () => {

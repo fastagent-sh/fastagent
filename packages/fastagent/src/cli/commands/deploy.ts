@@ -94,7 +94,7 @@ function flyConfig(app: string, port: number): string {
 [http_service]
   internal_port = ${port}
   force_https = true
-  # Keep one machine running: auto-stop pauses schedules and wake-ups, and a second machine cannot share the ${STORAGE_DIR}
+  # Keep one machine running: auto-stop pauses schedules, and a second machine cannot share the ${STORAGE_DIR}
   # volume lock (deploy with --ha=false).
   auto_stop_machines = "off"
   auto_start_machines = true

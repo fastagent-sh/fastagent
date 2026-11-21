@@ -1,8 +1,7 @@
 /**
- * `fastagent schedules` — the agent's clock, read and operated: `list` says what fires next, how each schedule last ran
- * and which wake-ups are pending; `run` fires a schedule now; `unwake` cancels a wake-up. Each goes through the process
- * that owns the instance (owner.ts): a deployment's (`--url`), the local serve's, or, with neither, this process
- * holding the instance itself.
+ * `fastagent schedules` — the agent's clock, read and operated: `list` says what fires next and how each schedule last
+ * ran; `run` fires a schedule now. Goes through the process that owns the instance (`--url`, local serve, or this
+ * process holding the instance itself).
  */
 import { resolve } from "node:path";
 import {
@@ -11,7 +10,6 @@ import {
   type ClockApi,
   type Message,
   type ScheduleState,
-  type Wakeup,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectClock } from "@fastagent-sh/client";
@@ -20,8 +18,7 @@ import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { openServing, withInstanceClock } from "../../harnesses/serving.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
-import { pendingWakeups, scheduleStates } from "../../schedule/operations.ts";
-import { removeAnyWakeup } from "../../schedule/wakeups.ts";
+import { scheduleStates } from "../../schedule/operations.ts";
 import { resolveRemoteTarget } from "../deployment.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 import { exitCodeOf } from "../invoke-stream.ts";
@@ -56,16 +53,11 @@ async function servedOwner(dirArg: string, opts: ClockOptions): Promise<{ agent:
 }
 
 /** The clock as the Clock API says it, through whatever owns the instance. */
-async function readClock(
-  dirArg: string,
-  opts: ClockOptions,
-): Promise<{ schedules: ScheduleState[]; wakeups: Wakeup[] }> {
+async function readClock(dirArg: string, opts: ClockOptions): Promise<{ schedules: ScheduleState[] }> {
   const served = await servedOwner(dirArg, opts);
   if (served !== undefined) {
-    const [schedules, wakeups] = await Promise.all([served.clock.schedules.list(), served.clock.wakeups.list()]).catch(
-      (error: unknown) => failStartup(refusal(error)),
-    );
-    return { schedules, wakeups };
+    const schedules = await served.clock.schedules.list().catch((error: unknown) => failStartup(refusal(error)));
+    return { schedules };
   }
   refuseUnnamedDatabaseInstance();
   const agentDir = agentDirOrExit(resolve(dirArg));
@@ -91,11 +83,10 @@ async function readClock(
   };
   return withInstanceClock(place, async (clock) => ({
     schedules: await scheduleStates(clock, schedules),
-    wakeups: await pendingWakeups(clock),
   })).catch(failStartup);
 }
 
-/** List what fires next, how each schedule last ran, and the pending wake-ups. */
+/** List what fires next and how each schedule last ran. */
 export async function runList(dirArg: string, opts: ClockOptions & { json?: boolean }): Promise<void> {
   const clock = await readClock(dirArg, opts);
   if (opts.json) {
@@ -106,12 +97,6 @@ export async function runList(dirArg: string, opts: ClockOptions & { json?: bool
   for (const s of clock.schedules) {
     const last = s.last === undefined ? "never run" : `last ${s.last.outcome ?? "running"} at ${s.last.firedAt}`;
     console.log(`  ${s.name}  "${s.cron}"${s.tz ? ` ${s.tz}` : ""}  next ${s.next ?? "never"}  ${last}`);
-  }
-  console.log(clock.wakeups.length === 0 ? "wake-ups: (none)" : "wake-ups:");
-  for (const w of clock.wakeups) {
-    console.log(
-      `  ${w.id}  ${w.fireAt}${w.cron ? ` "${w.cron}"` : ""}  session=${w.sessionId}  ${w.prompt.slice(0, 60)}`,
-    );
   }
 }
 
@@ -188,44 +173,4 @@ export async function runScheduleNow(
     failStartup(new Error(`${name} did not fire: ${fired.reason}`));
   }
   return reportFire(agent, name, fired.message, () => agent.close(), opts.json);
-}
-
-/**
- * Cancel the pending wake-up `id`, whatever session set it: the one way out of a wake-up set where nobody can message
- * the agent (a schedule's own session). With no serve of the instance, this process holds its storage while it writes.
- */
-export async function runUnwake(id: string, dirArg: string, opts: ClockOptions): Promise<void> {
-  const served = await servedOwner(dirArg, opts);
-  const removed =
-    served !== undefined
-      ? await served.clock.wakeups.cancel(id).catch((error: unknown) => failStartup(refusal(error)))
-      : await (async () => {
-          refuseUnnamedDatabaseInstance();
-          const agentDir = agentDirOrExit(resolve(dirArg));
-          const definition = await loadSourceDefinition(agentDir).catch(failStartup);
-          const selection = (() => {
-            try {
-              return resolveHarnessSelection(definition.config, {
-                ...(opts.harness === undefined ? {} : { harness: opts.harness }),
-                ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
-              });
-            } catch (error) {
-              return failUsage(error instanceof Error ? error.message : String(error));
-            }
-          })();
-          const stateRoot = resolveStateRoot(agentDir);
-          const name = enteredInstanceName();
-          const place = {
-            stateRoot,
-            env: process.env,
-            harness: selection.harness,
-            ...(name === undefined ? {} : { name }),
-          };
-          const held = await withInstanceClock(place, (clock) => removeAnyWakeup(clock, id)).catch(failStartup);
-          if (held === undefined) failStartup(new Error(`no pending wake-up ${id} (state: ${stateRoot})`));
-          return { id: held.id, fireAt: held.fireAt, sessionId: held.session, prompt: held.prompt };
-        })();
-  console.log(
-    `removed wake ${removed.id}  ${removed.fireAt}  session=${removed.sessionId}  ${removed.prompt.slice(0, 60)}`,
-  );
 }

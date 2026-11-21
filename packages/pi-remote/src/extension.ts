@@ -71,7 +71,7 @@ const PRIMARY_SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "title", description: "Rename the current remote session [title|--clear]" },
   { name: "fork", description: "Fork the current remote session" },
   { name: "model", description: "Select remote model [provider/modelId]" },
-  { name: "clock", description: "View/run remote schedules and manage wake-ups" },
+  { name: "clock", description: "View and run remote schedules" },
   { name: "login", description: "Update remote server API key [remote]" },
   { name: "logout", description: "Clear saved remote server API key [remote]" },
   { name: "remotes", description: "Add, remove, or switch saved remotes" },
@@ -101,7 +101,6 @@ const RESERVED_SUBCOMMANDS = new Set([
   "clock",
   "schedules",
   "run",
-  "wakeups",
   "remotes",
   "add",
   "remove",
@@ -747,7 +746,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       { label: "Switch model (/model)", cmd: "model" },
       { label: "Thinking level (/thinking)", cmd: "thinking" },
       { label: "Compact session (/compact)", cmd: "compact" },
-      { label: "Clock: schedules & wake-ups (/fa clock)", cmd: "clock" },
+      { label: "Schedules (/fa clock)", cmd: "clock" },
       { label: "Copy last assistant reply (/copy)", cmd: "copy" },
       { label: "Delete a session (/fa delete)", cmd: "delete" },
       { label: "Update remote credentials (/login)", cmd: "login" },
@@ -770,49 +769,33 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       return;
     }
     try {
-      const [schedules, wakeups] = await Promise.all([controller.listSchedules(), controller.listWakeups()]);
-      if (schedules.length === 0 && wakeups.length === 0) {
-        ctx.ui.notify("No schedules or pending wake-ups on this remote", "info");
+      const schedules = await controller.listSchedules();
+      if (schedules.length === 0) {
+        ctx.ui.notify("No schedules on this remote", "info");
         return;
       }
-      const items: Array<{ label: string; kind: "schedule" | "wakeup"; id: string }> = [];
-      for (const s of schedules) {
+      const items = schedules.map((s) => {
         const next = s.next ? `next ${s.next}` : "no next run";
         const last = s.last?.outcome ? `last ${s.last.outcome}` : s.last ? "running" : "never ran";
-        items.push({
+        return {
           label: `[run schedule] ${s.name} (${s.cron}) — ${next}, ${last}`,
-          kind: "schedule",
           id: s.name,
-        });
-      }
-      for (const w of wakeups) {
-        items.push({
-          label: `[cancel wake-up] ${shortId(w.id)} @ ${w.fireAt} — ${w.prompt}`,
-          kind: "wakeup",
-          id: w.id,
-        });
-      }
+        };
+      });
       const picked = await ctx.ui.select(
-        "Remote clock (select to run schedule or cancel wake-up)",
+        "Remote schedules (select to run now)",
         items.map((i) => i.label),
       );
       if (!picked) return;
       const chosen = items.find((i) => i.label === picked);
       if (!chosen) return;
-      if (chosen.kind === "schedule") {
-        const run = await controller.runSchedule(chosen.id);
-        ctx.ui.notify(
-          run.status === "sent"
-            ? `Schedule "${chosen.id}" started (message ${shortId(run.message.id)})`
-            : `Schedule "${chosen.id}" skipped: ${run.reason}`,
-          run.status === "sent" ? "info" : "warning",
-        );
-      } else {
-        const confirmed = await ctx.ui.confirm("Cancel wake-up", `Cancel pending wake-up ${chosen.id}?`);
-        if (!confirmed) return;
-        await controller.cancelWakeup(chosen.id);
-        ctx.ui.notify(`Canceled wake-up ${shortId(chosen.id)}`, "info");
-      }
+      const run = await controller.runSchedule(chosen.id);
+      ctx.ui.notify(
+        run.status === "sent"
+          ? `Schedule "${chosen.id}" started (message ${shortId(run.message.id)})`
+          : `Schedule "${chosen.id}" skipped: ${run.reason}`,
+        run.status === "sent" ? "info" : "warning",
+      );
     } catch (error) {
       ctx.ui.notify(`Failed to read remote clock: ${errorText(error)}`, "error");
     }
@@ -1423,24 +1406,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           );
         } catch (error) {
           ctx.ui.notify(`Failed to run schedule "${name}": ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "wakeups": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const wakeups = await controller.listWakeups();
-          if (wakeups.length === 0) {
-            ctx.ui.notify("No pending wake-ups", "info");
-            return;
-          }
-          const lines = wakeups.map((w) => `${shortId(w.id)} @ ${w.fireAt} — ${w.prompt}`);
-          ctx.ui.notify(lines.join("\n"), "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to list wake-ups: ${errorText(error)}`, "error");
         }
         return;
       }

@@ -37,7 +37,6 @@ Every key is optional. An unknown key refuses the start.
 | `harness` | `"pi-durable"` | Runtime harness: `"pi-durable"` or `"dsh"` (experimental; requires `@fastagent-sh/harness-dsh`) |
 | `sandbox` | `"workspace"` (on `dsh`) | OS sandbox for `harness: "dsh"`: `"workspace"`, `"read-only"`, or `"off"` |
 | `codingTools` | `true` | Built-in coding tools (`read`, `write`, `edit`, `bash`): `true`, `false`, or a subset array such as `["read"]` |
-| `wakeTools` | `false` | Opt in to built-in self-scheduling tools (`wake`, `unwake`) |
 | `starters` | none | Up to 6 example first messages a client may offer |
 | `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
@@ -69,10 +68,6 @@ With none set, a command in a terminal lets you pick one (and sign in), then pri
 Without a terminal it fails with `missing model`. `fastagent models [search]` lists the specs. A command that runs the
 agent stops at startup when the model it resolves is not in the lists; `openAgent` opens an agent whose configured
 default is not, as [embedding](embedding.md) says.
-
-The model lists are refreshed from
-[pi.dev](https://pi.dev/models) at most every 4 hours and kept in `<state root>/models/`; `FASTAGENT_OFFLINE=1` skips
-the network.
 
 ## Custom models
 
@@ -183,7 +178,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions, schedule runs and wake-ups. One process at a time |
+| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions and schedule runs. One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
@@ -217,7 +212,7 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 - **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
   saying who holds it. A process that dies frees its instance within 30 seconds.
 - **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
-- **Schedule runs and wake-ups** are in the database too. Under the root stay only the agent's working files and
+- **Schedule runs** are in the database too. Under the root stay only the agent's working files and
   what `fastagent login` writes (`auth.json`).
 - `fastagent info` shows where the sessions are (`storage:`), without the password.
 - An app gives `openAgent` its database as `database: { url }` ([Embedding](embedding.md#1-open-it)). On Aurora DSQL,
@@ -270,19 +265,9 @@ export default defineSchedule({
   `skipped`.
 - `dev` and `start` run the clock.
 
-`fastagent schedules list` shows the next runs, each schedule's last outcome and the pending wake-ups, kept in the
-instance's storage; `fastagent schedules run <name>` runs one now. Both go through the running `dev` when there is one
-(`--url` for a deployment).
-
-### Self-scheduling
-
-Set `wakeTools: true` in `fastagent.config.ts` to give the agent `wake` and `unwake` (disabled by default); only a
-serve's clock fires the wake-ups:
-
-- `wake({ in: "30m", prompt })` or `wake({ cron: "0 9 * * *", tz?, prompt })` fires back into the same session, and
-  survives restarts.
-- At most 20 pending per session, at least 10 minutes between recurring runs.
-- `unwake({ id })` cancels one; `fastagent schedules unwake <id>` cancels any (`fastagent schedules list` lists them).
+`fastagent schedules list` shows the next runs and each schedule's last outcome, kept in the instance's storage;
+`fastagent schedules run <name>` runs one now. Both go through the running `dev` when there is one (`--url` for a
+deployment).
 
 ## Logging
 

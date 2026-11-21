@@ -78,7 +78,7 @@ export function besideAgent(dir: string, name: string): string {
  */
 function onCleanMachine(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {};
-  for (const key of ["HOME", "FASTAGENT_OFFLINE", "NODE_OPTIONS", CHILD_REFUSALS]) {
+  for (const key of ["HOME", "NODE_OPTIONS", CHILD_REFUSALS]) {
     if (process.env[key] !== undefined) clean[key] = process.env[key];
   }
   return { ...clean, ...env };
@@ -268,7 +268,6 @@ export async function whileServed<T>(
   const opened = await openAgent(await loadSourceDefinition(dir), {
     root: resolveWorkdir(dir),
     secrets: process.env,
-    offline: true,
     ...options,
   });
   try {

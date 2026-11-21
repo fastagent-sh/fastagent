@@ -1,16 +1,10 @@
 /**
  * A schedule: a prompt the definition runs on a cron, written in TypeScript as `defineSchedule` in `src/schedules/`,
  * its name its file's.
- *
- * WHAT IT IS NOT: a wake-up. The agent can schedule work for itself too (the `wake` tool, schedule/wakeups.ts). A
- * schedule is written in the DEFINITION and a wake-up into the STATE by a running agent (minted id, cancellable, aimed
- * back at the conversation it came from).
  */
 import { recurringCronError } from "./cron.ts";
-import { MAX_PENDING_WAKEUPS } from "./wakeups.ts";
 
-/** As many schedules as one conversation may have pending wake-ups: the same bound on what the agent can set going. */
-export const MAX_SCHEDULES = MAX_PENDING_WAKEUPS;
+export const MAX_SCHEDULES = 20;
 
 /** What an author writes. */
 export interface ScheduleConfig {

@@ -66,7 +66,6 @@ await step("an app's agent answers on it, and refuses a message larger than a tr
     root: dir,
     name: instance(),
     database,
-    offline: true,
   });
   try {
     const { id: sessionId } = await agent.sessions.create();

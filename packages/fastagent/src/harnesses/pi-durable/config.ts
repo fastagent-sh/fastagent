@@ -27,17 +27,7 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = [
-  "model",
-  "thinkingLevel",
-  "harness",
-  "sandbox",
-  "codingTools",
-  "wakeTools",
-  "starters",
-  "providers",
-  "mcpServers",
-];
+const KEYS = ["model", "thinkingLevel", "harness", "sandbox", "codingTools", "starters", "providers", "mcpServers"];
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
 const HARNESS_SET = new Set<string>(HARNESS_NAMES);
 const SANDBOX_SET = new Set<string>(SANDBOX_MODES);
@@ -132,7 +122,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, harness, sandbox, codingTools, wakeTools, starters, providers, mcpServers } =
+  const { model, thinkingLevel, harness, sandbox, codingTools, starters, providers, mcpServers } =
     config as AgentConfig;
   const validator = compile(DATA);
   const data = { model, thinkingLevel, starters };
@@ -152,9 +142,6 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
     throw new Error(`${file}: "sandbox" requires harness: "dsh"`);
   }
   checkCodingTools(codingTools, file);
-  if (wakeTools !== undefined && typeof wakeTools !== "boolean") {
-    throw new Error(`${file}: "wakeTools" must be a boolean`);
-  }
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (mcpServers !== undefined) declareServers(mcpServers, file);
