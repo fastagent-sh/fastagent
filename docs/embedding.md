@@ -36,6 +36,7 @@ await agent.close(); // on shutdown: releases the instance's storage
 - Opening refreshes the model lists (`offline: true` skips the network).
 - One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
   stop work for good, `agent.sessions.cancel(sessionId)` first.
+- Pass `harness: "dsh"` (with optional `sandbox: "workspace" | "read-only" | "off"`) to run on `@fastagent-sh/harness-dsh` instead of `pi-durable` (requires `npm i @fastagent-sh/harness-dsh`).
 - [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
 - `database: { url: "postgres://…" }` keeps the sessions and the clock in PostgreSQL
   ([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), under the instance's `name`, which is then
