@@ -238,9 +238,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const chosen = options.storage ?? "instance";
   let durableCreds: DurableCredentialStore | undefined;
   const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
-    stateRoot,
     environment: secrets,
-    env,
     ...(chosen === "instance"
       ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
       : {}),

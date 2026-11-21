@@ -65,8 +65,7 @@ const init: CommandSpec = {
 const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
-  description:
-    "Open the agent and serve its schedules, wake-ups and Agent API; restarts worker on src/ or config edits.",
+  description: "Open the agent and serve its schedules and Agent API; restarts worker on src/ or config edits.",
   flags: [
     PORT,
     BIND,

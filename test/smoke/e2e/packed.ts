@@ -14,8 +14,8 @@ const tarballs = process.argv.slice(2).map((path) => resolve(path));
 if (tarballs.length === 0) throw new Error("usage: node test/smoke/e2e/packed.ts <each tarball npm pack wrote>...");
 
 const work = mkdtempSync(join(tmpdir(), "fa-e2e-"));
-// A machine of its own: no credentials, no model catalog fetched.
-const env = { ...process.env, HOME: join(work, "home"), FASTAGENT_OFFLINE: "1" };
+// A machine of its own: no credentials.
+const env = { ...process.env, HOME: join(work, "home") };
 const sh = (command: string, args: string[], cwd: string): string => {
   console.error(`$ ${command} ${args.join(" ")}`);
   return execFileSync(command, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });

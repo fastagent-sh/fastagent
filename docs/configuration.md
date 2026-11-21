@@ -178,7 +178,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions, schedule runs and wake-ups. One process at a time |
+| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions and schedule runs. One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
@@ -212,7 +212,7 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 - **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
   saying who holds it. A process that dies frees its instance within 30 seconds.
 - **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
-- **Schedule runs and wake-ups** are in the database too. Under the root stay only the agent's working files and
+- **Schedule runs** are in the database too. Under the root stay only the agent's working files and
   what `fastagent login` writes (`auth.json`).
 - `fastagent info` shows where the sessions are (`storage:`), without the password.
 - An app gives `openAgent` its database as `database: { url }` ([Embedding](embedding.md#1-open-it)). On Aurora DSQL,

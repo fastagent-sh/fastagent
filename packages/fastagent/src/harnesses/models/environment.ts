@@ -55,19 +55,14 @@ export interface ModelEnvironment {
  * The model environment of the agent in `agentDir` (or, without one, of a caller with no directory: the named or global
  * credentials file). Passing `authPath: null` reads no credentials file at all (environment variables only). `providers`
  * are the definition's. `environment` is the one source of the values a provider authenticates with and of the requests'
- * settings, which this process's environment never adds to; where its files are (`FASTAGENT_ROOT`) is still read from
- * this process's first. The model lists are refreshed before it resolves, kept in the instance's state root
- * (`stateRoot`, else the directory's); `force` asks the network even when they are fresh.
+ * settings, which this process's environment never adds to.
  */
 export async function modelEnvironment(
   agentDir: string | undefined,
   source: FastagentAuthOptions & { authPath?: string | null } = {},
   providers: readonly Provider[] = [],
   options: {
-    stateRoot?: string;
     environment?: Readonly<Record<string, string>>;
-    /** The environment `FASTAGENT_ROOT` is read from. Default: this process's. */
-    env?: Readonly<Record<string, string | undefined>>;
     /** Optional wrapper around the resolved file store (e.g. layering instance-durable storage ahead of local files). */
     credentialStore?: (fallback: CredentialStore | undefined) => CredentialStore;
   } = {},

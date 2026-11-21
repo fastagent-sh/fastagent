@@ -131,10 +131,8 @@ export interface ServeOptions {
     sync(options?: { forceClear?: boolean }): Promise<void>;
     stop(): void;
   };
-  /** Runs before `tick()` claims due schedules and wake-ups (e.g. `harness.resume()`). */
+  /** Runs before `tick()` claims due schedules (e.g. `harness.resume()`). */
   beforeTick?: () => void;
-  /** Runs when this serve closes or rolls back after a failed start. */
-  onClose?: () => void;
 }
 
 /** What the assembly serves: the opened agent, its optional external clock runner and auth manager, and its schedules. */
@@ -181,10 +179,6 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ),
       );
       return yield* Effect.gen(function* () {
-        if (options.onClose !== undefined) {
-          const onClose = options.onClose;
-          yield* Effect.addFinalizer(() => Effect.sync(onClose));
-        }
         if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
         const scheduled =
           clock === undefined
