@@ -4,7 +4,7 @@ Optional second harness for [FastAgent](https://fastagent.sh) backed by [DeepSee
 
 ## Status
 
-**Experimental skeleton (private, not published to npm yet).** See [DESIGN.md](DESIGN.md) for the full architecture, empirical `0.2.2-rc.5` spike findings, contract mapping, and conformance roadmap.
+**Experimental Phase 1 live runtime (private, not published to npm yet).** Boots Cordis + `AgentLoop`, bridges `@earendil-works/pi-ai` models and FastAgent tools, and passes all 61 conformance tests in `test/harnesses/agent-api-conformance.ts`. See [DESIGN.md](DESIGN.md) for the architecture, empirical `0.2.2-rc.5` spike findings, and Phase 2–3 roadmap.
 
 ## Design boundary
 
