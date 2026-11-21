@@ -1,36 +1,27 @@
 /**
- * Dynamic serving bridge from FastAgent's `openServing()` to `@fastagent-sh/harness-dsh`.
- * Loads `@fastagent-sh/harness-dsh` lazily at runtime so `@fastagent-sh/fastagent` carries zero
- * dependency on `@deepseek-ai/*`, shares the instance's `agent.sqlite` / PostgreSQL database via
- * `dsh_*` tables, and warns-and-skips `pi-durable`-only `src/extensions/*` modules.
+ * `@fastagent-sh/harness-dsh` runtime adapter plugged into `harnesses/serving.ts`.
+ * Loads `@fastagent-sh/harness-dsh` lazily so `@fastagent-sh/fastagent` carries zero dependency on
+ * `@deepseek-ai/*`, shares `agent.sqlite` / PostgreSQL via `dsh_*` tables, forwards the sanitized
+ * `processEnv` to sandboxed `bash` commands, and warns-and-skips `pi-durable`-only `src/extensions/*`.
  */
 import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { Agent, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Credential, CredentialInfo, Models } from "@earendil-works/pi-ai";
-import { processEnvironment } from "../../child-env.ts";
-import { definedValues } from "../../declared-secrets.ts";
-import { instanceName } from "../../instance-name.ts";
+import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
-import { type McpClients, openMcpClients } from "../../mcp/client.ts";
-import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
+import type { McpClients } from "../../mcp/client.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { DATABASE_URL_ENV, resolveStateRoot } from "../../paths.ts";
 import type { Change, ClockStore } from "../../schedule/clock.ts";
-import { type ClockRunner, createClockRunner } from "../../schedule/runner.ts";
 import type { Fire } from "../../schedule/state.ts";
 import type { Wakeup } from "../../schedule/wakeups.ts";
-import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
-import { modelEnvironment } from "../models/environment.ts";
-import { type AuthManager, createAuthManager } from "../models/remote-auth.ts";
-import { type DurableCredentialStore, overlayCredentialStore } from "../pi-durable/credentials.ts";
-import { agentPresentation, type HarnessSelection, resolveCodingTools } from "../pi-durable/config.ts";
+import { agentPresentation, resolveCodingTools } from "../pi-durable/config.ts";
+import type { DurableCredentialStore } from "../pi-durable/credentials.ts";
 import type { AgentDefinition } from "../pi-durable/definition.ts";
 import { mcpTools } from "../pi-durable/mcp.ts";
-import { buildDefinition } from "../pi-durable/open.ts";
-import { acquirePgDatabase } from "../pi-durable/postgres/storage.ts";
-import type { OpenedServing, OpenServingOptions } from "../pi-durable/serve.ts";
+import { type PostgresDatabase, acquirePgDatabase } from "../pi-durable/postgres/storage.ts";
 import { definitionSections, readCommands } from "../pi-durable/text.ts";
+import type { HarnessOpenContext, InstancePlace, OpenServingOptions, OpenedHarnessRuntime } from "../serving.ts";
 
 const DSH_PACKAGE_NAME = ["@fastagent-sh", "harness-dsh"].join("/");
 
@@ -69,6 +60,7 @@ interface DshModule {
     readonly tools?: readonly unknown[];
     readonly codingTools?: boolean | readonly ("read" | "write" | "edit" | "bash")[];
     readonly protectedPaths?: readonly string[];
+    readonly env?: Readonly<Record<string, string>>;
     readonly commands?: () => readonly {
       readonly name: string;
       readonly description?: string;
@@ -184,7 +176,6 @@ function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
         const current = validCredential((await readAll())[providerId]);
         const next = await fn(current);
         if (next === undefined) return current;
-        // Re-read inside commitQueue so concurrent updates to distinct providers never overwrite each other.
         await serializedCommit(async () => {
           const latest = await readAll();
           latest[providerId] = next;
@@ -231,39 +222,37 @@ function openSqliteWithHelpfulLockError(dsh: DshModule, filePath: string): DshKv
   }
 }
 
-/**
- * Run `work` over a DSH instance's durable clock store (`dsh_kv`) without starting the runtime.
- */
-export async function withDshInstanceClock<T>(
-  place: {
-    readonly stateRoot: string;
-    readonly env: Readonly<Record<string, string | undefined>>;
-    readonly name?: string;
-    readonly database?: { readonly url: string; readonly password?: () => Promise<string> };
-  },
-  work: (clock: ClockStore) => Promise<T>,
-): Promise<T> {
-  const dsh = await loadDshModule();
-  const dbSpec = place.database ?? (place.env[DATABASE_URL_ENV] ? { url: place.env[DATABASE_URL_ENV] } : undefined);
-  let store: DshKvBackend & { close(): Promise<void> };
-  let ownedPgClose: (() => Promise<void>) | undefined;
-  if (dbSpec !== undefined) {
+async function openInstanceDshStore(
+  dsh: DshModule,
+  place: InstancePlace,
+  database: PostgresDatabase | undefined,
+): Promise<{ store: DshKvBackend & { close(): Promise<void> }; ownedPgClose?: () => Promise<void> }> {
+  if (database !== undefined) {
     if (place.name === undefined) {
       throw new Error(
         `an instance in a database is opened by its name, and none was given: set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
       );
     }
-    const acquired = acquirePgDatabase(dbSpec);
-    if (acquired.owned) ownedPgClose = () => acquired.db.close();
+    const acquired = acquirePgDatabase(database);
+    const ownedPgClose = acquired.owned ? () => acquired.db.close() : undefined;
     try {
-      store = await dsh.openPostgresDshStore(acquired.db, place.name);
+      const store = await dsh.openPostgresDshStore(acquired.db, place.name);
+      return ownedPgClose === undefined ? { store } : { store, ownedPgClose };
     } catch (error) {
       await ownedPgClose?.().catch(() => {});
       throw error;
     }
-  } else {
-    store = openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite"));
   }
+  return { store: openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite")) };
+}
+
+export async function withDshInstanceClock<T>(
+  place: InstancePlace,
+  database: PostgresDatabase | undefined,
+  work: (clock: ClockStore) => Promise<T>,
+): Promise<T> {
+  const dsh = await loadDshModule();
+  const { store, ownedPgClose } = await openInstanceDshStore(dsh, place, database);
   try {
     return await work(dshClockStore(store));
   } finally {
@@ -293,23 +282,23 @@ function renderSystemPrompt(
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
-/**
- * Open a FastAgent definition on `@fastagent-sh/harness-dsh` with the same storage, model,
- * MCP, clock, and auth contracts as `pi-durable`.
- */
-export async function openDshServing(
-  definition: AgentDefinition,
-  options: OpenServingOptions,
-  selection: HarnessSelection,
-): Promise<OpenedServing> {
+export async function openDshRuntime(ctx: HarnessOpenContext): Promise<OpenedHarnessRuntime> {
   const dsh = await loadDshModule();
+  const {
+    definition,
+    options,
+    selection,
+    name,
+    workdir,
+    stateRoot,
+    chosen,
+    place,
+    database,
+    processEnv,
+    code,
+    models,
+  } = ctx;
   const { dir, config } = definition;
-  const workdir = options.workdir ?? dir;
-  const projectDir = options.projectDir ?? workdir;
-  const name = instanceName(definition.name, options.name);
-  const mcpServers = declareMcp(config.mcpServers, dir);
-  const secrets = definedValues(options.secrets);
-  const code = buildDefinition(definition, secrets);
 
   if (code.extensions.length > 0) {
     const skipped = code.extensions.map((ext) => ext.name).join(", ");
@@ -318,36 +307,6 @@ export async function openDshServing(
     );
   }
 
-  const env = { ...options.ownEnv, ...secrets };
-  const processEnv = processEnvironment(
-    {
-      base: options.env,
-      secrets,
-      declared: definition.inputs.secrets.map(({ name: secretName }) => secretName),
-      workdir,
-    },
-    dirname(workdir),
-  );
-  const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
-  const authPath =
-    options.authPath !== undefined
-      ? options.authPath
-      : options.keeps === "state"
-        ? join(stateRoot, "auth.json")
-        : undefined;
-  const chosen = options.storage ?? "instance";
-  let durableCreds: DurableCredentialStore | undefined;
-  const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
-    stateRoot,
-    environment: secrets,
-    env,
-    offline: options.offline ?? env.FASTAGENT_OFFLINE === "1",
-    ...(chosen === "instance"
-      ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
-      : {}),
-  });
-
-  // Open shared storage: same agent.sqlite or PostgreSQL database as pi-durable, isolated in dsh_* tables.
   let store: DshKvBackend;
   let ownedPgClose: (() => Promise<void>) | undefined;
   if (chosen === "memory") {
@@ -355,29 +314,13 @@ export async function openDshServing(
   } else if (chosen !== "instance") {
     store = openSqliteWithHelpfulLockError(dsh, chosen.file);
   } else {
-    const dbSpec = options.database ?? (env[DATABASE_URL_ENV] ? { url: env[DATABASE_URL_ENV] } : undefined);
-    if (dbSpec !== undefined) {
-      if (options.name === undefined) {
-        throw new Error(
-          `an instance in a database is opened by its name, and none was given: set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
-        );
-      }
-      const acquired = acquirePgDatabase(dbSpec);
-      if (acquired.owned) ownedPgClose = () => acquired.db.close();
-      try {
-        store = await dsh.openPostgresDshStore(acquired.db, options.name);
-      } catch (error) {
-        await ownedPgClose?.().catch(() => {});
-        throw error;
-      }
-    } else {
-      store = openSqliteWithHelpfulLockError(dsh, join(stateRoot, "agent.sqlite"));
-    }
+    const opened = await openInstanceDshStore(dsh, place, database);
+    store = opened.store;
+    ownedPgClose = opened.ownedPgClose;
   }
 
-  if (chosen === "instance") {
-    durableCreds = dshCredentialStore(store);
-  }
+  const durableCreds = chosen === "instance" ? dshCredentialStore(store) : undefined;
+  if (durableCreds !== undefined) ctx.setDurableCreds(durableCreds);
 
   const codingTools = resolveCodingTools(config.codingTools);
   const presentation = agentPresentation(definition);
@@ -385,12 +328,10 @@ export async function openDshServing(
   const modelRef = modelSpec !== undefined ? modelRefOf(modelSpec, "model") : undefined;
   const systemPrompt = renderSystemPrompt(definition, workdir, options, codingTools);
 
-  let clock: ClockRunner | undefined;
-  let auth: AuthManager | undefined;
   let mcp: McpClients | undefined;
   let dshAgent: Agent & { busy(): boolean; close(): Promise<void> };
   try {
-    mcp = await openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv));
+    mcp = await ctx.openMcp();
     dshAgent = await dsh.openDshAgent({
       name,
       agent: presentation.agent,
@@ -403,8 +344,9 @@ export async function openDshServing(
       tools: [...code.tools, ...mcpTools(mcp.tools)],
       codingTools,
       protectedPaths: [stateRoot],
+      env: processEnv,
       commands: () => readCommands(dir),
-      ...(chosen === "instance" ? { onSessionDelete: (sessionId) => clock?.onSessionDelete(sessionId) } : {}),
+      ...(chosen === "instance" ? { onSessionDelete: ctx.onSessionDelete } : {}),
       sandbox: selection.sandbox ?? "workspace",
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       storage: store,
@@ -427,7 +369,7 @@ export async function openDshServing(
     close: () =>
       (closing ??= (async () => {
         const failures: unknown[] = [];
-        auth?.close();
+        ctx.closeAuth();
         await dshAgent.close().catch((error: unknown) => failures.push(error));
         await mcp?.close().catch((error: unknown) => failures.push(error));
         await store.close?.().catch((error: unknown) => failures.push(error));
@@ -436,35 +378,9 @@ export async function openDshServing(
       })()),
   };
 
-  if (chosen === "instance") {
-    auth = createAuthManager({
-      models,
-      durableStore: durableCreds as DurableCredentialStore,
-      providers: code.providers,
-      environment: secrets,
-    });
-    clock = createClockRunner({
-      agent: managedAgent,
-      store: dshClockStore(store),
-      schedules: code.schedules,
-    });
-  }
-
   return {
     agent: managedAgent,
-    harness: selection.harness,
-    ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
-    ...(clock === undefined ? {} : { clock }),
-    ...(auth === undefined ? {} : { auth }),
-    definition,
-    name,
-    code,
-    config,
-    secrets,
-    models,
-    agentDir: projectDir,
-    workdir,
-    stateRoot,
-    schedules: code.schedules,
+    ...(durableCreds === undefined ? {} : { durableCreds }),
+    ...(chosen === "instance" ? { clockStore: dshClockStore(store) } : {}),
   };
 }

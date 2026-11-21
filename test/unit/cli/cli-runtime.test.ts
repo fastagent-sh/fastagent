@@ -8,7 +8,7 @@ import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
 import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
-import { withInstanceClock } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { clockStore } from "../../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";

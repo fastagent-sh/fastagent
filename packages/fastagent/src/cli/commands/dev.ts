@@ -7,7 +7,7 @@ import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
 import { HARNESS_ENV, SANDBOX_ENV, resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
-import { openServing } from "../../harnesses/pi-durable/serve.ts";
+import { openServing } from "../../harnesses/serving.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
 import { failStartup, failUsage } from "../fail.ts";
 import { ownerKey } from "../owner.ts";

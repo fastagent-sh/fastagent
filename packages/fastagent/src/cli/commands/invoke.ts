@@ -198,7 +198,7 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
   }
   const [{ openServing }, { loadSourceDefinition }, { resolveHarnessSelection }, { enterAgentCommand, reportAuth }] =
     await Promise.all([
-      import("../../harnesses/pi-durable/serve.ts"),
+      import("../../harnesses/serving.ts"),
       import("../../harnesses/pi-durable/open.ts"),
       import("../../harnesses/pi-durable/config.ts"),
       import("../shared.ts"),

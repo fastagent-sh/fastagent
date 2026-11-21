@@ -17,7 +17,7 @@ import {
 } from "@fastagent-sh/harness-dsh";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { dshSubject } from "../../harnesses/dsh-subject.ts";

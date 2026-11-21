@@ -32,7 +32,7 @@ import {
   assembleAgent,
   loadSourceDefinition,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { log } from "../../../packages/fastagent/src/log.ts";
 import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";

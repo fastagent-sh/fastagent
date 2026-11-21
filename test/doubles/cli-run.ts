@@ -15,7 +15,7 @@ import { buildProject } from "../../packages/fastagent/src/harnesses/pi-durable/
 import { resolveStateRoot, resolveWorkdir } from "../../packages/fastagent/src/paths.ts";
 import { announceOwner, ownerKey } from "../../packages/fastagent/src/cli/owner.ts";
 import { loadSourceDefinition } from "../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import { openAgent } from "../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openAgent } from "../../packages/fastagent/src/harnesses/serving.ts";
 import { CHILD_REFUSALS } from "../guards/network-guard.ts";
 
 const CLI = fileURLToPath(new URL("../../packages/fastagent/src/cli.ts", import.meta.url));

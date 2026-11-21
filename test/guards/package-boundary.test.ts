@@ -152,6 +152,17 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     );
     expect(scheduleImports).toEqual([]);
   });
+
+  it("harnesses/pi-durable/ never imports harnesses/dsh/ (orchestration lives in harnesses/serving.ts)", () => {
+    const piDir = resolve(srcOf("fastagent"), "harnesses/pi-durable");
+    const dshDir = resolve(srcOf("fastagent"), "harnesses/dsh");
+    const offenders = filesUnder(piDir).flatMap((file) =>
+      importsOf(file)
+        .relatives.filter((target) => target.startsWith(`${dshDir}/`))
+        .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
+    );
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("public entries", () => {

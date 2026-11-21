@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
 import { loadBuiltDefinition, loadProjectBuild } from "../../../packages/fastagent/src/harnesses/pi-durable/built.ts";
 import { FIXTURES, installProbe } from "../../harnesses/probe-package.ts";
-import { openAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
-import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 
 vi.mock(
   "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",

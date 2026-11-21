@@ -50,7 +50,7 @@ export {
   type LocalAgent,
   type OpenAgentOptions,
   type ServeAgentOptions,
-} from "./harnesses/pi-durable/serve.ts";
+} from "./harnesses/serving.ts";
 export type { Service } from "./service.ts";
 export {
   openPostgresDatabase,

@@ -1,43 +1,35 @@
 /**
- * A definition opened: its code built with its secrets, its model environment, its storage, and the Agent over them.
- * `openAgent` is how an app opens one; `dev`, `start`, `invoke` and `schedules run` open it
- * through `openServing`, which also takes where the Agent keeps its sessions and what becomes of an earlier process's
- * messages.
+ * Unified serving orchestrator for FastAgent: prepares the agent's definition, secrets, process environment,
+ * model environment, MCP clients, remote auth manager, and external clock runner once, then delegates runtime
+ * construction to the selected harness (`pi-durable` or `dsh`).
  */
 import { dirname, isAbsolute, join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai";
-import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
-import type { ClockStore } from "../../schedule/clock.ts";
-import { type ClockRunner, createClockRunner } from "../../schedule/runner.ts";
-import { clockStore } from "./clock.ts";
-import { type DurableCredentialStore, durableCredentialStore, overlayCredentialStore } from "./credentials.ts";
-import { type ModelEnvironment, modelEnvironment } from "../models/environment.ts";
-import { type AuthManager, createAuthManager } from "../models/remote-auth.ts";
-import { openMcpClients, type McpClients } from "../../mcp/client.ts";
-import { declareMcp, resolveMcpServers } from "../../mcp/config.ts";
-import { NOT_HOSTED, type RunsAs } from "../../serving-command.ts";
-import { mcpTools } from "./mcp.ts";
-import { processEnvironment } from "../../child-env.ts";
-import { definedValues } from "../../declared-secrets.ts";
-import { log } from "../../log.ts";
-import { activeWork } from "../../busy.ts";
 import type { Agent } from "@fastagent-sh/client/agent-api";
-import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.ts";
-import { type Service, serveAgent } from "../../service.ts";
-import type { DurableAgent, Unfinished } from "./agent.ts";
-import { watchInstanceAlarm } from "./alarm.ts";
-import { openDshServing, withDshInstanceClock } from "../dsh/serving.ts";
-import { resolveHarnessSelection } from "./config.ts";
-import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
-import { type AgentDefinition, assertDefinition } from "./definition.ts";
-import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
-import { describeDatabase } from "./postgres/database.ts";
-import { type PostgresDatabase, messageBytesFor, openPostgresStorage } from "./postgres/storage.ts";
-import { openLockedStorage } from "./storage.ts";
-import { INSTANCE_NAME_ENV, instanceName } from "../../instance-name.ts";
-import { otlpTraces } from "../telemetry/otlp.ts";
-import { fastagentVersion } from "../../version.ts";
+import type { Harness } from "@earendil-works/pi-durable";
+import { activeWork } from "../busy.ts";
+import { processEnvironment } from "../child-env.ts";
+import { definedValues } from "../declared-secrets.ts";
+import { instanceName, INSTANCE_NAME_ENV } from "../instance-name.ts";
+import { type McpClients, openMcpClients } from "../mcp/client.ts";
+import { declareMcp, resolveMcpServers } from "../mcp/config.ts";
+import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../paths.ts";
+import type { ClockStore } from "../schedule/clock.ts";
+import { type ClockRunner, createClockRunner } from "../schedule/runner.ts";
+import { type Service, serveAgent } from "../service.ts";
+import { NOT_HOSTED, type RunsAs } from "../serving-command.ts";
+import { openDshRuntime, withDshInstanceClock } from "./dsh/runtime.ts";
+import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts";
+import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
+import { watchInstanceAlarm } from "./pi-durable/alarm.ts";
+import type { Unfinished } from "./pi-durable/agent.ts";
+import { type HarnessSelection, resolveHarnessSelection } from "./pi-durable/config.ts";
+import { type DurableCredentialStore, overlayCredentialStore } from "./pi-durable/credentials.ts";
+import type { AgentConfig, HarnessName, SandboxMode } from "./pi-durable/define.ts";
+import { type AgentDefinition, assertDefinition } from "./pi-durable/definition.ts";
+import { type BuiltDefinition, buildDefinition } from "./pi-durable/open.ts";
+import { describeDatabase } from "./pi-durable/postgres/database.ts";
+import type { PostgresDatabase } from "./pi-durable/postgres/storage.ts";
+import { openPiDurableRuntime, withPiDurableInstanceClock } from "./pi-durable/runtime.ts";
 
 export interface OpenServingOptions {
   /** Override the credentials file, or `null` to read no credentials file at all. */
@@ -72,11 +64,8 @@ export interface OpenServingOptions {
   sandbox?: SandboxMode;
   /**
    * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, or the PostgreSQL database
-   * `FASTAGENT_DATABASE_URL` names (postgres/storage.ts), which one process holds at a time, with `wake` and `unwake`,
-   * since a serve's clock fires the wake-ups they keep. The other
-   * two never meet the storage a serve of the same directory holds, and have no `wake`, since no clock fires for them:
-   * `{ file }` is a database of the caller's own, held the same way (`holders`, when given, names in the refusal of a
-   * second opener what else opens it), and `"memory"` keeps nothing.
+   * `FASTAGENT_DATABASE_URL` names, which one process holds at a time. `{ file }` opens a caller-owned SQLite file;
+   * `"memory"` keeps nothing on disk.
    */
   storage?: ServingStorage;
   /** What becomes of the messages an earlier process left unfinished in the storage. Default `"resume"`. */
@@ -97,8 +86,7 @@ export interface OpenServingOptions {
   /**
    * Where the instance keeps its model credentials when it is given no store: `"secrets"`, the project's `.secrets/`
    * over the machine's own credentials (the CLI's), or `"state"`, `auth.json` in the state root and nothing else (an
-   * app's).
-   * Default `"secrets"`.
+   * app's). Default `"secrets"`.
    */
   keeps?: "secrets" | "state";
   /** Whether a clock fires the instance's wake-ups now (`assembleAgent`'s `wakeTicking`). Default always. */
@@ -107,14 +95,7 @@ export interface OpenServingOptions {
   database?: PostgresDatabase;
 }
 
-type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
-
-/** Who opens the instance's storage, for the refusal of a second opener. */
-const INSTANCE_HOLDERS =
-  "another `fastagent dev`, `start` or `schedules` command of this agent (or of another agent with the same state root)";
-/** Who opens an instance in a database: any process, on any machine, of an instance of that name. */
-const NAMED_INSTANCE_HOLDERS =
-  "another `fastagent dev`, `start` or `schedules` command of an instance of this name, on this machine or another";
+export type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
 
 /** An opened agent from either harness: the Agent API plus lifecycle and optional `pi-durable` harness handle. */
 export interface ServingAgent extends Agent {
@@ -164,6 +145,37 @@ export interface InstancePlace {
   database?: PostgresDatabase;
 }
 
+/** Shared context prepared once by `openServing()` and handed to the selected harness runtime adapter. */
+export interface HarnessOpenContext {
+  readonly definition: AgentDefinition;
+  readonly options: OpenServingOptions;
+  readonly selection: HarnessSelection;
+  readonly name: string;
+  readonly workdir: string;
+  readonly projectDir: string;
+  readonly stateRoot: string;
+  readonly chosen: ServingStorage;
+  readonly place: InstancePlace;
+  readonly database: PostgresDatabase | undefined;
+  readonly storageDescription: string;
+  readonly secrets: Readonly<Record<string, string>>;
+  readonly env: Readonly<Record<string, string | undefined>>;
+  readonly processEnv: Readonly<Record<string, string>>;
+  readonly code: BuiltDefinition;
+  readonly models: ModelEnvironment;
+  openMcp(): Promise<McpClients>;
+  onSessionDelete(sessionId: string): void;
+  setDurableCreds(creds: DurableCredentialStore): void;
+  closeAuth(): void;
+}
+
+/** Engine-specific handles returned by a harness runtime adapter to `openServing()`. */
+export interface OpenedHarnessRuntime {
+  readonly agent: ServingAgent;
+  readonly durableCreds?: DurableCredentialStore;
+  readonly clockStore?: ClockStore;
+}
+
 /** The database the instance's storage is in: the one given, or the one `FASTAGENT_DATABASE_URL` names, or none. */
 function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
   if (place.database !== undefined) return place.database;
@@ -180,70 +192,24 @@ export function describeInstanceStorage(place: InstancePlace): string {
 }
 
 /**
- * The instance's storage, which one process holds at a time: `agent.sqlite` under its state root, or its database's,
- * whose hold can end while open (`onLost`).
- */
-function openInstanceStorage(place: InstancePlace, onLost?: (error: Error) => void): Promise<Storage> {
-  const database = databaseOf(place);
-  if (database !== undefined) {
-    if (place.name === undefined) {
-      return Promise.reject(
-        new Error(
-          "an instance in a database is opened by its name, and none was given: " +
-            `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
-        ),
-      );
-    }
-    return openPostgresStorage(database, place.name, {
-      holders: NAMED_INSTANCE_HOLDERS,
-      ...(place.agent === undefined ? {} : { agent: place.agent }),
-      ...(onLost === undefined ? {} : { onLost }),
-    });
-  }
-  return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
-}
-
-/**
  * Run `work` over the clock of an instance no process serves, holding its storage meanwhile, so no serve of it starts
- * until it is done: how a command reads or changes the clock without one. Its Session is opened and never resumed, so
- * nothing of the instance runs.
+ * until it is done: how a command reads or changes the clock without one.
  */
 export async function withInstanceClock<T>(
   place: InstancePlace & { readonly harness?: HarnessName },
   work: (clock: ClockStore) => Promise<T>,
 ): Promise<T> {
+  const database = databaseOf(place);
   if (place.harness === "dsh") {
-    return withDshInstanceClock(place, work);
+    return withDshInstanceClock(place, database, work);
   }
-  const storage = await openInstanceStorage(place);
-  // The Session closes its storage with it, also when it fails to open.
-  const harness = await Harness.open(
-    storage,
-    { models: createModels(), registry: createRegistry() },
-    BACKGROUND_CONTEXT,
-  );
-  try {
-    return await work(clockStore(harness, BACKGROUND_CONTEXT));
-  } finally {
-    await harness.close(BACKGROUND_CONTEXT);
-  }
-}
-
-function openStorage(
-  place: InstancePlace,
-  storage: ServingStorage,
-  onLost: (error: Error) => void,
-): Promise<Storage> | Storage {
-  if (storage === "memory") return new MemoryStorage();
-  if (storage === "instance") return openInstanceStorage(place, onLost);
-  return openLockedStorage(storage.file, storage.holders);
+  return withPiDurableInstanceClock(place, database, work);
 }
 
 export async function openServing(definition: AgentDefinition, options: OpenServingOptions): Promise<OpenedServing> {
-  const { dir } = definition;
+  const { dir, config } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const { config } = definition;
   const selection = resolveHarnessSelection(
     config,
     {
@@ -252,23 +218,16 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     },
     options.ownEnv,
   );
-  if (selection.harness === "dsh") {
-    return openDshServing(definition, options, selection);
-  }
   const name = instanceName(definition.name, options.name);
   const mcpServers = declareMcp(config.mcpServers, dir);
-  // The instance's values are ONE input every reader below is given, and this process's is never written: a process
-  // may run several agents, each with its own values.
   const secrets = definedValues(options.secrets);
   const code = buildDefinition(definition, secrets);
-  // FastAgent's own work for the instance (finding its files) runs in this process's environment and the instance's
-  // secrets. What the AGENT starts gets an environment assembled from inputs.
   const env = { ...options.ownEnv, ...secrets };
   const processEnv = processEnvironment(
     {
       base: options.env,
       secrets,
-      declared: definition.inputs.secrets.map(({ name }) => name),
+      declared: definition.inputs.secrets.map(({ name: secretName }) => secretName),
       workdir,
     },
     dirname(workdir),
@@ -291,8 +250,6 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
       ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
       : {}),
   });
-  // Before anything is opened: a setting it cannot honor refuses the open.
-  const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
   const place: InstancePlace = {
     stateRoot,
     env,
@@ -300,95 +257,62 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     ...(options.name === undefined ? {} : { name }),
     ...(options.database === undefined ? {} : { database: options.database }),
   };
-  // A database that caps a transaction caps a message: one is written in one transaction.
+
   const database = chosen === "instance" ? databaseOf(place) : undefined;
-  const maxMessageBytes = messageBytesFor(database?.limits);
-  // Before the agent exists, a lost hold fails its open's first commit instead.
-  let stopRuns: ((error: Error) => void) | undefined;
+  const storageDescription = describeInstanceStorage(place);
   let clock: ClockRunner | undefined;
   let auth: AuthManager | undefined;
-  const storage = await openStorage(place, chosen, (error) => stopRuns?.(error));
-  if (database !== undefined) log.info(`[fastagent] storage: ${describeInstanceStorage(place)}`);
-  let mcp: McpClients | undefined;
-  let agent: DurableAgent;
-  try {
-    mcp = await openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv));
-    agent = await assembleAgent(definition, {
-      name,
-      mcpTools: mcpTools(mcp.tools),
-      runsAs: options.runsAs,
-      storage,
-      code,
-      workdir,
-      processEnv,
-      models: models.models,
-      ...(models.catalogProblem === undefined ? {} : { catalogProblem: models.catalogProblem }),
-      ...(chosen === "instance"
-        ? { clocked: true, onSessionDelete: (sessionId) => clock?.onSessionDelete(sessionId) }
-        : {}),
-      ...(options.model === undefined ? {} : { model: options.model }),
-      ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-      ...(options.wakeTicking === undefined ? {} : { wakeTicking: options.wakeTicking }),
-      ...(traces === undefined ? {} : { telemetry: traces.context }),
-      ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
-    });
-  } catch (error) {
-    const failures: unknown[] = [error];
-    if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
-    await storage.close(BACKGROUND_CONTEXT).catch((cleanup: unknown) => failures.push(cleanup));
-    await traces?.close();
-    throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
+  const ctx: HarnessOpenContext = {
+    definition,
+    options,
+    selection,
+    name,
+    workdir,
+    projectDir,
+    stateRoot,
+    chosen,
+    place,
+    database,
+    storageDescription,
+    secrets,
+    env,
+    processEnv,
+    code,
+    models,
+    openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
+    onSessionDelete: (sessionId) => clock?.onSessionDelete(sessionId),
+    setDurableCreds: (creds) => {
+      durableCreds = creds;
+    },
+    closeAuth: () => auth?.close(),
+  };
+
+  const openedRuntime = selection.harness === "dsh" ? await openDshRuntime(ctx) : await openPiDurableRuntime(ctx);
+  if (openedRuntime.durableCreds !== undefined) {
+    durableCreds = openedRuntime.durableCreds;
   }
-  // No longer the instance's holder: its runs stop before another process may resume them.
-  stopRuns = (error) => {
-    log.error(`[fastagent] ${error.message}: stopping its runs`);
-    agent.harness
-      .close(BACKGROUND_CONTEXT)
-      .catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
-  };
-  // One idempotent teardown for MCP clients and trace export, shared between explicit close and unexpected harness shutdown.
-  let resourcesClosed: Promise<void> | undefined;
-  const closeResources = (): Promise<void> =>
-    (resourcesClosed ??= (async () => {
-      auth?.close();
-      const failures: unknown[] = [];
-      await mcp.close().catch((error: unknown) => failures.push(error));
-      // Last: what the agent recorded up to its close goes out with it.
-      await traces?.close();
-      if (failures.length > 0) throw failures[0];
-    })());
-  void agent.harness.closed.then(closeResources).catch((error: unknown) => {
-    log.warn(`[fastagent] cleanup after harness shutdown failed: ${String(error)}`);
-  });
-  const closeAgent = agent.close.bind(agent);
-  let closing: Promise<void> | undefined;
-  const managedAgent: DurableAgent = {
-    ...agent,
-    close: () =>
-      (closing ??= (async () => {
-        const failures: unknown[] = [];
-        await closeAgent().catch((error: unknown) => failures.push(error));
-        await closeResources().catch((error: unknown) => failures.push(error));
-        if (failures.length) throw new AggregateError(failures, "Agent close failed");
-      })()),
-  };
   if (chosen === "instance") {
-    durableCreds = durableCredentialStore(managedAgent.harness, BACKGROUND_CONTEXT);
-    auth = createAuthManager({
-      models,
-      durableStore: durableCreds,
-      providers: code.providers,
-      environment: secrets,
-    });
-    clock = createClockRunner({
-      agent: managedAgent,
-      store: clockStore(managedAgent.harness, BACKGROUND_CONTEXT),
-      schedules: code.schedules,
-    });
+    if (durableCreds !== undefined) {
+      auth = createAuthManager({
+        models,
+        durableStore: durableCreds,
+        providers: code.providers,
+        environment: secrets,
+      });
+    }
+    if (openedRuntime.clockStore !== undefined) {
+      clock = createClockRunner({
+        agent: openedRuntime.agent,
+        store: openedRuntime.clockStore,
+        schedules: code.schedules,
+      });
+    }
   }
+
   return {
-    agent: managedAgent,
-    harness: "pi-durable",
+    agent: openedRuntime.agent,
+    harness: selection.harness,
+    ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...(clock === undefined ? {} : { clock }),
     ...(auth === undefined ? {} : { auth }),
     definition,
@@ -467,7 +391,6 @@ export interface OpenAgentOptions {
   database?: PostgresDatabase;
 }
 
-/** The instance root, which must be absolute: a relative one would be an input the process's cwd chooses. */
 function locationOf({ root }: { root: unknown }): { workdir: string; stateRoot: string } {
   if (typeof root !== "string" || !isAbsolute(root)) {
     throw new Error(`root must be an absolute path, and is ${JSON.stringify(root)}`);
@@ -482,7 +405,6 @@ function locationOf({ root }: { root: unknown }): { workdir: string; stateRoot: 
  */
 export async function openAgent(definition: AgentDefinition, options: OpenAgentOptions): Promise<LocalAgent> {
   const { workdir, stateRoot } = locationOf(options);
-  // An app may never serve the agent, and then no clock fires a wake-up: `wake` is refused until it does.
   let ticking = false;
   const opened = await openServing(assertDefinition(definition), {
     workdir,
@@ -512,7 +434,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(piHarness === undefined ? {} : { harness: piHarness }),
     busy: () => activeWork() > 0 || (agent.busy?.() ?? piHarness?.wake().active ?? false),
     serve(serveOptions = {}) {
-      // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
       ticking = true;
@@ -526,13 +447,11 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
           : {}),
         ...(piHarness !== undefined ? { beforeTick: () => piHarness.resume() } : {}),
         onClose: () => {
-          // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
           ticking = false;
         },
       });
       served = serving;
       serving.catch(() => {
-        // A serve that failed to start rolled itself back, so the agent may be served again.
         if (served === serving) {
           ticking = false;
           served = undefined;
@@ -543,7 +462,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     close() {
       ticking = false;
       closing ??= (async () => {
-        // A serve that never started has nothing to close; its failure reached the caller of `serve`.
         const service = await served?.catch(() => undefined);
         const failures: unknown[] = [];
         await service?.close().catch((error: unknown) => failures.push(error));

@@ -50,6 +50,8 @@ export interface CodingToolsContext {
   readonly getSandboxProvider: () => SandboxProvider | undefined;
   /** Canonical paths inside workdir that `write` and `edit` must never modify (e.g. `.fastagent`). */
   readonly protectedPaths?: readonly string[];
+  /** Sanitized environment variables for `bash` child processes. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 function isProtectedPath(resolvedPath: string, protectedPaths: readonly string[] | undefined): boolean {
@@ -275,6 +277,7 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
         const detached = process.platform !== "win32";
         const child = spawn(bin, binArgs, {
           cwd: ctx.workdir,
+          ...(ctx.env === undefined ? {} : { env: ctx.env }),
           stdio: ["ignore", "pipe", "pipe"],
           detached,
         });

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { type ServingAgent, openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { type ServingAgent, openServing } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../../../packages/client/src/http/client.ts";

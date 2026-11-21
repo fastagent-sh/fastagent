@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, type fauxProvider } from "@earendil-works/pi-ai";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import { openAgent, openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openAgent, openServing } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { DEV_SERVE_ENV, NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 import { made, agentPackage, FILES, toolCall, lastToolResult } from "../../fixtures/durable-definition-fixtures.ts";
 
