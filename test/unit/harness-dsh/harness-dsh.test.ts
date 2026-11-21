@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
@@ -9,8 +9,10 @@ import {
   MemoryDshEventStore,
   buildDshSandboxPolicy,
   openDshAgent,
+  openDshAgentFromDir,
   openPostgresDshStore,
   openSqliteDshStore,
+  resolveConfinedPath,
   toDshToolDefinition,
 } from "@fastagent-sh/harness-dsh";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
@@ -207,6 +209,197 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
       await store2.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveConfinedPath blocks traversal, outside absolutes, symlink escapes, and dangling symlinks", () => {
+    const root = mkdtempSync(join(tmpdir(), "dsh-confine-"));
+    const workspace = join(root, "ws");
+    const outside = join(root, "outside");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const secretFile = join(outside, "secret.txt");
+    writeFileSync(secretFile, "secret");
+    writeFileSync(join(workspace, "ok.txt"), "ok");
+    symlinkSync(secretFile, join(workspace, "link-file.txt"));
+    symlinkSync(outside, join(workspace, "link-dir"));
+    symlinkSync(join(outside, "future.txt"), join(workspace, "dangling.txt"));
+    symlinkSync(join(outside, "nonexistent-dir"), join(workspace, "dangling-dir"));
+
+    try {
+      expect(resolveConfinedPath(workspace, "ok.txt")).toContain("ok.txt");
+      expect(resolveConfinedPath(workspace, "sub/new.txt")).toContain("new.txt");
+      expect(() => resolveConfinedPath(workspace, "../outside/secret.txt")).toThrow(/escapes workspace/);
+      expect(() => resolveConfinedPath(workspace, secretFile)).toThrow(/escapes workspace/);
+      expect(() => resolveConfinedPath(workspace, "link-file.txt")).toThrow(/escapes workspace/);
+      expect(() => resolveConfinedPath(workspace, "link-dir/new.txt")).toThrow(/escapes workspace/);
+      expect(() => resolveConfinedPath(workspace, "dangling.txt")).toThrow(/Refusing dangling symlink/);
+      expect(() => resolveConfinedPath(workspace, "dangling-dir/nested.txt")).toThrow(/Refusing dangling symlink/);
+      expect(() => resolveConfinedPath(workspace, "ok.txt\0bad")).toThrow(/NUL bytes/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("wires codingTools gating, read/write/edit confinement, read-only enforcement, and openDshAgentFromDir", async () => {
+    const { createFauxCore, createModels, createProvider, fauxAssistantMessage, fauxToolCall } = await import(
+      "@earendil-works/pi-ai"
+    );
+    const root = mkdtempSync(join(tmpdir(), "dsh-dir-"));
+    const agentDir = join(root, "my-agent");
+    mkdirSync(join(agentDir, "skills", "deploy"), { recursive: true });
+    mkdirSync(join(agentDir, "prompts"), { recursive: true });
+    writeFileSync(join(agentDir, "SYSTEM.md"), "You are a sandboxed engineer.");
+    writeFileSync(join(agentDir, "AGENTS.md"), "Always follow workspace rules.");
+    writeFileSync(
+      join(agentDir, "skills", "deploy", "SKILL.md"),
+      "---\nname: deploy\ndescription: Ship releases safely\n---\nRun deploy.",
+    );
+    writeFileSync(
+      join(agentDir, "prompts", "review.md"),
+      "---\ndescription: Review a branch\n---\nPlease review: $ARGUMENTS",
+    );
+
+    const makeModels = (
+      handler: (ctx: { messages: readonly { role: string; content: unknown; isError?: boolean }[] }) => unknown,
+    ) => {
+      const core = createFauxCore({ provider: "dir", api: "dir" });
+      const stream = (...args: Parameters<typeof core.streamSimple>) => {
+        core.appendResponses([handler(args[1] as never) as never]);
+        return core.streamSimple(...args);
+      };
+      const models = createModels();
+      models.setProvider(
+        createProvider({
+          id: "dir",
+          auth: { apiKey: { name: "Dir", resolve: async () => ({ auth: {} }) } },
+          models: core.models,
+          api: { stream, streamSimple: stream },
+        }),
+      );
+      return { models, model: { provider: "dir", modelId: core.getModel().id } };
+    };
+
+    try {
+      // Duplicate coding tool name fails fast.
+      await expect(
+        openDshAgent({
+          name: "dup",
+          workdir: agentDir,
+          codingTools: ["read"],
+          tools: [
+            defineTool({
+              name: "read",
+              description: "conflict",
+              parameters: { type: "object", properties: {} } as const,
+              execute: async () => "x",
+            }),
+          ],
+          sandbox: "off",
+        }),
+      ).rejects.toMatchObject({ code: "invalid_request" });
+
+      // openDshAgentFromDir loads SYSTEM.md, AGENTS.md, skills, prompts, SQLite storage, and codingTools.
+      let seenSystem = "";
+      let seenUser = "";
+      const { models, model } = makeModels((ctx) => {
+        const last = ctx.messages.at(-1);
+        if (last?.role === "toolResult") {
+          const text = Array.isArray(last.content)
+            ? ((last.content[0] as { text?: string } | undefined)?.text ?? "")
+            : String(last.content);
+          return fauxAssistantMessage(`${last.isError ? "ERR" : "OK"}:${text}`);
+        }
+        seenSystem = ctx.messages
+          .filter((m) => m.role === "system")
+          .map((m) => String(m.content))
+          .join("\n");
+        seenUser = typeof last?.content === "string" ? last.content : "";
+        if (seenUser === "write-ok") {
+          return fauxAssistantMessage([fauxToolCall("write", { path: "note.txt", content: "hello world" })], {
+            stopReason: "toolUse",
+          });
+        }
+        if (seenUser === "edit-ok") {
+          return fauxAssistantMessage([fauxToolCall("edit", { path: "note.txt", oldText: "world", newText: "dsh" })], {
+            stopReason: "toolUse",
+          });
+        }
+        if (seenUser === "read-ok") {
+          return fauxAssistantMessage([fauxToolCall("read", { path: "note.txt" })], { stopReason: "toolUse" });
+        }
+        if (seenUser === "escape") {
+          return fauxAssistantMessage([fauxToolCall("write", { path: "../escaped.txt", content: "bad" })], {
+            stopReason: "toolUse",
+          });
+        }
+        if (seenUser === "clobber-state") {
+          return fauxAssistantMessage(
+            [fauxToolCall("write", { path: ".fastagent/dsh.sqlite", content: "corrupted" })],
+            { stopReason: "toolUse" },
+          );
+        }
+        return fauxAssistantMessage(`echo:${seenUser}`);
+      });
+
+      const agent = await openDshAgentFromDir(agentDir, { models, model, codingTools: ["read", "write", "edit"] });
+      try {
+        const info = await agent.info();
+        expect(info.name).toBe("my-agent");
+        expect(info.tools.map((t) => t.name)).toEqual(["read", "write", "edit"]);
+        expect(info.commands).toEqual([{ name: "review", description: "Review a branch" }]);
+
+        const session = await agent.sessions.create();
+        const cmdRes = await agent.messages.send({ sessionId: session.id, content: "/review main" }, { wait: 10 });
+        expect(cmdRes.answer?.text).toBe("echo:Please review: main");
+        expect(seenSystem).toContain("You are a sandboxed engineer.");
+        expect(seenSystem).toContain("Always follow workspace rules.");
+        expect(seenSystem).toContain("deploy");
+
+        expect(
+          (await agent.messages.send({ sessionId: session.id, content: "write-ok" }, { wait: 10 })).answer?.text,
+        ).toContain("OK:");
+        expect(
+          (await agent.messages.send({ sessionId: session.id, content: "edit-ok" }, { wait: 10 })).answer?.text,
+        ).toContain("OK:");
+        expect(
+          (await agent.messages.send({ sessionId: session.id, content: "read-ok" }, { wait: 10 })).answer?.text,
+        ).toBe("OK:hello dsh");
+        expect(readFileSync(join(agentDir, "note.txt"), "utf8")).toBe("hello dsh");
+
+        const escaped = await agent.messages.send({ sessionId: session.id, content: "escape" }, { wait: 10 });
+        expect(escaped.answer?.text).toContain("ERR:");
+        expect(existsSync(join(root, "escaped.txt"))).toBe(false);
+        const clobber = await agent.messages.send({ sessionId: session.id, content: "clobber-state" }, { wait: 10 });
+        expect(clobber.answer?.text).toContain("path is protected");
+        expect(existsSync(join(agentDir, ".fastagent", "dsh.sqlite"))).toBe(true);
+      } finally {
+        await agent.close();
+      }
+
+      // read-only sandbox denies write & edit while still allowing read.
+      const ro = await openDshAgentFromDir(agentDir, {
+        models,
+        model,
+        sandbox: "read-only",
+        codingTools: ["read", "write", "edit"],
+      });
+      try {
+        const s = await ro.sessions.create();
+        expect((await ro.messages.send({ sessionId: s.id, content: "read-ok" }, { wait: 10 })).answer?.text).toBe(
+          "OK:hello dsh",
+        );
+        expect((await ro.messages.send({ sessionId: s.id, content: "write-ok" }, { wait: 10 })).answer?.text).toContain(
+          "read-only mode",
+        );
+        expect((await ro.messages.send({ sessionId: s.id, content: "edit-ok" }, { wait: 10 })).answer?.text).toContain(
+          "read-only mode",
+        );
+      } finally {
+        await ro.close();
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

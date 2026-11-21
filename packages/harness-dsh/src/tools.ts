@@ -207,21 +207,23 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
         tool.execute as (
           args: Record<string, unknown>,
           api: FastAgentToolApi,
-          context: { abortSignal: AbortSignal },
+          context: { abortSignal: AbortSignal; sessionId?: string },
         ) => Promise<{
           readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
           readonly details?: unknown;
           readonly isError?: boolean;
           readonly control?: { readonly terminate?: boolean };
         }>
-      )(input, api, { abortSignal: exec.signal });
+      )(input, api, { abortSignal: exec.signal, ...(sessionId !== undefined ? { sessionId } : {}) });
 
       if (result?.control?.terminate === true) exec.concludeTurn();
       const explicitText = extractResultText(result);
       const text = explicitText.length > 0 ? explicitText : streamedOutput.trimEnd();
+      if (result?.isError === true) {
+        throw new Error(text || "Tool execution failed");
+      }
       return {
         text,
-        ...(result?.isError === true ? { isError: true } : {}),
         ...(result?.details !== undefined ? { details: structuredClone(result.details) } : {}),
       };
     },

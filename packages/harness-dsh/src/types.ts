@@ -16,6 +16,9 @@ import type {
 /** OS sandbox posture for DSH filesystem and shell tools. */
 export type DshSandboxMode = "off" | "workspace" | "read-only";
 
+/** Built-in sandboxed coding tool names matching FastAgent's `codingTools` config. */
+export type DshCodingToolName = "read" | "write" | "edit" | "bash";
+
 /** Fail-closed OS sandbox policy passed to DSH's `LocalSandboxProvider`. */
 export interface DshSandboxPolicy {
   readonly workspace: string;
@@ -209,6 +212,10 @@ export interface DshHarnessOptions {
   readonly thinkingLevel?: ThinkingLevel;
   /** Portable FastAgent tools to bridge into DSH's `ToolsService`. */
   readonly tools?: readonly FastAgentToolLike[];
+  /** Built-in sandboxed coding tools (`read`, `write`, `edit`, `bash`). Default: `false`. */
+  readonly codingTools?: boolean | readonly DshCodingToolName[];
+  /** Absolute paths inside `workdir` that `write` and `edit` must never modify (e.g. `.fastagent`). */
+  readonly protectedPaths?: readonly string[];
   /** Slash commands offered by `info().commands`. */
   readonly commands?: () => readonly DshCommand[];
   /** Hook invoked when a session is deleted (e.g. to clear external clock wakeups). */

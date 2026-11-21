@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -337,5 +338,106 @@ describe("@fastagent-sh/harness-dsh SIGKILL crash recovery on SQLite", () => {
     expect(recovered.m2).toMatchObject({ status: "completed", answer: { text: "answer: after-2" } });
     // Interrupted side-effecting tool MUST NOT have re-executed after SIGKILL.
     expect(Number(readFileSync(effectFile, "utf8").trim())).toBe(1);
+  });
+});
+
+describe("@fastagent-sh/harness-dsh OS sandbox enforcement (LocalSandboxProvider)", () => {
+  it("confines bash writes to workspace in workspace mode and blocks all writes in read-only mode", async () => {
+    const root = freshDir("fa-dsh-sandbox-");
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    // Choose a target outside both workspace and os.tmpdir() (/tmp), because workspace-write
+    // intentionally permits host temp directories while denying writes everywhere else.
+    const outsideTarget = join(process.cwd(), `.dsh-sandbox-escape-probe-${process.pid}.txt`);
+    rmSync(outsideTarget, { force: true });
+
+    const { createFauxCore, createModels, createProvider, fauxAssistantMessage, fauxToolCall } = await import(
+      "@earendil-works/pi-ai"
+    );
+    const { openDshAgent } = await import("@fastagent-sh/harness-dsh");
+
+    const makeModels = () => {
+      const core = createFauxCore({ provider: "sb", api: "sb" });
+      const stream = (...args: Parameters<typeof core.streamSimple>) => {
+        const last = args[1].messages.at(-1);
+        if (last?.role === "toolResult") {
+          const text = Array.isArray(last.content)
+            ? ((last.content[0] as { text?: string } | undefined)?.text ?? "")
+            : String(last.content);
+          core.appendResponses([fauxAssistantMessage(`${last.isError ? "DENIED" : "OK"}:${text}`)]);
+        } else {
+          const cmd = typeof last?.content === "string" ? last.content : "";
+          core.appendResponses([
+            fauxAssistantMessage([fauxToolCall("bash", { command: cmd })], { stopReason: "toolUse" }),
+          ]);
+        }
+        return core.streamSimple(...args);
+      };
+      const models = createModels();
+      models.setProvider(
+        createProvider({
+          id: "sb",
+          auth: { apiKey: { name: "SB", resolve: async () => ({ auth: {} }) } },
+          models: core.models,
+          api: { stream, streamSimple: stream },
+        }),
+      );
+      return { models, model: { provider: "sb", modelId: core.getModel().id } };
+    };
+
+    const { models, model } = makeModels();
+    const wsAgent = await openDshAgent({
+      name: "sb-ws",
+      workdir: workspace,
+      models,
+      model,
+      codingTools: ["bash"],
+      sandbox: "workspace",
+    });
+    try {
+      const session = await wsAgent.sessions.create();
+      const insideWrite = await wsAgent.messages.send(
+        { sessionId: session.id, content: `printf ok > "${join(workspace, "inside.txt")}"` },
+        { wait: 15 },
+      );
+      expect(insideWrite.answer?.text).toMatch(/^OK:/);
+      expect(readFileSync(join(workspace, "inside.txt"), "utf8")).toBe("ok");
+
+      const escapeAttempt = await wsAgent.messages.send(
+        { sessionId: session.id, content: `printf bad > "${outsideTarget}"` },
+        { wait: 15 },
+      );
+      expect(escapeAttempt.answer?.text).toMatch(/^DENIED:/);
+      expect(existsSync(outsideTarget)).toBe(false);
+    } finally {
+      rmSync(outsideTarget, { force: true });
+      await wsAgent.close();
+    }
+
+    const roAgent = await openDshAgent({
+      name: "sb-ro",
+      workdir: workspace,
+      models,
+      model,
+      codingTools: ["bash"],
+      sandbox: "read-only",
+    });
+    try {
+      const session = await roAgent.sessions.create();
+      const readRes = await roAgent.messages.send(
+        { sessionId: session.id, content: `cat "${join(workspace, "inside.txt")}"` },
+        { wait: 15 },
+      );
+      expect(readRes.answer?.text).toBe("OK:ok");
+
+      const blockedWrite = await roAgent.messages.send(
+        { sessionId: session.id, content: `printf blocked > "${join(workspace, "blocked.txt")}"` },
+        { wait: 15 },
+      );
+      expect(blockedWrite.answer?.text).toMatch(/^DENIED:/);
+      expect(existsSync(join(workspace, "blocked.txt"))).toBe(false);
+    } finally {
+      await roAgent.close();
+    }
   });
 });
