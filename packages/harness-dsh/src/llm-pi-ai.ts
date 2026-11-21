@@ -276,23 +276,28 @@ export class PiAiModelsAdapter extends LlmAdapter {
     let stepSpan: DshTelemetrySpan | undefined;
     if (this.hooks.telemetry !== undefined) {
       const telemetry = this.hooks.telemetry;
-      const spanReady = new Promise<DshTelemetrySpan>((resolveReady) => {
-        spanDone = telemetry
-          .startSpan(
-            {
-              name: "fastagent.dsh.step",
-              attributes: {
-                harness: "dsh",
-                ...(options.sessionId !== undefined ? { "session.id": options.sessionId } : {}),
+      const spanReady = new Promise<DshTelemetrySpan | undefined>((resolveReady) => {
+        spanDone = Promise.resolve()
+          .then(() =>
+            telemetry.startSpan(
+              {
+                name: "fastagent.dsh.step",
+                attributes: {
+                  harness: "dsh",
+                  ...(options.sessionId !== undefined ? { "session.id": options.sessionId } : {}),
+                },
               },
-            },
-            (span) =>
-              new Promise<void>((resolveSpan, rejectSpan) => {
-                finishSpan = (err) => (err === undefined ? resolveSpan() : rejectSpan(err));
-                resolveReady(span);
-              }),
+              (span) =>
+                new Promise<void>((resolveSpan, rejectSpan) => {
+                  finishSpan = (err) => (err === undefined ? resolveSpan() : rejectSpan(err));
+                  resolveReady(span);
+                }),
+            ),
           )
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => {
+            resolveReady(undefined);
+          });
       });
       stepSpan = await spanReady;
     }

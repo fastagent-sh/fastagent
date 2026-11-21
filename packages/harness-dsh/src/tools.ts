@@ -240,7 +240,14 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
             ...(sessionId !== undefined ? { "session.id": sessionId } : {}),
           },
         },
-        () => runTool(),
+        async (span) => {
+          try {
+            return await runTool();
+          } catch (error) {
+            span.setStatus({ status: "error", error: { name: "ToolError", message: "tool execution failed" } });
+            throw error;
+          }
+        },
       );
     },
   };
