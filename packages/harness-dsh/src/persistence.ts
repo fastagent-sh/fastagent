@@ -262,7 +262,22 @@ function mapPersistenceError(sessionId: SessionId, operation: string, error: unk
   return error;
 }
 
+function isContractPersistenceError(error: unknown): boolean {
+  return (
+    error instanceof SessionAlreadyExistsError ||
+    error instanceof SessionAlreadyOwnedError ||
+    error instanceof SessionPersistenceNotFoundError ||
+    error instanceof SessionHandleClosedError ||
+    error instanceof SessionReadOnlyError
+  );
+}
+
 function wrapHandle(id: SessionId, inner: DshSessionHandle, onStorageError?: (error: unknown) => void): SessionHandle {
+  const handleFailure = (operation: string, error: unknown): never => {
+    const mapped = mapPersistenceError(id, operation, error);
+    if (!isContractPersistenceError(mapped)) onStorageError?.(error);
+    throw mapped;
+  };
   const wrapped: SessionHandle = {
     id,
     header: toDshSessionHeader(inner.header),
@@ -276,24 +291,21 @@ function wrapHandle(id: SessionId, inner: DshSessionHandle, onStorageError?: (er
           eventState: "detached" as const,
         };
       } catch (error) {
-        onStorageError?.(error);
-        throw mapPersistenceError(id, "read", error);
+        throw handleFailure("read", error);
       }
     },
     async append(events: readonly SessionEvent[]) {
       try {
         await inner.append(events as unknown as readonly DshSessionEvent[]);
       } catch (error) {
-        onStorageError?.(error);
-        throw mapPersistenceError(id, "append", error);
+        throw handleFailure("append", error);
       }
     },
     async flush() {
       try {
         await inner.flush();
       } catch (error) {
-        onStorageError?.(error);
-        throw mapPersistenceError(id, "flush", error);
+        throw handleFailure("flush", error);
       }
     },
     close: () => inner.close(),
@@ -393,8 +405,9 @@ export function createDshPersistencePlugin(
         const handle = await backend.create(header as unknown as DshSessionHeader, options);
         return this.trackWriter(header.id, handle, 0);
       } catch (error) {
-        onStorageError?.(header.id, error);
-        throw mapPersistenceError(header.id, "create", error);
+        const mapped = mapPersistenceError(header.id, "create", error);
+        if (!isContractPersistenceError(mapped)) onStorageError?.(header.id, error);
+        throw mapped;
       }
     }
 
@@ -407,8 +420,9 @@ export function createDshPersistencePlugin(
         }
         return wrapHandle(id, handle, (err) => onStorageError?.(id, err));
       } catch (error) {
-        onStorageError?.(id, error);
-        throw mapPersistenceError(id, "open", error);
+        const mapped = mapPersistenceError(id, "open", error);
+        if (!isContractPersistenceError(mapped)) onStorageError?.(id, error);
+        throw mapped;
       }
     }
 

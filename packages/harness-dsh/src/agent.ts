@@ -84,8 +84,13 @@ const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set(["off", "minimal", "l
 
 const DEFAULT_THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+interface SequencedEvent {
+  readonly seq: number;
+  readonly event: SessionEvent;
+}
+
 interface Watcher {
-  push(event: SessionEvent): void;
+  push(item: SequencedEvent): void;
   end(): void;
 }
 
@@ -102,6 +107,10 @@ interface LiveSession {
   toolsDisposer?: () => void;
   watchers: Set<Watcher>;
   waiters: Map<string, Set<Waiter>>;
+  eventSeq: number;
+  pendingSettlement?: Promise<void>;
+  bufferedEvents: SessionEvent[];
+  storageErrored: boolean;
   toolNamesByCallId: Map<string, string>;
   costBySeq: Map<number, number>;
   pendingCosts: number[];
@@ -226,21 +235,21 @@ function toDshBlocks(parts: readonly ContentPart[]): ContentBlock[] {
 
 function createEventChannel(onClose: () => void): {
   readonly watcher: Watcher;
-  readonly iterable: AsyncIterable<SessionEvent>;
+  readonly iterable: AsyncIterable<SequencedEvent>;
 } {
-  const queue: SessionEvent[] = [];
+  const queue: SequencedEvent[] = [];
   let closed = false;
-  let waiting: ((result: IteratorResult<SessionEvent>) => void) | undefined;
+  let waiting: ((result: IteratorResult<SequencedEvent>) => void) | undefined;
 
   const watcher: Watcher = {
-    push(event) {
+    push(item) {
       if (closed) return;
       if (waiting !== undefined) {
         const resolve = waiting;
         waiting = undefined;
-        resolve({ done: false, value: event });
+        resolve({ done: false, value: item });
       } else {
-        queue.push(event);
+        queue.push(item);
       }
     },
     end() {
@@ -254,15 +263,15 @@ function createEventChannel(onClose: () => void): {
     },
   };
 
-  async function* generate(): AsyncGenerator<SessionEvent> {
+  async function* generate(): AsyncGenerator<SequencedEvent> {
     try {
       for (;;) {
         if (queue.length > 0) {
-          yield queue.shift() as SessionEvent;
+          yield queue.shift() as SequencedEvent;
           continue;
         }
         if (closed) return;
-        const next = await new Promise<IteratorResult<SessionEvent>>((resolve) => {
+        const next = await new Promise<IteratorResult<SequencedEvent>>((resolve) => {
           waiting = resolve;
         });
         if (next.done) return;
@@ -323,17 +332,31 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
   const messagesByKey = new Map<string, Map<string, string>>();
   let nextSessionOrder = 1;
   let closing = false;
-  let storageFailed = false;
+
+  const emitNow = (live: LiveSession, event: SessionEvent) => {
+    const seq = ++live.eventSeq;
+    for (const watcher of live.watchers) watcher.push({ seq, event });
+  };
+
+  const broadcast = (live: LiveSession, event: SessionEvent) => {
+    if (live.pendingSettlement !== undefined) {
+      live.bufferedEvents.push(event);
+      return;
+    }
+    emitNow(live, event);
+  };
 
   const failSessionWatchersAndWaiters = (sessionId: string | undefined, error: unknown) => {
-    storageFailed = true;
     const message = error instanceof Error ? error.message : String(error);
     const errData: AgentErrorData = { code: "unavailable", message, retryable: true };
     const targets =
       sessionId !== undefined ? [liveSessions.get(sessionId)].filter(Boolean) : [...liveSessions.values()];
     for (const live of targets as LiveSession[]) {
+      live.storageErrored = true;
+      live.bufferedEvents.length = 0;
+      const seq = ++live.eventSeq;
       for (const watcher of [...live.watchers]) {
-        watcher.push({ type: "stream_error", error: errData });
+        watcher.push({ seq, event: { type: "stream_error", error: errData } });
         watcher.end();
       }
       for (const [msgId, waiterSet] of live.waiters) {
@@ -386,10 +409,6 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       ctx.llm.registerAdapter(providerIds, adapter);
     }
   }
-
-  const broadcast = (live: LiveSession, event: SessionEvent) => {
-    for (const watcher of live.watchers) watcher.push(event);
-  };
 
   const toolRuntime = {
     toolsByName,
@@ -463,8 +482,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     }
   };
 
-  const buildSessionSnapshot = async (live: LiveSession): Promise<Session> => {
-    const rawEvents = await readSessionRawEvents(live);
+  const buildSessionSnapshotFromEvents = (live: LiveSession, rawEvents: readonly DshSessionEventRecord[]): Session => {
     const contextUsage = deriveContextUsage(rawEvents, options.models, live.meta.inheritedContextUsage);
     const isRunning =
       live.dshAgent?.status === "running" || live.activeTurnMessageIds.length > 0 || live.queuedMessages.length > 0;
@@ -495,6 +513,11 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     };
   };
 
+  const buildSessionSnapshot = async (live: LiveSession): Promise<Session> => {
+    const rawEvents = await readSessionRawEvents(live);
+    return buildSessionSnapshotFromEvents(live, rawEvents);
+  };
+
   const applyScopedSettings = (live: LiveSession) => {
     const dshAgent = live.dshAgent;
     if (dshAgent === undefined) return;
@@ -514,6 +537,8 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       const allowed = live.meta.tools.filter((name) => toolsByName.has(name));
       if (allowed.length > 0) {
         live.toolsDisposer = dshAgent.ctx.tools.restrict({ allow: allowed });
+      } else if (toolsByName.size > 0) {
+        live.toolsDisposer = dshAgent.ctx.tools.restrict({ deny: [...toolsByName.keys()] });
       }
     }
     const effectiveModel = live.meta.model ?? options.model;
@@ -577,7 +602,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     });
 
     agentCtx.on("agent/status", ({ status }: { status: "idle" | "running" }) => {
-      if (status !== "idle" || closing || storageFailed || live.meta.deleted) return;
+      if (status !== "idle" || closing || live.storageErrored || live.meta.deleted) return;
       if (dshAgent.inbox.nextTurn.length > 0 && live.activeTurnMessageIds.length === 0) {
         const pending = [...dshAgent.inbox.nextTurn];
         dshAgent.inbox.clear();
@@ -752,40 +777,42 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           settled.push(next);
         }
 
-        for (const next of settled) {
-          let bySession = allMessages.get(next.sessionId);
-          if (bySession === undefined) {
-            bySession = new Map();
-            allMessages.set(next.sessionId, bySession);
-          }
-          bySession.set(next.id, next);
-        }
-
-        const flushPromise = (async () => {
-          await ctx.sessions.flush(dshAgent.session);
-          for (const next of settled) {
-            if (store.putMessage !== undefined) await store.putMessage(next);
-          }
-          await persistSessionMeta({ ...live.meta, updatedAt: Date.now() });
-        })();
-
-        flushPromise.then(
-          () => {
-            if (storageFailed) return;
+        const prevSettlement = live.pendingSettlement ?? Promise.resolve();
+        const settleTask = prevSettlement
+          .catch(() => {})
+          .then(async () => {
+            await ctx.sessions.flush(dshAgent.session);
             for (const next of settled) {
-              notifyMessageSettled(live, toPublicMessage(next));
+              if (store.putMessage !== undefined) await store.putMessage(next);
             }
-          },
-          (error) => {
+            live.meta = { ...live.meta, updatedAt: Date.now() };
+            await persistSessionMeta(live.meta);
+            live.storageErrored = false;
+            for (const next of settled) {
+              let bySession = allMessages.get(next.sessionId);
+              if (bySession === undefined) {
+                bySession = new Map();
+                allMessages.set(next.sessionId, bySession);
+              }
+              bySession.set(next.id, next);
+              const pub = toPublicMessage(next);
+              emitNow(live, { type: "done", message: pub });
+              notifyMessageSettled(live, pub);
+            }
+          })
+          .catch((error) => {
             failSessionWatchersAndWaiters(live.meta.id, error);
-          },
-        );
-
-        if (!storageFailed) {
-          for (const next of settled) {
-            broadcast(live, { type: "done", message: toPublicMessage(next) });
-          }
-        }
+          })
+          .finally(() => {
+            if (live.pendingSettlement === settleTask) {
+              live.pendingSettlement = undefined;
+              const buffered = live.bufferedEvents.splice(0);
+              if (!live.storageErrored) {
+                for (const event of buffered) emitNow(live, event);
+              }
+            }
+          });
+        live.pendingSettlement = settleTask;
       }
     });
   };
@@ -827,6 +854,9 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       meta: structuredClone(meta),
       watchers: new Set(),
       waiters: new Map(),
+      eventSeq: 0,
+      bufferedEvents: [],
+      storageErrored: false,
       toolNamesByCallId: new Map(),
       costBySeq: new Map(),
       pendingCosts: [],
@@ -1043,6 +1073,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         }
       }
 
+      live.storageErrored = false;
       const dshAgent = await ensureDshAgent(live);
       const busy = dshAgent.status === "running" || live.activeTurnMessageIds.length > 0;
       if (busy && whenBusy === "reject") {
@@ -1243,6 +1274,9 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           dshHandle: handle,
           watchers: new Set(),
           waiters: new Map(),
+          eventSeq: 0,
+          bufferedEvents: [],
+          storageErrored: false,
           toolNamesByCallId: new Map(),
           costBySeq: new Map(),
           pendingCosts: [],
@@ -1364,11 +1398,18 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             message: `session "${sessionId}" deleted`,
             retryable: false,
           };
+          const seq = ++live.eventSeq;
           for (const watcher of [...live.watchers]) {
-            watcher.push({ type: "stream_error", error: deletedError });
+            watcher.push({ seq, event: { type: "stream_error", error: deletedError } });
             watcher.end();
           }
           live.watchers.clear();
+          const deleteRejection = agentError("not_found", `session "${sessionId}" deleted`);
+          for (const waiterSet of live.waiters.values()) {
+            for (const waiter of [...waiterSet]) waiter.reject(deleteRejection);
+            waiterSet.clear();
+          }
+          live.waiters.clear();
           live.instructionsDisposer?.();
           live.toolsDisposer?.();
           await persistSessionMeta(live.meta);
@@ -1478,7 +1519,27 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         let cleanup = () => {};
         async function* stream(): AsyncGenerator<SessionEvent> {
           const live = requireSession(sessionId);
-          const all = await getSessionEntries(live);
+          const { watcher, iterable } = createEventChannel(() => {
+            live.watchers.delete(watcher);
+          });
+          live.watchers.add(watcher);
+          cleanup = () => {
+            live.watchers.delete(watcher);
+            watcher.end();
+          };
+
+          let rawEvents: readonly DshSessionEventRecord[];
+          if (live.dshAgent !== undefined) {
+            rawEvents = live.dshAgent.session.snapshotEvents();
+          } else {
+            rawEvents = await readSessionRawEvents(live);
+            const resumed = live.dshAgent as DshLoopAgent | undefined;
+            if (resumed !== undefined) {
+              rawEvents = resumed.session.snapshotEvents();
+            }
+          }
+          const watermark = live.eventSeq;
+          const all = projectSessionLog(rawEvents, live.costBySeq).map((item) => item.entry);
           let replay: Entry[] = [];
           if (eventOptions?.after === "start") {
             replay = all;
@@ -1489,30 +1550,16 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             }
             replay = all.slice(idx + 1);
           }
-
-          const { watcher, iterable } = createEventChannel(() => {
-            live.watchers.delete(watcher);
-          });
-          live.watchers.add(watcher);
-          cleanup = () => {
-            live.watchers.delete(watcher);
-            watcher.end();
-          };
+          const snapshot = buildSessionSnapshotFromEvents(live, rawEvents);
 
           for (const entry of replay) {
             yield { type: "entry", entry };
           }
-          const snapshot = await buildSessionSnapshot(live);
           yield { type: "state", session: snapshot };
 
-          const lastReplayedId = replay.at(-1)?.id;
-          let seenCursor = lastReplayedId === undefined;
-          for await (const event of iterable) {
-            if (!seenCursor && event.type === "entry" && event.entry.id === lastReplayedId) {
-              seenCursor = true;
-              continue;
-            }
-            yield event;
+          for await (const item of iterable) {
+            if (item.seq <= watermark) continue;
+            yield item.event;
           }
         }
 
@@ -1581,6 +1628,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             live.dshAgent.cancel({ kind: "disposed" }, { keepInbox: true });
           }
           await live.dshAgent.whenIdle().catch(() => {});
+          await live.pendingSettlement?.catch(() => {});
           await ctx.sessions.flush(live.dshAgent.session).catch(() => {});
         }
         live.instructionsDisposer?.();
