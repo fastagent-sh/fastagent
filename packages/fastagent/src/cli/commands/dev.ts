@@ -6,9 +6,10 @@ import { listenForRestart, runDevSupervisor } from "../dev-supervisor.ts";
 import { setLogLevel } from "../../log.ts";
 import { markDevServe } from "../../serving-command.ts";
 import { loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { HARNESS_ENV, SANDBOX_ENV, resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { openServing } from "../../harnesses/pi-durable/serve.ts";
 import { DEFAULT_HTTP_PORT, serveAgent } from "../../service.ts";
-import { failStartup } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 import { ownerKey } from "../owner.ts";
 import { cliMountOptions, parseBind, parsePort, serveService } from "../serve.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
@@ -24,6 +25,8 @@ export interface DevOptions {
   port?: string;
   bind?: string;
   model?: string;
+  harness?: string;
+  sandbox?: string;
   /** false ⇔ `--no-watch`. */
   watch?: boolean;
   /** false ⇔ `--no-input`. */
@@ -50,6 +53,19 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   // Flag-shape checks before spawning.
   parsePort(opts.port, "--port", "flag");
   parseBind(opts.bind);
+  if (opts.harness !== undefined || opts.sandbox !== undefined) {
+    try {
+      const def = await loadSourceDefinition(agentDir);
+      resolveHarnessSelection(def.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      failUsage(error instanceof Error ? error.message : String(error));
+    }
+    if (opts.harness !== undefined) process.env[HARNESS_ENV] = opts.harness;
+    if (opts.sandbox !== undefined) process.env[SANDBOX_ENV] = opts.sandbox;
+  }
   await runDevSupervisor(agentDir);
 }
 
@@ -58,7 +74,18 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const opened = await loadSourceDefinition(agentDir)
-    .then((definition) => openServing(definition, { model: modelSpec, ...instanceInputs(agentDir) }))
+    .then((definition) => {
+      const selection = resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+      return openServing(definition, {
+        model: modelSpec,
+        harness: selection.harness,
+        ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
+        ...instanceInputs(agentDir),
+      });
+    })
     .catch(failStartup);
   await reportAssembly(opened, modelSpec);
   // This machine's other commands reach the instance through the serve that owns it (owner.ts).

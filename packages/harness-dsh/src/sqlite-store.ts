@@ -28,6 +28,11 @@ export interface SqliteDshEventStore extends DshEventStoreBackend {
 }
 
 const SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS dsh_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS dsh_sessions (
   session_id            TEXT PRIMARY KEY,
   header_json           TEXT NOT NULL,
@@ -58,6 +63,13 @@ CREATE TABLE IF NOT EXISTS dsh_attachments (
   data       BLOB NOT NULL,
   PRIMARY KEY (session_id, ref)
 );
+
+CREATE TABLE IF NOT EXISTS dsh_kv (
+  namespace  TEXT NOT NULL,
+  key        TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  PRIMARY KEY (namespace, key)
+);
 `;
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -84,7 +96,9 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
     }
     db.exec(SCHEMA_SQL);
     if (filePath !== ":memory:") {
-      db.exec("BEGIN IMMEDIATE; PRAGMA user_version = 1; COMMIT;");
+      // Touch a DSH-owned table (never global PRAGMA user_version) so sharing agent.sqlite with
+      // pi-durable keeps schema metadata isolated while acquiring the OS exclusive lock.
+      db.exec("BEGIN IMMEDIATE; INSERT OR REPLACE INTO dsh_meta (key, value) VALUES ('schema_version', '1'); COMMIT;");
     }
   } catch (error) {
     try {
@@ -165,6 +179,13 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
   const stmtSelectAttachment = db.prepare(
     "SELECT mime_type, data FROM dsh_attachments WHERE session_id = ? AND ref = ?",
   );
+  const stmtSelectKv = db.prepare("SELECT value_json FROM dsh_kv WHERE namespace = ? AND key = ?");
+  const stmtUpsertKv = db.prepare(
+    `INSERT INTO dsh_kv (namespace, key, value_json)
+     VALUES (?, ?, ?)
+     ON CONFLICT(namespace, key) DO UPDATE SET value_json = excluded.value_json`,
+  );
+  const stmtListKv = db.prepare("SELECT key, value_json FROM dsh_kv WHERE namespace = ? ORDER BY key ASC");
 
   const eventCountOf = (sessionId: string): number => {
     const row = stmtCountEvents.get(sessionId) as { count: number } | undefined;
@@ -383,6 +404,23 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
         mimeType: row.mime_type,
         data: new Uint8Array(row.data),
       } satisfies DshStoredAttachment;
+    },
+
+    async getKv(namespace, key) {
+      assertDbOpen();
+      const row = stmtSelectKv.get(namespace, key) as { value_json: string } | undefined;
+      return row?.value_json;
+    },
+
+    async putKv(namespace, key, valueJson) {
+      assertDbOpen();
+      stmtUpsertKv.run(namespace, key, valueJson);
+    },
+
+    async listKv(namespace) {
+      assertDbOpen();
+      const rows = stmtListKv.all(namespace) as Array<{ key: string; value_json: string }>;
+      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
     },
 
     async close() {

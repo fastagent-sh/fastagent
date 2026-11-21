@@ -16,6 +16,7 @@ import {
 } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectClock } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
+import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { openServing, withInstanceClock } from "../../harnesses/pi-durable/serve.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";
@@ -125,7 +126,7 @@ async function reportFire(
 export async function runScheduleNow(
   name: string,
   dirArg: string,
-  opts: ClockOptions & { model?: string; input?: boolean; json?: boolean },
+  opts: ClockOptions & { model?: string; harness?: string; sandbox?: string; input?: boolean; json?: boolean },
 ): Promise<void> {
   const served = await servedOwner(dirArg, opts);
   if (served !== undefined) {
@@ -146,9 +147,19 @@ export async function runScheduleNow(
   });
   // Refused while the instance holds work a stopped serve left: this process would run it, and cut it off at its exit.
   const { agent, clock, models } = await loadSourceDefinition(agentDir)
-    .then((definition) =>
-      openServing(definition, { model: modelSpec, ...instanceInputs(agentDir), unfinished: "refuse" }),
-    )
+    .then((definition) => {
+      const selection = resolveHarnessSelection(definition.config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+      return openServing(definition, {
+        model: modelSpec,
+        harness: selection.harness,
+        ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
+        ...instanceInputs(agentDir),
+        unfinished: "refuse",
+      });
+    })
     .catch(failStartup);
   await reportAuth(models, modelSpec, agentDir);
   if (clock === undefined) {

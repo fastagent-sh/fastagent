@@ -76,6 +76,9 @@ function reportLine(label: string, value: string): void {
 export async function reportAssembly(opened: OpenedServing, modelSpec: string): Promise<void> {
   const { code, models, agentDir, workdir, stateRoot, config } = opened;
   reportLine("agent", `${opened.name} — ${workdir}`);
+  if (opened.harness !== "pi-durable") {
+    reportLine("harness", `${opened.harness}${opened.sandbox ? ` (sandbox: ${opened.sandbox})` : ""}`);
+  }
   reportLine("model", `${modelSpec}${config.thinkingLevel ? ` (thinking: ${config.thinkingLevel})` : ""}`);
   await reportAuth(models, modelSpec, agentDir);
   const names = (list: readonly { name: string }[]) => list.map(({ name }) => name).join(", ") || "(none)";

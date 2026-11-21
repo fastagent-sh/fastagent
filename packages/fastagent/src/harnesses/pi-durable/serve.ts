@@ -27,7 +27,9 @@ import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../../paths.t
 import { type Service, serveAgent } from "../../service.ts";
 import type { DurableAgent, Unfinished } from "./agent.ts";
 import { watchInstanceAlarm } from "./alarm.ts";
-import type { AgentConfig } from "./define.ts";
+import { openDshServing } from "../dsh/serving.ts";
+import { resolveHarnessSelection } from "./config.ts";
+import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { type BuiltDefinition, assembleAgent, buildDefinition } from "./open.ts";
 import { describeDatabase } from "./postgres/database.ts";
@@ -64,6 +66,10 @@ export interface OpenServingOptions {
   offline?: boolean;
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
+  /** Runtime harness override (`--harness` / `FASTAGENT_HARNESS` / `fastagent.config.ts`). */
+  harness?: HarnessName;
+  /** OS sandbox mode override for `harness: "dsh"` (`--sandbox` / `FASTAGENT_SANDBOX` / `fastagent.config.ts`). */
+  sandbox?: SandboxMode;
   /**
    * Where the Agent keeps its sessions. Default `"instance"`: the instance's `agent.sqlite`, or the PostgreSQL database
    * `FASTAGENT_DATABASE_URL` names (postgres/storage.ts), which one process holds at a time, with `wake` and `unwake`,
@@ -110,8 +116,19 @@ const INSTANCE_HOLDERS =
 const NAMED_INSTANCE_HOLDERS =
   "another `fastagent dev`, `start` or `schedules` command of an instance of this name, on this machine or another";
 
+/** An opened agent from either harness: the Agent API plus lifecycle and optional `pi-durable` harness handle. */
+export interface ServingAgent extends Agent {
+  readonly harness?: Harness;
+  busy?(): boolean;
+  close(): Promise<void>;
+}
+
 export interface OpenedServing {
-  agent: DurableAgent;
+  agent: ServingAgent;
+  /** The active runtime harness (`"pi-durable"` or `"dsh"`). */
+  harness: HarnessName;
+  /** The active OS sandbox mode when `harness === "dsh"`. */
+  sandbox?: SandboxMode;
   /** The instance's external clock runner, when opened on durable instance storage. */
   clock?: ClockRunner;
   /** The instance's remote authentication manager, backed by durable storage. */
@@ -221,6 +238,17 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
   const { config } = definition;
+  const selection = resolveHarnessSelection(
+    config,
+    {
+      ...(options.harness === undefined ? {} : { harness: options.harness }),
+      ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
+    },
+    options.ownEnv,
+  );
+  if (selection.harness === "dsh") {
+    return openDshServing(definition, options, selection);
+  }
   const name = instanceName(definition.name, options.name);
   const mcpServers = declareMcp(config.mcpServers, dir);
   // The instance's values are ONE input every reader below is given, and this process's is never written: a process
@@ -354,6 +382,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   }
   return {
     agent: managedAgent,
+    harness: "pi-durable",
     ...(clock === undefined ? {} : { clock }),
     ...(auth === undefined ? {} : { auth }),
     definition,
@@ -376,8 +405,8 @@ export interface LocalAgent extends Agent {
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;
-  /** pi-durable's own API, for operating the agent. */
-  readonly harness: Harness;
+  /** pi-durable's own API when running on `harness: "pi-durable"`; absent on `harness: "dsh"`. */
+  readonly harness?: Harness;
   /**
    * Whether the process has work in flight: a message not yet ended, or a schedule's fire before its message is taken.
    * For a platform that reclaims an idle machine (AgentCore's `HealthyBusy`).
@@ -418,6 +447,10 @@ export interface OpenAgentOptions {
   env?: Readonly<Record<string, string>>;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
+  /** Runtime harness override (`"pi-durable"` or `"dsh"`). */
+  harness?: HarnessName;
+  /** OS sandbox mode override for `harness: "dsh"` (`"workspace"`, `"read-only"`, or `"off"`). */
+  sandbox?: SandboxMode;
   /** Refresh the model lists without the network: each is the one last kept, or pi-ai's own. Default: false. */
   offline?: boolean;
   /**
@@ -457,9 +490,12 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     wakeTicking: () => ticking,
     keeps: "state",
     ...(options.model === undefined ? {} : { model: options.model }),
+    ...(options.harness === undefined ? {} : { harness: options.harness }),
+    ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
     ...(options.database === undefined ? {} : { database: options.database }),
   });
   const { agent } = opened;
+  const piHarness = agent.harness;
   let served: Promise<Service> | undefined;
   let closing: Promise<void> | undefined;
   return {
@@ -467,8 +503,8 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
-    harness: agent.harness,
-    busy: () => activeWork() > 0 || agent.harness.wake().active,
+    ...(piHarness === undefined ? {} : { harness: piHarness }),
+    busy: () => activeWork() > 0 || (agent.busy?.() ?? piHarness?.wake().active ?? false),
     serve(serveOptions = {}) {
       // Its storage is let go, or about to be: a service now would run schedules nobody closes.
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
@@ -477,13 +513,12 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
       const { alarm, ...rest } = serveOptions;
       const serving: Promise<Service> = serveAgent(opened, {
         ...rest,
-        ...(alarm === undefined
-          ? {}
-          : {
-              watchAlarm: (nextClockDue) =>
-                watchInstanceAlarm({ harness: agent.harness, nextClockDue, setAlarm: alarm }),
-            }),
-        beforeTick: () => agent.harness.resume(),
+        ...(alarm !== undefined && piHarness !== undefined
+          ? {
+              watchAlarm: (nextClockDue) => watchInstanceAlarm({ harness: piHarness, nextClockDue, setAlarm: alarm }),
+            }
+          : {}),
+        ...(piHarness !== undefined ? { beforeTick: () => piHarness.resume() } : {}),
         onClose: () => {
           // Its clock stops with it, whichever closes it: a wake-up kept after this is one nothing fires.
           ticking = false;

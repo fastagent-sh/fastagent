@@ -2,8 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { DurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
-import { openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { type ServingAgent, openServing } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../../../packages/client/src/http/client.ts";
@@ -11,7 +10,7 @@ import { type ServeOptions, serveAgent } from "../../../packages/fastagent/src/s
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
 import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 
-const opened: DurableAgent[] = [];
+const opened: ServingAgent[] = [];
 afterAll(async () => {
   for (const agent of opened) await agent.close();
 });

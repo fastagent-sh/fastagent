@@ -9,7 +9,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { agentPresentation, resolveCodingTools } from "../../harnesses/pi-durable/config.ts";
+import { agentPresentation, resolveCodingTools, resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
 import { definitionSecrets } from "../../harnesses/pi-durable/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
 import { describeInstanceStorage } from "../../harnesses/pi-durable/serve.ts";
@@ -17,11 +17,13 @@ import { readCommands } from "../../harnesses/pi-durable/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
 import { nextRun } from "../../schedule/cron.ts";
-import { agentDirOrExit, failStartup } from "../fail.ts";
+import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface InfoOptions {
   json?: boolean;
   model?: string;
+  harness?: string;
+  sandbox?: string;
   instance?: InstanceFlags;
 }
 
@@ -31,6 +33,16 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const workdir = resolveWorkdir(agentDir);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { config } = definition;
+  const harnessSelection = (() => {
+    try {
+      return resolveHarnessSelection(config, {
+        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+      });
+    } catch (error) {
+      return failUsage(error instanceof Error ? error.message : String(error));
+    }
+  })();
   const name = instanceName(definition.name, enteredInstanceName());
   const presentation = agentPresentation(definition);
   const program = presentation.agent;
@@ -85,6 +97,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           name: name,
           agent: { name: program.name, description: program.description ?? null },
           starters: presentation.starters ?? [],
+          harness: harnessSelection.harness,
+          sandbox: harnessSelection.sandbox ?? null,
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
@@ -118,6 +132,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   }
   if (presentation.starters !== undefined)
     line("starters", presentation.starters.map((starter) => JSON.stringify(starter)).join(", "));
+  line(
+    "harness",
+    harnessSelection.sandbox !== undefined
+      ? `${harnessSelection.harness} (sandbox: ${harnessSelection.sandbox})`
+      : harnessSelection.harness,
+  );
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);

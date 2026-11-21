@@ -138,6 +138,9 @@ export interface DshEventStoreBackend {
   listMessages?(sessionId?: string): Promise<readonly DshStoredMessage[]>;
   putAttachment?(attachment: DshStoredAttachment): Promise<void>;
   getAttachment?(sessionId: string, ref: string): Promise<DshStoredAttachment | undefined>;
+  getKv?(namespace: string, key: string): Promise<string | undefined>;
+  putKv?(namespace: string, key: string, valueJson: string): Promise<void>;
+  listKv?(namespace: string): Promise<readonly { readonly key: string; readonly valueJson: string }[]>;
 }
 
 /** Runtime helper object passed to FastAgent tools (`defineTool`). */
@@ -226,11 +229,15 @@ export interface DshHarnessOptions {
   readonly sandbox?: DshSandboxMode;
   /** Allow outbound network inside sandboxed shell commands. Default: `false`. */
   readonly sandboxNetwork?: boolean;
+  /** What becomes of unsettled messages from an earlier process on startup. Default: `"resume"`. */
+  readonly unfinished?: "resume" | "refuse";
   /** Event log + ledger storage backend. Defaults to in-memory storage when omitted. */
   readonly storage?: DshEventStoreBackend;
 }
 
 /** Agent opened on the DSH harness: pure Agent API plus lifecycle teardown. */
 export interface DshAgent extends Agent {
+  /** Whether any session currently has active or queued work in flight. */
+  busy(): boolean;
   close(): Promise<void>;
 }

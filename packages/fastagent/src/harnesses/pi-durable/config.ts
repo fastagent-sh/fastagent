@@ -3,7 +3,16 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../../mcp/config.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type CodingToolsConfig } from "./define.ts";
+import {
+  CODING_TOOL_NAMES,
+  HARNESS_NAMES,
+  SANDBOX_MODES,
+  type AgentConfig,
+  type CodingToolName,
+  type CodingToolsConfig,
+  type HarnessName,
+  type SandboxMode,
+} from "./define.ts";
 import type { AgentDefinition } from "./definition.ts";
 
 const THINKING_LEVELS = [
@@ -18,8 +27,56 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = ["model", "thinkingLevel", "codingTools", "wakeTools", "starters", "providers", "mcpServers"];
+const KEYS = [
+  "model",
+  "thinkingLevel",
+  "harness",
+  "sandbox",
+  "codingTools",
+  "wakeTools",
+  "starters",
+  "providers",
+  "mcpServers",
+];
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
+const HARNESS_SET = new Set<string>(HARNESS_NAMES);
+const SANDBOX_SET = new Set<string>(SANDBOX_MODES);
+
+export const HARNESS_ENV = "FASTAGENT_HARNESS";
+export const SANDBOX_ENV = "FASTAGENT_SANDBOX";
+
+export interface HarnessSelection {
+  readonly harness: HarnessName;
+  readonly sandbox?: SandboxMode;
+}
+
+/**
+ * Resolve the effective harness and sandbox posture with precedence:
+ * explicit override (CLI flag / openAgent option) > environment (`FASTAGENT_HARNESS` / `FASTAGENT_SANDBOX`) >
+ * `fastagent.config.ts` > defaults (`"pi-durable"`, and `"workspace"` when `"dsh"`).
+ */
+export function resolveHarnessSelection(
+  config: Pick<AgentConfig, "harness" | "sandbox">,
+  overrides: { readonly harness?: string; readonly sandbox?: string } = {},
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): HarnessSelection {
+  const rawHarness = overrides.harness ?? (env[HARNESS_ENV] || config.harness) ?? "pi-durable";
+  if (!HARNESS_SET.has(rawHarness)) {
+    throw new Error(`unknown harness ${JSON.stringify(rawHarness)} (allowed: ${HARNESS_NAMES.join(", ")})`);
+  }
+  const harness = rawHarness as HarnessName;
+  const rawSandbox = overrides.sandbox ?? (env[SANDBOX_ENV] || config.sandbox);
+  if (rawSandbox !== undefined && !SANDBOX_SET.has(rawSandbox)) {
+    throw new Error(`unknown sandbox mode ${JSON.stringify(rawSandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
+  }
+  if (harness === "pi-durable") {
+    if (rawSandbox !== undefined) {
+      throw new Error(`sandbox (${JSON.stringify(rawSandbox)}) requires harness: "dsh"`);
+    }
+    return { harness };
+  }
+  return { harness, sandbox: (rawSandbox as SandboxMode | undefined) ?? "workspace" };
+}
 
 /** Resolve `codingTools` from config into the concrete list of built-in coding tools to install. */
 export function resolveCodingTools(setting: CodingToolsConfig | undefined): readonly CodingToolName[] {
@@ -75,7 +132,8 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, codingTools, wakeTools, starters, providers, mcpServers } = config as AgentConfig;
+  const { model, thinkingLevel, harness, sandbox, codingTools, wakeTools, starters, providers, mcpServers } =
+    config as AgentConfig;
   const validator = compile(DATA);
   const data = { model, thinkingLevel, starters };
   if (!validator.check(data)) {
@@ -83,6 +141,15 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
       .errors(data)
       .map(({ path, message }) => `${path === "" ? "(the value)" : path} ${message}`);
     throw new Error(`${file}: ${problems.join("; ")}`);
+  }
+  if (harness !== undefined && (typeof harness !== "string" || !HARNESS_SET.has(harness))) {
+    throw new Error(`${file}: unknown harness ${JSON.stringify(harness)} (allowed: ${HARNESS_NAMES.join(", ")})`);
+  }
+  if (sandbox !== undefined && (typeof sandbox !== "string" || !SANDBOX_SET.has(sandbox))) {
+    throw new Error(`${file}: unknown sandbox mode ${JSON.stringify(sandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
+  }
+  if (sandbox !== undefined && (harness ?? "pi-durable") === "pi-durable") {
+    throw new Error(`${file}: "sandbox" requires harness: "dsh"`);
   }
   checkCodingTools(codingTools, file);
   if (wakeTools !== undefined && typeof wakeTools !== "boolean") {

@@ -67,6 +67,8 @@ export {
   type AgentConfig,
   type CodingToolName,
   type CodingToolsConfig,
+  type HarnessName,
+  type SandboxMode,
 } from "./harnesses/pi-durable/define.ts";
 export {
   defineTool,

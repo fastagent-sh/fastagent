@@ -57,6 +57,7 @@ export class MemoryDshEventStore implements DshEventStoreBackend {
   private readonly messages = new Map<string, Map<string, DshStoredMessage>>();
   private readonly messagesByKey = new Map<string, Map<string, string>>();
   private readonly attachments = new Map<string, Map<string, DshStoredAttachment>>();
+  private readonly kv = new Map<string, Map<string, string>>();
 
   async create(
     header: DshSessionHeader,
@@ -187,6 +188,25 @@ export class MemoryDshEventStore implements DshEventStoreBackend {
       ...found,
       data: new Uint8Array(found.data),
     };
+  }
+
+  async getKv(namespace: string, key: string): Promise<string | undefined> {
+    return this.kv.get(namespace)?.get(key);
+  }
+
+  async putKv(namespace: string, key: string, valueJson: string): Promise<void> {
+    let ns = this.kv.get(namespace);
+    if (ns === undefined) {
+      ns = new Map();
+      this.kv.set(namespace, ns);
+    }
+    ns.set(key, valueJson);
+  }
+
+  async listKv(namespace: string): Promise<readonly { readonly key: string; readonly valueJson: string }[]> {
+    const ns = this.kv.get(namespace);
+    if (ns === undefined) return [];
+    return [...ns.entries()].map(([key, valueJson]) => ({ key, valueJson }));
   }
 
   private makeHandle(id: string, access: "read" | "write", record: StoredSession): DshSessionHandle {

@@ -196,6 +196,17 @@ function sharedHandleOf(database: PostgresDatabase): SharedPostgresHandle | unde
   return (database as Partial<SharedPostgresInternal>)[SHARED_DB];
 }
 
+/** Borrow a shared `PgDatabase` pool or open a dedicated one for a caller-managed harness store. */
+export function acquirePgDatabase(database: PostgresDatabase): { readonly db: PgDatabase; readonly owned: boolean } {
+  const shared = sharedHandleOf(database);
+  if (shared !== undefined) {
+    shared.assertOpen();
+    return { db: shared.borrowed, owned: false };
+  }
+  const db = openPgDatabase(database.url, database.password === undefined ? {} : { password: database.password });
+  return { db, owned: true };
+}
+
 /**
  * Open a shared PostgreSQL connection pool for reuse across multiple `openAgent` instances in one process.
  * Accepts any {@link PostgresDatabase}, including `{ url }` or `dsqlDatabase({ endpoint })`.

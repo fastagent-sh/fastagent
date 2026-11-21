@@ -14,6 +14,17 @@ const MODEL: FlagSpec = {
   flags: "--model <provider/modelId>",
   description: "model override (--model > FASTAGENT_MODEL > config)",
 };
+const HARNESS_FLAGS: FlagSpec[] = [
+  {
+    flags: "--harness <name>",
+    description: "runtime harness: pi-durable or dsh (--harness > FASTAGENT_HARNESS > config)",
+  },
+  { flags: "--sandbox <mode>", description: "OS sandbox for harness dsh: workspace, read-only, or off" },
+];
+const harnessOptions = (f: Record<string, unknown>) => ({
+  ...(typeof f.harness === "string" ? { harness: f.harness } : {}),
+  ...(typeof f.sandbox === "string" ? { sandbox: f.sandbox } : {}),
+});
 const JSON_FLAG: FlagSpec = { flags: "--json", description: "machine-readable JSON output" };
 const NO_INPUT: FlagSpec = {
   flags: "--no-input",
@@ -60,17 +71,19 @@ const dev: CommandSpec = {
     PORT,
     BIND,
     MODEL,
+    ...HARNESS_FLAGS,
     { flags: "--no-watch", description: "serve once, no file-watching" },
     NO_INPUT,
     ...INSTANCE_FLAGS,
     ENV_FILE_FLAG,
   ],
-  examples: [{ cmd: "fastagent dev" }],
+  examples: [{ cmd: "fastagent dev" }, { cmd: "fastagent dev --harness dsh", note: "run with DSH + OS sandbox" }],
   run: async (_args, f) =>
     (await import("./commands/dev.ts")).runDev(".", {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
+      ...harnessOptions(f),
       watch: f.watch !== false,
       input: f.input !== false,
       instance: instanceFlags(f),
@@ -83,12 +96,13 @@ const info: CommandSpec = {
   description:
     "Inspect model, tools, extensions, schedules, commands and secrets read-only, from the directory: never the " +
     "instance's storage, so it answers beside a running serve.",
-  flags: [JSON_FLAG, MODEL, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+  flags: [JSON_FLAG, MODEL, ...HARNESS_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
   run: async (_args, f) =>
     (await import("./commands/info.ts")).runInfo(".", {
       json: f.json === true,
       model: f.model as string | undefined,
+      ...harnessOptions(f),
       instance: instanceFlags(f),
     }),
 };
@@ -115,6 +129,7 @@ const invoke: CommandSpec = {
   args: [{ name: "[message]", description: "the message to send (omit or pass '-' to read from stdin)" }],
   flags: [
     MODEL,
+    ...HARNESS_FLAGS,
     NO_INPUT,
     { flags: "--json", description: "print receipt and message events as JSON lines" },
     { flags: "--session <id>", description: "continue an existing session" },
@@ -131,6 +146,7 @@ const invoke: CommandSpec = {
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string | undefined, ".", {
       model: f.model as string | undefined,
+      ...harnessOptions(f),
       input: f.input !== false,
       json: f.json === true,
       ...(typeof f.session === "string" ? { session: f.session } : {}),
@@ -165,13 +181,14 @@ const start: CommandSpec = {
   name: "start",
   summary: "serve the built dist/ in production posture (no watching)",
   description: "Serve the compiled dist/ build; refuses a missing or stale build (`fastagent build`).",
-  flags: [PORT, BIND, MODEL, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+  flags: [PORT, BIND, MODEL, ...HARNESS_FLAGS, NO_INPUT, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent start", note: "after fastagent build" }],
   run: async (_args, f) =>
     (await import("./commands/start.ts")).runStart(".", {
       port: f.port as string | undefined,
       bind: f.bind as string | undefined,
       model: f.model as string | undefined,
+      ...harnessOptions(f),
       input: f.input !== false,
       instance: instanceFlags(f),
     }),
@@ -251,7 +268,7 @@ const schedules: CommandSpec = {
       name: "run",
       summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
       args: [{ name: "<name>", description: "schedule name" }],
-      flags: [JSON_FLAG, MODEL, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
+      flags: [JSON_FLAG, MODEL, ...HARNESS_FLAGS, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
       examples: [
         { cmd: "fastagent schedules run daily-digest" },
         { cmd: "fastagent schedules run daily-digest --json", note: "Message JSON on stdout" },
@@ -261,6 +278,7 @@ const schedules: CommandSpec = {
         (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, ".", {
           json: f.json === true,
           model: f.model as string | undefined,
+          ...harnessOptions(f),
           input: f.input !== false,
           ...urlOptions(f),
           instance: instanceFlags(f),

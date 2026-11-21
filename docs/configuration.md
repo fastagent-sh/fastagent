@@ -34,6 +34,8 @@ Every key is optional. An unknown key refuses the start.
 |---|---|---|
 | `model` | none | `provider/modelId` ([model selection](#model-selection)) |
 | `thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `harness` | `"pi-durable"` | Runtime harness: `"pi-durable"` or `"dsh"` (experimental; requires `@fastagent-sh/harness-dsh`) |
+| `sandbox` | `"workspace"` (on `dsh`) | OS sandbox for `harness: "dsh"`: `"workspace"`, `"read-only"`, or `"off"` |
 | `codingTools` | `true` | Built-in coding tools (`read`, `write`, `edit`, `bash`): `true`, `false`, or a subset array such as `["read"]` |
 | `wakeTools` | `false` | Opt in to built-in self-scheduling tools (`wake`, `unwake`) |
 | `starters` | none | Up to 6 example first messages a client may offer |
@@ -41,6 +43,21 @@ Every key is optional. An unknown key refuses the start.
 | `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
 
 The name and description of the agent come from its `package.json`.
+
+## Harness and sandbox selection
+
+```txt
+--harness > FASTAGENT_HARNESS > harness in fastagent.config.ts > "pi-durable"
+--sandbox > FASTAGENT_SANDBOX > sandbox in fastagent.config.ts > "workspace" (on "dsh")
+```
+
+Pass `--harness dsh` (and optionally `--sandbox read-only` or `--sandbox off`) to `dev`, `start`, `invoke`,
+`schedules run`, or `info`, or pass `{ harness: "dsh", sandbox: "workspace" }` to `openAgent()`. Both harnesses
+share the instance's `agent.sqlite` (or PostgreSQL database) in separate table namespaces, so switching between
+`pi-durable` and `dsh` preserves each harness's own sessions without mutating the other's. Modules in
+`src/extensions/` are `pi-durable`-specific and are skipped with a startup warning when running on `dsh`; portable
+tools in `src/tools/` (`defineTool`), `mcpServers`, `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, and
+`src/schedules/` run on both.
 
 ## Model selection
 
