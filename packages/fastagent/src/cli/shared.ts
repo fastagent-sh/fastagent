@@ -9,7 +9,7 @@ import { definedValues } from "../declared-secrets.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { SignInCancelled } from "../harnesses/models/login.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
-import type { AgentDefinition } from "../harnesses/pi-durable/definition.ts";
+import type { AgentDefinition } from "../definition/definition.ts";
 import {
   buildDefinitionShape,
   definitionProviders,

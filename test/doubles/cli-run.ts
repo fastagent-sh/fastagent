@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
-import { buildProject } from "../../packages/fastagent/src/harnesses/pi-durable/build.ts";
+import { buildProject } from "../../packages/fastagent/src/harnesses/build.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../packages/fastagent/src/paths.ts";
 import { announceOwner, ownerKey } from "../../packages/fastagent/src/cli/owner.ts";
 import { loadSourceDefinition } from "../../packages/fastagent/src/harnesses/pi-durable/open.ts";

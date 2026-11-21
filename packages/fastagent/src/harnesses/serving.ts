@@ -23,13 +23,12 @@ import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
 import { watchInstanceAlarm } from "./pi-durable/alarm.ts";
 import type { Unfinished } from "./pi-durable/agent.ts";
-import { type HarnessSelection, resolveHarnessSelection } from "./pi-durable/config.ts";
-import { type DurableCredentialStore, overlayCredentialStore } from "./pi-durable/credentials.ts";
-import type { AgentConfig, HarnessName, SandboxMode } from "./pi-durable/define.ts";
-import { type AgentDefinition, assertDefinition } from "./pi-durable/definition.ts";
+import { type HarnessSelection, resolveHarnessSelection } from "./config.ts";
+import { type DurableCredentialStore, overlayCredentialStore } from "./models/credentials.ts";
+import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
+import { type AgentDefinition, assertDefinition } from "../definition/definition.ts";
 import { type BuiltDefinition, buildDefinition } from "./pi-durable/open.ts";
-import { describeDatabase } from "./pi-durable/postgres/database.ts";
-import type { PostgresDatabase } from "./pi-durable/postgres/storage.ts";
+import { type PostgresDatabase, describeDatabase } from "../postgres.ts";
 import { openPiDurableRuntime, withPiDurableInstanceClock } from "./pi-durable/runtime.ts";
 import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
 

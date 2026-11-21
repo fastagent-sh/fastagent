@@ -5,7 +5,7 @@
  */
 import pg from "pg";
 import { parseIntoClientConfig } from "pg-connection-string";
-import { log } from "../../../log.ts";
+import { log } from "./log.ts";
 
 export interface PgExecutor {
   query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
@@ -124,4 +124,135 @@ export function describeDatabase(connectionString: string): string {
   } catch {
     return "(an unparsable database URL)";
   }
+}
+
+/**
+ * How an index is made: by default its statement as written. A database that builds one as a job (Aurora DSQL's
+ * `ASYNC`) starts it and answers how to wait for it.
+ */
+export type CreateIndex = (db: PgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
+
+/**
+ * Per-transaction caps a managed PostgreSQL database imposes (such as Aurora DSQL's 3,000 rows and 10 MiB per
+ * transaction). Unset means no cap.
+ */
+export interface PostgresLimits {
+  rowsPerTransaction?: number;
+  bytesPerTransaction?: number;
+  bytesPerValue?: number;
+}
+
+/**
+ * The longest message an agent takes into a storage of `limits`: a message is written once, in one batch, and four
+ * fifths of a transaction leave the rest of its batch room. Unset with no transaction cap.
+ */
+export function messageBytesFor(limits: PostgresLimits | undefined): number | undefined {
+  const bytes = limits?.bytesPerTransaction;
+  return bytes === undefined ? undefined : Math.floor(bytes * 0.8);
+}
+
+/** How the database is reached and what it allows, past its URL: what a platform's own database needs. */
+export interface PostgresOptions {
+  /** The password of each new connection, when the URL has none that lasts (a signed token). */
+  password?: () => Promise<string>;
+  limits?: PostgresLimits;
+  createIndex?: CreateIndex;
+}
+
+/** A PostgreSQL database an instance's storage is in: its URL (`postgres://…`), and how it is reached. */
+export interface PostgresDatabase extends PostgresOptions {
+  url: string;
+}
+
+const SHARED_DB = Symbol("fastagent.sharedPostgres");
+
+export interface SharedPostgresHandle {
+  readonly borrowed: PgDatabase;
+  isClosed(): boolean;
+  assertOpen(): void;
+  ensureMigrated(key: string, run: (db: PgDatabase) => Promise<void>): Promise<void>;
+}
+
+/**
+ * A shared PostgreSQL connection pool handle reusable across multiple `openAgent` instances in one process:
+ * schema migration runs once (single-flight), and each `agent.close()` releases only that instance's lease without
+ * closing the underlying pool. Call `close()` once on host shutdown.
+ */
+export interface SharedPostgresDatabase extends PostgresDatabase {
+  close(): Promise<void>;
+}
+
+type SharedPostgresInternal = SharedPostgresDatabase & { readonly [SHARED_DB]: SharedPostgresHandle };
+
+export function sharedHandleOf(database: PostgresDatabase): SharedPostgresHandle | undefined {
+  return (database as Partial<SharedPostgresInternal>)[SHARED_DB];
+}
+
+/** Borrow a shared `PgDatabase` pool or open a dedicated one for a caller-managed harness store. */
+export function acquirePgDatabase(database: PostgresDatabase): { readonly db: PgDatabase; readonly owned: boolean } {
+  const shared = sharedHandleOf(database);
+  if (shared !== undefined) {
+    shared.assertOpen();
+    return { db: shared.borrowed, owned: false };
+  }
+  const db = openPgDatabase(database.url, database.password === undefined ? {} : { password: database.password });
+  return { db, owned: true };
+}
+
+/**
+ * Open a shared PostgreSQL connection pool for reuse across multiple `openAgent` instances in one process.
+ * Accepts any {@link PostgresDatabase}, including `{ url }` or `dsqlDatabase({ endpoint })`.
+ */
+export function openPostgresDatabase(
+  database: PostgresDatabase,
+  options: PostgresPoolOptions = {},
+): SharedPostgresDatabase {
+  const { url, password, limits, createIndex } = database;
+  const db = openPgDatabase(url, {
+    ...options,
+    ...(password === undefined ? {} : { password }),
+  });
+  let closed = false;
+  let closing: Promise<void> | undefined;
+  const migrations = new Map<string, Promise<void>>();
+
+  const assertOpen = () => {
+    if (closed) throw new Error(`the shared database ${describeDatabase(url)} is closed`);
+  };
+  const borrowed: PgDatabase = {
+    query: (text, params) => db.query(text, params),
+    transaction: (work) => db.transaction(work),
+    close: async () => {},
+  };
+  const handle: SharedPostgresHandle = {
+    borrowed,
+    isClosed: () => closed,
+    assertOpen,
+    ensureMigrated(key, run) {
+      assertOpen();
+      let pending = migrations.get(key);
+      if (pending === undefined) {
+        pending = run(db).catch((error) => {
+          migrations.delete(key);
+          throw error;
+        });
+        migrations.set(key, pending);
+      }
+      return pending;
+    },
+  };
+
+  const shared: SharedPostgresInternal = {
+    [SHARED_DB]: handle,
+    url,
+    ...(password === undefined ? {} : { password }),
+    ...(limits === undefined ? {} : { limits }),
+    ...(createIndex === undefined ? {} : { createIndex }),
+    close() {
+      closed = true;
+      closing ??= db.close();
+      return closing;
+    },
+  };
+  return shared;
 }

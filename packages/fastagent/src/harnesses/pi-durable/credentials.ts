@@ -4,8 +4,9 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
-import type { Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import type { Credential, CredentialInfo } from "@earendil-works/pi-ai";
 import { type JsonObject, type Session, defineDoc } from "@earendil-works/pi-durable";
+import type { DurableCredentialStore } from "../models/credentials.ts";
 
 const whole = () => true;
 
@@ -26,11 +27,6 @@ const DeviceIdDoc = defineDoc<{ deviceId: string }>({
 });
 
 export type CredentialSession = Pick<Session, "commit" | "snapshot">;
-
-export interface DurableCredentialStore extends CredentialStore {
-  /** Stable installation identity for OAuth providers that require one, persisted in instance storage. */
-  getOrCreateDeviceId(): Promise<string>;
-}
 
 function validCredential(value: unknown): Credential | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -109,48 +105,6 @@ export function durableCredentialStore(session: CredentialSession, context: Cont
         doc.deviceId = generated;
         return generated;
       }, context);
-    },
-  };
-}
-
-/**
- * Layer a late-bound primary `CredentialStore` (instance durable storage) over an optional fallback store (local file
- * layers). Reads prefer `primary`; refreshes write back to whichever store holds the credential.
- */
-export function overlayCredentialStore(
-  primary: () => CredentialStore | undefined,
-  fallback?: CredentialStore,
-): CredentialStore {
-  return {
-    async read(providerId) {
-      const found = await primary()?.read(providerId);
-      if (found !== undefined) return found;
-      return fallback?.read(providerId);
-    },
-    async list() {
-      const infos = new Map<string, CredentialInfo>();
-      for (const info of (await fallback?.list()) ?? []) infos.set(info.providerId, info);
-      for (const info of (await primary()?.list()) ?? []) infos.set(info.providerId, info);
-      return [...infos.values()];
-    },
-    async modify(providerId, fn) {
-      const first = primary();
-      if (first !== undefined) {
-        const inPrimary = (await first.read(providerId)) !== undefined;
-        if (inPrimary || fallback === undefined || (await fallback.read(providerId)) === undefined) {
-          return first.modify(providerId, fn);
-        }
-      }
-      if (fallback !== undefined) return fallback.modify(providerId, fn);
-      return fn(undefined);
-    },
-    async delete(providerId) {
-      const first = primary();
-      if (first !== undefined && (await first.read(providerId)) !== undefined) {
-        await first.delete(providerId);
-        return;
-      }
-      await fallback?.delete(providerId);
     },
   };
 }

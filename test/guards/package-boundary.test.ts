@@ -153,13 +153,31 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     expect(scheduleImports).toEqual([]);
   });
 
-  it("harnesses/pi-durable/ never imports harnesses/dsh/ (orchestration lives in harnesses/serving.ts)", () => {
+  it("harnesses/pi-durable/ and harnesses/dsh/ never import each other (shared orchestration lives in harnesses/)", () => {
     const piDir = resolve(srcOf("fastagent"), "harnesses/pi-durable");
     const dshDir = resolve(srcOf("fastagent"), "harnesses/dsh");
-    const offenders = filesUnder(piDir).flatMap((file) =>
+    const piToDsh = filesUnder(piDir).flatMap((file) =>
       importsOf(file)
         .relatives.filter((target) => target.startsWith(`${dshDir}/`))
         .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
+    );
+    const dshToPi = filesUnder(dshDir).flatMap((file) =>
+      importsOf(file)
+        .relatives.filter((target) => target.startsWith(`${piDir}/`))
+        .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
+    );
+    expect([...piToDsh, ...dshToPi]).toEqual([]);
+  });
+
+  it("definition/ and postgres.ts stay harness-neutral (zero @earendil-works/* runtime imports)", () => {
+    const neutralEntries = [
+      resolve(srcOf("fastagent"), "postgres.ts"),
+      ...filesUnder(resolve(srcOf("fastagent"), "definition")),
+    ];
+    const offenders = neutralEntries.flatMap((entry) =>
+      [...staticPackageGraph(entry)]
+        .filter((spec) => spec.startsWith("@earendil-works/"))
+        .map((spec) => `${relative(repo, entry)} → ${spec}`),
     );
     expect(offenders).toEqual([]);
   });

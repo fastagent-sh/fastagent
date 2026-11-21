@@ -14,7 +14,7 @@ import {
 } from "@fastagent-sh/harness-dsh";
 import { buildDshSandboxPolicy, resolveConfinedPath } from "../../../packages/harness-dsh/src/sandbox.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
-import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";

@@ -17,7 +17,7 @@ import type {
   Seq,
   StorageWrite,
 } from "@earendil-works/pi-durable";
-import type { PgExecutor } from "./database.ts";
+import type { PgExecutor } from "../../../postgres.ts";
 import { type ValueKind, readTexts, splitText } from "./values.ts";
 
 type Cell = string | number | null;

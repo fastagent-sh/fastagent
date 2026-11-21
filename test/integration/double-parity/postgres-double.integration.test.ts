@@ -8,7 +8,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
   PostgresStorage,

@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { afterAll, expect, it } from "vitest";
-import * as real from "../../../packages/fastagent/src/harnesses/pi-durable/tsc.ts";
+import * as real from "../../../packages/fastagent/src/definition/tsc.ts";
 import { FILES, listing, made, project } from "../../fixtures/build-fixtures.ts";
 import * as double from "../../doubles/tsc-double.ts";
 

@@ -7,7 +7,7 @@ const ROOT = import.meta.dirname;
 
 export const made: string[] = [];
 
-const DEFINE = "../../../../../packages/fastagent/src/harnesses/pi-durable/define.ts";
+const DEFINE = "../../../../../packages/fastagent/src/harnesses/define.ts";
 const NEEDS = "../../../../../packages/fastagent/src/needs.ts";
 const IDS = "../../../../../packages/fastagent/src/harnesses/pi-durable/ids.ts";
 

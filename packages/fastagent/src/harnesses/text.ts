@@ -8,9 +8,14 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
 import { parse as parseYaml } from "yaml";
-import { log } from "../../log.ts";
-import type { RunsAs } from "../../serving-command.ts";
-import type { AgentCommand } from "./agent.ts";
+import { log } from "../log.ts";
+import type { RunsAs } from "../serving-command.ts";
+/** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */
+export interface AgentCommand {
+  name: string;
+  description?: string;
+  expand(args: string): string;
+}
 import { CODING_TOOL_NAMES, type CodingToolName } from "./define.ts";
 
 interface Skill {

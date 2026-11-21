@@ -22,10 +22,7 @@ import { obj, str } from "@earendil-works/pi-schema";
 import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/pi-durable/tool.ts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
-import {
-  DEFINITION_FORMAT,
-  defineDefinition,
-} from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
+import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
 import {
   type AssembleAgentOptions,
   buildDefinition,

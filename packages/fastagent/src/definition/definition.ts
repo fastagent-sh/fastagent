@@ -2,11 +2,11 @@
  * A definition as a value: what `dev` loads from a source project and what a built package
  * will export, one frozen shape every opener assembles from. Its declared inputs are read once, when it is made.
  */
-import type { DeclaredSecret } from "../../declared-secrets.ts";
-import { declareMcp, mcpSecrets } from "../../mcp/config.ts";
-import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
-import { isNeeds } from "../../needs.ts";
-import type { AgentConfig } from "./define.ts";
+import type { DeclaredSecret } from "../declared-secrets.ts";
+import { declareMcp, mcpSecrets } from "../mcp/config.ts";
+import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../paths.ts";
+import { isNeeds } from "../needs.ts";
+import type { AgentConfig } from "../harnesses/define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 
 /** What an opener of this FastAgent reads; a definition made for another refuses. */

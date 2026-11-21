@@ -11,13 +11,13 @@ import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { ClockStore } from "../../schedule/clock.ts";
 import type { HarnessOpenContext, InstancePlace, OpenedHarnessRuntime, ServingStorage } from "../serving.ts";
-import type { PostgresDatabase } from "./postgres/storage.ts";
+import { type PostgresDatabase, messageBytesFor } from "../../postgres.ts";
 import type { DurableAgent } from "./agent.ts";
 import { clockStore } from "./clock.ts";
 import { durableCredentialStore } from "./credentials.ts";
-import { mcpTools } from "./mcp.ts";
+import { mcpTools } from "../mcp.ts";
 import { assembleAgent } from "./open.ts";
-import { messageBytesFor, openPostgresStorage } from "./postgres/storage.ts";
+import { openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
 
 const INSTANCE_HOLDERS =
