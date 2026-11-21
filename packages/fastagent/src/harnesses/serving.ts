@@ -17,7 +17,7 @@ import type { ClockStore } from "../schedule/clock.ts";
 import { type ClockRunner, createClockRunner } from "../schedule/runner.ts";
 import { type Service, serveAgent } from "../service.ts";
 import { NOT_HOSTED, type RunsAs } from "../serving-command.ts";
-import { openDshRuntime, withDshInstanceClock } from "./dsh/runtime.ts";
+import { loadDshModule, openDshRuntime, withDshInstanceClock } from "./dsh/runtime.ts";
 import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts";
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
 import { watchInstanceAlarm } from "./pi-durable/alarm.ts";
@@ -218,6 +218,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     },
     options.ownEnv,
   );
+  const dshModule = selection.harness === "dsh" ? await loadDshModule() : undefined;
   const name = instanceName(definition.name, options.name);
   const mcpServers = declareMcp(config.mcpServers, dir);
   const secrets = definedValues(options.secrets);
@@ -287,7 +288,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     closeAuth: () => auth?.close(),
   };
 
-  const openedRuntime = selection.harness === "dsh" ? await openDshRuntime(ctx) : await openPiDurableRuntime(ctx);
+  const openedRuntime =
+    dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
   if (openedRuntime.durableCreds !== undefined) {
     durableCreds = openedRuntime.durableCreds;
   }

@@ -31,7 +31,7 @@ interface DshKvBackend {
   close?(): Promise<void>;
 }
 
-interface DshModule {
+export interface DshModule {
   MemoryDshEventStore: new () => DshKvBackend;
   openSqliteDshStore(
     filePath: string,
@@ -73,7 +73,7 @@ interface DshModule {
   }): Promise<Agent & { busy(): boolean; close(): Promise<void> }>;
 }
 
-async function loadDshModule(): Promise<DshModule> {
+export async function loadDshModule(): Promise<DshModule> {
   try {
     return (await import(DSH_PACKAGE_NAME)) as unknown as DshModule;
   } catch (error) {
@@ -282,8 +282,8 @@ function renderSystemPrompt(
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
-export async function openDshRuntime(ctx: HarnessOpenContext): Promise<OpenedHarnessRuntime> {
-  const dsh = await loadDshModule();
+export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshModule): Promise<OpenedHarnessRuntime> {
+  const dsh = preloaded ?? (await loadDshModule());
   const {
     definition,
     options,
@@ -294,6 +294,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext): Promise<OpenedHar
     chosen,
     place,
     database,
+    storageDescription,
     processEnv,
     code,
     models,
@@ -317,6 +318,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext): Promise<OpenedHar
     const opened = await openInstanceDshStore(dsh, place, database);
     store = opened.store;
     ownedPgClose = opened.ownedPgClose;
+    if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
   }
 
   const durableCreds = chosen === "instance" ? dshCredentialStore(store) : undefined;
