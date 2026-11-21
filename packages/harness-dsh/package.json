@@ -40,7 +40,8 @@
   ],
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "tsc -p tsconfig.build.json"
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
     "@fastagent-sh/client": "0.32.0"

@@ -21,13 +21,17 @@ export function toDshToolDefinition(tool: FastAgentToolLike): DshToolDefinition 
   if (!tool.name || typeof tool.name !== "string") {
     throw new Error("DSH tool bridge requires a non-empty tool name");
   }
-  if (typeof tool.parameters !== "object" || tool.parameters === null || Array.isArray(tool.parameters)) {
-    throw new Error(`DSH tool "${tool.name}" requires an object JSON Schema for parameters`);
-  }
-  if ("~standard" in tool.parameters) {
+  if (
+    tool.parameters !== null &&
+    (typeof tool.parameters === "object" || typeof tool.parameters === "function") &&
+    "~standard" in tool.parameters
+  ) {
     throw new Error(
       `DSH tool "${tool.name}" received an unconverted Standard Schema; wrap it with defineTool from "@fastagent-sh/fastagent"`,
     );
+  }
+  if (typeof tool.parameters !== "object" || tool.parameters === null || Array.isArray(tool.parameters)) {
+    throw new Error(`DSH tool "${tool.name}" requires an object JSON Schema for parameters`);
   }
   return {
     name: tool.name,

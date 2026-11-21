@@ -106,6 +106,9 @@ export class MemoryDshEventStore implements DshEventStoreBackend {
         if (!Number.isInteger(offset) || offset < 0) {
           throw new Error(`DSH read offset must be a non-negative integer, got ${String(offset)}`);
         }
+        if (length !== undefined && (!Number.isInteger(length) || length < 0)) {
+          throw new Error(`DSH read length must be a non-negative integer, got ${String(length)}`);
+        }
         const slice = length === undefined ? record.events.slice(offset) : record.events.slice(offset, offset + length);
         return { events: clone(slice), eventState: "detached" as const };
       },
