@@ -5,8 +5,8 @@
  * when confinement is requested and unavailable.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import {
   type RunnerFailureRule,
   type SandboxProvider,
@@ -19,6 +19,8 @@ import type { DshCodingToolName, DshSandboxMode, FastAgentToolApi, FastAgentTool
 
 const ALL_CODING_TOOLS: readonly DshCodingToolName[] = ["read", "write", "edit", "bash"];
 const CODING_TOOL_SET: ReadonlySet<string> = new Set(ALL_CODING_TOOLS);
+const MAX_READ_BYTES = 1024 * 1024;
+const MAX_BASH_OUTPUT_BYTES = 256 * 1024;
 
 export function resolveEnabledCodingTools(
   config: boolean | readonly DshCodingToolName[] | undefined,
@@ -46,6 +48,23 @@ export interface CodingToolsContext {
   readonly workdir: string;
   readonly sandbox: DshSandboxMode;
   readonly getSandboxProvider: () => SandboxProvider | undefined;
+  /** Canonical paths inside workdir that `write` and `edit` must never modify (e.g. `.fastagent`). */
+  readonly protectedPaths?: readonly string[];
+}
+
+function isProtectedPath(resolvedPath: string, protectedPaths: readonly string[] | undefined): boolean {
+  if (protectedPaths === undefined || protectedPaths.length === 0) return false;
+  for (const rawProtected of protectedPaths) {
+    let canonical = resolve(rawProtected);
+    try {
+      canonical = realpathSync(rawProtected);
+    } catch {
+      // Directory may not exist yet; fall back to normalized absolute path.
+    }
+    const rel = relative(canonical, resolvedPath);
+    if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return true;
+  }
+  return false;
 }
 
 function makeReadTool(workdir: string): FastAgentToolLike {
@@ -64,6 +83,16 @@ function makeReadTool(workdir: string): FastAgentToolLike {
     execute: (async (args: { path: string; offset?: number; limit?: number }) => {
       try {
         const resolved = resolveConfinedPath(workdir, args.path);
+        const stat = statSync(resolved);
+        if (stat.isDirectory()) {
+          return { isError: true, output: [{ type: "text", text: `Cannot read directory: ${args.path}` }] };
+        }
+        if (stat.size > MAX_READ_BYTES) {
+          return {
+            isError: true,
+            output: [{ type: "text", text: `File exceeds ${MAX_READ_BYTES} byte read limit: ${args.path}` }],
+          };
+        }
         const content = readFileSync(resolved, "utf8");
         const lines = content.split(/\r?\n/);
         const start = args.offset !== undefined && args.offset > 1 ? args.offset - 1 : 0;
@@ -79,7 +108,11 @@ function makeReadTool(workdir: string): FastAgentToolLike {
   };
 }
 
-function makeWriteTool(workdir: string, sandbox: DshSandboxMode): FastAgentToolLike {
+function makeWriteTool(
+  workdir: string,
+  sandbox: DshSandboxMode,
+  protectedPaths?: readonly string[],
+): FastAgentToolLike {
   return {
     name: "write",
     description: "Create or overwrite a UTF-8 text file inside the workspace.",
@@ -100,6 +133,12 @@ function makeWriteTool(workdir: string, sandbox: DshSandboxMode): FastAgentToolL
       }
       try {
         const resolved = resolveConfinedPath(workdir, args.path);
+        if (isProtectedPath(resolved, protectedPaths)) {
+          return {
+            isError: true,
+            output: [{ type: "text", text: `Write denied: path is protected (${args.path})` }],
+          };
+        }
         mkdirSync(dirname(resolved), { recursive: true });
         writeFileSync(resolved, args.content, "utf8");
         return { output: [{ type: "text", text: `Wrote ${args.path}` }] };
@@ -113,7 +152,7 @@ function makeWriteTool(workdir: string, sandbox: DshSandboxMode): FastAgentToolL
   };
 }
 
-function makeEditTool(workdir: string, sandbox: DshSandboxMode): FastAgentToolLike {
+function makeEditTool(workdir: string, sandbox: DshSandboxMode, protectedPaths?: readonly string[]): FastAgentToolLike {
   return {
     name: "edit",
     description: "Replace an exact unique substring in a file inside the workspace.",
@@ -135,6 +174,12 @@ function makeEditTool(workdir: string, sandbox: DshSandboxMode): FastAgentToolLi
       }
       try {
         const resolved = resolveConfinedPath(workdir, args.path);
+        if (isProtectedPath(resolved, protectedPaths)) {
+          return {
+            isError: true,
+            output: [{ type: "text", text: `Edit denied: path is protected (${args.path})` }],
+          };
+        }
         const current = readFileSync(resolved, "utf8");
         const first = current.indexOf(args.oldText);
         if (first === -1) {
@@ -176,6 +221,16 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
       api: FastAgentToolApi,
       execCtx: { abortSignal?: AbortSignal; sessionId?: string },
     ) => {
+      if (typeof args.command !== "string" || args.command.trim().length === 0) {
+        return { isError: true, output: [{ type: "text", text: "Command must be a non-empty string" }] };
+      }
+      const timeoutMs = args.timeoutMs ?? 30_000;
+      if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+        return { isError: true, output: [{ type: "text", text: `Invalid timeoutMs: ${String(args.timeoutMs)}` }] };
+      }
+      if (execCtx.abortSignal?.aborted) {
+        return { isError: true, output: [{ type: "text", text: "Command aborted before execution" }] };
+      }
       const rawArgv = ["/bin/sh", "-c", args.command];
       const runtimePolicy = toRuntimeSandboxPolicy({
         workdir: ctx.workdir,
@@ -213,17 +268,49 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
         return { isError: true, output: [{ type: "text", text: "Empty command argv" }] };
       }
 
-      const timeoutMs = args.timeoutMs ?? 30_000;
-      return new Promise((resolve) => {
+      if (execCtx.abortSignal?.aborted) {
+        return { isError: true, output: [{ type: "text", text: "Command aborted before execution" }] };
+      }
+      return new Promise((resolvePromise) => {
+        const detached = process.platform !== "win32";
         const child = spawn(bin, binArgs, {
           cwd: ctx.workdir,
           stdio: ["ignore", "pipe", "pipe"],
+          detached,
         });
         let stdout = "";
         let stderr = "";
+        let totalBytes = 0;
+        let truncated = false;
         let timedOut = false;
 
+        const appendCapped = (current: string, text: string): string => {
+          const bytes = Buffer.byteLength(text, "utf8");
+          if (totalBytes + bytes <= MAX_BASH_OUTPUT_BYTES) {
+            totalBytes += bytes;
+            api.output?.(text);
+            return current + text;
+          }
+          if (!truncated) {
+            truncated = true;
+            const remaining = Math.max(0, MAX_BASH_OUTPUT_BYTES - totalBytes);
+            const partial = remaining > 0 ? Buffer.from(text, "utf8").subarray(0, remaining).toString("utf8") : "";
+            totalBytes = MAX_BASH_OUTPUT_BYTES;
+            if (partial) api.output?.(partial);
+            return `${current}${partial}\n[output truncated at ${MAX_BASH_OUTPUT_BYTES} bytes]`;
+          }
+          return current;
+        };
+
         const killChild = () => {
+          if (detached && child.pid !== undefined) {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+              return;
+            } catch {
+              // Fall back to direct child kill if process group already exited.
+            }
+          }
           try {
             child.kill("SIGKILL");
           } catch {
@@ -239,19 +326,15 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
         }, timeoutMs);
 
         child.stdout.on("data", (chunk: Buffer) => {
-          const text = chunk.toString("utf8");
-          stdout += text;
-          api.output?.(text);
+          stdout = appendCapped(stdout, chunk.toString("utf8"));
         });
         child.stderr.on("data", (chunk: Buffer) => {
-          const text = chunk.toString("utf8");
-          stderr += text;
-          api.output?.(text);
+          stderr = appendCapped(stderr, chunk.toString("utf8"));
         });
         child.on("error", (error) => {
           clearTimeout(timer);
           execCtx.abortSignal?.removeEventListener("abort", onAbort);
-          resolve({
+          resolvePromise({
             isError: true,
             output: [{ type: "text", text: error.message }],
           });
@@ -263,14 +346,14 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
             .filter((part) => part.length > 0)
             .join(stdout.endsWith("\n") || !stdout ? "" : "\n");
           if (timedOut) {
-            resolve({
+            resolvePromise({
               isError: true,
               output: [{ type: "text", text: `Command timed out after ${timeoutMs}ms\n${combined}`.trim() }],
             });
             return;
           }
           if (code === 0) {
-            resolve({
+            resolvePromise({
               output: [{ type: "text", text: combined }],
             });
             return;
@@ -285,7 +368,7 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
               : sandboxDenied
                 ? "Sandbox denied file operation: "
                 : `Command exited with ${code !== null ? `code ${code}` : `signal ${String(signal)}`}: `;
-          resolve({
+          resolvePromise({
             isError: true,
             output: [{ type: "text", text: `${prefix}${combined}`.trim() }],
           });
@@ -302,8 +385,8 @@ export function buildCodingTools(enabled: readonly DshCodingToolName[], ctx: Cod
   const tools: FastAgentToolLike[] = [];
   for (const name of enabled) {
     if (name === "read") tools.push(makeReadTool(ctx.workdir));
-    else if (name === "write") tools.push(makeWriteTool(ctx.workdir, ctx.sandbox));
-    else if (name === "edit") tools.push(makeEditTool(ctx.workdir, ctx.sandbox));
+    else if (name === "write") tools.push(makeWriteTool(ctx.workdir, ctx.sandbox, ctx.protectedPaths));
+    else if (name === "edit") tools.push(makeEditTool(ctx.workdir, ctx.sandbox, ctx.protectedPaths));
     else if (name === "bash") tools.push(makeBashTool(ctx));
   }
   return tools;

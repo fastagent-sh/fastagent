@@ -81,65 +81,59 @@ export function resolveConfinedPath(workdir: string, targetPath: string): string
   if (!isAbsolute(workdir)) {
     throw new Error(`DSH workdir must be an absolute path, got ${JSON.stringify(workdir)}`);
   }
-  if (!targetPath || typeof targetPath !== "string") {
-    throw new Error("Path must be a non-empty string");
+  if (!targetPath || typeof targetPath !== "string" || targetPath.includes("\0")) {
+    throw new Error("Path must be a non-empty string without NUL bytes");
   }
   const canonicalRoot = safeRealpath(workdir);
   const candidate = isAbsolute(targetPath) ? resolve(targetPath) : resolve(canonicalRoot, targetPath);
 
-  // If the target itself exists (including a dangling symlink via lstat), resolve its real target.
-  try {
-    const stat = lstatSync(candidate);
+  const resolveExisting = (entryPath: string): string | undefined => {
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(entryPath);
+    } catch {
+      return undefined;
+    }
     if (stat.isSymbolicLink()) {
-      // Try realpath first; if it's a dangling symlink, reject outright to prevent escape on write.
       let resolvedLink: string;
       try {
-        resolvedLink = realpathSync(candidate);
+        resolvedLink = realpathSync(entryPath);
       } catch {
-        throw new Error(`Refusing symlink outside workspace: ${targetPath}`);
+        throw new Error(`Refusing dangling symlink: ${targetPath}`);
       }
       if (!isInsideRoot(canonicalRoot, resolvedLink)) {
         throw new Error(`Path escapes workspace: ${targetPath}`);
       }
       return resolvedLink;
     }
-    const resolved = realpathSync(candidate);
+    const resolved = realpathSync(entryPath);
     if (!isInsideRoot(canonicalRoot, resolved)) {
       throw new Error(`Path escapes workspace: ${targetPath}`);
     }
     return resolved;
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      (error.message.includes("escapes workspace") || error.message.includes("Refusing symlink"))
-    ) {
-      throw error;
+  };
+
+  const direct = resolveExisting(candidate);
+  if (direct !== undefined) return direct;
+
+  // Target does not exist yet: walk up to the nearest existing ancestor (checking lstat first so
+  // dangling directory symlinks are rejected immediately rather than skipped).
+  const trailingSegments: string[] = [];
+  let current = candidate;
+  for (;;) {
+    const parent = dirname(current);
+    if (parent === current) {
+      throw new Error(`Path escapes workspace: ${targetPath}`);
     }
-    // Target does not exist yet: walk up to the nearest existing ancestor and verify its realpath is inside root.
-    const trailingSegments: string[] = [];
-    let current = candidate;
-    for (;;) {
-      const parent = dirname(current);
-      if (parent === current) {
+    trailingSegments.unshift(relative(parent, current));
+    current = parent;
+    const resolvedAncestor = resolveExisting(current);
+    if (resolvedAncestor !== undefined) {
+      const finalPath = resolve(resolvedAncestor, ...trailingSegments);
+      if (!isInsideRoot(canonicalRoot, finalPath)) {
         throw new Error(`Path escapes workspace: ${targetPath}`);
       }
-      trailingSegments.unshift(relative(parent, current));
-      current = parent;
-      try {
-        const resolvedAncestor = realpathSync(current);
-        if (!isInsideRoot(canonicalRoot, resolvedAncestor)) {
-          throw new Error(`Path escapes workspace: ${targetPath}`);
-        }
-        const finalPath = resolve(resolvedAncestor, ...trailingSegments);
-        if (!isInsideRoot(canonicalRoot, finalPath)) {
-          throw new Error(`Path escapes workspace: ${targetPath}`);
-        }
-        return finalPath;
-      } catch (ancestorError) {
-        if (ancestorError instanceof Error && ancestorError.message.includes("escapes workspace")) {
-          throw ancestorError;
-        }
-      }
+      return finalPath;
     }
   }
 }

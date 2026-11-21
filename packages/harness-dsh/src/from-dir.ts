@@ -150,6 +150,7 @@ export async function openDshAgentFromDir(dir: string, options: DshFromDirOption
       ...(options.thinkingLevel !== undefined ? { thinkingLevel: options.thinkingLevel } : {}),
       ...(options.tools !== undefined ? { tools: options.tools } : {}),
       codingTools: options.codingTools ?? true,
+      protectedPaths: [join(absDir, ".fastagent")],
       sandbox: options.sandbox ?? "workspace",
       ...(commands.length > 0 ? { commands: () => commands } : {}),
       ...(options.retry !== undefined ? { retry: options.retry } : {}),

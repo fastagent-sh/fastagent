@@ -214,6 +214,8 @@ export interface DshHarnessOptions {
   readonly tools?: readonly FastAgentToolLike[];
   /** Built-in sandboxed coding tools (`read`, `write`, `edit`, `bash`). Default: `false`. */
   readonly codingTools?: boolean | readonly DshCodingToolName[];
+  /** Absolute paths inside `workdir` that `write` and `edit` must never modify (e.g. `.fastagent`). */
+  readonly protectedPaths?: readonly string[];
   /** Slash commands offered by `info().commands`. */
   readonly commands?: () => readonly DshCommand[];
   /** Hook invoked when a session is deleted (e.g. to clear external clock wakeups). */

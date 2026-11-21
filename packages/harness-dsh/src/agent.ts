@@ -421,6 +421,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     workdir: options.workdir,
     sandbox: sandboxMode,
     getSandboxProvider: () => ctx.get("sandbox"),
+    ...(options.protectedPaths !== undefined ? { protectedPaths: options.protectedPaths } : {}),
   });
   const toolsList: FastAgentToolLike[] = [...builtInCodingTools, ...userTools];
   for (const tool of toolsList) toolsByName.set(tool.name, tool);

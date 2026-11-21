@@ -224,6 +224,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     symlinkSync(secretFile, join(workspace, "link-file.txt"));
     symlinkSync(outside, join(workspace, "link-dir"));
     symlinkSync(join(outside, "future.txt"), join(workspace, "dangling.txt"));
+    symlinkSync(join(outside, "nonexistent-dir"), join(workspace, "dangling-dir"));
 
     try {
       expect(resolveConfinedPath(workspace, "ok.txt")).toContain("ok.txt");
@@ -232,7 +233,9 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
       expect(() => resolveConfinedPath(workspace, secretFile)).toThrow(/escapes workspace/);
       expect(() => resolveConfinedPath(workspace, "link-file.txt")).toThrow(/escapes workspace/);
       expect(() => resolveConfinedPath(workspace, "link-dir/new.txt")).toThrow(/escapes workspace/);
-      expect(() => resolveConfinedPath(workspace, "dangling.txt")).toThrow(/Refusing symlink/);
+      expect(() => resolveConfinedPath(workspace, "dangling.txt")).toThrow(/Refusing dangling symlink/);
+      expect(() => resolveConfinedPath(workspace, "dangling-dir/nested.txt")).toThrow(/Refusing dangling symlink/);
+      expect(() => resolveConfinedPath(workspace, "ok.txt\0bad")).toThrow(/NUL bytes/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -330,6 +333,12 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
             stopReason: "toolUse",
           });
         }
+        if (seenUser === "clobber-state") {
+          return fauxAssistantMessage(
+            [fauxToolCall("write", { path: ".fastagent/dsh.sqlite", content: "corrupted" })],
+            { stopReason: "toolUse" },
+          );
+        }
         return fauxAssistantMessage(`echo:${seenUser}`);
       });
 
@@ -361,6 +370,8 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
         const escaped = await agent.messages.send({ sessionId: session.id, content: "escape" }, { wait: 10 });
         expect(escaped.answer?.text).toContain("ERR:");
         expect(existsSync(join(root, "escaped.txt"))).toBe(false);
+        const clobber = await agent.messages.send({ sessionId: session.id, content: "clobber-state" }, { wait: 10 });
+        expect(clobber.answer?.text).toContain("path is protected");
         expect(existsSync(join(agentDir, ".fastagent", "dsh.sqlite"))).toBe(true);
       } finally {
         await agent.close();
