@@ -1,14 +1,58 @@
 # @fastagent-sh/harness-dsh (Experimental)
 
-Optional second harness for [FastAgent](https://fastagent.sh) backed by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness).
+Optional second runtime harness for [FastAgent](https://fastagent.sh) backed by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness), adding kernel-enforced OS sandboxing (`sandbox-exec` on macOS, `bwrap` / `Landlock` on Linux, restricted-token ACL on Windows) while implementing the full FastAgent Agent API.
 
-## Status
+## Install
 
-**Experimental Phase 3 runtime (private, not published to npm yet).** Boots Cordis + `AgentLoop`, bridges `@earendil-works/pi-ai` models and FastAgent tools, ships durable SQLite (`node:sqlite`) and PostgreSQL (`dsh_leases` + multi-instance) backends with `SIGKILL` crash recovery, enforces kernel-level OS sandboxing (`@deepseek-ai/dsh-sandbox-local`) for built-in `read`/`write`/`edit`/`bash` coding tools, supports directory loading via `openDshAgentFromDir()`, and passes all 61 conformance tests in `test/harnesses/agent-api-conformance.ts`. See [DESIGN.md](DESIGN.md) for architecture details.
+```bash
+npm install @fastagent-sh/harness-dsh
+```
 
-## Design boundary
+## Use with FastAgent
 
-- Implements the pure `@fastagent-sh/client` `Agent` interface (`info`, `usage`, `sessions`, `messages`) — no shared internal `LoopPort`.
-- Zero dependency on `@earendil-works/pi-durable`; `@fastagent-sh/fastagent` has zero dependency on `@deepseek-ai/*`.
-- Keeps `@deepseek-ai/dsh-*` in optional `peerDependencies` until upstream reaches a stable release.
-- Targets full compliance with `test/harnesses/agent-api-conformance.ts` while bringing native OS sandboxing (`sandbox-exec`, `bwrap` / `Landlock`, Windows ACL) and lightweight SQLite/PostgreSQL `SessionPersistence`.
+Switch in `fastagent.config.ts`:
+
+```ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+
+export default defineAgent({
+  model: "anthropic/claude-sonnet-4-6",
+  harness: "dsh",
+  sandbox: "workspace", // "workspace" (default) | "read-only" | "off"
+  codingTools: true,
+});
+```
+
+Or override per command without editing config:
+
+```bash
+fastagent dev --harness dsh
+fastagent dev --harness dsh --sandbox read-only
+fastagent invoke "summarize this repo" --harness dsh
+fastagent start --harness dsh
+```
+
+Or programmatically with `openAgent()`:
+
+```ts
+import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
+import myAgent from "./dist/index.js";
+
+const agent = await openAgent(myAgent, {
+  root: "/var/lib/myapp/agent",
+  env: baseEnv(process.env),
+  harness: "dsh",
+  sandbox: "workspace",
+});
+```
+
+## Compatibility
+
+- **Full Agent API**: passes all 61 tests in `test/harnesses/agent-api-conformance.ts` (streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, context usage, crash recovery).
+- **Shared storage**: shares the instance's `agent.sqlite` (with kernel-enforced `EXCLUSIVE` locking) or PostgreSQL database (`dsh_*` tables + `dsh_leases` fencing) without colliding with `pi-durable`.
+- **Portable assets**: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), `mcpServers`, and `src/schedules/` work identically on both harnesses.
+- **`src/extensions/`**: `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
+
+## Experimental status
+
+This package pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release. See [DESIGN.md](DESIGN.md) for architecture details.

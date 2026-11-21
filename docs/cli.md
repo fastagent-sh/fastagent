@@ -58,6 +58,8 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
 | `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
+| `--harness <pi-durable\|dsh>` | `dev`, `start`, `invoke`, `schedules`, `info` | Runtime harness override (`--harness` > `FASTAGENT_HARNESS` > config > `pi-durable`). `dsh` requires `@fastagent-sh/harness-dsh`. |
+| `--sandbox <workspace\|read-only\|off>` | `dev`, `start`, `invoke`, `schedules`, `info` | OS sandbox mode for `harness: "dsh"` (`--sandbox` > `FASTAGENT_SANDBOX` > config > `workspace`). |
 | `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `schedules run`, `build`, `deploy check` | Machine-readable output. |
 | `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `schedules list`, `schedules run`, `schedules unwake` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
 
