@@ -403,7 +403,7 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
   };
 }
 
-/** Connect to the served instance's clock API (schedules and wake-ups) over HTTP. */
+/** Connect to the served instance's clock API (declarative schedules) over HTTP. */
 export function connectClock(url: string, options: ConnectOptions): ClockApi {
   const { api, request, waited } = createTransport(url, options);
   const client = api.clock;

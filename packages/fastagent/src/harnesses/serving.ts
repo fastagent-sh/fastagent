@@ -125,7 +125,7 @@ export interface OpenedServing {
   agentDir: string;
   /** The agent's working directory. */
   workdir: string;
-  /** Where the instance's state is: its storage, its schedules' state, its wake-ups. */
+  /** Where the instance's state is: its storage and its schedules' state. */
   stateRoot: string;
   /** The definition's schedules, as `serveAgent` serves them: `serveAgent(opened)`. */
   schedules: BuiltDefinition["schedules"];
@@ -335,7 +335,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
 /** An agent opened in this process: the Agent API, and how it is served and operated. */
 export interface LocalAgent extends Agent {
   /**
-   * Schedules and wake-ups, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
+   * Schedules, `/health`, and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;

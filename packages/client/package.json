@@ -61,6 +61,11 @@
       "types": "./dist/remotes.d.ts",
       "default": "./dist/remotes.js"
     },
+    "./stream": {
+      "@fastagent-sh/source": "./src/stream.ts",
+      "types": "./dist/stream.d.ts",
+      "default": "./dist/stream.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

@@ -36,7 +36,7 @@ export async function withLockedFile<T>(
   path: string,
   fn: (current: string | undefined, replace: (next: string) => void) => Promise<LockResult<T>>,
   /**
-   * `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for the credential and catalog files.
+   * `mode`: the replaced file's permissions; default {@link SECRET_FILE_MODE}, for credential files.
    * `create: false` locks a file that may not exist without creating it (the lock is `<file>.lock` either way), for a
    * lock that guards more than the file it is named after.
    */

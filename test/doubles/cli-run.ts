@@ -72,9 +72,9 @@ export function besideAgent(dir: string, name: string): string {
 
 /**
  * The environment a command is given, on the clean machine `test/setup.ts` makes: a test that names the whole environment
- * still runs with the test's HOME, no model catalog fetched and the network guard, unless it names those itself. Without
- * HOME a command finds the user's own home directory, and its credentials; without FASTAGENT_OFFLINE it fetches pi.dev's
- * catalog; without NODE_OPTIONS a child process could reach the network unseen.
+ * still runs with the test's HOME and the network guard, unless it names those itself. Without
+ * HOME a command finds the user's own home directory, and its credentials; without NODE_OPTIONS a child process could
+ * reach the network unseen.
  */
 function onCleanMachine(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const clean: NodeJS.ProcessEnv = {};

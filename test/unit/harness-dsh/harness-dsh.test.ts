@@ -7,14 +7,13 @@ import { defineTool } from "@fastagent-sh/fastagent";
 import {
   DshInstanceHeldError,
   MemoryDshEventStore,
-  buildDshSandboxPolicy,
   openDshAgent,
   openDshAgentFromDir,
   openPostgresDshStore,
   openSqliteDshStore,
-  resolveConfinedPath,
-  toDshToolDefinition,
 } from "@fastagent-sh/harness-dsh";
+import { buildDshSandboxPolicy, resolveConfinedPath } from "../../../packages/harness-dsh/src/sandbox.ts";
+import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
@@ -52,7 +51,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     await reader.close();
   });
 
-  it("toDshToolDefinition bridges FastAgent defineTool (Standard JSON Schema v1) into DSH tool contract", async () => {
+  it("bridgeDshRuntimeTool bridges FastAgent defineTool (Standard JSON Schema v1) into DSH tool contract", async () => {
     const struct = EffectSchema.Struct({
       name: EffectSchema.String,
     });
@@ -70,17 +69,19 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
       execute: async ({ name }) => `Hello, ${name}!`,
     });
 
-    const bridged = toDshToolDefinition(fastAgentTool);
+    const bridged = bridgeDshRuntimeTool(fastAgentTool, {
+      toolsByName: new Map([[fastAgentTool.name, fastAgentTool]]),
+      onProgress: () => {},
+    });
     expect(bridged.name).toBe("greet");
     expect(bridged.parameters).toMatchObject({ type: "object", required: ["name"] });
 
-    const out = await bridged.execute({ name: "Ada" }, { signal: new AbortController().signal });
+    const execCtx = { callId: "tc-1", signal: new AbortController().signal, concludeTurn: () => {} } as never;
+    const out = await bridged.execute({ name: "Ada" }, execCtx);
     expect(out).toEqual({ text: "Hello, Ada!" });
-    expect(bridged.output.render({}, out)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
+    expect(bridged.output.render?.({} as never, out as never)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
 
-    const bad = await bridged.execute({ name: 123 }, { signal: new AbortController().signal });
-    expect(bad.isError).toBe(true);
-    expect(bad.text).toContain("Invalid arguments");
+    await expect(bridged.execute({ name: 123 }, execCtx)).rejects.toThrow(/Invalid arguments/);
   });
 
   it("buildDshSandboxPolicy produces fail-closed policies for workspace, read-only, and off modes", () => {
@@ -419,10 +420,10 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
     const instanceB = freshInstance();
     try {
       // Single-writer lease fencing: second live holder refused, close releases immediately, expired lease taken over.
-      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 120, owner: "holder-1" });
-      await expect(openPostgresDshStore(db, instanceA, { leaseMs: 120, waitMs: 0, owner: "holder-2" })).rejects.toThrow(
-        DshInstanceHeldError,
-      );
+      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, owner: "holder-1" });
+      await expect(
+        openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2" }),
+      ).rejects.toThrow(DshInstanceHeldError);
 
       // Multi-instance isolation on the same database.
       const other = await openPostgresDshStore(db, instanceB, { leaseMs: 5_000, owner: "holder-b" });

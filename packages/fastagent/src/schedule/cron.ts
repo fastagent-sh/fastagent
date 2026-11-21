@@ -30,7 +30,7 @@ export function cronError(cron: string, tz: string | undefined): string | undefi
   }
 }
 
-/** The minimum gap between two consecutive fires of anything recurring: a schedule, or a recurring wake-up. */
+/** The minimum gap between two consecutive fires of a recurring schedule. */
 const MIN_RECURRING_GAP_MS = 10 * 60_000; // 10 minutes
 /** Where the check below starts: fixed, so its verdict is the cron's and never the hour it was asked in. */
 const ANCHOR = new Date("2024-01-01T00:00:00Z");

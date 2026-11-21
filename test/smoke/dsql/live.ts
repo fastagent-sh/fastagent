@@ -20,7 +20,6 @@ import { fauxAgent } from "../../doubles/cli-run.ts";
 
 const endpoint = process.argv[2];
 if (endpoint === undefined) throw new Error("usage: node test/smoke/dsql/live.ts <cluster id>.dsql.<region>.on.aws");
-process.env.FASTAGENT_OFFLINE = "1";
 
 const database = dsqlDatabase({ endpoint });
 const instance = () => `live-${crypto.randomUUID()}`;

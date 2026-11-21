@@ -13,8 +13,11 @@ that API from outside the runtime: channels are not part of it.
 - **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, and
   `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI),
   `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager, EventBridge alarms,
-  and its CDK construct) and `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
-  FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`). A package reaches another only by name, and in the repository reads its source through the
+  and its CDK construct), `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
+  FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`), and
+  `@fastagent-sh/harness-dsh` (optional second runtime harness backed by `@deepseek-ai/dsh` with native OS sandboxing;
+  loaded lazily by `@fastagent-sh/fastagent` so core carries zero `@deepseek-ai/*` dependencies). A package reaches
+  another only by name, and in the repository reads its source through the
   `@fastagent-sh/source` export condition; `test/guards/package-boundary.test.ts` holds the lines.
 - `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
   (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
@@ -30,9 +33,11 @@ that API from outside the runtime: channels are not part of it.
 
 ## Decisions the code cannot show
 
-- **One harness, pi-durable.** A harness-neutral layer was tried and dropped: it cost more than it bought.
-  `@earendil-works/pi-*` is imported only under `packages/fastagent/src/harnesses/`. An author's tools and extensions are pi-durable code,
-  by choice.
+- **Two harnesses behind one contract.** `pi-durable` is the built-in default harness and `@fastagent-sh/harness-dsh`
+  is an optional second harness with native OS sandboxing. The contract boundary stays strictly at `@fastagent-sh/client`'s
+  Agent API + `test/harnesses/agent-api-conformance.ts` (no internal `LoopPort`). `@earendil-works/pi-*` is imported
+  only under `packages/fastagent/src/harnesses/`. Portable tools use `defineTool`; `src/extensions/*` remain
+  `pi-durable`-specific and are skipped with a warning on `dsh`.
 - **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; the runtime's
   `mcp-api.ts` imports nothing. Each package's `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.
@@ -90,7 +95,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 | Change area | Required tests | Mandatory seam (do not invent a local mock) |
 | --- | --- | --- |
 | Agent API / HTTP (`packages/client/src/agent-api.ts`, `src/http/` in both packages) | `test/harnesses/agent-api-conformance.ts`, `test/unit/agent-api/http-api.test.ts` | `durableSubject` / `httpSubject` |
-| CLI command or flag (`packages/fastagent/src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`); tickets mock `startTicket` and run `--ticket <id>` |
+| CLI command or flag (`packages/fastagent/src/cli/`) | `test/unit/cli/`: main path, exit 2/1 refusals, `--json` shape | `runInProcess` (`test/doubles/cli-run.ts`) |
 | Deploy (`packages/fastagent/src/deploy/`) | `test/unit/deploy/`: preflight gates, generated artifacts | No secrets in artifacts |
 | Security boundary | `test/unit/security/`: valid pass + explicit refusal naming the error | **Mutation check:** break the guard and watch the new test fail before keeping it |
 | Test double (`test/doubles/*-double.ts`, `cli-run.ts`) | Update its `test/integration/double-parity/*.integration.test.ts` parity test | Same inputs against the double and the real tool must match |
@@ -100,7 +105,7 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 - **Scoped local loop:** Iterate on the domain you touched (`npx vitest run test/unit/<domain>/` and `npm run test:guards`), then run the full local loop before pushing.
 - **Append before creating:** When adding fewer than ~8 tests in an existing domain, append to that domain's test file instead of opening a new `.test.ts` file (each file in `pool: "forks"` pays a cold-import cost).
 - **Canonical seams only:** Use `runInProcess` for CLI tests (never spy on `process.cwd`/`console.log`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, and `scripted-agent.ts`.
-- **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, `FASTAGENT_OFFLINE=1`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
+- **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
 - **Hygiene guards (`test/guards/suite-hygiene.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds, shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`), ghost file references, missing double parity, missing CLI command tests, and CLI seam bypasses are rejected.
 - **Process CLI tests (`run`):** Spawn the binary in `test/integration/` only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).
 - **Paired fixtures:** A subject tested in both Unit and Integration shares `test/fixtures/<name>-fixtures.ts`.

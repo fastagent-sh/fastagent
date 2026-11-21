@@ -76,8 +76,8 @@ import {
   readSessionRawEvents,
   requireSession,
 } from "./session-state.ts";
-import { leavableIterator, messageStream } from "./stream.ts";
-import { bridgeDshRuntimeTool, toDshToolDefinition } from "./tools.ts";
+import { leavableIterator, messageStream } from "@fastagent-sh/client/stream";
+import { bridgeDshRuntimeTool, validateFastAgentTool } from "./tools.ts";
 import type {
   DshAgent,
   DshEventStoreBackend,
@@ -127,7 +127,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     throw agentError("invalid_request", error instanceof Error ? error.message : String(error));
   }
   const userTools = options.tools ?? [];
-  for (const tool of userTools) toDshToolDefinition(tool);
+  for (const tool of userTools) validateFastAgentTool(tool);
   const codingToolNames = new Set<string>(enabledCodingTools);
   for (const tool of userTools) {
     if (codingToolNames.has(tool.name)) {

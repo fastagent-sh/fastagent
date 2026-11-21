@@ -41,9 +41,9 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
-  /** Where the instance's clock keeps its fires and wake-ups; its schedules are `digest` and `long` (a `hold`). */
+  /** Where the instance's clock keeps its fires; its schedules are `digest` and `long` (a `hold`). */
   clock(): ClockStore;
-  /** The decoupled Clock API (`schedules`, `wakeups`) wired alongside the Agent. */
+  /** The decoupled Clock API (`schedules`) wired alongside the Agent. */
   clockApi(): ClockApi;
   /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
   keysSends?: boolean;
