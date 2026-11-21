@@ -12,6 +12,9 @@
   "engines": {
     "node": ">=24.15.0"
   },
+  "overrides": {
+    "undici": ">=8.13.1"
+  },
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "vitest --run --project unit",
