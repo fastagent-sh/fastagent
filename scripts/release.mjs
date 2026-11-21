@@ -163,6 +163,7 @@ async function main() {
 	setVersion(version);
 	run("npm", ["run", "lint"]);
 	run("npm", ["run", "typecheck"]);
+	run("npm", ["audit", "--audit-level=high"]);
 	run("npm", ["test"]);
 	run("npm", ["run", "test:integration"]);
 	run("npm", ["pack", "--dry-run", "--json", "--workspaces"]);
@@ -170,7 +171,7 @@ async function main() {
 	run("git", ["add", ...WORKSPACES.map((dir) => `${dir}/package.json`), "package-lock.json"]);
 	run("git", ["commit", "-m", `chore: release ${version}`]);
 	run("git", ["push", "-u", "origin", branch]);
-	const body = `## Release v${version}\n\nBump every package (${WORKSPACES.join(", ")}) from ${pkg.version} to ${version}.\n\n### Verification\n\n- \`npm run lint\`\n- \`npm run typecheck\`\n- \`npm test\`\n- \`npm run test:integration\`\n- \`npm pack --dry-run --json --workspaces\`\n\n### After merge\n\nCreate and publish the GitHub Release \`${tag}\`. The protected publish workflow will verify and publish the packages to npm via Trusted Publishing.`;
+	const body = `## Release v${version}\n\nBump every package (${WORKSPACES.join(", ")}) from ${pkg.version} to ${version}.\n\n### Verification\n\n- \`npm run lint\`\n- \`npm run typecheck\`\n- \`npm audit --audit-level=high\`\n- \`npm test\`\n- \`npm run test:integration\`\n- \`npm pack --dry-run --json --workspaces\`\n\n### After merge\n\nCreate and publish the GitHub Release \`${tag}\`. The protected publish workflow will verify and publish the packages to npm via Trusted Publishing.`;
 	const pr = capture("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", `chore: release ${version}`, "--body", body]);
 
 	console.log(`\nRelease PR created: ${pr}`);

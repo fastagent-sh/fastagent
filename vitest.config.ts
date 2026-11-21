@@ -28,6 +28,8 @@ export default defineConfig({
   },
   test: {
     pool: "forks",
+    // Cap worker forks so concurrent PGlite WASM boots do not contend for CPU/memory on high-core hosts.
+    maxWorkers: 2,
     // A module a test imports natively (a built package's, outside Vite) reads the packages' source too.
     execArgv: ["--conditions=@fastagent-sh/source"],
     projects: [
@@ -42,7 +44,7 @@ export default defineConfig({
           exclude: ["test/**/*.integration.test.ts", "test/fixtures/.tmp-**"],
           setupFiles: ["test/setup.ts", "test/unit-setup.ts"],
           testTimeout: 20_000,
-          hookTimeout: 20_000,
+          hookTimeout: 30_000,
         },
       },
       {
