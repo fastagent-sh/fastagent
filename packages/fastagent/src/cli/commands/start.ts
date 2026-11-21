@@ -6,7 +6,7 @@ import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../harnesses/pi-durable/built.ts";
 import type { AgentDefinition } from "../../harnesses/pi-durable/definition.ts";
 import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
-import { openServing } from "../../harnesses/pi-durable/serve.ts";
+import { openServing } from "../../harnesses/serving.ts";
 import { type InstanceFlags, instanceInputs } from "../instance.ts";
 import { DEFAULT_HTTP_PORT, serveAgent, type ServedAgent } from "../../service.ts";
 import { failStartup, failUsage } from "../fail.ts";

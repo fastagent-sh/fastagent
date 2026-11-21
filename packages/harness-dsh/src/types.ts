@@ -219,6 +219,8 @@ export interface DshHarnessOptions {
   readonly codingTools?: boolean | readonly DshCodingToolName[];
   /** Absolute paths inside `workdir` that `write` and `edit` must never modify (e.g. `.fastagent`). */
   readonly protectedPaths?: readonly string[];
+  /** Sanitized environment variables passed to sandboxed shell commands. Defaults to process.env when omitted. */
+  readonly env?: Readonly<Record<string, string>>;
   /** Slash commands offered by `info().commands`. */
   readonly commands?: () => readonly DshCommand[];
   /** Hook invoked when a session is deleted (e.g. to clear external clock wakeups). */

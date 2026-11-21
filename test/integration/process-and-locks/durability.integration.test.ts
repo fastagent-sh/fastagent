@@ -440,4 +440,81 @@ describe("@fastagent-sh/harness-dsh OS sandbox enforcement (LocalSandboxProvider
       await roAgent.close();
     }
   });
+
+  it("openAgent with harness: dsh isolates bash subprocess env to declared secrets and baseEnv (no host secret leak)", async () => {
+    const { openAgent, baseEnv } = await import("../../../packages/fastagent/src/index.ts");
+    const { loadSourceDefinition } = await import("../../../packages/fastagent/src/harnesses/pi-durable/open.ts");
+
+    const agentDir = freshDir("fa-dsh-env-iso-");
+    const root = freshDir("fa-dsh-env-root-");
+    mkdirSync(join(agentDir, "src", "tools"), { recursive: true });
+    writeFileSync(join(agentDir, "package.json"), JSON.stringify({ name: "env-iso-agent", type: "module" }));
+    writeFileSync(join(agentDir, "SYSTEM.md"), "Env isolation check.\n");
+    writeFileSync(
+      join(agentDir, "fastagent.config.ts"),
+      `import { createFauxCore, createProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { defineAgent } from "@fastagent-sh/fastagent";
+const core = createFauxCore({ provider: "envcheck", api: "envcheck" });
+const stream = (...args) => {
+  const last = args[1].messages.at(-1);
+  if (last?.role === "toolResult") {
+    const text = Array.isArray(last.content) ? (last.content[0]?.text ?? "") : String(last.content);
+    core.appendResponses([fauxAssistantMessage(text)]);
+  } else {
+    core.appendResponses([
+      fauxAssistantMessage([fauxToolCall("bash", { command: 'printf "%s|%s" "$DECLARED_TOKEN" "$UNDECLARED_HOST_SECRET"' })], { stopReason: "toolUse" }),
+    ]);
+  }
+  return core.streamSimple(...args);
+};
+export default defineAgent({
+  model: "envcheck/" + core.getModel().id,
+  harness: "dsh",
+  sandbox: "off",
+  codingTools: ["bash"],
+  providers: [
+    createProvider({
+      id: "envcheck",
+      auth: { apiKey: { name: "ENVCHECK", resolve: async () => ({ auth: {} }) } },
+      models: core.models,
+      api: { stream, streamSimple: stream },
+    }),
+  ],
+});
+`,
+    );
+    writeFileSync(
+      join(agentDir, "src", "tools", "declare-secret.ts"),
+      `import { defineTool, needs } from "@fastagent-sh/fastagent";
+export default needs(["DECLARED_TOKEN"], () =>
+  defineTool({
+    name: "noop_secret_decl",
+    description: "Declares DECLARED_TOKEN",
+    parameters: { type: "object", properties: {} } as const,
+    execute: async () => "ok",
+  }),
+);
+`,
+    );
+
+    const definition = await loadSourceDefinition(agentDir);
+    const prevHostSecret = process.env.UNDECLARED_HOST_SECRET;
+    process.env.UNDECLARED_HOST_SECRET = "host-secret-must-not-leak";
+    const agent = await openAgent(definition, {
+      root,
+      offline: true,
+      secrets: { DECLARED_TOKEN: "declared-ok", UNDECLARED_HOST_SECRET: "undeclared-in-secrets-too" },
+      env: baseEnv(process.env),
+    });
+    try {
+      const session = await agent.sessions.create();
+      const reply = await agent.messages.send({ sessionId: session.id, content: "check env" }, { wait: 15 });
+      expect(reply.status).toBe("completed");
+      expect(reply.answer?.text).toBe("declared-ok|");
+    } finally {
+      await agent.close();
+      if (prevHostSecret === undefined) delete process.env.UNDECLARED_HOST_SECRET;
+      else process.env.UNDECLARED_HOST_SECRET = prevHostSecret;
+    }
+  });
 });

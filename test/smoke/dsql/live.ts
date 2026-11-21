@@ -13,7 +13,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { StorageWrite } from "@earendil-works/pi-durable";
 import { createStorageConformance } from "@earendil-works/pi-durable/testing";
 import { dsqlDatabase } from "../../../packages/agentcore/src/index.ts";
-import { openAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/serve.ts";
+import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { openPostgresStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
