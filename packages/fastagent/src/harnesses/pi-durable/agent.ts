@@ -83,7 +83,7 @@ import {
 import { type Reads, durableReads } from "./reads.ts";
 import { releaseWaitingQueues } from "./release.ts";
 import { type Sessions, latestContextTokens, trackSessions } from "./sessions.ts";
-import { messageStream } from "./stream.ts";
+import { messageStream } from "@fastagent-sh/client/stream";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 
 /** What a Caller may offer as `/<name>`: a prompt template or a skill, expanded for the model. */

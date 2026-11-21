@@ -48,11 +48,11 @@ const agent = await openAgent(myAgent, {
 
 ## Compatibility
 
-- **Full Agent API**: passes all 61 tests in `test/harnesses/agent-api-conformance.ts` (streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, context usage, crash recovery).
+- **Full Agent API**: passes the full `test/harnesses/agent-api-conformance.ts` suite (streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, context usage, crash recovery).
 - **Shared storage**: shares the instance's `agent.sqlite` (with kernel-enforced `EXCLUSIVE` locking) or PostgreSQL database (`dsh_*` tables + `dsh_leases` fencing) without colliding with `pi-durable`.
 - **Portable assets**: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), `mcpServers`, and `src/schedules/` work identically on both harnesses.
 - **`src/extensions/`**: `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
 
 ## Experimental status
 
-This package pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release. See [DESIGN.md](DESIGN.md) for architecture details.
+This package pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release.

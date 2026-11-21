@@ -167,22 +167,6 @@ export interface FastAgentToolLike {
   }>;
 }
 
-/** Tool definition shape expected by `@deepseek-ai/dsh-tools`'s `ctx.tools.register()`. */
-export interface DshToolDefinition {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: Record<string, unknown>;
-  readonly output: {
-    readonly schema: Record<string, unknown>;
-    readonly render: (args: unknown, value: unknown) => Array<{ readonly type: "text"; readonly text: string }>;
-    readonly presentationMeta?: (args: unknown, value: unknown) => unknown;
-  };
-  execute(
-    args: unknown,
-    exec: { readonly signal: AbortSignal; readonly callId?: string; concludeTurn?(): void },
-  ): Promise<{ readonly text: string; readonly isError?: boolean; readonly details?: unknown }>;
-}
-
 /** Slash command advertised by `info().commands` and expanded before reaching the model. */
 export interface DshCommand {
   readonly name: string;

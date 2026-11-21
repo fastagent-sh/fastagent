@@ -3,7 +3,7 @@
  * `@deepseek-ai/dsh-tools` registration contract (`output: { schema, render, presentationMeta }`).
  */
 import type { ToolDefinition as DshRuntimeToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import type { DshTelemetryContext, DshToolDefinition, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
+import type { DshTelemetryContext, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
 
 type DshPresentationMeta = ReturnType<NonNullable<DshRuntimeToolDefinition["output"]["presentationMeta"]>>;
 
@@ -49,7 +49,7 @@ function formatNestedCall(name: string, args: unknown): string {
   return name;
 }
 
-function validateFastAgentTool(tool: FastAgentToolLike): void {
+export function validateFastAgentTool(tool: FastAgentToolLike): void {
   if (!tool.name || typeof tool.name !== "string") {
     throw new Error("DSH tool bridge requires a non-empty tool name");
   }
@@ -84,51 +84,6 @@ function extractResultText(
   return (result?.output ?? [])
     .map((part) => (part.type === "text" && typeof part.text === "string" ? part.text : JSON.stringify(part)))
     .join("\n");
-}
-
-/**
- * Convert a FastAgent tool registration into a DSH `ToolDefinition`.
- * Preserves JSON Schema parameters verbatim and forwards DSH's `exec.signal` as the tool's abort signal.
- */
-export function toDshToolDefinition(tool: FastAgentToolLike): DshToolDefinition {
-  validateFastAgentTool(tool);
-  return {
-    name: tool.name,
-    description: tool.description,
-    parameters: structuredClone(tool.parameters) as Record<string, unknown>,
-    output: {
-      schema: TOOL_OUTPUT_SCHEMA,
-      render: (argsOrValue: unknown, maybeValue?: unknown) =>
-        renderToolOutput(maybeValue === undefined ? undefined : argsOrValue, maybeValue ?? argsOrValue),
-      presentationMeta: (_args: unknown, value: unknown) =>
-        typeof value === "object" && value !== null && "details" in value
-          ? (value as { details?: unknown }).details
-          : undefined,
-    },
-    async execute(args: unknown, exec: { readonly signal: AbortSignal; concludeTurn?(): void }) {
-      const input =
-        typeof args === "object" && args !== null && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-      const result = await (
-        tool.execute as (
-          args: Record<string, unknown>,
-          api: FastAgentToolApi,
-          context: { abortSignal: AbortSignal },
-        ) => Promise<{
-          readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-          readonly details?: unknown;
-          readonly isError?: boolean;
-          readonly control?: { readonly terminate?: boolean };
-        }>
-      )(input, {}, { abortSignal: exec.signal });
-      if (result?.control?.terminate === true) exec.concludeTurn?.();
-      const text = extractResultText(result);
-      return {
-        text,
-        ...(result?.isError === true ? { isError: true } : {}),
-        ...(result?.details !== undefined ? { details: structuredClone(result.details) } : {}),
-      };
-    },
-  };
 }
 
 /**

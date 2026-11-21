@@ -194,7 +194,7 @@ export function connectAgentCore(connection: AgentCoreConnection): Agent {
 }
 
 /**
- * The Clock API (schedules and wake-ups) of the session `sessionId` on the runtime `runtimeArn`.
+ * The Clock API (declarative schedules) of the session `sessionId` on the runtime `runtimeArn`.
  * @public
  */
 export function connectAgentCoreClock(connection: AgentCoreConnection): ClockApi {

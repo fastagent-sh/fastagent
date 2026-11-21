@@ -14,10 +14,11 @@ import {
   agentError,
   errorData,
   hasEnded,
-} from "@fastagent-sh/client/agent-api";
+} from "./agent-api.ts";
 
 export interface StreamSource {
   events(sessionId: string, after?: string): AsyncIterable<SessionEvent>;
+  /** A send, and whether its key had already been sent: the message is then delivered from where it is. */
   admit(request: SendRequest): Promise<{ message: Message; replayed: boolean }>;
   get(sessionId: string, messageId: string): Promise<Message>;
   entry(sessionId: string, entryId: string): Promise<Entry>;
@@ -27,6 +28,13 @@ export interface StreamSource {
 const messageOf = (entry: Entry): string | undefined =>
   entry.kind === "user" ? (entry.data as { messageId?: string }).messageId : undefined;
 
+/**
+ * The next of `events`, a read that failed as the `stream_error` it is once the message has been delivered: a session
+ * watched again cannot reject the stream then, or a Caller would take a message already recorded for one refused.
+ */
+const nextOf = (events: AsyncIterator<SessionEvent>): Promise<IteratorResult<SessionEvent>> =>
+  events.next().catch((error: unknown) => ({ done: false, value: failedRead(error) }));
+
 const failedRead = (error: unknown): SessionEvent => ({
   type: "stream_error",
   error: errorData(
@@ -35,9 +43,6 @@ const failedRead = (error: unknown): SessionEvent => ({
       : agentError("internal", error instanceof Error ? error.message : String(error)),
   ),
 });
-
-const nextOf = (events: AsyncIterator<SessionEvent>): Promise<IteratorResult<SessionEvent>> =>
-  events.next().catch((error: unknown) => ({ done: false, value: failedRead(error) }));
 
 export function messageStream(
   source: StreamSource,
@@ -57,17 +62,24 @@ export function messageStream(
     return active;
   };
 
+  /** From the message's `user` entry, which arrives live, through its `done`. */
   async function* live(watching: AsyncIterator<SessionEvent>, id: string): AsyncGenerator<SessionEvent> {
     let opened = false;
     for (let next = await watching.next(); !next.done; next = await watching.next()) {
       const event = next.value;
       if (event.type === "stream_error") return yield event;
+      // A queued message withdrawn by a cancel ends without ever being taken.
       if (event.type === "done" && event.message.id === id) return yield event;
       if (!opened && event.type === "entry" && messageOf(event.entry) === id) opened = true;
       if (opened) yield event;
     }
   }
 
+  /**
+   * A running message sent again, whose `user` entry was written before: its entries so far, then live. What the
+   * session replays is held until the message is read again, since one that ended meanwhile may have been followed by
+   * the next message's entries.
+   */
   async function* running(message: Message & { entryId: string }): AsyncGenerator<SessionEvent> {
     let opening: Entry;
     try {
@@ -107,6 +119,7 @@ export function messageStream(
     }
   }
 
+  /** An ended message: its entries through its answer, then its `done`. */
   async function* ended(done: Message, opening?: Entry, held?: SessionEvent[]): AsyncGenerator<SessionEvent> {
     const { entryId, answer } = done;
     if (entryId === undefined) return yield { type: "done", message: done };
@@ -166,6 +179,13 @@ export function messageStream(
   return { [Symbol.asyncIterator]: () => leavableIterator(events(), leave, signal) };
 }
 
+/**
+ * A stream the Caller can leave at any point. An async generator suspended on an await parks inside it, and
+ * `gen.return()` queues behind the pending `next()` (async-generator semantics), so leaving first ends what it awaits
+ * (`leave`), then returns the generator. Leaving also silences it: a generator on its way out can still reach a
+ * `yield`, which must not hand an event to a Caller that left. A `signal` leaves the same way, and the read pending
+ * then, and any after it, rejects with the signal's reason.
+ */
 export function leavableIterator<T>(
   gen: AsyncGenerator<T>,
   leave: () => void,

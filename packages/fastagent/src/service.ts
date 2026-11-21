@@ -1,4 +1,4 @@
-/** The product, as one call: an opened agent becomes a live service: its schedules and wake-ups, `GET /health`, and the
+/** The product, as one call: an opened agent becomes a live service: its schedules, `GET /health`, and the
  * Agent API under `/v1` when it has a key. */
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -33,20 +33,20 @@ function once<A, E, R>(work: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
 /** The port a serve binds when neither a flag nor `PORT` (start only) names one. */
 export const DEFAULT_HTTP_PORT = 8787;
 
-/** Start the clock: the definition's schedules, and any wake-ups the agent sets for itself, on every serve. */
+/** Start the clock: the definition's declarative schedules, on every serve. */
 async function startClock(clock: ClockRunner, schedules: readonly Schedule[], since?: Date): Promise<ClockRunner> {
   await clock.start(since === undefined ? undefined : { since });
   if (schedules.length > 0) log.info(`[fastagent] schedules: ${schedules.map((s) => s.name).join(", ")}`);
   return clock;
 }
 
-/** What `serve()` answers: the agent's schedules and wake-ups, `GET /health`, and the Agent API with a key. */
+/** What `serve()` answers: the agent's schedules, `GET /health`, and the Agent API with a key. */
 export interface Service {
   /** For an app's own server to route to. */
   fetch(request: Request): Promise<Response>;
   /** Or a server of its own, on this runtime's server: the one way to start one. Answers the port it bound. */
   listen(port: number, host?: string): Promise<number>;
-  /** The instance's clock operations (schedules and wake-ups), when opened on durable storage. */
+  /** The instance's clock operations (declarative schedules), when opened on durable storage. */
   readonly clock?: ClockApi;
   /** The instance's remote authentication API, when opened on durable storage. */
   readonly auth?: AuthApi;

@@ -22,9 +22,9 @@ export interface Scheduler {
    * read: a schedule is not run blind.
    */
   start(options?: { since?: Date }): Promise<void>;
-  /** Claim and start every cron occurrence and wake-up due now (`since` stamps schedules seen for the first time). */
+  /** Claim and start every cron occurrence due now (`since` stamps schedules seen for the first time). */
   tick(options?: { since?: Date }): Promise<void>;
-  /** The earliest instant a schedule or pending wake-up in `clock` is next due, or `undefined` when nothing is. */
+  /** The earliest instant a schedule in `clock` is next due, or `undefined` when nothing is. */
   nextDue(at?: Date): Promise<Date | undefined>;
   /** Cancel pending waits. */
   stop(): void;
@@ -128,7 +128,7 @@ function settled(message: Message): { fire: "completed" | "failed"; detail?: str
  * One invoke, read to its message's end, with what became of it said in the log.
  *
  * WHAT THE AGENT SAID IS NOT LOGGED. It is already durable: every fire runs in the session named in the line below
- * (the schedule's own, the asking conversation's for a wake-up), kept in the instance's storage like any other.
+ * (the schedule's own), kept in the instance's storage like any other.
  * Copying the reply into the log would be a second store of the same text, unstructured, in a stream with a wider
  * audience and a bound that differs per host.
  */
@@ -352,7 +352,6 @@ export function fireScheduleNow(opts: {
  * WHAT BECAME OF ITS MESSAGE decides the outcome. One the agent took is durable: it is answered after the restart
  * (or already was), so its end is read through its key and written back, as the fire that ran would have. One that was
  * never taken is `interrupted`, and NOT re-fired: a fire that kills its own process would then replay on every boot.
- * Cron only: a killed wake-up leaves no claim behind (`takeFirstDueWakeup` removes it before its message is sent).
  *
  * THE NEWEST CLAIM ONLY. A schedule's loop runs one fire at a time, so a killed process leaves exactly one claim
  * unsettled — the one it was in. Walking the whole retained window would add nothing a resident process can produce.
@@ -573,7 +572,7 @@ export function createScheduler(options: SchedulerOptions): Effect.Effect<Schedu
       launch(s.name, cronLoop(s, due));
     };
 
-    /** Stamp armed schedules, catch up every schedule and wake-up due by now, and optionally arm timers. */
+    /** Stamp armed schedules, catch up every schedule due by now, and optionally arm timers. */
     async function catchUpDue(
       lastFires: ReadonlyMap<string, string>,
       sinceOption: Date | undefined,

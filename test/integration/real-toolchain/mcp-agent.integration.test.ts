@@ -11,7 +11,6 @@ afterEach(async () => {
 });
 
 it("an MCP ${VAR} reference is resolved from the instance's secrets, never from the process's environment", async () => {
-  vi.stubEnv("FASTAGENT_OFFLINE", "1");
   vi.stubEnv("FA_MCP_REF", "from-the-process");
   const dir = await directory({
     mcpServers: { constructor: { command: process.execPath, args: [FIXTURE], env: { MCP_VALUE: "${FA_MCP_REF}" } } },

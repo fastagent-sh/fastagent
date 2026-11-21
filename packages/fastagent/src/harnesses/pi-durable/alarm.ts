@@ -1,6 +1,6 @@
 /**
  * Keeps an external platform alarm (such as an AgentCore session's EventBridge schedule) converged to when this
- * instance next needs a running process: the earliest of its clock's next cron or wake-up, pi-durable's own earliest
+ * instance next needs a running process: the earliest of its clock's next cron, pi-durable's own earliest
  * task sleep (`harness.wake().at`), and, once a run has been active past {@link ACTIVE_DEBOUNCE_MS}, a recovery
  * heartbeat ({@link ACTIVE_RECOVERY_MS}) so a machine killed mid-run or at its lifetime cap is woken to `resume()`.
  *

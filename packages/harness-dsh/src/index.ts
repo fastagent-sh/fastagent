@@ -18,15 +18,11 @@ export {
   type PostgresDshStoreOptions,
 } from "./postgres-store.ts";
 /** @public */
-export { buildDshSandboxPolicy, resolveConfinedPath } from "./sandbox.ts";
-/** @public */
 export {
   openSqliteDshStore,
   type SqliteDshEventStore,
   type SqliteDshStoreOptions,
 } from "./sqlite-store.ts";
-/** @public */
-export { toDshToolDefinition } from "./tools.ts";
 /** @public */
 export type {
   DshAgent,
@@ -36,17 +32,8 @@ export type {
   DshHarnessOptions,
   DshRetryOptions,
   DshSandboxMode,
-  DshSandboxPolicy,
-  DshSessionEvent,
-  DshSessionHandle,
-  DshSessionHeader,
-  DshSessionSnapshot,
-  DshStoredAttachment,
-  DshStoredMessage,
-  DshStoredSession,
   DshTelemetryContext,
   DshTelemetrySpan,
-  DshToolDefinition,
   FastAgentToolApi,
   FastAgentToolLike,
 } from "./types.ts";

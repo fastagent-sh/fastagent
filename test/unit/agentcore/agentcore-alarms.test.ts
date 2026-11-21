@@ -293,7 +293,7 @@ export default defineSchedule({ cron: "0 * * * *", tz: "UTC", prompt: "run hourl
       expect(sched.schedules.get(alarmNameOf(dormant))?.ScheduleExpression).toBe("at(2026-11-18T11:00:00)");
       expect(sched.schedules.get(alarmNameOf(preconfigured))?.ScheduleExpression).toBe("at(2026-11-18T11:00:00)");
       expect(sched.schedules.get(alarmNameOf(withPastCompleted))?.ScheduleExpression).toBe("at(2026-11-18T11:00:00)");
-      // The earlier active 10:20 wake-up stays untouched.
+      // The earlier active 10:20 alarm stays untouched.
       expect(sched.schedules.get(alarmNameOf(withEarlierWake))?.ScheduleExpression).toBe("at(2026-11-18T10:20:00)");
       // `.deploy` disabled itself once rearm succeeded.
       expect(sched.schedules.get(DEPLOY_SCHEDULE_NAME)?.State).toBe("DISABLED");
