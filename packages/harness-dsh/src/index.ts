@@ -7,7 +7,22 @@ export { openDshAgent } from "./agent.ts";
 /** @public */
 export { MemoryDshEventStore } from "./persistence.ts";
 /** @public */
+export {
+  DshInstanceHeldError,
+  openPostgresDshStore,
+  type DshPgDatabase,
+  type DshPgExecutor,
+  type PostgresDshEventStore,
+  type PostgresDshStoreOptions,
+} from "./postgres-store.ts";
+/** @public */
 export { buildDshSandboxPolicy } from "./sandbox.ts";
+/** @public */
+export {
+  openSqliteDshStore,
+  type SqliteDshEventStore,
+  type SqliteDshStoreOptions,
+} from "./sqlite-store.ts";
 /** @public */
 export { toDshToolDefinition } from "./tools.ts";
 /** @public */

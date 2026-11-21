@@ -909,40 +909,55 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     if (runningMsgs.length > 0) {
       const target = runningMsgs[0] as DshStoredMessage;
       live.activeTurnMessageIds.push(...runningMsgs.map((m) => m.id));
-      const hasUserLogged = dshAgent.session
-        .snapshotEvents()
-        .some(
-          (ev) =>
-            ev.type === "user/message" &&
-            ev.data.source.kind === "fastagent-user" &&
-            ev.data.source.messageId === target.id,
-        );
-      if (hasUserLogged) {
+      // Clear any inbox items that survived SIGKILL so the recovery turn runs strictly
+      // BEFORE queued follow-up turns (DSH claims `next-turn` before `next-step` at turn start).
+      if (dshAgent.inbox.nextStep.length > 0 || dshAgent.inbox.nextTurn.length > 0) {
+        dshAgent.inbox.clear();
+      }
+      const loggedMessageIds = new Set<string>();
+      for (const ev of dshAgent.session.snapshotEvents()) {
+        if (ev.type === "user/message" && ev.data.source.kind === "fastagent-user") {
+          loggedMessageIds.add(ev.data.source.messageId);
+        }
+      }
+      const unloggedRunning = runningMsgs.filter((m) => !loggedMessageIds.has(m.id));
+      if (unloggedRunning.length === 0) {
         const recoveryMsg = createUserMessage({
           content: [{ type: "text", text: "" }],
           source: { kind: "fastagent-recovery", messageId: target.id },
         });
-        dshAgent.steer(recoveryMsg);
+        dshAgent.followup(recoveryMsg);
       } else {
+        for (const msg of unloggedRunning) {
+          const dshUser = createUserMessage({
+            content: toDshBlocks(msg.modelContent),
+            source: {
+              kind: "fastagent-user",
+              messageId: msg.id,
+              displayContent: msg.displayContent,
+            },
+          });
+          dshAgent.followup(dshUser);
+        }
+      }
+      for (const q of queuedMsgs) {
         const dshUser = createUserMessage({
-          content: toDshBlocks(target.modelContent),
+          content: toDshBlocks(q.modelContent),
           source: {
             kind: "fastagent-user",
-            messageId: target.id,
-            displayContent: target.displayContent,
+            messageId: q.id,
+            displayContent: q.displayContent,
           },
         });
-        dshAgent.steer(dshUser);
+        dshAgent.followup(dshUser);
       }
-    }
-
-    if (queuedMsgs.length > 0) {
-      const missingQueued = queuedMsgs.filter((q) => !pendingInDsh.has(q.id));
-      if (runningMsgs.length === 0 && dshAgent.inbox.nextTurn.length > 0) {
+    } else if (queuedMsgs.length > 0) {
+      if (dshAgent.inbox.nextTurn.length > 0) {
         const existing = [...dshAgent.inbox.nextTurn];
         dshAgent.inbox.clear();
         for (const item of existing) dshAgent.followup(item);
       }
+      const missingQueued = queuedMsgs.filter((q) => !pendingInDsh.has(q.id));
       for (const q of missingQueued) {
         const dshUser = createUserMessage({
           content: toDshBlocks(q.modelContent),
@@ -1528,6 +1543,9 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             watcher.end();
           };
 
+          if (live.pendingSettlement !== undefined) {
+            await live.pendingSettlement.catch(() => {});
+          }
           let rawEvents: readonly DshSessionEventRecord[];
           if (live.dshAgent !== undefined) {
             rawEvents = live.dshAgent.session.snapshotEvents();
@@ -1550,6 +1568,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             }
             replay = all.slice(idx + 1);
           }
+          const replayedIds = new Set(replay.map((entry) => entry.id));
           const snapshot = buildSessionSnapshotFromEvents(live, rawEvents);
 
           for (const entry of replay) {
@@ -1559,6 +1578,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
 
           for await (const item of iterable) {
             if (item.seq <= watermark) continue;
+            if (item.event.type === "entry" && replayedIds.has(item.event.entry.id)) continue;
             yield item.event;
           }
         }

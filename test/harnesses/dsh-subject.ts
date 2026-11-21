@@ -3,7 +3,7 @@
  * mirrors `durable-subject.ts` with the exact same scripted `@earendil-works/pi-ai` model, tools,
  * failure injection, restartable storage, and external `ClockRunner`.
  */
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,8 +22,8 @@ import {
   type DshEventStoreBackend,
   type FastAgentToolApi,
   type FastAgentToolLike,
-  MemoryDshEventStore,
   openDshAgent,
+  openSqliteDshStore,
 } from "@fastagent-sh/harness-dsh";
 import type { Change, ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
 import { type ClockRunner, createClockRunner } from "../../packages/fastagent/src/schedule/runner.ts";
@@ -242,12 +242,16 @@ function failableBackend(inner: DshEventStoreBackend): { backend: DshEventStoreB
   return { backend, fail: () => (failed = true) };
 }
 
-export function dshSubject(): AgentApiSubject {
+export type DshSubjectStore = (directory: string) => Promise<DshEventStoreBackend & { close(): Promise<void> }>;
+
+const sqliteIn: DshSubjectStore = async (directory) => openSqliteDshStore(join(directory, "dsh.sqlite"));
+
+export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubject {
   let directory = "";
   let current: DshAgent | undefined;
   let currentClock: ClockRunner | undefined;
   let currentStore: ClockStore | undefined;
-  let persistentBackend: MemoryDshEventStore | undefined;
+  let currentBackend: (DshEventStoreBackend & { close(): Promise<void> }) | undefined;
   let fail: () => void = () => {};
   let held: (() => void)[] = [];
   let effects = 0;
@@ -348,9 +352,9 @@ export function dshSubject(): AgentApiSubject {
 
   const open = async (without: readonly string[] = []): Promise<DshAgent> => {
     const { models, model } = subjectModels(signedOut);
-    if (persistentBackend === undefined) persistentBackend = new MemoryDshEventStore();
+    currentBackend = await openStore(directory);
     if (currentStore === undefined) currentStore = memoryClockStore();
-    const wrapped = failableBackend(persistentBackend);
+    const wrapped = failableBackend(currentBackend);
     fail = wrapped.fail;
     current = await openDshAgent({
       name: "subject",
@@ -380,8 +384,10 @@ export function dshSubject(): AgentApiSubject {
   return {
     async start(options) {
       await current?.close();
+      await currentBackend?.close().catch(() => undefined);
+      currentBackend = undefined;
+      if (directory) rmSync(directory, { recursive: true, force: true });
       directory = mkdtempSync(join(tmpdir(), "fastagent-dsh-"));
-      persistentBackend = new MemoryDshEventStore();
       currentStore = memoryClockStore();
       held = [];
       effects = 0;
@@ -391,10 +397,13 @@ export function dshSubject(): AgentApiSubject {
     },
     async restart(options) {
       const previous = current;
+      const previousBackend = currentBackend;
       current = undefined;
+      currentBackend = undefined;
       const closing = previous?.close();
       for (const release of held.splice(0)) release();
       await closing;
+      await previousBackend?.close().catch(() => undefined);
       return open(options?.removeTools);
     },
     release() {
@@ -415,10 +424,13 @@ export function dshSubject(): AgentApiSubject {
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);
+      await currentBackend?.close().catch(() => undefined);
+      if (directory) rmSync(directory, { recursive: true, force: true });
+      directory = "";
       current = undefined;
       currentClock = undefined;
       currentStore = undefined;
-      persistentBackend = undefined;
+      currentBackend = undefined;
     },
   };
 }
