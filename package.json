@@ -6,7 +6,8 @@
     "packages/client",
     "packages/fastagent",
     "packages/agentcore",
-    "packages/pi-remote"
+    "packages/pi-remote",
+    "packages/harness-dsh"
   ],
   "engines": {
     "node": ">=24.15.0"

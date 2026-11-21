@@ -6,7 +6,13 @@ import { spawnSync } from "node:child_process";
 
 const PACKAGE_NAME = "@fastagent-sh/fastagent";
 // Every package of the workspace, in the order they build and publish; all share one version.
-const WORKSPACES = ["packages/client", "packages/fastagent", "packages/agentcore", "packages/pi-remote"];
+const WORKSPACES = [
+	"packages/client",
+	"packages/fastagent",
+	"packages/agentcore",
+	"packages/pi-remote",
+	"packages/harness-dsh",
+];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
@@ -142,7 +148,10 @@ async function main() {
 	if (capture("git", ["ls-remote", "--heads", "origin", branch])) throw new Error(`Remote branch already exists: ${branch}`);
 	const existingTag = run("git", ["show-ref", "--verify", "--quiet", `refs/tags/${tag}`], { allowFailure: true, capture: true });
 	if (existingTag.status === 0 || capture("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`])) throw new Error(`Tag already exists: ${tag}`);
-	for (const dir of WORKSPACES) assertNpmVersionIsUnpublished(readPackage(dir).name, version);
+	for (const dir of WORKSPACES) {
+		const member = readPackage(dir);
+		if (!member.private) assertNpmVersionIsUnpublished(member.name, version);
+	}
 
 	console.log(`\nCurrent version: ${pkg.version}\nTarget version:  ${version}\nBranch:          ${branch}\n`);
 	if (!(await confirm(version))) {

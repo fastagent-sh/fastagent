@@ -38,6 +38,10 @@
         "@earendil-works/pi-coding-agent",
         "@earendil-works/pi-tui"
       ]
+    },
+    "packages/harness-dsh": {
+      "project": ["src/**/*.ts"],
+      "includeEntryExports": true
     }
   },
   // `tsc` is the fastagent package's devDependency, the TypeScript `fastagent build` gives an agent, installed at the

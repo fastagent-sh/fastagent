@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * (`@fastagent-sh/client`) imports no runtime, so its root entry loads where only `fetch` is.
  */
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PACKAGES = ["client", "fastagent", "agentcore", "pi-remote"] as const;
+const PACKAGES = ["client", "fastagent", "agentcore", "pi-remote", "harness-dsh"] as const;
 const srcOf = (name: string) => resolve(repo, "packages", name, "src");
 const manifestOf = (name: string) =>
   JSON.parse(readFileSync(resolve(repo, "packages", name, "package.json"), "utf8")) as {
@@ -114,6 +114,22 @@ describe("package lines", () => {
     const manifest = manifestOf("pi-remote");
     const directDeps = Object.keys(manifest.dependencies ?? {}).filter((dep) => dep.startsWith("@earendil-works/"));
     expect(directDeps).toEqual([]);
+  });
+
+  it("@fastagent-sh/harness-dsh stays decoupled from pi-durable, and @fastagent-sh/fastagent never imports @deepseek-ai/*", () => {
+    const dshImports = filesUnder(srcOf("harness-dsh")).flatMap((file) =>
+      importsOf(file)
+        .bare.filter((spec) => spec.startsWith("@earendil-works/pi-durable"))
+        .map((spec) => `${relative(repo, file)} → ${spec}`),
+    );
+    expect(dshImports).toEqual([]);
+
+    const fastagentDsh = filesUnder(srcOf("fastagent")).flatMap((file) =>
+      importsOf(file)
+        .bare.filter((spec) => spec.startsWith("@deepseek-ai/") || spec.startsWith("@fastagent-sh/harness-dsh"))
+        .map((spec) => `${relative(repo, file)} → ${spec}`),
+    );
+    expect(fastagentDsh).toEqual([]);
   });
 });
 

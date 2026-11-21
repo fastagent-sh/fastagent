@@ -22,6 +22,8 @@ export default defineConfig({
       { find: /^@fastagent-sh\/agentcore$/, replacement: `${source("agentcore")}/index.ts` },
       { find: /^@fastagent-sh\/pi-remote\/(.+)$/, replacement: `${source("pi-remote")}/$1.ts` },
       { find: /^@fastagent-sh\/pi-remote$/, replacement: `${source("pi-remote")}/index.ts` },
+      { find: /^@fastagent-sh\/harness-dsh\/(.+)$/, replacement: `${source("harness-dsh")}/$1.ts` },
+      { find: /^@fastagent-sh\/harness-dsh$/, replacement: `${source("harness-dsh")}/index.ts` },
     ],
   },
   test: {
