@@ -20,10 +20,8 @@ import { activeWork } from "../../../packages/fastagent/src/busy.ts";
 import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-login.ts";
 import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
 import { createAuthManager } from "../../../packages/fastagent/src/harnesses/models/remote-auth.ts";
-import {
-  durableCredentialStore,
-  overlayCredentialStore,
-} from "../../../packages/fastagent/src/harnesses/pi-durable/credentials.ts";
+import { overlayCredentialStore } from "../../../packages/fastagent/src/harnesses/models/credentials.ts";
+import { durableCredentialStore } from "../../../packages/fastagent/src/harnesses/pi-durable/credentials.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 import { KEY, served } from "../../harnesses/http-subject.ts";

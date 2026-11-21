@@ -14,7 +14,7 @@ import {
 } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectClock } from "@fastagent-sh/client";
 import { buildDefinitionShape, loadSourceDefinition } from "../../harnesses/pi-durable/open.ts";
-import { resolveHarnessSelection } from "../../harnesses/pi-durable/config.ts";
+import { resolveHarnessSelection } from "../../harnesses/config.ts";
 import { openServing, withInstanceClock } from "../../harnesses/serving.ts";
 import { enteredInstanceName } from "../../instance-name.ts";
 import { resolveStateRoot } from "../../paths.ts";

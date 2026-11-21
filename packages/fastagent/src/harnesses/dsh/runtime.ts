@@ -14,12 +14,12 @@ import type { McpClients } from "../../mcp/client.ts";
 import { modelRefOf } from "../../model-ref.ts";
 import type { Change, ClockStore } from "../../schedule/clock.ts";
 import type { Fire } from "../../schedule/state.ts";
-import { agentPresentation, resolveCodingTools } from "../pi-durable/config.ts";
-import type { DurableCredentialStore } from "../pi-durable/credentials.ts";
-import type { AgentDefinition } from "../pi-durable/definition.ts";
-import { mcpTools } from "../pi-durable/mcp.ts";
-import { type PostgresDatabase, acquirePgDatabase } from "../pi-durable/postgres/storage.ts";
-import { definitionSections, readCommands } from "../pi-durable/text.ts";
+import type { AgentDefinition } from "../../definition/definition.ts";
+import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
+import { agentPresentation, resolveCodingTools } from "../config.ts";
+import { mcpTools } from "../mcp.ts";
+import type { DurableCredentialStore } from "../models/credentials.ts";
+import { definitionSections, readCommands } from "../text.ts";
 import type { HarnessOpenContext, InstancePlace, OpenServingOptions, OpenedHarnessRuntime } from "../serving.ts";
 
 const DSH_PACKAGE_NAME = ["@fastagent-sh", "harness-dsh"].join("/");

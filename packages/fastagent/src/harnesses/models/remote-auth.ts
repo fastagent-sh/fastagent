@@ -15,7 +15,7 @@ import {
   agentError,
 } from "@fastagent-sh/client/agent-api";
 import { beginWork } from "../../busy.ts";
-import type { DurableCredentialStore } from "../pi-durable/credentials.ts";
+import type { DurableCredentialStore } from "./credentials.ts";
 import type { ModelEnvironment } from "./environment.ts";
 import { SignInCancelled, loginOver } from "./login.ts";
 import { interactiveAuth, loginProviders } from "./models.ts";

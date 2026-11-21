@@ -35,11 +35,11 @@ import { modelRefOf } from "../../model-ref.ts";
 import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type Needs, isNeeds } from "../../needs.ts";
-import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type DefinedSchedule } from "./define.ts";
-import { agentPresentation, checkProgramConfig, resolveCodingTools } from "./config.ts";
-import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "./definition.ts";
-import { importRegistry } from "./registry.ts";
-import { definitionSections, readCommands } from "./text.ts";
+import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type DefinedSchedule } from "../define.ts";
+import { agentPresentation, checkProgramConfig, resolveCodingTools } from "../config.ts";
+import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "../../definition/definition.ts";
+import { importRegistry } from "../../definition/registry.ts";
+import { definitionSections, readCommands } from "../text.ts";
 
 const DEFINITION_EXTENSION = "fastagent.definition";
 

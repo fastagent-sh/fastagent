@@ -200,7 +200,7 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
     await Promise.all([
       import("../../harnesses/serving.ts"),
       import("../../harnesses/pi-durable/open.ts"),
-      import("../../harnesses/pi-durable/config.ts"),
+      import("../../harnesses/config.ts"),
       import("../shared.ts"),
     ]);
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {

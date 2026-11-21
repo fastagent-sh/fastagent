@@ -4,16 +4,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  type PgDatabase,
-  openPgDatabase,
-} from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/database.ts";
+import { type PgDatabase, openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
   InstanceHeld,
   PostgresStorage,
   listPostgresInstances,
-  openPostgresDatabase,
   openPostgresStorage,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";

@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exists } from "../../paths.ts";
+import { exists } from "../paths.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { registryFiles } from "./registry.ts";
 

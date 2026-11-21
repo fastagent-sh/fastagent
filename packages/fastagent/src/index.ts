@@ -54,9 +54,9 @@ export type { Service } from "./service.ts";
 export {
   openPostgresDatabase,
   type PostgresDatabase,
+  type PostgresPoolOptions,
   type SharedPostgresDatabase,
-} from "./harnesses/pi-durable/postgres/storage.ts";
-export type { PostgresPoolOptions } from "./harnesses/pi-durable/postgres/database.ts";
+} from "./postgres.ts";
 export { McpError, type McpErrorCode } from "./mcp-api.ts";
 export { baseEnv } from "./child-env.ts";
 
@@ -68,7 +68,7 @@ export {
   type CodingToolsConfig,
   type HarnessName,
   type SandboxMode,
-} from "./harnesses/pi-durable/define.ts";
+} from "./harnesses/define.ts";
 export {
   defineTool,
   type InferToolArgs,
@@ -79,6 +79,6 @@ export {
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
-export { defineDefinition, type AgentDefinition } from "./harnesses/pi-durable/definition.ts";
+export { defineDefinition, type AgentDefinition } from "./definition/definition.ts";
 // The session a tool runs in, as the Agent hands it out.
 export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";

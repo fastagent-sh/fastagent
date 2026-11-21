@@ -8,10 +8,11 @@ import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } fro
 import { type ContainerTarget, containerArtifacts } from "./deploy/container.ts";
 import { checkContainer } from "./deploy/preflight.ts";
 import { resolveAuthPath } from "./harnesses/models/credentials.ts";
-import { type AgentDefinition, assertDefinition, definitionSecrets } from "./harnesses/pi-durable/definition.ts";
-import { loadProjectBuild } from "./harnesses/pi-durable/built.ts";
+import { type AgentDefinition, assertDefinition, definitionSecrets } from "./definition/definition.ts";
+import { loadProjectBuild } from "./definition/built.ts";
 import { buildDefinitionShape, loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
-import { type PostgresDatabase, listPostgresInstances } from "./harnesses/pi-durable/postgres/storage.ts";
+import { listPostgresInstances } from "./harnesses/pi-durable/postgres/storage.ts";
+import type { PostgresDatabase } from "./postgres.ts";
 import { instanceName } from "./instance-name.ts";
 import { nextRun } from "./schedule/cron.ts";
 
@@ -24,9 +25,7 @@ import type { DeclaredSecret } from "./declared-secrets.ts";
 export type { ExtensionCli } from "./cli/extension.ts";
 export type { ContainerTarget } from "./deploy/container.ts";
 export type { DeclaredSecret } from "./declared-secrets.ts";
-export type { PostgresDatabase, PostgresLimits } from "./harnesses/pi-durable/postgres/storage.ts";
-export type { CreateIndex } from "./harnesses/pi-durable/postgres/schema.ts";
-export type { PgExecutor } from "./harnesses/pi-durable/postgres/database.ts";
+export type { CreateIndex, PgExecutor, PostgresDatabase, PostgresLimits } from "./postgres.ts";
 
 /** One of the definition's schedules, as a platform inspects it without running it. */
 export interface ScheduleFact {

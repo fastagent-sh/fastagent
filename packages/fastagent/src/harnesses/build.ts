@@ -7,15 +7,15 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "./built.ts";
-import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../../mcp/config.ts";
-import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../../paths.ts";
-import { readPackageJson } from "../../runtime.ts";
-import { HARNESS_PACKAGES } from "../../version.ts";
-import { type AgentDefinition, DEFINITION_FORMAT } from "./definition.ts";
-import { loadSourceDefinition } from "./open.ts";
-import { REGISTRY_KINDS } from "./registry.ts";
-import { type ProjectCompiler, projectCompiler } from "./tsc.ts";
+import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "../definition/built.ts";
+import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../mcp/config.ts";
+import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
+import { readPackageJson } from "../runtime.ts";
+import { HARNESS_PACKAGES } from "../version.ts";
+import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
+import { loadSourceDefinition } from "./pi-durable/open.ts";
+import { REGISTRY_KINDS } from "../definition/registry.ts";
+import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
 const STAGING_DIR = join(".fastagent", "build");
 

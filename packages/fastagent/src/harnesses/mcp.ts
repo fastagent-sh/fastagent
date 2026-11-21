@@ -2,8 +2,8 @@
 import type { JsonObject } from "@earendil-works/pi-ai";
 import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
 import type { Schema } from "@earendil-works/pi-schema";
-import type { McpTool } from "../../mcp/client.ts";
-import { McpError } from "../../mcp-api.ts";
+import type { McpTool } from "../mcp/client.ts";
+import { McpError } from "../mcp-api.ts";
 
 export function mcpTools(tools: readonly McpTool[]): ToolRegistration[] {
   return tools.map((tool) =>

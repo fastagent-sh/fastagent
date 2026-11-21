@@ -21,7 +21,7 @@ Use these shared seams instead of writing per-file mocks:
 | --- | --- | --- |
 | `doubles/cli-run.ts` (`runInProcess`, `fauxAgent`, `agentWorkspace`) | Spawning `packages/fastagent/src/cli.ts` for command logic | `integration/double-parity/cli-run-parity.integration.test.ts` |
 | `doubles/git-double.ts` (`gitAnswersIn`) | `packages/fastagent/src/git.ts` | `integration/double-parity/git-double.integration.test.ts` |
-| `doubles/tsc-double.ts` | `packages/fastagent/src/harnesses/pi-durable/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
+| `doubles/tsc-double.ts` | `packages/fastagent/src/definition/tsc.ts` | `integration/double-parity/tsc-double.integration.test.ts` |
 | `doubles/postgres-double.ts` (`servedPostgres`) | A PostgreSQL server (PGlite on a loopback port) | `integration/double-parity/postgres-double.integration.test.ts`, against `FASTAGENT_TEST_POSTGRES_URL` |
 | `doubles/storage-no-wait.ts` | `packages/fastagent/src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
 | `doubles/codex-model.ts` | Model providers | pi-ai's `fauxProvider` |

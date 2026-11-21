@@ -5,7 +5,7 @@
 import { cpSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildProject } from "../../packages/fastagent/src/harnesses/pi-durable/build.ts";
+import { buildProject } from "../../packages/fastagent/src/harnesses/build.ts";
 
 export const FIXTURES = fileURLToPath(new URL("../fixtures", import.meta.url));
 

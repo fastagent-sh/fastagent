@@ -4,9 +4,9 @@
  * assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
-import type { McpServerDeclaration } from "../../mcp/config.ts";
-import type { Needs } from "../../needs.ts";
-import type { ScheduleConfig } from "../../schedule/schedule.ts";
+import type { McpServerDeclaration } from "../mcp/config.ts";
+import type { Needs } from "../needs.ts";
+import type { ScheduleConfig } from "../schedule/schedule.ts";
 
 /** The built-in coding tools FastAgent ships. */
 export const CODING_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;

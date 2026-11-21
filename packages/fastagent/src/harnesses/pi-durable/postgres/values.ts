@@ -3,7 +3,7 @@
  * an empty text and how many parts there are, and `durable_values` holds the parts under the row's kind and key. A
  * database that refuses a long value (Aurora DSQL: 1 MiB) takes any record this way. Every read assembles them.
  */
-import type { PgExecutor } from "./database.ts";
+import type { PgExecutor } from "../../../postgres.ts";
 
 /** What a stored text belongs to: its table, and for a revision its seq beside its document's id. */
 export type ValueKind = "conversation" | "entry" | "task" | "submission" | "document" | "revision";

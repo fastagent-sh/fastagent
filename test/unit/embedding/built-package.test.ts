@@ -1,10 +1,10 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
-import { loadBuiltDefinition, loadProjectBuild } from "../../../packages/fastagent/src/harnesses/pi-durable/built.ts";
+import { loadBuiltDefinition, loadProjectBuild } from "../../../packages/fastagent/src/definition/built.ts";
 import { FIXTURES, installProbe } from "../../harnesses/probe-package.ts";
 import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
-import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/harnesses/pi-durable/definition.ts";
+import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/definition/definition.ts";
 import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -55,7 +55,7 @@ async function ask(agent: LocalAgent, name: string, args: Record<string, unknown
   return end;
 }
 
-vi.mock("../../../packages/fastagent/src/harnesses/pi-durable/tsc.ts", () => import("../../doubles/tsc-double.ts"));
+vi.mock("../../../packages/fastagent/src/definition/tsc.ts", () => import("../../doubles/tsc-double.ts"));
 
 let installed: string | undefined;
 

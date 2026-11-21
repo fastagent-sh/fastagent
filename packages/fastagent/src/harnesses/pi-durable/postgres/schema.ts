@@ -5,7 +5,7 @@
  * writes an instance (storage.ts). No sequence, advisory lock or temporary table: the storage needs none, and Aurora
  * DSQL has none.
  */
-import type { PgDatabase, PgExecutor } from "./database.ts";
+import type { CreateIndex, PgDatabase } from "../../../postgres.ts";
 
 const VERSION = 1;
 
@@ -60,12 +60,6 @@ const TABLES = [
  * creates, so the loser of a race fails on the relation (42P07), its row type (42710) or a catalog key (23505).
  */
 const MADE_CONCURRENTLY = new Set(["42P07", "42710", "23505"]);
-
-/**
- * How an index is made: by default its statement as written. A database that builds one as a job (Aurora DSQL's
- * `ASYNC`) starts it and answers how to wait for it.
- */
-export type CreateIndex = (db: PgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
 
 const createIndexAsWritten: CreateIndex = async (db, statement) => {
   await db.query(statement);

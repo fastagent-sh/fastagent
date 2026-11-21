@@ -1,8 +1,8 @@
 /** The program's `fastagent.config.ts`, checked: the one place an agent's settings are written. */
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
-import { declareServers } from "../../mcp/config.ts";
-import { modelRefOf } from "../../model-ref.ts";
+import { declareServers } from "../mcp/config.ts";
+import { modelRefOf } from "../model-ref.ts";
 import {
   CODING_TOOL_NAMES,
   HARNESS_NAMES,
@@ -13,7 +13,7 @@ import {
   type HarnessName,
   type SandboxMode,
 } from "./define.ts";
-import type { AgentDefinition } from "./definition.ts";
+import type { AgentDefinition } from "../definition/definition.ts";
 
 const THINKING_LEVELS = [
   "off",
