@@ -5,8 +5,6 @@
 /** @public */
 export { openDshAgent } from "./agent.ts";
 /** @public */
-export { openDshAgentFromDir, type DshFromDirOptions } from "./from-dir.ts";
-/** @public */
 export { MemoryDshEventStore } from "./persistence.ts";
 /** @public */
 export {

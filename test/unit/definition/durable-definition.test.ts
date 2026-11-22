@@ -19,16 +19,12 @@ import {
 import * as EffectSchema from "effect/Schema";
 import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/pi-durable/tool.ts";
+import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/tool.ts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
-import {
-  type AssembleAgentOptions,
-  buildDefinition,
-  assembleAgent,
-  loadSourceDefinition,
-} from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { buildDefinition, loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
+import { type AssembleAgentOptions, assembleAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import type { LocalAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { log } from "../../../packages/fastagent/src/log.ts";
@@ -306,6 +302,14 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         "fastagent.config.ts": 'export default { codingTools: "none" };\n',
       });
       await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
+
+      // An authored extension cannot shadow pi-durable's built-in "coding-tools" extension.
+      const shadowCoding = agentPackage({
+        ...FILES,
+        "src/extensions/shadow.ts": 'export default { name: "coding-tools" };\n',
+      });
+      const shadowDef = await loadSourceDefinition(shadowCoding);
+      expect(() => buildDefinition(shadowDef, ENV)).toThrow(/both define the extension "coding-tools"/);
     });
   });
 });

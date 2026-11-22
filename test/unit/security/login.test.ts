@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,9 +11,6 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai";
-import { Harness, createRegistry } from "@earendil-works/pi-durable";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
@@ -21,8 +19,11 @@ import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-
 import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
 import { createAuthManager } from "../../../packages/fastagent/src/harnesses/models/remote-auth.ts";
 import { overlayCredentialStore } from "../../../packages/fastagent/src/harnesses/models/credentials.ts";
-import { durableCredentialStore } from "../../../packages/fastagent/src/harnesses/pi-durable/credentials.ts";
-import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
+import {
+  memoryDurableCredentialStore,
+  postgresDurableCredentialStore,
+  sqliteDurableCredentialStore,
+} from "../../../packages/fastagent/src/harnesses/models/durable-credentials.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 import { KEY, served } from "../../harnesses/http-subject.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -264,13 +265,8 @@ describe("login (the entry point any front end drives with pi-ai's AuthInteracti
 describe("durable instance credentials and remote Auth HTTP API", () => {
   it("persists OAuth credentials and deviceId in instance storage across reopen and layers over fallback store", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-durable-creds-"));
-    const dbPath = join(dir, "agent.sqlite");
-    const h1 = await Harness.open(
-      await openLockedStorage(dbPath),
-      { models: createModels(), registry: createRegistry() },
-      BACKGROUND_CONTEXT,
-    );
-    const store1 = durableCredentialStore(h1, BACKGROUND_CONTEXT);
+    const dbPath = join(dir, "credentials.sqlite");
+    const store1 = sqliteDurableCredentialStore(dbPath);
     const deviceId1 = await store1.getOrCreateDeviceId();
     await store1.modify("openai-codex", async () => ({
       type: "oauth",
@@ -278,15 +274,10 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
       refresh: "ref-1",
       expires: Date.now() + 3_600_000,
     }));
-    await h1.close(BACKGROUND_CONTEXT);
+    await store1.close();
 
-    const h2 = await Harness.open(
-      await openLockedStorage(dbPath),
-      { models: createModels(), registry: createRegistry() },
-      BACKGROUND_CONTEXT,
-    );
+    const store2 = sqliteDurableCredentialStore(dbPath);
     try {
-      const store2 = durableCredentialStore(h2, BACKGROUND_CONTEXT);
       expect(await store2.getOrCreateDeviceId()).toBe(deviceId1);
       expect(await store2.read("openai-codex")).toMatchObject({ type: "oauth", access: "acc-1", refresh: "ref-1" });
       expect(await store2.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
@@ -312,19 +303,19 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
       expect(await overlay.read("anthropic")).toEqual({ type: "api_key", key: "fallback-key" });
       await overlay.delete("openai-codex");
       expect(await store2.read("openai-codex")).toBeUndefined();
+      // DELETE journal mode leaves no persistent -wal sidecar file holding plaintext tokens.
+      expect(existsSync(`${dbPath}-wal`)).toBe(false);
+
+      const brokenPg = postgresDurableCredentialStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
+      await expect(brokenPg.read("openai-codex")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      await brokenPg.close();
     } finally {
-      await h2.close(BACKGROUND_CONTEXT);
+      await store2.close();
     }
   });
 
   it("drives OAuth auth_url + manual_code, device_code polling, cancel, and logout over HTTP via connectAuth", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-"));
-    const harness = await Harness.open(
-      await openLockedStorage(join(dir, "agent.sqlite")),
-      { models: createModels(), registry: createRegistry() },
-      BACKGROUND_CONTEXT,
-    );
-    const durableStore = durableCredentialStore(harness, BACKGROUND_CONTEXT);
+    const durableStore = memoryDurableCredentialStore();
 
     let finishDevice!: () => void;
     const deviceReady = new Promise<void>((resolve) => {
@@ -442,7 +433,7 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
     } finally {
       authManager.close();
       await http.close();
-      await harness.close(BACKGROUND_CONTEXT);
+      await durableStore.close();
     }
   });
 
@@ -493,7 +484,20 @@ export default { model: "remote-keyed/m1", providers: [provider] };
       await first.close();
     }
 
-    // Reopen on the same root (no local .secrets/auth.json): credential persists in instance SQLite storage.
+    // Reopen on the same root on BOTH harnesses: credential persists in shared instance storage across harness switches.
+    const dshView = await openSource(dir, { secrets: {}, harness: "dsh", sandbox: "off" });
+    const dshSvc = await dshView.serve({ apiKeys: [KEY] });
+    const dshPort = await dshSvc.listen(0, "127.0.0.1");
+    try {
+      const dshAuth = connectAuth(`http://127.0.0.1:${dshPort}`, { apiKey: KEY });
+      expect((await dshAuth.providers()).find((p) => p.provider === "remote-keyed")).toMatchObject({
+        authenticated: true,
+        stored: "api_key",
+      });
+    } finally {
+      await dshView.close();
+    }
+
     const second = await openSource(dir, { secrets: {} });
     const svc2 = await second.serve({ apiKeys: [KEY] });
     const port2 = await svc2.listen(0, "127.0.0.1");
@@ -513,13 +517,7 @@ export default { model: "remote-keyed/m1", providers: [provider] };
   });
 
   it("tracks active login flows in busy() and auto-cancels them on TTL expiry, and listenLocalRedirect enforces OAuth state", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "fa-remote-auth-ttl-"));
-    const harness = await Harness.open(
-      await openLockedStorage(join(dir, "agent.sqlite")),
-      { models: createModels(), registry: createRegistry() },
-      BACKGROUND_CONTEXT,
-    );
-    const durableStore = durableCredentialStore(harness, BACKGROUND_CONTEXT);
+    const durableStore = memoryDurableCredentialStore();
     const slowProvider: Provider = {
       ...fauxProvider({ provider: "slow-oauth", models: [{ id: "m1" }] }).provider,
       name: "Slow OAuth",
@@ -551,7 +549,7 @@ export default { model: "remote-keyed/m1", providers: [provider] };
       expect(activeWork()).toBe(baseline);
     } finally {
       manager.close();
-      await harness.close(BACKGROUND_CONTEXT);
+      await durableStore.close();
     }
 
     // Reserve a free ephemeral port, close it, then verify listenLocalRedirect enforces GET + matching state.

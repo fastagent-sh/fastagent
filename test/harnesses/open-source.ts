@@ -1,4 +1,4 @@
-import { loadSourceDefinition } from "../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../packages/fastagent/src/harnesses/assembly.ts";
 import { type LocalAgent, type OpenAgentOptions, openAgent } from "../../packages/fastagent/src/harnesses/serving.ts";
 
 type SourceOptions = Omit<OpenAgentOptions, "root">;

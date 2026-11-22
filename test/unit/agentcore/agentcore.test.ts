@@ -11,7 +11,7 @@ import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/sr
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
 import { Unavailable } from "../../../packages/fastagent/src/unavailable.ts";
 import agentcorePackage from "../../../packages/agentcore/package.json" with { type: "json" };
-import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { type CreateIndex, type PostgresDatabase, openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { fauxAgent, runInProcess } from "../../doubles/cli-run.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";

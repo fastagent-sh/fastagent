@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
-import { loadSourceDefinition } from "../harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../harnesses/assembly.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";

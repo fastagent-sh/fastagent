@@ -21,6 +21,28 @@ const INT8 = 20;
 const CONNECT_TIMEOUT_MS = 10_000;
 const ATTEMPTS = 4;
 
+/** Whether `error` is a transient PostgreSQL / Aurora DSQL failure safe for a caller to retry. */
+export function isTransientPgError(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  if (typeof code === "string") {
+    if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EPIPE"].includes(code)) return true;
+    if (
+      code.startsWith("08") ||
+      code.startsWith("53") ||
+      code === "40001" ||
+      code === "40P01" ||
+      code === "57P01" ||
+      code === "57P02" ||
+      code === "57P03" ||
+      code === "OC000" ||
+      code === "OC001"
+    ) {
+      return true;
+    }
+  }
+  return error instanceof Error && /Connection terminated|timeout exceeded when trying to connect/.test(error.message);
+}
+
 /** An error that means the database was not reached: nothing the attempt sent took effect, or nothing was sent. */
 function unreachable(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;

@@ -15,7 +15,7 @@ import {
   definitionProviders,
   loadSourceDefinition,
   modelSpecFor,
-} from "../harnesses/pi-durable/open.ts";
+} from "../harnesses/assembly.ts";
 import type { OpenedServing } from "../harnesses/serving.ts";
 import { log } from "../log.ts";
 import { isDeployedWorkspace } from "../paths.ts";

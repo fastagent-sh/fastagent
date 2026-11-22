@@ -21,7 +21,7 @@ import {
   agentError,
 } from "@fastagent-sh/client/agent-api";
 import { log } from "./log.ts";
-import { type PostgresDatabase, acquirePgDatabase } from "./postgres.ts";
+import { type PostgresDatabase, acquirePgDatabase, isTransientPgError } from "./postgres.ts";
 
 interface ConversationSetOptions {
   /** Ephemeral idempotency bindings expire after a bounded TTL; caller-named conversations are retained durably. */
@@ -47,27 +47,6 @@ const DEFAULT_MAX_EPHEMERAL = 10_000;
 const PG_PRUNE_INTERVAL_MS = 60_000;
 
 const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
-
-function isTransientPgError(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code;
-  if (typeof code === "string") {
-    if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EPIPE"].includes(code)) return true;
-    if (
-      code.startsWith("08") ||
-      code.startsWith("53") ||
-      code === "40001" ||
-      code === "40P01" ||
-      code === "57P01" ||
-      code === "57P02" ||
-      code === "57P03" ||
-      code === "OC000" ||
-      code === "OC001"
-    ) {
-      return true;
-    }
-  }
-  return error instanceof Error && /Connection terminated|timeout exceeded when trying to connect/.test(error.message);
-}
 
 function mapPgError(error: unknown): unknown {
   if (!isTransientPgError(error)) return error;

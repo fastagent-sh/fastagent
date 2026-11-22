@@ -1,10 +1,8 @@
 /**
- * A definition assembled onto pi-durable: a source project read as a definition, its secrets
- * checked as one list, its code built with them, and an Agent opened over pi-ai's built-in models with the
- * text, tools and extensions installed. `dev`, `start` and an embedder call the same function.
+ * `pi-durable` agent assembler: takes an already-built definition (`harnesses/assembly.ts`) and opens a
+ * `DurableAgent` over `pi-durable` with its coding tools, authored tools, MCP tools, extensions, and execution env.
  */
-import { basename, resolve } from "node:path";
-import type { Models, Provider } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import {
   type Extension,
   type HarnessSettings,
@@ -21,215 +19,35 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
-import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../../paths.ts";
-import { loadRawProgramConfig } from "../../program-config.ts";
-import { readPackageJson } from "../../runtime.ts";
-import { fastagentVersion } from "../../version.ts";
-import { InstanceExecutionEnv } from "./execution-env.ts";
-import { instanceName } from "../../instance-name.ts";
-import type { RunsAs } from "../../serving-command.ts";
 import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
+import type { AgentDefinition } from "../../definition/definition.ts";
+import { instanceName } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
-import { type Needs, isNeeds } from "../../needs.ts";
-import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName } from "../define.ts";
-import { agentPresentation, checkProgramConfig, resolveCodingTools } from "../config.ts";
-import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "../../definition/definition.ts";
-import { importRegistry } from "../../definition/registry.ts";
+import type { RunsAs } from "../../serving-command.ts";
+import { type BuiltDefinition, DEFINITION_EXTENSION, type Unfinished } from "../assembly.ts";
+import { agentPresentation, resolveCodingTools } from "../config.ts";
+import { CODING_TOOL_NAMES, type CodingToolName } from "../define.ts";
 import { definitionSections, readCommands } from "../text.ts";
-
-const DEFINITION_EXTENSION = "fastagent.definition";
-
-/** The agent package's `fastagent.config.ts`, checked; `{}` without one. */
-async function loadConfig(dir: string): Promise<AgentConfig> {
-  const { value, file } = await loadRawProgramConfig(dir);
-  return checkProgramConfig(value, file);
-}
-
-/** The default model a process here runs with: `--model` > `FASTAGENT_MODEL` > the configuration's `model`. */
-export function modelSpecFor(
-  config: Pick<AgentConfig, "model">,
-  flag: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  return flag ?? (env.FASTAGENT_MODEL || config.model);
-}
-
-/** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */
-export async function loadSourceDefinition(directory: string): Promise<AgentDefinition> {
-  // Absolute, since the prompt names the definition's files by it and the agent's tools resolve a relative path against
-  // the agent's own working directory, which is this one.
-  const dir = resolve(directory);
-  const config = await loadConfig(dir);
-  const registry = await importRegistry(dir);
-  const pkg = (await readPackageJson(dir)) as { name?: unknown; version?: unknown; description?: unknown };
-  return defineDefinition({
-    format: DEFINITION_FORMAT,
-    builtWith: await fastagentVersion(),
-    name: typeof pkg.name === "string" ? pkg.name : basename(dir),
-    // A source project need not be published, so it need not have a version.
-    version: typeof pkg.version === "string" ? pkg.version : "0.0.0",
-    ...(typeof pkg.description === "string" && pkg.description.trim() !== "" ? { description: pkg.description } : {}),
-    source: true,
-    dir,
-    config,
-    registry,
-  });
-}
-
-/** What one value is once its secrets are supplied, or why it is not what its place holds. */
-function built<T>(
-  source: string,
-  value: unknown,
-  values: Record<string, string | undefined>,
-  accept: (v: unknown) => string | undefined,
-): T {
-  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
-  const problem = accept(resolved);
-  if (problem !== undefined) throw new Error(`${source}: ${problem}`);
-  return resolved as T;
-}
-
-const toolProblem = (value: unknown): string | undefined => {
-  const tool = value as Partial<ToolRegistration> | null;
-  if (
-    tool?.parameters !== null &&
-    (typeof tool?.parameters === "object" || typeof tool?.parameters === "function") &&
-    "~standard" in tool.parameters
-  ) {
-    return 'parameters is an unconverted Standard Schema: wrap the tool with defineTool from "@fastagent-sh/fastagent"';
-  }
-  if (
-    typeof tool?.name !== "string" ||
-    typeof tool.description !== "string" ||
-    typeof tool.parameters !== "object" ||
-    tool.parameters === null ||
-    Array.isArray(tool.parameters) ||
-    typeof tool.execute !== "function"
-  ) {
-    return "must default-export a tool (defineTool from @fastagent-sh/fastagent or @earendil-works/pi-durable), or needs(...) around one";
-  }
-  return undefined;
-};
-const extensionProblem = (value: unknown): string | undefined =>
-  typeof (value as Partial<Extension> | null)?.name === "string"
-    ? undefined
-    : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
-const providerProblem = (value: unknown): string | undefined =>
-  typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
-
-/** The definition's code, built with the values of the secrets it declares. */
-export interface BuiltDefinition {
-  tools: ToolRegistration[];
-  extensions: Extension[];
-  providers: Provider[];
-}
-
-/**
- * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
- * the values it declared, and refuse one that is not what its directory holds.
- */
-export function buildDefinition(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
-  const missing = missingSecrets(codeSecrets(definition), env);
-  if (missing.length > 0) {
-    throw new Error(`missing required secrets: ${describeSecrets(missing)} (set them in the environment)`);
-  }
-  const values = (value: unknown): Record<string, string | undefined> =>
-    isNeeds(value) ? Object.fromEntries(value.secrets.map(({ name }) => [name, env[name] || undefined])) : {};
-  const { registry, config } = definition;
-  const tools = registry.tools.map(({ file, value }) => ({
-    source: file,
-    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
-  }));
-  const extensions = [
-    ...registry.extensions.map(({ file, value }) => ({
-      source: file,
-      ...named(built<Extension>(file, value, values(value), extensionProblem)),
-    })),
-  ];
-  refuseTwins("tool", tools);
-  // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
-  const codingTools = resolveCodingTools(config.codingTools);
-  refuseTwins("extension", [
-    ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CodingTools.name }] : []),
-    { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
-    ...extensions,
-  ]);
-  return {
-    tools: tools.map(({ value }) => value),
-    extensions: extensions.map(({ value }) => value),
-    providers: (config.providers ?? []).map((value, i) =>
-      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
-    ),
-  };
-}
-
-/**
- * The definition's code built only to read its shape (which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
- * this machine holds the values. Whatever a build refuses, this refuses too.
- */
-export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {
-  const values: NodeJS.ProcessEnv = Object.fromEntries(
-    definition.inputs.secrets.map(({ name }) => [name, "(no value here)"]),
-  );
-  for (const [name, value] of Object.entries(env)) if (value) values[name] = value;
-  return buildDefinition(definition, values);
-}
-
-/**
- * The providers of the definition in `agentDir`, for a command that reads models without serving (`models`, `login`,
- * the first-run picker): with the values `env` holds and stand-ins for the rest, so listing a model or signing in to
- * it needs no secret the serve would. Without these a provider in code, or one replacing a built-in's id, would be
- * unknown there, or verified against the built-in's endpoint.
- */
-export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv): Promise<Provider[]> {
-  return buildDefinitionShape(await loadSourceDefinition(agentDir), env).providers;
-}
-
-const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
-
-/** Refuse two of a kind under one name: whichever is installed or kept last would silently stand in for the other. */
-function refuseTwins(kind: string, entries: readonly { source: string; name: string }[]): void {
-  const first = new Map<string, string>();
-  for (const { source, name } of entries) {
-    const earlier = first.get(name);
-    if (earlier !== undefined) throw new Error(`${earlier} and ${source} both define the ${kind} "${name}"`);
-    first.set(name, source);
-  }
-}
+import { type DurableAgent, openDurableAgent } from "./agent.ts";
+import { InstanceExecutionEnv } from "./execution-env.ts";
 
 export interface AssembleAgentOptions {
   storage: Storage;
-  /** Who runs the instance, as far as the prompt says where the agent runs (deployed or not). */
   runsAs: RunsAs;
-  /** The instance's name (`instanceName`): what `info().name` reports. Default: the definition's, as one segment. */
   name?: string;
-  /** The agent's working directory: the definition's own, unless the instance is elsewhere. */
   workdir?: string;
-  /** The definition's code, built once with its secrets (`buildDefinition`). */
   code: BuiltDefinition;
   mcpTools?: ToolRegistration[];
-  /** pi-ai's built-ins and the definition's providers over the instance's credentials. */
   models: Models;
-  /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
   settings?: HarnessSettings;
   unfinished?: Unfinished;
-  /** The whole environment of the processes the agent starts (child-env.ts): nothing of this process's is added. */
   processEnv: Readonly<Record<string, string>>;
-  /** Where the runs' spans go. */
   telemetry?: TelemetryContext;
-  /** The longest message the storage takes, in bytes: a longer one is refused `too_large`. */
   maxMessageBytes?: number;
 }
 
-/**
- * The default model `spec` names, or why this instance cannot answer with it. A model chosen now (`chosen`: a flag,
- * `FASTAGENT_MODEL`) is strict, so a typo fails at the open. A configured default may have left the catalog since it was
- * written (a provider retires it, a catalog update renames it); the instance still opens, with no default.
- */
 function resolveDefaultModel(
   spec: string | undefined,
   chosen: boolean,
@@ -261,11 +79,10 @@ function codingToolsExtension(selected: readonly CodingToolName[]): Extension | 
   });
 }
 
-/** Open the definition as an Agent over `models`: the selected coding tools, then its own. */
+/** Open the definition as a `pi-durable` Agent over `models`: selected coding tools, then authored and MCP tools. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
-  const { dir } = definition;
+  const { dir, config } = definition;
   const { code, models } = options;
-  const { config } = definition;
   const spec = options.model ?? config.model;
   const { model, unusableDefault } = resolveDefaultModel(spec, options.model !== undefined, models);
   const authoredNames = new Set(
@@ -278,7 +95,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const builtinCoding = codingToolsExtension(selectedCodingTools);
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
-  // After the coding tools, so a tool of the definition's own with one of their names replaces it.
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
@@ -306,7 +122,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
-    // What the agent runs is not `dev`'s own serving, even when `dev` is what runs the agent.
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),
   });
