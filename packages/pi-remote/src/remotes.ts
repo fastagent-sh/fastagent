@@ -15,6 +15,7 @@ import {
   expandRemoteEnvRef,
   isHttpRemote,
   isHttpUrl,
+  parseApiKeys,
   parseRemoteEntry,
   parseRemotesJson,
   removeRemoteConfig,
@@ -88,7 +89,7 @@ export async function connectRemote(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ agent: Agent; defaultSessionId?: string }> {
   if (isHttpRemote(remote)) {
-    const rawKey = remote.apiKey?.trim() || env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
+    const rawKey = remote.apiKey?.trim() || parseApiKeys(env.FASTAGENT_API_KEY)[0];
     if (!rawKey) {
       throw new Error(`Remote "${name}" has no apiKey configured and FASTAGENT_API_KEY is not set`);
     }

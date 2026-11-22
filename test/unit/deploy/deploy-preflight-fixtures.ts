@@ -17,7 +17,7 @@ export async function agent(files: Record<string, string> = {}): Promise<string>
   await writeFile(join(dir, ".secrets", "auth.json"), "{}\n");
   await writeFile(join(dir, ".secrets", ".env"), "K=v\n");
   for (const [name, content] of Object.entries(files)) {
-    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (schedules/…)
+    await mkdir(join(dir, name, ".."), { recursive: true }); // a fixture may name a nested file (src/tools/…)
     await writeFile(join(dir, name), content);
   }
   return dir;
