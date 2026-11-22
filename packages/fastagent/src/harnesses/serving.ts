@@ -6,7 +6,7 @@
 import { dirname, isAbsolute, join } from "node:path";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
-import { activeWork } from "../busy.ts";
+import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
 import {
   type ConversationStore,
@@ -113,6 +113,8 @@ export interface OpenedServing {
   agent: ServingAgent;
   /** Single-call invoker backed by this instance's conversation store. */
   invoker: InvokeApi;
+  /** Whether this instance has any unsettled turn or active remote auth flow. */
+  busy(): boolean;
   /** The active runtime harness (`"pi-durable"` or `"dsh"`). */
   harness: HarnessName;
   /** The active OS sandbox mode when `harness === "dsh"`. */
@@ -168,6 +170,7 @@ export interface HarnessOpenContext {
   readonly code: BuiltDefinition;
   readonly models: ModelEnvironment;
   readonly traces: Traces | undefined;
+  readonly work: WorkTracker;
   openMcp(): Promise<McpClients>;
   closeAuth(): void;
 }
@@ -260,6 +263,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     throw error;
   }
 
+  const work = createWorkTracker();
   let auth: AuthManager | undefined;
   const ctx: HarnessOpenContext = {
     definition,
@@ -280,6 +284,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     code,
     models,
     traces,
+    work,
     openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
     closeAuth: () => auth?.close(),
   };
@@ -301,6 +306,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         durableStore: durableCreds,
         providers: code.providers,
         environment: secrets,
+        work,
       });
     }
     conversations =
@@ -338,6 +344,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   return {
     agent: wrappedAgent,
     invoker,
+    busy: () => work.active() > 0 || (runtimeAgent.busy?.() ?? false),
     harness: selection.harness,
     ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...(auth === undefined ? {} : { auth }),
@@ -447,7 +454,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     invoke: invoker.invoke,
     invokeStream: invoker.invokeStream,
     ...(piHarness === undefined ? {} : { harness: piHarness }),
-    busy: () => activeWork() > 0 || (agent.busy?.() ?? piHarness?.wake().active ?? false),
+    busy: () => opened.busy(),
     serve(serveOptions = {}) {
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));

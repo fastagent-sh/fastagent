@@ -19,6 +19,7 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
+import type { WorkTracker } from "../../busy.ts";
 import type { AgentDefinition } from "../../definition/definition.ts";
 import { instanceName } from "../../instance-name.ts";
 import type { RunsAs } from "../../serving-command.ts";
@@ -49,6 +50,7 @@ export interface AssembleAgentOptions {
   processEnv: Readonly<Record<string, string>>;
   telemetry?: TelemetryContext;
   maxMessageBytes?: number;
+  work?: WorkTracker;
 }
 
 const CODING_TOOL_FACTORIES: Record<CodingToolName, () => ToolRegistration> = {
@@ -106,6 +108,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
     ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
+    ...(options.work === undefined ? {} : { work: options.work }),
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),
   });

@@ -14,7 +14,7 @@ import {
   type StartAuthLoginRequest,
   agentError,
 } from "@fastagent-sh/client/agent-api";
-import { beginWork } from "../../busy.ts";
+import { type WorkTracker, createWorkTracker } from "../../busy.ts";
 import type { DurableCredentialStore } from "./credentials.ts";
 import type { ModelEnvironment } from "./environment.ts";
 import { SignInCancelled, loginOver } from "./login.ts";
@@ -147,8 +147,16 @@ export function createAuthManager(options: {
   providers?: readonly Provider[];
   environment?: Readonly<Record<string, string>>;
   activeFlowTtlMs?: number;
+  work?: WorkTracker;
 }): AuthManager {
-  const { models, durableStore, providers = [], environment, activeFlowTtlMs = ACTIVE_FLOW_TTL_MS } = options;
+  const {
+    models,
+    durableStore,
+    providers = [],
+    environment,
+    activeFlowTtlMs = ACTIVE_FLOW_TTL_MS,
+    work = createWorkTracker(),
+  } = options;
   const flows = new Map<string, FlowRecord>();
   let closed = false;
 
@@ -253,7 +261,7 @@ export function createAuthManager(options: {
       }
       const { provider, method } = resolveProviderAndMethod(request);
       const now = Date.now();
-      const doneWork = beginWork();
+      const doneWork = work.begin();
       let released = false;
       const flow: FlowRecord = {
         flowId: randomUUID(),

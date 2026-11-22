@@ -70,6 +70,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     code,
     models,
     traces,
+    work,
   } = ctx;
 
   let stopRuns: ((error: Error) => void) | undefined;
@@ -93,6 +94,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(traces === undefined ? {} : { telemetry: traces.context }),
       ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
+      work,
     });
   } catch (error) {
     const failures: unknown[] = [error];

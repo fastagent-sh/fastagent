@@ -64,7 +64,7 @@ import {
   agentError,
   hasEnded as messageHasEnded,
 } from "@fastagent-sh/client/agent-api";
-import { beginWork } from "../../busy.ts";
+import { type WorkTracker, createWorkTracker } from "../../busy.ts";
 import type { Unfinished } from "../assembly.ts";
 import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
@@ -115,11 +115,15 @@ export interface DurableAgentOptions {
   telemetry?: TelemetryContext;
   /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
   maxMessageBytes?: number;
+  /** Per-instance tracker counting unsettled submissions for `busy()`. */
+  work?: WorkTracker;
 }
 
 export interface DurableAgent extends Agent {
   /** pi-durable's own API, for operating the agent. */
   readonly harness: Harness;
+  /** Whether any message submission is currently unsettled on this instance. */
+  busy(): boolean;
   /** The conversation a session id names, to operate it through `harness`. */
   conversation(sessionId: string): Promise<Conversation | undefined>;
   close(): Promise<void>;
@@ -145,6 +149,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
     },
     context,
   );
+  const work = options.work ?? createWorkTracker();
   const lifetime = Scope.makeUnsafe();
   try {
     const ids = await storageIds(harness, context);
@@ -166,12 +171,12 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
       // What an earlier process accepted and did not settle runs on in this one: it is this process's work now.
       for (const record of unsettled) {
         const submission = await harness.submission(record.id, context);
-        if (submission !== undefined) countUntilSettled(submission);
+        if (submission !== undefined) countUntilSettled(submission, work);
       }
     }
     harness.resume();
     await Effect.runPromise(Scope.provide(releaseWaitingQueues(harness, context), lifetime));
-    return durableAgent(harness, ids, sessions, lifetime, options);
+    return durableAgent(harness, ids, sessions, lifetime, work, options);
   } catch (error) {
     await Effect.runPromise(Scope.close(lifetime, Exit.void));
     await harness.close(context);
@@ -236,10 +241,11 @@ async function warnRemovedWork(
 }
 
 /**
- * A message not yet settled is the process's work in flight (busy.ts): what `dev`'s restart waits for. Whatever ends the wait, settling or the harness closing, ends the count.
+ * A message not yet settled is the instance's work in flight: what `dev`'s restart and `busy()` wait for.
+ * Whatever ends the wait, settling or the harness closing, ends the count.
  */
-function countUntilSettled(submission: Submission): void {
-  const done = beginWork();
+function countUntilSettled(submission: Submission, work: WorkTracker): void {
+  const done = work.begin();
   submission.wait(BACKGROUND_CONTEXT).then(done, done);
 }
 
@@ -270,6 +276,7 @@ function durableAgent(
   ids: Ids,
   sessions: Sessions,
   lifetime: Scope.Closeable,
+  work: WorkTracker,
   options: DurableAgentOptions,
 ): DurableAgent {
   const context = BACKGROUND_CONTEXT;
@@ -530,7 +537,7 @@ function durableAgent(
           // Counted once it is read back, whether or not that read succeeds: the wait must not be what reads the
           // storage first, or a failing read would fail it instead of answering this call.
           const record = yield* fromPromise(() => submission.status(context)).pipe(
-            Effect.ensuring(Effect.sync(() => countUntilSettled(submission))),
+            Effect.ensuring(Effect.sync(() => countUntilSettled(submission, work))),
           );
           if (!isInput(record)) throw new Error(`submission ${record.id} was admitted as a write`);
           return { message: yield* reads.message(record), replayed: false };
@@ -909,6 +916,7 @@ function durableAgent(
       attachment,
     },
     messages,
+    busy: () => work.active() > 0,
     conversation: (sessionId) => Effect.runPromise(reads.conversation(sessionId)),
     close: async () => {
       closing = true;

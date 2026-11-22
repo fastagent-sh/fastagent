@@ -47,4 +47,75 @@ describe("a host's own instance of an agent", () => {
     }
     expect(existsSync(join(dir, ".state", "agent.sqlite"))).toBe(true);
   });
+
+  it("isolates busy() per opened instance when two instances run in the same process", async () => {
+    const base = await mkdtemp(join(tmpdir(), "fa-busy-isolation-"));
+    const dir = join(base, "agent");
+    await mkdir(join(dir, "src", "tools"), { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "busy-iso", type: "module" }));
+    await writeFile(
+      join(dir, "fastagent.config.ts"),
+      `import { createFauxCore, createProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { defineAgent } from "@fastagent-sh/fastagent";
+const core = createFauxCore({ provider: "iso", api: "iso" });
+const stream = (...args) => {
+  const last = args[1].messages.at(-1);
+  core.appendResponses([
+    last?.role === "toolResult"
+      ? fauxAssistantMessage("done")
+      : fauxAssistantMessage([fauxToolCall("pause", {})], { stopReason: "toolUse" }),
+  ]);
+  return core.streamSimple(...args);
+};
+export default defineAgent({
+  model: "iso/" + core.getModel().id,
+  codingTools: false,
+  providers: [
+    createProvider({
+      id: "iso",
+      auth: { apiKey: { name: "ISO", resolve: async () => ({ auth: {} }) } },
+      models: core.models,
+      api: { stream, streamSimple: stream },
+    }),
+  ],
+});
+`,
+    );
+    await writeFile(
+      join(dir, "src", "tools", "pause.ts"),
+      `import { defineTool } from "@fastagent-sh/fastagent";
+export default defineTool({
+  name: "pause",
+  description: "Pauses briefly",
+  parameters: { type: "object", properties: {} } as const,
+  execute: async () => {
+    await new Promise((r) => setTimeout(r, 150));
+    return "ok";
+  },
+});
+`,
+    );
+    const definition = await loadSourceDefinition(dir);
+    const rootA = join(base, "root-a");
+    const rootB = join(base, "root-b");
+    await mkdir(rootA);
+    await mkdir(rootB);
+    const agentA = await openAgent(definition, { root: rootA });
+    const agentB = await openAgent(definition, { root: rootB });
+    try {
+      const sA = await agentA.sessions.create();
+      const pending = agentA.messages.send({ sessionId: sA.id, content: "go" }, { wait: 10 });
+      await vi.waitFor(() => {
+        expect(agentA.busy()).toBe(true);
+      });
+      expect(agentB.busy()).toBe(false);
+      expect((await pending).status).toBe("completed");
+      await vi.waitFor(() => {
+        expect(agentA.busy()).toBe(false);
+      });
+    } finally {
+      await agentA.close();
+      await agentB.close();
+    }
+  });
 });
