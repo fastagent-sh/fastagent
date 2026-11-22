@@ -1,5 +1,5 @@
 /**
- * Entering an agent directory for commands that run the agent (`dev`, `start`, `invoke`, `schedules run`):
+ * Entering an agent directory for commands that run the agent (`dev`, `start`, `invoke`):
  * directory + instance entry, first-run model resolution, and startup assembly/auth reporting.
  */
 import { resolve } from "node:path";
@@ -48,7 +48,7 @@ async function enterAgentDirectory(
 }
 
 /**
- * How every command that runs the agent on this machine enters it (`dev`, `start`, `invoke`, `schedules run`):
+ * How every command that runs the agent on this machine enters it (`dev`, `start`, `invoke`):
  * enters the directory and resolves a default model, or exits 2 when none is set and no terminal can pick one.
  */
 export async function enterAgentCommand(

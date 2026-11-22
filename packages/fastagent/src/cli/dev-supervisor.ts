@@ -10,7 +10,7 @@ import { dotEnvPath } from "../value-file.ts";
 import { log } from "../log.ts";
 import { activeWork } from "../busy.ts";
 
-/** The agent's code (its tools, extensions and schedules), loaded ONCE per worker: a restart is its only re-read. */
+/** The agent's code (its tools and extensions), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
 
 const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, .secrets/.env`;

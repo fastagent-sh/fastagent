@@ -150,7 +150,7 @@ export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env
   return resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, mode);
 }
 
-/** The durable machine-state home (sessions, schedules' state): `.state` in the instance root. */
+/** The durable machine-state home (sessions and instance state): `.state` in the instance root. */
 export function resolveStateRoot(
   dir: string,
   env: NodeJS.ProcessEnv = process.env,

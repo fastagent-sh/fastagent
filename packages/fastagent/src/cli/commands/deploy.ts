@@ -94,7 +94,8 @@ function flyConfig(app: string, port: number): string {
 [http_service]
   internal_port = ${port}
   force_https = true
-  # Suspend to zero when idle and resume on demand; keep a single machine (--ha=false) so nothing else contends for ${STORAGE_DIR}.
+  # Suspend to zero when idle and resume on demand (keep requests open via stream/wait while turns run, or set
+  # min_machines_running = 1 for fire-and-forget background turns); keep one machine (--ha=false) for ${STORAGE_DIR}.
   auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0

@@ -1,6 +1,6 @@
 /**
  * The process that owns an instance on this machine, as the CLI's other commands reach it. One process owns an
- * instance's state, so a command that operates a running instance (`invoke`, `schedules run`) goes
+ * instance's state, so a command that operates a running instance (`invoke`) goes
  * through it, by the Agent API, instead of opening the storage it holds. `dev` writes where it answers and a key of its
  * own into the instance's state once it listens, and removes them when it stops; a file a killed process left answers
  * nothing, and the command then opens the instance itself.

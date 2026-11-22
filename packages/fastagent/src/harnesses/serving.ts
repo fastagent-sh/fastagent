@@ -343,7 +343,7 @@ export interface OpenAgentOptions {
   /** OS sandbox mode override for `harness: "dsh"` (`"workspace"`, `"read-only"`, or `"off"`). */
   sandbox?: SandboxMode;
   /**
-   * The PostgreSQL database the instance's sessions and clock are in, instead of `<root>/.state/agent.sqlite`: its URL,
+   * The PostgreSQL database the instance's sessions are in, instead of `<root>/.state/agent.sqlite`: its URL,
    * and for a platform's own database how a connection signs in and what a transaction may hold. Over
    * `secrets.FASTAGENT_DATABASE_URL`. An instance in a database is opened by its `name`, which is then required.
    */

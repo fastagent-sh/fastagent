@@ -58,7 +58,9 @@ docker compose up -d --build
 
 Fly.io launches two replicas by default, which contends for `/data`. `fastagent deploy init fly` writes a `fly.toml`
 with scale-to-zero `auto_stop_machines = "suspend"`, `min_machines_running = 0`, a `/data` volume mount, and a
-`GET /health` check:
+`GET /health` check. Because Fly Proxy treats a machine with no active HTTP connections as idle, keep the request open
+(`messages.stream` or `messages.send` with `wait`) for turns that must finish before suspension, or set
+`min_machines_running = 1` if you rely on fire-and-forget background turns:
 
 ```bash
 fastagent deploy init fly

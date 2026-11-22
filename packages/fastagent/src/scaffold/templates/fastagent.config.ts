@@ -1,5 +1,5 @@
 // fastagent.config.ts — the agent's settings, the same wherever it runs. Its prompt
-// lives in SYSTEM.md, its capabilities in skills/ and src/ (tools, extensions, schedules) — never here. Its name and
+// lives in SYSTEM.md, its capabilities in skills/ and src/ (tools, extensions) — never here. Its name and
 // description are package.json's.
 //
 // Model precedence: `--model` flag > FASTAGENT_MODEL env > `model` here. No model is preset: `fastagent dev` shows the
