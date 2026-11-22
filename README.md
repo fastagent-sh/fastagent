@@ -33,16 +33,13 @@
 
 ## Why FastAgent
 
-Writing an agent prototype takes minutes. Putting it into production means building durable session storage, crash recovery, resumable SSE streaming, idempotent retries, secret isolation, OS sandboxing, tracing, and container deployments. FastAgent ships that entire backend out of the box—without forcing you into a workflow DSL, a single model vendor, or a proprietary cloud.
+Writing an agent prototype takes minutes. Putting it into production means building durable session storage, crash recovery, resumable SSE streaming, idempotent retries, secret isolation, OS sandboxing, tracing, and container deployments. FastAgent ships that entire backend out of the box around three pillars:
 
-| Production need | What FastAgent gives you |
+| Pillar | What you get |
 | --- | --- |
-| **No lost or duplicate work** | Accepted messages survive crashes, deploys, and scale-to-zero suspends on SQLite, PostgreSQL, or Aurora DSQL with single-writer lease fencing and `Idempotency-Key` deduplication. |
-| **One API everywhere** | Identical [Agent API](https://fastagent.sh/docs/agent-api/) in process (`openAgent`), over HTTP (`connectAgent`), on AWS AgentCore (`connectAgentCore`), in the CLI, and in Pi TUI (`@fastagent-sh/pi-remote`). |
-| **Scale-to-zero & stateless callers** | Single-call `POST /v1/invoke` with caller-named `conversation` wakes a container, runs up to 600 s (or streams), and suspends cleanly afterward. |
-| **Two harnesses, optional OS sandbox** | Built-in `pi-durable` by default, or switch to `@fastagent-sh/harness-dsh` (`--harness dsh`) for kernel-enforced OS sandboxing (`workspace`, `read-only`, `off`) with zero changes to your agent or callers. |
-| **Zero-leak secrets & clean ops** | Declare secrets beside code with `needs()`, gate CI with `fastagent deploy check`, log deployed instances into OAuth providers remotely (`fastagent login --remote`), and export zero-content OpenTelemetry traces. |
-| **Deploy anywhere** | Generate editable configs for Docker, Compose, Fly.io, Railway, or Amazon Bedrock AgentCore (`fastagent deploy init <target>`), or embed directly inside your Node backend. |
+| **1. One Agent API everywhere** | Identical [Agent API](https://fastagent.sh/docs/agent-api/) across CLI, in-process embedding (`openAgent`), zero-Node-dep HTTP (`@fastagent-sh/client`), AWS AgentCore (`@fastagent-sh/client-agentcore`), and Pi TUI (`@fastagent-sh/pi-remote`)—including single-call `POST /v1/invoke` for scale-to-zero callers and `/v1/auth/*` for remote provider sign-in. |
+| **2. Durable & isolated runtime** | Accepted messages survive crashes and restarts on SQLite, PostgreSQL, or Aurora DSQL with single-writer lease fencing, `Idempotency-Key` deduplication, gapless resumable SSE (`after`), `needs()` secret isolation, zero-content OpenTelemetry traces, and two harnesses behind one contract (`pi-durable` default, optional `@fastagent-sh/harness-dsh` with kernel OS sandboxing). |
+| **3. Embed or deploy anywhere** | Keep your agent simple (`SYSTEM.md`, `skills/`, portable `defineTool`—no workflow DSL or model lock-in). Embed inside your Node backend with shared PostgreSQL pooling (`openPostgresDatabase`), or ship to Docker, Compose, Fly.io, Railway (scale-to-zero), or Amazon Bedrock AgentCore (per-user microVMs) with `fastagent deploy init` and `deploy check`. |
 
 ## Quickstart
 

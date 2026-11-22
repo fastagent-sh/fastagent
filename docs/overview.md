@@ -16,14 +16,11 @@ FastAgent provides that entire serving layer out of the box without forcing you 
 
 ## What FastAgent gives you
 
-1. **Durable execution out of the box.** Every accepted message is recorded before acknowledgment and settles cleanly even across crashes, deploys, and scale-to-zero suspends. Callers can retry safely with an `Idempotency-Key` and reconnect to live streams from the last durable entry they saw.
-2. **One Agent API everywhere.** Whether you run locally via the CLI, embed the agent inside your backend (`openAgent`), call it over HTTP (`@fastagent-sh/client`), invoke microVM-isolated instances on Amazon Bedrock AgentCore (`@fastagent-sh/client-agentcore`), or connect interactively from Pi (`@fastagent-sh/pi-remote`), every caller uses the exact same [Agent API](agent-api.md).
-3. **Production isolation & operations.** Secrets are declared next to the code that uses them (`needs()`) and never baked into images; child processes run with sanitized environments; remote model-provider credentials persist across restarts via `/v1/auth/*`; and OpenTelemetry OTLP traces export token/tool telemetry without capturing prompt or answer content.
-4. **Harness, model, and cloud neutrality.**
-   - **Harnesses:** Run on the built-in `pi-durable` harness by default, or switch to the optional [`@fastagent-sh/harness-dsh`](configuration.md#harness-and-sandbox-selection) harness for kernel-enforced OS sandboxing (`workspace`, `read-only`, or `off`) with no change to your prompt, skills, tools, or callers.
-   - **Models:** Use any built-in provider from `pi-ai` or add your own gateway or self-hosted endpoint in code.
-   - **Hosts:** Embed in Node, deploy containers to Docker, Compose, Fly.io, Railway, or any host, or run per-user microVMs on Amazon Bedrock AgentCore.
-5. **Simple authoring, zero framework lock-in.** Define your agent with plain files (`SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/`, `fastagent.config.ts`) and compile it into a standard package with `fastagent build`.
+FastAgent centers on three core pillars:
+
+1. **One Agent API everywhere.** Whether you run locally via the CLI, embed inside your backend (`openAgent`), call over HTTP (`@fastagent-sh/client`), invoke microVM-isolated instances on Amazon Bedrock AgentCore (`@fastagent-sh/client-agentcore`), or connect interactively from Pi (`@fastagent-sh/pi-remote`), every caller uses the exact same [Agent API](agent-api.md)—including single-call `POST /v1/invoke` (with caller-named `conversation` for webhooks, cron, and scale-to-zero hosts) and `/v1/auth/*` for remote provider authentication.
+2. **Durable & isolated runtime.** Every accepted message persists before acknowledgment and survives crashes, deploys, and scale-to-zero suspends on SQLite, PostgreSQL, or Aurora DSQL with single-writer lease fencing, `Idempotency-Key` deduplication, and gapless resumable SSE streams (`after`). Secrets are declared beside code with `needs()`, child processes run with sanitized environments, OpenTelemetry OTLP traces export telemetry without capturing prompt or answer content, and you can choose between the built-in `pi-durable` harness or optional [`@fastagent-sh/harness-dsh`](configuration.md#harness-and-sandbox-selection) for kernel-enforced OS sandboxing (`workspace`, `read-only`, or `off`).
+3. **Embed or deploy anywhere, with zero rewrite.** Author your agent as plain files (`SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, portable `defineTool`, `fastagent.config.ts`) across any `pi-ai` model provider or custom gateway, compile with `fastagent build`, and either embed directly into your Node app (including multi-tenant `openPostgresDatabase` pools) or deploy to Docker, Compose, Fly.io, Railway, or Amazon Bedrock AgentCore.
 
 ## How an agent is structured
 
