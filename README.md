@@ -1,11 +1,12 @@
 <p align="center">
-  <a href="https://fastagent.sh"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — Take your agent from prototype to durable service. Embed in your app or serve over HTTP behind one Agent API." width="860"></a>
+  <a href="https://fastagent.sh"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — The TypeScript runtime for production AI agents." width="860"></a>
 </p>
 
-<h3 align="center">Take your agent from prototype to durable service.</h3>
+<h3 align="center">The TypeScript runtime for production AI agents.</h3>
 
 <p align="center">
-  The durable runtime and serving layer that turns your prompts, skills, and TypeScript tools into a live service — embedded in your app or served over HTTP behind one <a href="https://fastagent.sh/docs/agent-api/">Agent API</a>.
+  Author with <strong>Markdown (<code>SYSTEM.md</code>, <code>AGENTS.md</code>, <code>skills/</code>), typed TypeScript tools, and MCP</strong>.<br>
+  <strong>Embed</strong> in Next.js, Hono, Express, or Fastify (keeping your own auth &amp; database), <strong>self-host</strong> with Docker, or <strong>deploy</strong> to Fly.io, Railway, and AWS AgentCore.
 </p>
 
 <p align="center">
@@ -18,74 +19,122 @@
 </p>
 
 <p align="center">
-  <a href="https://fastagent.sh">Website</a> ·
-  <a href="https://fastagent.sh/docs/quickstart/">Quickstart</a> ·
+  <a href="https://fastagent.sh/docs/quickstart/"><strong>Quickstart</strong></a> ·
   <a href="https://github.com/fastagent-sh/fastagent/tree/main/examples">Examples</a> ·
-  <a href="https://fastagent.sh/docs/architecture/">Architecture</a> ·
-  <a href="https://fastagent.sh/docs/agent-api/">Agent API</a> ·
+  <a href="https://fastagent.sh/docs/embedding/">Embed</a> ·
+  <a href="https://fastagent.sh/docs/deploy/">Self-Host &amp; Deploy</a> ·
   <a href="https://fastagent.sh/docs/">Docs</a> ·
   <a href="https://github.com/fastagent-sh/fastagent/discussions">Discussions</a>
 </p>
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="FastAgent workflow: write your prompt, skills, and tools, run locally with fastagent dev, invoke over the Agent API, and prepare a container with fastagent deploy init." width="860">
+  <img src="https://cdn.jsdelivr.net/gh/fastagent-sh/fastagent@main/assets/demo.svg" alt="FastAgent workflow: author in Markdown and TypeScript, run locally with durable sessions, invoke via CLI or HTTP webhook, and deploy to any host." width="860">
 </p>
 
-## Why FastAgent
+## Why FastAgent?
 
-Writing an agent prototype takes minutes. Putting it into production means building durable session storage, crash recovery, resumable SSE streaming, idempotent retries, secret isolation, OS sandboxing, tracing, and container deployments. FastAgent ships that entire backend out of the box around three pillars:
+Coding agents proved the cleanest way to author an agent is **prompts, skills, typed tools, and MCP** checked into Git. Moving that agent off your laptop into production is where weeks disappear into backend plumbing. **FastAgent gives you that production runtime without locking you into a workflow framework:**
 
-| Pillar | What you get |
+| When your agent hits production | What FastAgent gives you out of the box |
 | --- | --- |
-| **1. One Agent API everywhere** | Identical [Agent API](https://fastagent.sh/docs/agent-api/) across CLI, in-process embedding (`openAgent`), zero-Node-dep HTTP (`@fastagent-sh/client`), AWS AgentCore (`@fastagent-sh/client-agentcore`), and Pi TUI (`@fastagent-sh/pi-remote`)—including single-call `POST /v1/invoke` for scale-to-zero callers and `/v1/auth/*` for remote provider sign-in. |
-| **2. Durable & isolated runtime** | Accepted messages survive crashes and restarts on SQLite, PostgreSQL, or Aurora DSQL with single-writer lease fencing, `Idempotency-Key` deduplication, gapless resumable SSE (`after`), `needs()` secret isolation, zero-content OpenTelemetry traces, and two harnesses behind one contract (`pi-durable` default, optional `@fastagent-sh/harness-dsh` with kernel OS sandboxing). |
-| **3. Embed or deploy anywhere** | Keep your agent simple (`SYSTEM.md`, `skills/`, portable `defineTool`—no workflow DSL or model lock-in). Embed inside your Node backend with shared PostgreSQL pooling (`openPostgresDatabase`), or ship to Docker, Compose, Fly.io, Railway (scale-to-zero), or Amazon Bedrock AgentCore (per-user microVMs) with `fastagent deploy init` and `deploy check`. |
+| Deploys, crashes, or browser refreshes kill long runs | **Durable sessions** (SQLite, PostgreSQL, Aurora DSQL) and **resumable SSE streams** |
+| Webhook retries double-run or corrupt active sessions | **Idempotent `POST /v1/invoke`**, per-conversation locking, and live mid-run **`steer`** |
+| Your app already has users, permissions, and a database | **Native Node.js embedding** (`openAgent()` or Fetch handler) sharing your auth &amp; PostgreSQL pool |
+| API keys leak into child shells, logs, or Docker layers | **Declared secrets** kept out of shells, **pre-deploy leak checks**, tool-only mode, **OS sandboxing**, and **AWS microVMs** |
+| Hosting, models, or cloud requirements change later | **Zero lock-in**: standard Markdown, TypeScript tools, MCP, and **one Agent API** across every host |
 
-## Quickstart
+## Quickstart (5 minutes)
 
-**With a coding agent** (Claude Code, Codex, Cursor, …), paste:
-
-> Read https://fastagent.sh/start.md and build an agent in this project.
-
-**From your terminal** (Node ≥ 24.15):
+Requires **Node ≥ 24.15**.
 
 ```bash
 npm i -g @fastagent-sh/fastagent
 fastagent init my-agent && cd my-agent
-fastagent dev                 # serve locally with live reload
+fastagent dev                 # local server with hot reload & SQLite persistence
 fastagent invoke "hello"      # send a message through the Agent API
 ```
 
-Inside an agent directory, the global `fastagent` delegates automatically to that agent's installed version. Without a global install, use `npm run dev` / `build` / `start` or `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is a different package).
+**Using a coding agent?** Paste this into Claude Code, Codex, Cursor, or Pi:
 
-Follow the 5-minute [Quickstart](https://fastagent.sh/docs/quickstart/) to add a typed TypeScript tool (`defineTool`) and build for production, or explore production [examples](https://github.com/fastagent-sh/fastagent/tree/main/examples) (`pr-review-agent`, `incident-triage-agent`, `saas-copilot`, `agentcore-per-user`, `deep-research-agent`).
+> Read https://fastagent.sh/start.md and build an agent in this project.
 
-## Use it your way
+> **Tip:** Prefer no global install? Run `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is an unrelated package). See the full [Quickstart](https://fastagent.sh/docs/quickstart/).
 
-### 1. Embed in your Node backend or desktop app
+## Write once. Run anywhere.
+
+### 1. Author in Git (Markdown + TypeScript)
+
+No visual canvas or proprietary graph DSL. Every agent is a standard TypeScript project your team can diff, review, and version:
+
+```text
+my-agent/
+├── fastagent.config.ts   # model, tool permissions, MCP servers, sandbox
+├── SYSTEM.md             # standing system prompt (hot-reloaded in dev)
+├── AGENTS.md             # optional operating rules
+├── skills/               # reusable Agent Skills (skills/<name>/SKILL.md)
+└── src/tools/            # typed TypeScript tools (defineTool + needs())
+```
+
+```ts
+// fastagent.config.ts
+import { defineAgent } from "@fastagent-sh/fastagent";
+
+export default defineAgent({
+  model: "anthropic/claude-sonnet-4-6",
+  codingTools: false, // or ["read", "bash"] with sandbox: "read-only"
+  mcpServers: {
+    sentry: {
+      type: "http",
+      url: "https://mcp.sentry.example.com/mcp",
+      headers: { Authorization: "Bearer ${SENTRY_MCP_TOKEN}" },
+    },
+  },
+});
+```
+
+### 2. Run embedded in your app — or self-host & deploy to any cloud
+
+Compile once with `fastagent build`, then run on the infrastructure you already own:
+
+#### Embed in Next.js, Hono, Express, or Fastify
+
+Keep your own authentication, tenancy, and database. Share one PostgreSQL pool via `openPostgresDatabase()`, or mount `service.fetch` on your existing server.
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
-import support from "@acme/support-agent"; // built with `fastagent build`
+import copilot from "@acme/saas-copilot"; // built with `fastagent build`
 
-const agent = await openAgent(support, {
-  root: "/var/lib/myapp/support",
+const agent = await openAgent(copilot, {
+  root: "/var/lib/myapp/copilot",
   secrets: { OPENAI_API_KEY: process.env.OPENAI_API_KEY },
   env: baseEnv(process.env),
   model: "openai/gpt-5.5",
 });
 
 const session = await agent.sessions.create();
-for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
+for await (const event of agent.messages.stream({ sessionId: session.id, content: "Summarize my usage" })) {
   if (event.type === "delta" && event.channel === "text") render(event.text);
 }
 ```
 
-Your app keeps its authentication, database, and routes. See [Embedding](https://fastagent.sh/docs/embedding/).
+#### Self-host with Docker or deploy to Fly.io, Railway, or AWS
 
-### 2. Call over HTTP or scale-to-zero (`@fastagent-sh/client`)
+Generate ready-to-ship deployment files and verify no secrets leak into your build context:
 
-Zero Node dependencies—runs on Node, Bun, Deno, and edge workers anywhere `fetch` exists:
+```bash
+# Targets: docker | compose | fly | railway | agentcore
+fastagent deploy init docker
+fastagent deploy check
+
+# Optional: kernel-enforced OS sandboxing (sandbox-exec / bwrap / Landlock)
+fastagent dev --harness dsh --sandbox read-only
+```
+
+Self-hosted containers store state on a mounted `/data` volume or `FASTAGENT_DATABASE_URL` (PostgreSQL). Fly.io scales to zero and wakes on demand; AWS AgentCore isolates each user in a dedicated microVM backed by Aurora DSQL. See [Embedding](https://fastagent.sh/docs/embedding/), [Deploy](https://fastagent.sh/docs/deploy/), and [AgentCore](https://fastagent.sh/docs/agentcore/).
+
+### 3. Call it from webhooks, cron jobs, CI, or edge workers
+
+`@fastagent-sh/client` has zero Node.js dependencies and runs anywhere `fetch` exists. Caller code stays identical regardless of where the agent is hosted:
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -94,35 +143,57 @@ const agent = connectAgent("https://agent.example.com", {
   apiKey: process.env.AGENT_API_KEY!,
 });
 
+// Wakes a scale-to-zero container, deduplicates retries, and steers if already running
 const reply = await agent.invoke(
-  { conversation: "order:9231", content: "Check refund status" },
-  { wait: 120 },
+  {
+    conversation: "incident:inc-415",
+    idempotencyKey: webhookEventId,
+    whenBusy: "steer",
+    content: alertSummary,
+  },
+  { wait: 300 },
 );
 console.log(reply.status, reply.answer?.text);
 ```
 
-### 3. Deploy, sandbox & operate remotely
+## Production examples
 
-```bash
-# Run with kernel-enforced OS sandboxing (requires @fastagent-sh/harness-dsh)
-fastagent dev --harness dsh --sandbox workspace
+Clone a complete working agent from [`examples/`](https://github.com/fastagent-sh/fastagent/tree/main/examples):
 
-# Prepare & verify deployment (docker | compose | fly | railway | agentcore)
-fastagent deploy init fly && fastagent deploy check
+| Example | Runs on | Key capabilities |
+| --- | --- | --- |
+| [**Multi-Tenant SaaS Copilot**](https://github.com/fastagent-sh/fastagent/tree/main/examples/saas-copilot) | Embedded (Hono + PostgreSQL) | Shared DB pool, `codingTools: false`, resumable SSE |
+| [**Sandboxed PR Review Agent**](https://github.com/fastagent-sh/fastagent/tree/main/examples/pr-review-agent) | Self-hosted + GitHub Actions | Read-only OS sandbox, per-PR memory, idempotent retries |
+| [**Scale-to-Zero AI SRE**](https://github.com/fastagent-sh/fastagent/tree/main/examples/incident-triage-agent) | Fly.io + Alert Webhooks | Alert deduplication, mid-run `steer`, MCP servers |
+| [**Deep Research & Daily Brief**](https://github.com/fastagent-sh/fastagent/tree/main/examples/deep-research-agent) | Self-hosted + External Cron | Long crash-resilient runs, live terminal attach via Pi |
+| [**Per-User AWS MicroVM Agent**](https://github.com/fastagent-sh/fastagent/tree/main/examples/agentcore-per-user) | AWS Bedrock AgentCore | Per-user microVM, Aurora DSQL, Secrets Manager, IAM auth |
 
-# Save a remote, invoke it, or authenticate model providers remotely
-fastagent remote add prod https://agent.example.com --key '$PROD_AGENT_KEY'
-fastagent invoke --remote prod --conversation daily-digest "/daily-digest"
-fastagent login openai-codex --remote prod
-```
+## When to use FastAgent
 
-## Architecture at a glance
+| Need | Workflow Frameworks | Raw LLM SDKs | Coding CLIs | **FastAgent** |
+| --- | --- | --- | --- | --- |
+| **Authoring** | Graph DSLs &amp; chains | Custom loop in code | Local terminal | **Markdown, skills, typed TS tools, MCP** |
+| **Embed in Node.js** | Separate service / glue | Stateless by default | Not embeddable | **Native `openAgent()` + your auth &amp; DB** |
+| **Background &amp; webhooks** | Bring queue &amp; locks | Build from scratch | Local only | **Built-in SQLite/PG, idempotency, scale-to-zero** |
+| **Hosting &amp; isolation** | DIY hosting &amp; sandbox | DIY hosting &amp; sandbox | Local machine | **Docker, Fly, Railway, AWS + OS sandbox / microVM** |
+
+<sub>Examples compared: Workflow frameworks (LangGraph, CrewAI), Raw LLM SDKs (Vercel AI SDK, OpenAI SDK), Coding CLIs (Claude Code).</sub>
+
+**Not the right fit if you want:**
+
+- A **visual no-code canvas** for non-engineers → use Dify or n8n.
+- An **interactive local coding assistant** only on your laptop → use Claude Code, Codex, or Pi.
+- A **static deterministic DAG workflow engine** → use Temporal or Inngest.
+
+## Architecture & operations
+
+Every caller talks through one contract: the [Agent API](https://fastagent.sh/docs/agent-api/). Swap models, storage backends, hosts, or execution harnesses without changing your agent or application code:
 
 ```text
 Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastagent-sh/pi-remote)
-                                        │  One Contract: Agent API (/v1)
+                                        │  Agent API (/v1)
 ┌───────────────────────────────────────▼───────────────────────────────────────┐
-│ Unified Serving Layer (@fastagent-sh/fastagent)                               │
+│ Unified Runtime Layer (@fastagent-sh/fastagent)                               │
 │  Build · defineTool · needs() Secrets · Models & Durable Auth · MCP · OTLP    │
 └───────────────────┬───────────────────────────────────────┬───────────────────┘
                     │                                       │ (optional, lazy)
@@ -133,43 +204,36 @@ Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastag
          └─────────────────────┘                 └─────────────────────┘
 ```
 
-Read the full [Technical architecture](https://fastagent.sh/docs/architecture/).
+- **Privacy-safe tracing:** Export cost, token, and tool spans via OpenTelemetry (`OTEL_EXPORTER_OTLP_ENDPOINT`) without logging prompts or answers.
+- **Remote CLI & OAuth:** Manage live instances (`fastagent remote add prod <url>`) and run provider OAuth remotely (`fastagent login openai-codex --remote prod`).
+- **Live terminal attach:** Inspect or steer running remote sessions from your terminal with [`@fastagent-sh/pi-remote`](https://fastagent.sh/docs/remotes/).
 
-## Packages
+## Packages & documentation
 
 | Package | Role |
 | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Durable runtime (`pi-durable`), unified serving layer, `openAgent`, `defineTool`, `openPostgresDatabase`, HTTP Agent API server, and `fastagent` CLI |
-| [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | Zero-Node-dep HTTP Agent API & Auth client (`connectAgent`, `connectAuth`, pluggable `remotes.json` transport protocol) |
-| [`@fastagent-sh/client-agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client-agentcore/README.md) | Pure Amazon Bedrock AgentCore client (`connectAgentCore`, `connectAgentCoreAuth`) and `remotes.json` transport plugin (zero server or Node deps) |
-| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore server runtime, Aurora DSQL adapter, Secrets Manager integration, CLI extension, and CDK construct |
-| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) runtime adapter with kernel-enforced OS sandboxing (`--harness dsh`, experimental) |
-| [`@fastagent-sh/pi-remote`](https://github.com/fastagent-sh/fastagent/blob/main/packages/pi-remote/README.md) | Pi TUI extension (`/fa`) for interactive terminal sessions against deployed HTTP or AgentCore instances |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Core runtime (`pi-durable`), `openAgent`, `defineTool`, `openPostgresDatabase`, HTTP server, CLI |
+| [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | Zero-Node-dep HTTP Agent API &amp; Auth client (`connectAgent`, `connectAuth`) |
+| [`@fastagent-sh/client-agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client-agentcore/README.md) | Zero-Node-dep Amazon Bedrock AgentCore client (`connectAgentCore`, `connectAgentCoreAuth`) |
+| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | AWS AgentCore server runtime, Aurora DSQL adapter, Secrets Manager, CDK construct |
+| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) adapter with kernel OS sandboxing (experimental) |
+| [`@fastagent-sh/pi-remote`](https://github.com/fastagent-sh/fastagent/blob/main/packages/pi-remote/README.md) | Pi TUI extension (`/fa`) for live terminal access to deployed HTTP or AgentCore instances |
 
-## Documentation
-
-Full documentation lives at **[fastagent.sh/docs](https://fastagent.sh/docs/)**:
-
-- **Start:** [Overview](https://fastagent.sh/docs/overview/) · [Quickstart](https://fastagent.sh/docs/quickstart/) · [Agent development guide](https://fastagent.sh/docs/ai-start/)
-- **Architecture & contract:** [Technical architecture](https://fastagent.sh/docs/architecture/) · [Agent API](https://fastagent.sh/docs/agent-api/)
-- **Build & operate:** [Configuration](https://fastagent.sh/docs/configuration/) · [MCP servers](https://fastagent.sh/docs/mcp/) · [Remotes & clients](https://fastagent.sh/docs/remotes/) · [CLI reference](https://fastagent.sh/docs/cli/)
-- **Embed & deploy:** [Embedding](https://fastagent.sh/docs/embedding/) · [Deploy](https://fastagent.sh/docs/deploy/) · [AgentCore](https://fastagent.sh/docs/agentcore/) · [API reference](https://fastagent.sh/docs/api-reference/)
+**Docs at [fastagent.sh/docs](https://fastagent.sh/docs/):**
+[Overview](https://fastagent.sh/docs/overview/) · [Quickstart](https://fastagent.sh/docs/quickstart/) · [AI Guide](https://fastagent.sh/docs/ai-start/) · [Architecture](https://fastagent.sh/docs/architecture/) · [Agent API](https://fastagent.sh/docs/agent-api/) · [Configuration](https://fastagent.sh/docs/configuration/) · [MCP](https://fastagent.sh/docs/mcp/) · [Embedding](https://fastagent.sh/docs/embedding/) · [Deploy](https://fastagent.sh/docs/deploy/) · [AgentCore](https://fastagent.sh/docs/agentcore/) · [Remotes](https://fastagent.sh/docs/remotes/) · [CLI](https://fastagent.sh/docs/cli/) · [API Reference](https://fastagent.sh/docs/api-reference/)
 
 ## Community & status
 
-FastAgent is pre-1.0. The [Agent API](https://fastagent.sh/docs/agent-api/) is the stable center; see [releases](https://github.com/fastagent-sh/fastagent/releases) for updates.
+FastAgent is pre-1.0 with the [Agent API](https://fastagent.sh/docs/agent-api/) as its stable contract. See [releases](https://github.com/fastagent-sh/fastagent/releases), join [GitHub Discussions](https://github.com/fastagent-sh/fastagent/discussions), or read [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md), [Code of Conduct](https://github.com/fastagent-sh/fastagent/blob/main/CODE_OF_CONDUCT.md), [Security](https://github.com/fastagent-sh/fastagent/blob/main/SECURITY.md), and the [MIT license](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE).
 
-- **Questions, ideas & show-and-tell:** [GitHub Discussions](https://github.com/fastagent-sh/fastagent/discussions)
-- **Contribute:** [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md) · [Code of Conduct](https://github.com/fastagent-sh/fastagent/blob/main/CODE_OF_CONDUCT.md) · [Security policy](https://github.com/fastagent-sh/fastagent/blob/main/SECURITY.md) · [MIT license](https://github.com/fastagent-sh/fastagent/blob/main/LICENSE)
-
-> ☁️ **Prefer managed hosting?** FastAgent Cloud will run your agents with multi-instance durability, scale-to-zero, and observability built in, while self-hosting stays free. [Join the waitlist →](https://tally.so/r/44DVMB)
+> ☁️ **Prefer managed hosting?** FastAgent Cloud adds managed multi-instance durability, scale-to-zero, and observability while self-hosting stays free. [Join the waitlist →](https://tally.so/r/44DVMB)
 
 <p align="center">
   <sub>Powered by</sub>
   <a href="https://pi.dev"><img src="https://pi.dev/logo-auto.svg" alt="pi" height="18" /></a>
-  <sub>(<code>pi-durable</code> &amp; <code>pi-ai</code>), with <a href="https://github.com/Effect-TS/effect">Effect</a>, <a href="https://github.com/nodejs/undici">undici</a>, <a href="https://node-postgres.com">node-postgres</a>, and optional OS sandboxing via <a href="https://github.com/deepseek-ai/deepseek-harness">@deepseek-ai/dsh</a>. Scaffolded <code>writing-great-skills</code> vendored from <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>.</sub>
+  <sub>(<code>pi-durable</code> &amp; <code>pi-ai</code>), <a href="https://github.com/Effect-TS/effect">Effect</a>, <a href="https://github.com/nodejs/undici">undici</a>, <a href="https://node-postgres.com">node-postgres</a>, and optional OS sandboxing via <a href="https://github.com/deepseek-ai/deepseek-harness">@deepseek-ai/dsh</a>. Scaffolded <code>writing-great-skills</code> vendored from <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>.</sub>
 </p>
 
 <p align="center">
-  If FastAgent saves you from building agent serving infrastructure from scratch, <a href="https://github.com/fastagent-sh/fastagent">give it a ⭐</a>.
+  If FastAgent saves you from building agent infrastructure from scratch, <a href="https://github.com/fastagent-sh/fastagent">give it a ⭐</a>.
 </p>

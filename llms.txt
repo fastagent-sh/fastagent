@@ -1,6 +1,6 @@
 # FastAgent
 
-> Take your agent from prototype to durable service. FastAgent is the durable runtime and serving layer that turns your prompts, skills, and TypeScript tools into a live service—embedded in your app (`openAgent`) or served over HTTP behind one Agent API. Supports two harnesses behind the same contract (`pi-durable` built-in default, optional `@fastagent-sh/harness-dsh` with kernel-enforced OS sandboxing), SQLite / PostgreSQL / Aurora DSQL persistence, remote provider auth, and pluggable cloud transports.
+> The TypeScript runtime for production AI agents. Author agents with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — embed in Next.js, Hono, Express, or Fastify keeping your own auth and database, self-host with Docker, or deploy to Fly.io, Railway, and Amazon Bedrock AgentCore with durable sessions (SQLite / PostgreSQL / Aurora DSQL), idempotent webhooks (`POST /v1/invoke`), OS sandboxing (`--harness dsh`), remote OAuth auth, and OpenTelemetry traces.
 
 Key facts:
 

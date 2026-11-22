@@ -34,26 +34,26 @@
   <circle cx="24" cy="24" r="6" fill="#e0604f"/>
   <circle cx="44" cy="24" r="6" fill="#dfa943"/>
   <circle cx="64" cy="24" r="6" fill="#4fb96a"/>
-  <text x="430" y="29" text-anchor="middle" class="title"><tspan class="mark" font-size="16">F</tspan> ~/support-agent</text>
+  <text x="430" y="29" text-anchor="middle" class="title"><tspan class="mark" font-size="16">F</tspan> ~/incident-agent</text>
   <line x1="1" y1="46" x2="859" y2="46" stroke="#1e2522" stroke-width="1"/>
 
-  <text class="l a1" x="20" y="80"><tspan class="cm"># build your agent</tspan></text>
-  <text class="l a2" x="20" y="106"><tspan class="tp">❯ </tspan><tspan class="txt">claude </tspan><tspan class="am">"read fastagent.sh/start.md, build a support agent"</tspan></text>
+  <text class="l a1" x="20" y="80"><tspan class="cm"># 1. author in Markdown &amp; TypeScript (checked into Git)</tspan></text>
+  <text class="l a2" x="20" y="106"><tspan class="tp">❯ </tspan><tspan class="txt">claude </tspan><tspan class="am">"read fastagent.sh/start.md, build an incident triage agent"</tspan></text>
   <text class="l a3" x="20" y="132"><tspan class="ok">✓ </tspan><tspan class="txt">wrote SYSTEM.md · </tspan><tspan class="dir">skills/</tspan><tspan class="txt"> · </tspan><tspan class="dir">src/tools/</tspan><tspan class="txt"> · </tspan><tspan class="acc">fastagent.config.ts</tspan></text>
 
-  <text class="l a4" x="20" y="170"><tspan class="cm"># serve locally with durable sessions</tspan></text>
+  <text class="l a4" x="20" y="170"><tspan class="cm"># 2. run locally with durable sessions &amp; MCP tools</tspan></text>
   <text class="l a5" x="20" y="196"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent dev</tspan></text>
-  <text class="l a6" x="20" y="222"><tspan class="dim">[fastagent] ready · </tspan><tspan class="txt">SYSTEM.md · skills · 3 tools · Agent API (/v1)</tspan></text>
-  <text class="l a7" x="20" y="248"><tspan class="dim">[fastagent] </tspan><tspan class="txt">harness: pi-durable</tspan><tspan class="dim"> (or --harness dsh) — listening on </tspan><tspan class="ok">:8787</tspan></text>
+  <text class="l a6" x="20" y="222"><tspan class="dim">[fastagent] ready · </tspan><tspan class="txt">SYSTEM.md · skills · 3 tools · sentry MCP · Agent API (/v1)</tspan></text>
+  <text class="l a7" x="20" y="248"><tspan class="dim">[fastagent] </tspan><tspan class="txt">durable SQLite</tspan><tspan class="dim"> (Postgres in prod · --harness dsh sandbox) — </tspan><tspan class="ok">:8787</tspan></text>
 
-  <text class="l a8" x="20" y="286"><tspan class="cm"># call via CLI, SDK, or HTTP POST /v1/invoke</tspan></text>
-  <text class="l a9" x="20" y="312"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent invoke --conversation order-9231 </tspan><tspan class="am">"refund status?"</tspan></text>
-  <text class="l a10" x="20" y="338"><tspan class="bl">[tool]      </tspan><tspan class="dim">▸ </tspan><tspan class="bl">lookup_order</tspan><tspan class="dim"> { id: "9231" }</tspan></text>
-  <text class="l a11" x="20" y="364"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">Order #9231 refund approved and settled </tspan><tspan class="dim">(1.4s)</tspan></text>
-  <text class="l a12" x="20" y="390"><tspan class="pu">[http]      </tspan><tspan class="dim">▸ </tspan><tspan class="pu">POST /v1/invoke</tspan><tspan class="txt">  conversation="daily-digest" </tspan><tspan class="dim">wait=300</tspan></text>
-  <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">completed · 12 tickets summarized </tspan><tspan class="dim">(2.1s)</tspan></text>
+  <text class="l a8" x="20" y="286"><tspan class="cm"># 3. invoke via CLI, embedded SDK, or idempotent webhook</tspan></text>
+  <text class="l a9" x="20" y="312"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent invoke --conversation inc-415 </tspan><tspan class="am">"503 spike on /api/checkout"</tspan></text>
+  <text class="l a10" x="20" y="338"><tspan class="bl">[tool]      </tspan><tspan class="dim">▸ </tspan><tspan class="bl">probe_service</tspan><tspan class="dim"> { url: "https://api.acme.dev/health" }</tspan></text>
+  <text class="l a11" x="20" y="364"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">Root cause: DB pool exhausted after deploy #842 </tspan><tspan class="dim">(1.8s)</tspan></text>
+  <text class="l a12" x="20" y="390"><tspan class="pu">[http]      </tspan><tspan class="dim">▸ </tspan><tspan class="pu">POST /v1/invoke</tspan><tspan class="txt">  conversation="inc-415" </tspan><tspan class="dim">whenBusy="steer"</tspan></text>
+  <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">completed · steered active run &amp; RCA posted </tspan><tspan class="dim">(2.1s)</tspan></text>
 
-  <text class="l a14" x="20" y="454"><tspan class="cm"># ship to any container host or AWS AgentCore</tspan></text>
+  <text class="l a14" x="20" y="454"><tspan class="cm"># 4. self-host with Docker or deploy to Fly.io, Railway, or AWS AgentCore</tspan></text>
   <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent deploy init fly &amp;&amp; fastagent deploy check</tspan></text>
-  <text class="l a16" x="20" y="506"><tspan class="ok">✓ </tspan><tspan class="txt">wrote Dockerfile · .dockerignore · fly.toml — build context clean</tspan></text>
+  <text class="l a16" x="20" y="506"><tspan class="ok">✓ </tspan><tspan class="txt">wrote Dockerfile · .dockerignore · fly.toml — no secrets leaked</tspan></text>
 </svg>

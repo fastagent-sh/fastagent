@@ -3,9 +3,11 @@
   "version": "0.34.0",
   "description": "The FastAgent Agent API and its client: talk to any FastAgent service over HTTP or pluggable cloud transports.",
   "keywords": [
-    "agent",
     "ai-agent",
     "agent-api",
+    "typescript",
+    "webhook",
+    "edge",
     "sse",
     "fastagent"
   ],

@@ -13,9 +13,13 @@ const agent = connectAgent("https://agent.example.com", {
   apiKey: process.env.AGENT_API_KEY!,
 });
 
-// Single-call invoke with a caller-named conversation
+// Single-call idempotent invoke with a caller-named conversation
 const reply = await agent.invoke(
-  { conversation: "support:42", content: "Where is order 9231?" },
+  {
+    conversation: "incident:inc-415",
+    idempotencyKey: webhookEventId,
+    content: "Triage the 503 spike on /api/checkout",
+  },
   { wait: 120 },
 );
 console.log(reply.status, reply.answer?.text);

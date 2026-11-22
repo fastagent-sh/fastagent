@@ -24,6 +24,6 @@
     </g>
   <text x="142" y="188" font-family="Newsreader" font-size="96" font-weight="700" font-style="italic" fill="url(#word)">astAgent</text>
 
-  <text x="88" y="250" font-family="Archivo" font-size="34" font-weight="700" fill="#f4f5f7">Take your agent from prototype to durable service.</text>
-  <text x="88" y="294" font-family="Archivo" font-size="22" font-weight="400" fill="#868b93">Turn prompts, skills, and TypeScript tools into a live service &#8212; in your app or behind one Agent API.</text>
+  <text x="88" y="250" font-family="Archivo" font-size="34" font-weight="700" fill="#f4f5f7">The TypeScript runtime for production AI agents.</text>
+  <text x="88" y="294" font-family="Archivo" font-size="22" font-weight="400" fill="#868b93">Markdown, skills, typed tools &amp; MCP &#8212; embed in your app, self-host, or deploy to any cloud.</text>
 </svg>
