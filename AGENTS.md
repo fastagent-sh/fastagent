@@ -20,9 +20,10 @@ that API from outside the runtime: channels are not part of it.
   loaded lazily by `@fastagent-sh/fastagent` so core carries zero `@deepseek-ai/*` dependencies). A package reaches
   another only by name, and in the repository reads its source through the
   `@fastagent-sh/source` export condition; `test/guards/package-boundary.test.ts` holds the lines.
-- `docs/` is for users: how to author, run, connect, embed and deploy an agent, and the Agent API they call
-  (`docs/agent-api.md`). A guide says what a user does and sees. It never says how the code does it: no internal module,
-  state file, call order or history.
+- `docs/` is for users and developers: product positioning (`docs/overview.md`), technical architecture
+  (`docs/architecture.md`), authoring, configuration, remote operations (`docs/remotes.md`), embedding, deployment,
+  and the Agent API contract (`docs/agent-api.md`). Docs stay user- and developer-facing and never include process
+  logs or design history.
 - When a doc and the code disagree, the code is right. Fix the doc or delete the passage. A change in what a user does
   or sees updates its guide in the same PR. A CLI command's flags are its `--help`, generated from `packages/fastagent/src/cli/program.ts`.
 - Do not commit design notes, plans, measurements or progress logs. They go in the PR description. Anything that

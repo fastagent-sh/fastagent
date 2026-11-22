@@ -17,7 +17,7 @@
     </g>
   </g>
 
-  <text x="78" y="92" font-size="24" fill="#45cbd3"># ship your agent as a live service</text>
+  <text x="78" y="92" font-size="24" fill="#45cbd3"># take your agent from prototype to durable service</text>
   <text x="956" y="92" font-size="22" fill="#6b7480">built on</text>
   <g transform="translate(1075,53) scale(0.077)" fill="#45cbd3">
     <path d="M165.29 165.29H517.36V400H400V282.65H165.29Z"/>
@@ -34,8 +34,8 @@
     <text x="58" y="0" font-family="Newsreader" font-size="96" font-weight="700" font-style="italic" fill="url(#word)">astAgent</text>
   </g>
 
-  <text x="78" y="300" font-size="42" font-weight="700" fill="#f1f4f7">An agent is just a directory.</text>
-  <text x="78" y="342" font-size="24" fill="#9ba3ae">No rewrite, no new format, no platform.</text>
+  <text x="78" y="300" font-size="40" font-weight="700" fill="#f1f4f7">From prototype to durable service.</text>
+  <text x="78" y="342" font-size="22" fill="#9ba3ae">Embed in your app or serve over HTTP behind one Agent API.</text>
 
   <rect x="78.5" y="372.5" width="1043" height="215" rx="12" fill="#0b0e12" stroke="#1b2027"/>
   <path d="M90.5 372.5H1109.5A12 12 0 0 1 1121.5 384.5V414.5H78.5V384.5A12 12 0 0 1 90.5 372.5Z" fill="#141920"/>
@@ -49,8 +49,8 @@
 
   <g font-size="21">
     <text x="108" y="458"><tspan fill="#45cbd3">❯ </tspan><tspan fill="#f1f4f7">claude </tspan><tspan fill="#e6c68a">"read fastagent.sh/start.md, build a support agent"</tspan></text>
-    <text x="108" y="496"><tspan fill="#8fdc8a">✓ </tspan><tspan fill="#c3cad4">wrote SYSTEM.md · skills/ · src/tools/ · </tspan><tspan fill="#45cbd3">src/channels/</tspan></text>
+    <text x="108" y="496"><tspan fill="#8fdc8a">✓ </tspan><tspan fill="#c3cad4">wrote SYSTEM.md · skills/ · src/tools/ · </tspan><tspan fill="#45cbd3">fastagent.config.ts</tspan></text>
     <text x="108" y="534"><tspan fill="#45cbd3">❯ </tspan><tspan fill="#f1f4f7">fastagent dev</tspan></text>
-    <text x="108" y="572"><tspan fill="#6b7480">[fastagent] </tspan><tspan fill="#c3cad4">telegram · slack · feishu · schedules</tspan><tspan fill="#6b7480"> — listening on </tspan><tspan fill="#45cbd3">:8787</tspan></text>
+    <text x="108" y="572"><tspan fill="#6b7480">[fastagent] </tspan><tspan fill="#c3cad4">Agent API (/v1) · durable sessions</tspan><tspan fill="#6b7480"> — listening on </tspan><tspan fill="#45cbd3">:8787</tspan></text>
   </g>
 </svg>

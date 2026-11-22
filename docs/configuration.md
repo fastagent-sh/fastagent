@@ -1,22 +1,24 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, sessions in PostgreSQL, tools, extensions and run traces."
+description: "Configure your agent's model, custom providers, tools, OS sandboxing, secrets, HTTP API, SQLite or PostgreSQL storage, and OpenTelemetry traces."
 status: current
 ---
 
 # Configuration
 
-| What | Where |
-|---|---|
-| Behavior | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, code in `src/` |
-| Model, providers, MCP servers, starters | `fastagent.config.ts` |
-| Where one instance runs | flags and environment variables |
-| Secrets | `.secrets/.env`, `.secrets/auth.json` (`fastagent login`), provider variables |
+FastAgent keeps what you commit with your agent (`fastagent.config.ts`, prompts, skills, tools) cleanly separate from per-environment settings and secrets (environment variables, `.secrets/`, or `openAgent` options).
 
-## `fastagent.config.ts`
+| What you want to configure | Where it lives |
+| --- | --- |
+| Prompt, standing rules, skills, prompt templates | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/` |
+| Custom TypeScript tools & extensions | `src/tools/`, `src/extensions/` |
+| Default model, harness, OS sandbox, coding tools, custom providers, MCP servers | `fastagent.config.ts` |
+| Per-environment overrides (port, storage, model, harness, API keys) | CLI flags & `FASTAGENT_*` environment variables |
+| Provider logins & secrets | `.secrets/.env`, `.secrets/auth.json`, env vars, or remote `fastagent login --remote` |
 
-`fastagent.config.ts` belongs to the agent's author and is committed. It is the same wherever the agent runs; what
-differs between deployments comes from the environment, read through [`needs`](#secrets-in-code).
+## Agent defaults (`fastagent.config.ts`)
+
+Committed in git and shared across every environment. Never hardcode secrets here—use [`needs()`](#declare-secrets-in-code).
 
 ```ts
 import { defineAgent } from "@fastagent-sh/fastagent";
@@ -24,53 +26,42 @@ import { defineAgent } from "@fastagent-sh/fastagent";
 export default defineAgent({
   model: "openai/gpt-5.5",
   thinkingLevel: "high",
+  harness: "pi-durable",
+  codingTools: true,
   starters: ["Summarize today's issues"],
 });
 ```
 
-Every key is optional. An unknown key refuses the start.
+All fields are optional; unknown keys fail startup immediately.
 
-| Key | Default | Meaning |
-|---|---|---|
-| `model` | none | `provider/modelId` ([model selection](#model-selection)) |
-| `thinkingLevel` | the harness's | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| Key | Default | What it controls |
+| --- | --- | --- |
+| `model` | none | Default `provider/modelId` ([Model selection](#model-selection)) |
+| `thinkingLevel` | harness default | Reasoning effort: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `harness` | `"pi-durable"` | Runtime harness: `"pi-durable"` or `"dsh"` (experimental; requires `@fastagent-sh/harness-dsh`) |
-| `sandbox` | `"workspace"` (on `dsh`) | OS sandbox for `harness: "dsh"`: `"workspace"`, `"read-only"`, or `"off"` |
-| `codingTools` | `true` | Built-in coding tools (`read`, `write`, `edit`, `bash`): `true`, `false`, or a subset array such as `["read"]` |
-| `starters` | none | Up to 6 example first messages a client may offer |
-| `providers` | `[]` | Model providers beyond the built-ins ([custom models](#custom-models)) |
-| `mcpServers` | none | [MCP servers](mcp.md) whose tools the agent gets |
+| `sandbox` | `"workspace"` (on `dsh`) | OS sandbox mode when `harness: "dsh"`: `"workspace"`, `"read-only"`, or `"off"` |
+| `codingTools` | `true` | Built-in `read`, `write`, `edit`, `bash`: `true`, `false`, or an explicit subset such as `["read"]` |
+| `starters` | none | Up to 6 example first messages exposed in `info().starters` |
+| `providers` | `[]` | Custom model providers or gateways (`createProvider`, optionally wrapped in `needs()`) |
+| `mcpServers` | none | [MCP tool servers](mcp.md) available to the agent |
 
-The name and description of the agent come from its `package.json`.
-
-## Harness and sandbox selection
-
-```txt
---harness > FASTAGENT_HARNESS > harness in fastagent.config.ts > "pi-durable"
---sandbox > FASTAGENT_SANDBOX > sandbox in fastagent.config.ts > "workspace" (on "dsh")
-```
-
-Pass `--harness dsh` (and optionally `--sandbox read-only` or `--sandbox off`) to `dev`, `start`, `invoke`,
-or `info`, or pass `{ harness: "dsh", sandbox: "workspace" }` to `openAgent()`. Both harnesses
-share the instance's `agent.sqlite` (or PostgreSQL database) in separate table namespaces, so switching between
-`pi-durable` and `dsh` preserves each harness's own sessions without mutating the other's. Modules in
-`src/extensions/` are `pi-durable`-specific and are skipped with a startup warning when running on `dsh`; portable
-tools in `src/tools/` (`defineTool`), `mcpServers`, `SYSTEM.md`, `AGENTS.md`, `skills/`, and `prompts/` run on both.
+The agent's `name` and `description` come from `package.json`.
 
 ## Model selection
 
-```txt
+Precedence (highest first):
+
+```text
 --model > FASTAGENT_MODEL > model in fastagent.config.ts
 ```
 
-With none set, a command in a terminal lets you pick one (and sign in), then prints the line to keep in the config.
-Without a terminal it fails with `missing model`. `fastagent models [search]` lists the specs. A command that runs the
-agent stops at startup when the model it resolves is not in the lists; `openAgent` opens an agent whose configured
-default is not, as [embedding](embedding.md) says.
+Run `fastagent models [search]` to list all built-in and custom `provider/modelId` specs. When no model is set, interactive CLI commands prompt you to pick one and sign in; non-interactive runs fail with `missing model`.
 
-## Custom models
+CLI commands stop at startup if the selected model does not exist. In embedded apps, `openAgent()` still opens if a configured default model was retired or renamed (exposing `info().unusableDefault` and refusing messages without an explicit model), while failing immediately if an explicit `openAgent({ model })` override is invalid.
 
-A self-hosted model or a gateway is a provider in code:
+### Custom models & self-hosted gateways
+
+Add a self-hosted endpoint (vLLM, Ollama) or internal gateway with `createProvider` from `@earendil-works/pi-ai`, wrapping credentials in `needs()`:
 
 ```ts
 import { createProvider } from "@earendil-works/pi-ai";
@@ -90,9 +81,16 @@ export default defineAgent({
         auth: { apiKey: { name: "My gateway", resolve: async () => ({ auth: { apiKey: MYGW_API_KEY } }) } },
         models: [
           {
-            id: "deepseek-v3", name: "DeepSeek V3", api: "openai-completions", provider: "mygw", baseUrl,
-            reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 65536, maxTokens: 8192,
+            id: "deepseek-v3",
+            name: "DeepSeek V3",
+            api: "openai-completions",
+            provider: "mygw",
+            baseUrl,
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 65536,
+            maxTokens: 8192,
           },
         ],
         api: openAICompletionsApi(),
@@ -102,33 +100,63 @@ export default defineAgent({
 });
 ```
 
-Read the key through `needs`, never write it into the config: the config ships in the image.
+Declaring a provider with the same `id` as a built-in provider replaces that built-in.
 
-## The system prompt
+## Harness and sandbox selection
 
-`SYSTEM.md` is the whole prompt, read for every message. FastAgent appends: the agent's `AGENTS.md`, its skills, where
-it works, and (when deployed) what a self-edit changes. Nothing comes from the machine (no `~/.pi/agent`).
+Precedence (highest first):
 
-Prompt templates (`prompts/<name>.md`) run on a message that is a bare `/<name>`, whoever sends it.
+```text
+--harness > FASTAGENT_HARNESS > harness in fastagent.config.ts > "pi-durable"
+--sandbox > FASTAGENT_SANDBOX > sandbox in fastagent.config.ts > "workspace" (on "dsh")
+```
+
+| Choice | When to pick it |
+| --- | --- |
+| **`pi-durable` (default)** | Standard production choice built into `@fastagent-sh/fastagent`; supports `src/extensions/`. |
+| **`dsh` + `sandbox: "workspace"`** | When your agent enables `bash`/file tools and you want kernel-enforced confinement (`sandbox-exec` on macOS, `bwrap`/`Landlock` on Linux, restricted tokens on Windows) limited to the working directory. Fails closed if OS sandboxing is unavailable. |
+| **`dsh` + `sandbox: "read-only"`** | When the agent may inspect workspace files and run read-only commands but must not modify files (`write` and `edit` are refused). |
+| **`dsh` + `sandbox: "off"`** | Running `dsh` inside an already-isolated container without nested kernel sandboxing. |
+
+Both harnesses share the same SQLite file or PostgreSQL database in disjoint table namespaces (`durable_*` vs `dsh_*`), while sharing durable credentials and conversation mappings. `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), and `mcpServers` run identically on both; `src/extensions/` modules are `pi-durable`-specific and are skipped with a warning on `dsh`.
+
+## Prompts, skills, and templates
+
+- **`SYSTEM.md`:** Re-read on every message. FastAgent appends `AGENTS.md` (when present), skill metadata from `skills/`, workspace instructions (when `codingTools` is enabled), and deployment notes (when deployed). Machine-local files like `~/.pi/agent` are never read.
+- **`skills/<name>/SKILL.md`:** Discovered automatically, listed in the system prompt, and invokable directly via `/skill:<name>`.
+- **`prompts/<name>.md`:** Prompt templates expanded whenever a message begins with `/<name>`.
+
+## Tools and extensions (`src/`)
+
+Every file placed directly in `src/tools/` or `src/extensions/` is auto-loaded by default export—nothing to register manually. Test files (`*.test.*`) are ignored; place shared helpers outside `src/` (for example in `lib/`). Rename a file to `<name>.ts.disabled` to turn it off temporarily.
+
+| Directory | Default export | Supported harnesses |
+| --- | --- | --- |
+| `src/tools/` | `defineTool(...)` from `@fastagent-sh/fastagent` (or `@earendil-works/pi-durable`), optionally wrapped in `needs()` | Both `pi-durable` and `dsh` |
+| `src/extensions/` | `defineExtension(...)` from `@earendil-works/pi-durable`, optionally wrapped in `needs()` | `pi-durable` only (skipped with warning on `dsh`) |
+
+- **Flexible parameter schemas:** `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect `Schema.toStandardJSONSchemaV1`), plain JSON Schema objects (with `as const` type inference), or `@earendil-works/pi-schema`.
+- **Simple return values:** `execute` can return a plain `string` or a full `ToolExecutionResult` (`{ output, details?, isError? }`).
+- **Session id lookup:** Call `await sessionIdOf(api, context)` from `@fastagent-sh/fastagent` to read the active Agent API session id on either harness.
+- **Built-in coding tools:** `read`, `write`, `edit`, and `bash` are enabled by default. Set `codingTools: false` for tool-only or multi-user embedded agents (this also omits workspace filesystem guidance from the system prompt), or pass a subset like `codingTools: ["read"]`. Even with `read` disabled, skills remain accessible via `/skill:<name>`.
 
 ## Auth and secrets
 
-| Source | Use |
-|---|---|
-| `fastagent login` | Stores credentials locally in `.secrets/auth.json` (`-g` for `~/.fastagent/.secrets/auth.json`), or with `--url` / `--remote` stores them in the deployed instance's durable storage (SQLite / PostgreSQL / Aurora DSQL) |
-| Provider variables | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, … for servers and CI |
-| `.secrets/.env` | Values for local commands (`dev`, `start`, `invoke`, …); git-ignored. Pass `--env-file <file>` to isolate another set of values |
+Provider credentials resolve in this priority order:
 
-A provider's credential comes from the agent's `auth.json`, then the provider's variable, then the global file. A
-container never reads your files: give it its values as environment variables. `--env-file <file>` works on `dev`,
-`start`, `invoke` and `info`.
+1. **Instance durable credentials** — saved via remote `fastagent login --url` / `--remote` or `/v1/auth/*` in `<root>/.state/credentials.sqlite` or PostgreSQL.
+2. **Project auth file** — `.secrets/auth.json` (written by local `fastagent login`).
+3. **Provider environment variables** — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_BEARER_TOKEN_BEDROCK`, etc., from the environment or `.secrets/.env` (`--env-file`).
+4. **Global auth file** — `~/.fastagent/.secrets/auth.json` (written by `fastagent login -g` or `fastagent login` outside an agent).
 
-### Secrets in code
+Containers and embedded apps (`openAgent`) never read your local `.secrets/` or `~/.fastagent`: pass secrets explicitly through host environment variables, `openAgent({ secrets })`, or remote `fastagent login --remote`.
 
-Code declares the secrets it reads, in the module that reads them:
+### Declare secrets in code
+
+Wrap any tool, extension, or provider that reads a secret or per-environment setting in `needs()`:
 
 ```ts
-import { z } from "zod"; // or plain JSON Schema, or @earendil-works/pi-schema
+import { z } from "zod"; // or plain JSON Schema (`as const`), or @earendil-works/pi-schema
 import { defineTool, needs } from "@fastagent-sh/fastagent";
 
 export default needs(
@@ -136,134 +164,93 @@ export default needs(
   ({ WEATHER_API_KEY, WEATHER_UNITS }) =>
     defineTool({
       name: "weather",
-      description: "Current weather for a city.",
+      description: "Get current weather for a city.",
       parameters: z.object({ city: z.string() }),
-      execute: async ({ city }) => await lookup(city, WEATHER_API_KEY, WEATHER_UNITS),
+      execute: async ({ city }) => await lookupWeather(city, WEATHER_API_KEY, WEATHER_UNITS ?? "metric"),
     }),
 );
 ```
 
-A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions and providers.
+Missing required secrets fail startup immediately and name the file that declared them. Run `fastagent info` to see every secret your agent requires.
 
-A value that differs between deployments but is not secret (a repository name, a team id) is read the same way:
-declare it with `optional: true` and fall back to a default in code.
+## HTTP server & API keys
 
-## Ports and bind address
-
-```txt
-port   dev:   --port > 8787                       start: --port > PORT > 8787
-bind   dev:   --bind > 127.0.0.1                  start: --bind > all interfaces
+```text
+port   dev:   --port > 8787              start: --port > PORT > 8787
+bind   dev:   --bind > 127.0.0.1         start: --bind > 0.0.0.0 (all interfaces)
 ```
 
-`--bind` takes an IP or `localhost`. A serve answers the [Agent API](#the-agent-api-over-http) with a key, and
-`GET /health`: public, `200 {"status": "ok"}`.
+`--bind` accepts an IP literal or `localhost`. Every running server answers `GET /health` (`200 {"status": "ok"}`).
 
-## The Agent API over HTTP
-
-Set `FASTAGENT_API_KEY` (in `.secrets/.env`, or on the host) and a serve answers the [Agent API](agent-api.md#over-http) under
-`/v1` to `Authorization: Bearer <key>`. Several keys, comma-separated, let you rotate one. The key opens the whole
-instance ([security model](agent-api.md#security)): keep it on a server.
+Set `FASTAGENT_API_KEY` (in `.secrets/.env` locally or as a host secret in production) to enable the [Agent API](agent-api.md#http-binding) under `/v1` (`Authorization: Bearer <key>`). Pass comma-separated keys (`FASTAGENT_API_KEY=new,old`) to rotate keys with zero downtime.
 
 ```bash
 FASTAGENT_API_KEY=$(openssl rand -hex 32)
 ```
 
-Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or check it with
-`fastagent invoke --url <url> "hello"`.
+## Storage: SQLite vs PostgreSQL
 
-## Where things live
+### Local SQLite (default)
 
-| Path | Holds |
-|---|---|
-| `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
-| `<root>/` | The agent's working directory |
-| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)). One process at a time |
-| `.secrets/` | `.env`, `auth.json`. Never in git or the image |
+By default each instance stores its state under `<root>/.state/` (`agent.sqlite`, `credentials.sqlite`, `conversations.sqlite`):
 
-| Flag | Variable | Default |
-|---|---|---|
-| `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`) |
-| `--name <name>` | `FASTAGENT_NAME` | the package's name; none with `FASTAGENT_DATABASE_URL`, where it is required |
+| Path / Flag | Env var | Default |
+| --- | --- | --- |
+| `--root <dir>` | `FASTAGENT_ROOT` | `.fastagent/dev` (`start`: `.fastagent/start`; container: `/data`) |
+| `--name <name>` | `FASTAGENT_NAME` | Package name (required with no default when using PostgreSQL) |
+| `--env-file <file>` | — | `.secrets/.env` |
 
-The container `deploy init` writes keeps its root at `/data`. On your own server without a container:
+`dev` and `start` use separate local instance directories (`.fastagent/dev/` vs `.fastagent/start/`) so testing a production build never touches your dev sessions.
 
-```bash
-fastagent build
-FASTAGENT_ROOT=/data fastagent start
-```
+### Sessions in PostgreSQL
 
-## Sessions in PostgreSQL
-
-Set `FASTAGENT_DATABASE_URL` and an instance keeps its sessions and runs in that PostgreSQL database instead of
-`<root>/.state/agent.sqlite`. A new machine, container or root with the same name continues them.
+Set `FASTAGENT_DATABASE_URL` (or pass `database` to `openAgent`) to keep sessions, durable credentials, and conversation mappings in PostgreSQL instead of SQLite:
 
 ```bash
-FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=require' FASTAGENT_NAME=support fastagent start
+FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=require' \
+FASTAGENT_NAME=support \
+fastagent start
 ```
 
-- **Name each instance.** Instances in one database are told apart by the name you give them (`--name` or
-  `FASTAGENT_NAME`; an app: `openAgent`'s `name`). There is no default: a command that opens an instance without one
-  exits 2.
-- **An instance belongs to its agent.** The first agent (package) to open a name owns it; another agent with the same
-  name is refused: `the instance "support" belongs to the agent "@acme/support", not "@acme/sales"`.
-- **One database per environment.** Point `dev` at a development database, never at production's: with the same
-  name, it would continue production's sessions whenever production is not running.
-- **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
-  saying who holds it. A process that dies frees its instance within 30 seconds.
-- **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
-- Under the root stay only the agent's working files and what `fastagent login` writes (`auth.json`).
-- `fastagent info` shows where the sessions are (`storage:`), without the password.
-- An app gives `openAgent` its database as `database: { url }` ([Embedding](embedding.md#1-open-it)). On Aurora DSQL,
-  `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` signs each connection in with the process's AWS
-  credentials and keeps a commit within DSQL's limits; a message over 6.4 MiB is refused there (`too_large`).
+- **Explicit name required:** Multiple instances can share one PostgreSQL database keyed by `FASTAGENT_NAME` (`--name` or `openAgent({ name })`). Missing a name exits `2`.
+- **Agent ownership:** The first agent package to open a name owns it; another agent opening the same name is refused.
+- **Isolate environments:** Use separate databases for dev and production.
+- **Single-writer lease fencing:** Only one process owns an instance at a time across hosts. A second opener waits up to 35 s before refusing (naming the holder); a crashed holder releases its lease within 30 s.
+- **Automatic schema setup:** Tables are created on first open (`CREATE TABLE` privilege required).
+- **Shared pools & Aurora DSQL:** Multi-instance apps wrap a database descriptor with `openPostgresDatabase()` ([Embedding](embedding.md#1-open-the-agent)); AWS deployments use `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` ([AgentCore](agentcore.md)).
 
-## Code: `src/`
+## Logging & OpenTelemetry traces
 
-| Directory | Each file default-exports |
-|---|---|
-| `src/tools/` | a tool: `defineTool` from `@fastagent-sh/fastagent` (Zod v4 / Standard JSON Schema, plain JSON Schema, or `pi-schema`) or `@earendil-works/pi-durable` |
-| `src/extensions/` | an extension: `defineExtension` |
+Set `FASTAGENT_LOG_LEVEL` to `debug`, `info`, `warn`, or `error` (defaults: `debug` in `dev`, `info` in `start`).
 
-Any of them may be wrapped in `needs`. Every file is loaded; there is nothing to register. Tests (`*.test.*`) are
-skipped, and helpers go elsewhere (`lib/`). Rename a file to `<name>.ts.disabled` to turn it off.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) to export OTLP/HTTP JSON traces for both `pi-durable` and `dsh`. Traces record message admission, turns, tool calls, and model calls with token usage, cost, OpenTelemetry GenAI attributes (`gen_ai.*`), and W3C `traceparent` propagation—without ever exporting prompt text, answers, or tool arguments.
 
-## Tools
+| Variable | Purpose |
+| --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Collector base URL (exports to `<base>/v1/traces`) |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Explicit full traces endpoint (overrides base URL) |
+| `OTEL_EXPORTER_OTLP_HEADERS` / `OTEL_EXPORTER_OTLP_TRACES_HEADERS` | `key=value,...` headers (percent-encoded values) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` | Must be `http/json` (default) when set |
+| `OTEL_SERVICE_NAME` | `service.name` resource attribute (defaults to instance name) |
+| `OTEL_RESOURCE_ATTRIBUTES` | Additional `key=value,...` resource attributes |
+| `OTEL_SDK_DISABLED=true` | Disable trace export |
 
-By default an agent has the coding tools `read`, `write`, `edit` and `bash`. Set `codingTools: false` in
-`fastagent.config.ts` to disable all four (for tool-only or multi-user embedded agents), or pass a subset such as
-`codingTools: ["read"]`. When `codingTools` is disabled, workspace paths and filesystem instructions are omitted from
-the system prompt; when `read` is disabled, skills remain usable via `/skill:<name>` rather than model-driven `read`.
-Coding tools are not a sandbox: to isolate an agent that enables them, sandbox its process. A tool's `parameters` schema
-is checked before `execute` runs. A tool that needs its session id calls `await sessionIdOf(api, context)`.
-[MCP servers](mcp.md) add tools from `mcpServers`.
+CLI commands read `OTEL_*` from the environment or `.secrets/.env`; `openAgent()` reads them from `options.secrets` (keeping collector credentials out of agent subprocesses). Collector outages never block agent runs; dropped batches log a warning.
 
-## Extensions
+## Environment variables reference
 
-An extension (`defineExtension({ name, … })`) bundles tools, prompt sections and hooks. A third-party one is a file in
-`src/extensions/` that re-exports it: `export { default } from "some-extension-package"`.
-
-## Logging
-
-`FASTAGENT_LOG_LEVEL` is `debug`, `info`, `warn` or `error`. Defaults: `debug` for `dev`, `info` for `start`, which
-keeps message content out of the logs.
-
-## Run traces
-
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) and every run goes to that OpenTelemetry
-collector as a trace: the message's admission, each step of its run with the tools it called, and each model request
-with its tokens and cost. A model request also carries the GenAI names (`gen_ai.request.model`,
-`gen_ai.usage.input_tokens`, …) that LLM observability tools read. A trace holds no content: no prompt, answer or tool
-argument.
-
-| Variable | |
-|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's base URL; traces go to `<base>/v1/traces` |
-| `OTEL_EXPORTER_OTLP_HEADERS` | `key=value,…`, percent-encoded values: what the collector authenticates with |
-| `OTEL_SERVICE_NAME` | `service.name`; default the instance's name |
-| `OTEL_RESOURCE_ATTRIBUTES` | More resource attributes, `key=value,…` |
-| `OTEL_SDK_DISABLED=true` | Export nothing |
-
-The protocol is OTLP/HTTP with JSON; any other `OTEL_EXPORTER_OTLP_PROTOCOL` refuses the start. `dev`, `start`
-and `invoke` read these variables from the environment or the `.secrets/` value files; an app's `openAgent`
-reads them from its `secrets` ([Embedding](embedding.md#1-open-it)). A collector that is down costs the agent nothing: the
-spans it missed are dropped, and the log says how many.
+| Variable | Scope | Purpose |
+| --- | --- | --- |
+| `FASTAGENT_MODEL` | Runtime / CLI | Default `provider/modelId` override |
+| `FASTAGENT_HARNESS` | Runtime / CLI | Harness override (`pi-durable` or `dsh`) |
+| `FASTAGENT_SANDBOX` | Runtime / CLI | DSH OS sandbox override (`workspace`, `read-only`, `off`) |
+| `FASTAGENT_API_KEY` | Server / CLI | Comma-separated bearer keys enabling `/v1` HTTP routes (also default key for `--url`) |
+| `FASTAGENT_ROOT` | Runtime / CLI | Instance root directory (working directory + `.state/`) |
+| `FASTAGENT_NAME` | Runtime / CLI | Instance name (required with PostgreSQL and containers) |
+| `FASTAGENT_DATABASE_URL` | Runtime / CLI | PostgreSQL connection string for sessions, credentials, and conversations |
+| `FASTAGENT_LOG_LEVEL` | Runtime / CLI | Log verbosity (`debug`, `info`, `warn`, `error`) |
+| `FASTAGENT_REMOTES_PATH` | CLI / `pi-remote` | Override path to `remotes.json` (default `~/.config/fastagent/remotes.json`) |
+| `FASTAGENT_DEPLOYED` | Container | Set to `1` by generated `Dockerfile` to enforce mounted storage and deployment checks |
+| `FASTAGENT_AGENTCORE_ARN` | AgentCore CLI | Default runtime ARN for `fastagent agentcore invoke` |
+| `FASTAGENT_DSQL_ENDPOINT` | AgentCore server | Aurora DSQL cluster endpoint |
+| `FASTAGENT_SECRETS` | AgentCore server | AWS Secrets Manager secret name holding JSON values |

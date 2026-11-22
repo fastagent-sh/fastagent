@@ -45,8 +45,8 @@ export interface ModelEnvironment {
   models: Models;
   /**
    * What authenticates `provider` here, resolved exactly as a message resolves it: the one answer the startup report
-   * and a deployed box's `login --if-missing` both give. `modelId` picks the model to probe with; the provider's first
-   * one otherwise (auth is provider-scoped).
+   * and `login --check` both give. `modelId` picks the model to probe with; the provider's first one otherwise
+   * (auth is provider-scoped).
    */
   authStatus(provider: string, modelId?: string): Promise<AuthStatus>;
 }

@@ -10,11 +10,10 @@ export const baseTemplate = (name: string): string =>
   readFileSync(new URL(`./templates/${name}`, import.meta.url), "utf8");
 
 /**
- * package.json for the complete agent: fastagent at this build's version, the packages an agent's code is written
- * against (its tools and extensions are pi-durable code, its providers pi-ai's, its tool schemas pi-schema's) at the
- * versions this build runs, and the TypeScript `fastagent build` compiles it with. Its scripts are the framework's
- * three entries, so `npm run dev` and `npm start` work as in any web project; `start` builds first, since it opens the
- * built `dist/` and refuses one the project has moved past.
+ * `package.json` for a scaffolded agent: `@fastagent-sh/fastagent` at this build's version, the supporting packages
+ * for custom providers (`pi-ai`), extensions (`pi-durable`), and optional schemas (`pi-schema`), and the TypeScript
+ * version `fastagent build` compiles with. Its scripts expose `dev`, `build`, and `start` (`start` builds first so
+ * `dist/` stays up to date).
  */
 export function packageJson(
   name: string,

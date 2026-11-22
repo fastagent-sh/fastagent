@@ -1,19 +1,32 @@
 # @fastagent-sh/client
 
-The client of [FastAgent](https://fastagent.sh): the Agent API's types and an HTTP client for an agent that FastAgent
-serves.
+Call any HTTP [FastAgent](https://fastagent.sh) service—or manage its remote model-provider logins—from Node, Bun, Deno, or edge workers. Zero Node dependencies; needs only `fetch`.
 
-```ts
-import { connectAgent } from "@fastagent-sh/client";
-
-const agent = connectAgent("https://agent.example.com", { apiKey: process.env.AGENT_API_KEY! });
-const { id } = await agent.sessions.create();
-const message = await agent.messages.send({ sessionId: id, content: "hi" }, { wait: 60 });
-console.log(message.answer?.text);
+```bash
+npm i @fastagent-sh/client
 ```
 
-`@fastagent-sh/client` is the Agent API and `connectAgent`, and needs only `fetch`. Cloud-specific transports
-(such as `@fastagent-sh/client-agentcore`) plug in through `@fastagent-sh/client/remotes`. Its contract entries
-(`/agent-api`, `/http/contract`) are the ones FastAgent's runtime builds its servers from.
+```ts
+import { connectAgent, connectAuth } from "@fastagent-sh/client";
 
-See [the Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md).
+const agent = connectAgent("https://agent.example.com", {
+  apiKey: process.env.AGENT_API_KEY!,
+});
+
+// Single-call invoke with a caller-named conversation
+const reply = await agent.invoke(
+  { conversation: "support:42", content: "Where is order 9231?" },
+  { wait: 120 },
+);
+console.log(reply.status, reply.answer?.text);
+
+// Or inspect / manage model-provider auth on the deployed instance
+const auth = connectAuth("https://agent.example.com", {
+  apiKey: process.env.AGENT_API_KEY!,
+});
+const providers = await auth.providers();
+```
+
+Also exports the Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and pluggable `remotes.json` transport contract (`/remotes`) used by cloud transport clients like `@fastagent-sh/client-agentcore`.
+
+See [Agent API](https://fastagent.sh/docs/agent-api/) and [Remotes & clients](https://fastagent.sh/docs/remotes/).

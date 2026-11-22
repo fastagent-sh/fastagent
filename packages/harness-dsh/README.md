@@ -1,6 +1,6 @@
 # @fastagent-sh/harness-dsh (Experimental)
 
-Optional second runtime harness for [FastAgent](https://fastagent.sh) backed by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness), adding kernel-enforced OS sandboxing (`sandbox-exec` on macOS, `bwrap` / `Landlock` on Linux, restricted-token ACL on Windows) while implementing the full FastAgent Agent API.
+Run any [FastAgent](https://fastagent.sh) with kernel-enforced OS sandboxing (`sandbox-exec` on macOS, `bwrap` / `Landlock` on Linux, restricted tokens on Windows) powered by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness)—with zero changes to your prompt, skills, portable tools, or callers.
 
 ## Install
 
@@ -10,7 +10,7 @@ npm install @fastagent-sh/harness-dsh
 
 ## Use with FastAgent
 
-Switch in `fastagent.config.ts`:
+Enable in `fastagent.config.ts`:
 
 ```ts
 import { defineAgent } from "@fastagent-sh/fastagent";
@@ -23,7 +23,7 @@ export default defineAgent({
 });
 ```
 
-Or override per command without editing config:
+Or override per CLI command:
 
 ```bash
 fastagent dev --harness dsh
@@ -32,7 +32,7 @@ fastagent invoke "summarize this repo" --harness dsh
 fastagent start --harness dsh
 ```
 
-Or programmatically with `openAgent()`:
+Or programmatically via `openAgent()`:
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
@@ -40,19 +40,22 @@ import myAgent from "./dist/index.js";
 
 const agent = await openAgent(myAgent, {
   root: "/var/lib/myapp/agent",
+  secrets: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
   env: baseEnv(process.env),
   harness: "dsh",
   sandbox: "workspace",
 });
 ```
 
-## Compatibility
+## What stays the same (and what differs)
 
-- **Full Agent API**: passes the full `test/harnesses/agent-api-conformance.ts` suite (streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, context usage, crash recovery).
-- **Shared storage**: shares the instance's `agent.sqlite` (with kernel-enforced `EXCLUSIVE` locking) or PostgreSQL database (`dsh_*` tables + `dsh_leases` fencing) without colliding with `pi-durable`.
-- **Portable assets**: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), and `mcpServers` work identically on both harnesses.
-- **`src/extensions/`**: `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
+- **Same Agent API:** Streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, OTLP traces, and crash recovery work identically.
+- **Same storage:** Shares your SQLite file or PostgreSQL database in its own table namespace (`dsh_*`) without touching `pi-durable` sessions, while sharing durable credentials and conversation mappings.
+- **Same portable assets:** `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool` from `@fastagent-sh/fastagent`), and `mcpServers` run identically.
+- **`src/extensions/`:** `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
 
 ## Experimental status
 
-This package pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release.
+Pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release.
+
+See [Configuration](https://fastagent.sh/docs/configuration/#harness-and-sandbox-selection) and [Technical architecture](https://fastagent.sh/docs/architecture/).

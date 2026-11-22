@@ -1,87 +1,112 @@
 ---
 title: Troubleshooting
-description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, sessions, and deployment."
+description: "Quick fixes for common FastAgent setup, local development, OS sandbox, remote authentication, and deployment issues."
 status: current
 ---
 
 # Troubleshooting
 
-Find the message or symptom, then the fix. `fastagent info --json` reports everything the agent loads, for bug reports
-and CI.
+Look up the error message or symptom below. When filing an issue, include the output of `fastagent info --json`.
 
-## Setup
+## Setup & authoring
 
 ### `missing model`
 
-The run has no terminal to ask, and no model is set. Set one:
+**Why:** No default model is configured and there is no interactive terminal to ask.
+**Fix:** Set a model explicitly (run `fastagent models [search]` to see valid `provider/modelId` specs):
 
 ```bash
-fastagent dev --model provider/modelId          # this run
-FASTAGENT_MODEL=provider/modelId fastagent dev   # this shell
-# or model in fastagent.config.ts               # always
+fastagent dev --model provider/modelId           # one run
+FASTAGENT_MODEL=provider/modelId fastagent dev   # shell or container
+# or set `model` in fastagent.config.ts          # permanent default
 ```
-
-`fastagent models` lists the specs. A **deployment** reads only the config and its environment: set `model` in
-`fastagent.config.ts` and deploy again, or `FASTAGENT_MODEL` on the container.
 
 ### `auth: (none found)`
 
-The provider has no credential here. You probably ran `fastagent login` in another agent: credentials are per agent
-(`.secrets/auth.json`), plus `~/.fastagent` for `login -g`. Run `fastagent login` in this agent, or set the provider's
-key (`OPENAI_API_KEY`, …) in `.secrets/.env`.
+**Why:** The selected provider has no credentials for this agent. Local credentials are stored per agent in `.secrets/auth.json` (plus `~/.fastagent/.secrets/auth.json` for `fastagent login -g`).
+**Fix:** Run `fastagent login` in the agent directory, or add the provider's API key (such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) to `.secrets/.env`.
 
-### A module does not load
+### A tool or extension fails to load
 
-`Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file in `src/`. Check:
-- `npm install` ran, and `package.json` has `"type": "module"` and the packages the code imports;
-- the file sits directly in `src/tools/` or `src/extensions/` and default-exports
-  what that directory holds; helpers live outside them.
+**Why:** `Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file under `src/`.
+**Fix:**
+- Run `npm install` and verify `package.json` has `"type": "module"`.
+- Put only tool/extension modules with default exports directly inside `src/tools/` or `src/extensions/`. Move helper modules outside `src/` (for example into `lib/`).
+- Use `.ts` extensions on relative imports (`../lib/helper.ts`) and `import type` for type-only imports.
 
-### `Invalid schema for function '…'`
+### `Invalid schema for function '...'`
 
-OpenAI accepts only some string formats (`date-time`, `date`, `email`, `uuid`, …), so `str({ format: "uri" })` breaks
-the tool. Use a pattern: `str({ pattern: "^https?://\\S+$" })`.
+**Why:** Some model providers (notably OpenAI) only accept a narrow set of JSON Schema `format` values (`date-time`, `date`, `email`, `uuid`, …) and reject others like `format: "uri"`.
+**Fix:** Replace unsupported string formats with a regex pattern (`pattern: "^https?://\\S+$"` in JSON Schema, `z.string().regex(/^https?:\/\/\S+$/)` in Zod, or `str({ pattern: "^https?://\\S+$" })` in `pi-schema`).
 
 ### Port already in use
 
-`--port 8788`, or `PORT` for `start`.
+**Fix:** Pass `--port 8788` (or set `PORT=8788` for `fastagent start`).
 
-### `the storage … is held by another process`
+### `the storage ... is held by another process`
 
-Another process holds this instance: a `start`, or an `invoke` command that opened it while no `dev`
-ran. Stop it, or run the command again once it ends. A running `dev` is reached through its Agent API instead.
+**Why:** Only one process can own an instance's SQLite file (or PostgreSQL lease) at a time. Another `fastagent dev`, `fastagent start`, or standalone `fastagent invoke` currently holds it.
+**Fix:** Stop the other process—or keep `fastagent dev` running so `fastagent invoke` connects to it automatically over its Agent API.
 
 ## Local development
 
 ### `dev` does not pick up a change
 
-Prompt, `AGENTS.md`, skill and template edits apply on the next message. Code (`src/`, config, `package.json`,
-`.secrets/.env`) restarts the worker once running messages finish. Anything else, such as `lib/`, needs a manual
-restart. After a broken edit, fix it and save again.
+- Edits to `SYSTEM.md`, `AGENTS.md`, `skills/`, and `prompts/` apply automatically on the next message.
+- Edits to `src/`, `fastagent.config.ts`, `package.json`, and `.secrets/.env` restart the worker cleanly once active turns finish.
+- Files outside `src/` (such as `lib/`) are not watched—restart `fastagent dev` manually after editing them.
 
-### `busy`
+### `busy` error on send
 
-The session's queue is full, or the request said `whenBusy: "reject"`. Use separate sessions for separate work.
+**Why:** The session's queue is full (`details.reason: "queue_full"`), the process hit capacity (`"capacity"`), or the request specified `whenBusy: "reject"` while a turn was running (`"running"`).
+**Fix:** Use separate sessions for independent work, or send with `whenBusy: "queue"` or `"steer"`.
 
-### Proxy or network errors
+### Proxy or corporate network errors
 
-Set `HTTPS_PROXY` (in the shell or `.secrets/.env`). Loopback is never proxied; add a LAN address you bind to
-`NO_PROXY` yourself.
+**Fix:** Set `HTTPS_PROXY` (and `HTTP_PROXY` / `NO_PROXY`) in your shell or `.secrets/.env`. Loopback addresses bypass proxies automatically; add custom LAN addresses to `NO_PROXY`.
+
+## Harnesses & OS sandboxing
+
+### `harness "dsh" requires @fastagent-sh/harness-dsh`
+
+**Why:** `@fastagent-sh/harness-dsh` is an optional package loaded lazily so core stays lightweight.
+**Fix:** Install it in your agent directory:
+
+```bash
+npm install @fastagent-sh/harness-dsh
+```
+
+### DSH sandbox refuses to start
+
+**Why:** With `harness: "dsh"` and `sandbox: "workspace"` or `"read-only"`, `bash` fails closed if the host OS cannot enforce confinement (for example inside a restricted container without user namespaces for `bwrap` or Landlock support).
+**Fix:** Grant the required sandbox capability, rely on container isolation with `--sandbox off`, or disable `bash` via `codingTools: ["read"]` or `codingTools: false`.
+
+### Extensions are skipped on `dsh`
+
+**Why:** Modules in `src/extensions/` use `pi-durable`'s extension API and are skipped with a startup warning on `harness: "dsh"`.
+**Fix:** Move portable tool logic into `src/tools/` using `defineTool` from `@fastagent-sh/fastagent`, or use `mcpServers`—both run identically on `pi-durable` and `dsh`.
+
+## Remotes & remote auth
+
+### `Remote "..." uses transport "agentcore"; install @fastagent-sh/client-agentcore`
+
+**Why:** Non-HTTP entries in `~/.config/fastagent/remotes.json` dynamically load `@fastagent-sh/client-<type>`.
+**Fix:** Install `@fastagent-sh/client-agentcore` in the environment where you run `fastagent` or Pi.
+
+### `unauthorized` vs `auth_required` on a remote call
+
+- **`unauthorized` (HTTP 401):** Your **server API key** (`FASTAGENT_API_KEY`, `--key`, or `apiKey` in `remotes.json`) was missing or rejected by the FastAgent server (or AWS IAM rejected your AgentCore invocation).
+- **`auth_required` (in `message.error`):** The FastAgent server accepted your request, but the **model provider** inside the deployment has no valid credential. Set the provider's API key on the host or run `fastagent login <provider> --remote <name>`.
 
 ## Deployment
 
 ### Sessions disappear after a redeploy
 
-The state root is not on persistent storage. The generated container keeps it at `/data`: mount a volume there
-(`-v my-agent-data:/data`). On your own server set `FASTAGENT_ROOT=/data`.
+**Why:** Instance state is being written to ephemeral container storage.
+**Fix:** Mount a persistent volume at `/data` (the generated container's `FASTAGENT_ROOT`) or set `FASTAGENT_DATABASE_URL` to PostgreSQL / Aurora DSQL.
 
-### `deploy init` stopped, or the container does not start
+### `deploy init` or `deploy check` fails, or the container exits on boot
 
-`deploy init` stops only when the container would not start: the agent directory has no `package.json`, or its
-definition does not load. The line after `deploy init <target> stopped:` names which.
-
-- **`persistent storage is not mounted at /data`:** the container runs without its volume. Add `-v <name>-data:/data`.
-- **`FASTAGENT_NAME is required for a deployment`:** a Dockerfile of your own dropped it. Add
-  `ENV FASTAGENT_NAME=<name>`, as the generated one does.
-- **`auth_required` from `invoke --url`:** the container has no credential for its model: set the provider's API key
-  in its environment.
+- **`persistent storage is not mounted at /data`:** Attach a persistent volume at `/data` (`-v <name>-data:/data`). Generated containers (`FASTAGENT_DEPLOYED=1`) always require a mounted `/data` volume for working files and the deployment lease, even when sessions are stored in PostgreSQL via `FASTAGENT_DATABASE_URL`.
+- **`FASTAGENT_NAME is required for a deployment`:** Ensure your `Dockerfile` sets `ENV FASTAGENT_NAME=<name>` (or pass it in container env).
+- **Build context leak reported:** Your `.dockerignore` is missing or does not exclude `.secrets/`, `.env*`, `.state/`, or `.fastagent/`. Update `.dockerignore` or run `fastagent deploy init <target> --force` to regenerate the FastAgent-managed file.

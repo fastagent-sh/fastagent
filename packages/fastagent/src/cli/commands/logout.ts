@@ -1,7 +1,7 @@
 /**
- * `fastagent logout [provider]`: remove the credential `login` stored for a provider, as pi's `/logout` does, from the
- * file `login` writes (the agent's, or with `-g` or outside an agent the global one). Environment variables and the
- * grant at the provider are left as they are.
+ * `fastagent logout [provider]`: remove a stored credential for a provider locally (`.secrets/auth.json`), globally
+ * (`-g` or outside an agent), or from a remote instance's durable storage (`--url` / `--remote`). Environment
+ * variables and provider-side grants are left unchanged.
  */
 import { enterAgentEnv } from "../../env.ts";
 import { GLOBAL_AUTH_PATH, fastagentCredentialStore, resolveAuthPath } from "../../harnesses/models/credentials.ts";

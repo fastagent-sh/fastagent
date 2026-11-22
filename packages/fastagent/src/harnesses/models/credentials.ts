@@ -1,7 +1,8 @@
 /**
- * Auth for the pi harness: a read-WRITE {@link CredentialStore} over a fastagent credentials file, consumed by the
- * `Models` collection (models.ts), and which of those files an agent reads. The write path refuses to overwrite a
- * corrupt file, so a torn read never clobbers the other providers' credentials.
+ * File-backed provider auth shared across harnesses (`pi-durable` and `dsh`): a read-write {@link CredentialStore}
+ * over a fastagent credentials file, consumed by the `Models` collection (models.ts), and which of those files an
+ * agent reads. The write path refuses to overwrite a corrupt file, so a torn read never clobbers the other providers'
+ * credentials.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";

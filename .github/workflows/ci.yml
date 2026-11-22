@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor (RUNTIME_FLOOR in src/runtime.ts, package.json engines) and the next LTS. The floor's own
+        # The floor (RUNTIME_FLOOR in packages/fastagent/src/runtime.ts, package.json engines) and the next LTS. The floor's own
         # line (`24`) is not a third entry: it only sits between these two, and a job that cannot fail
         # differently is one more chance for a flaky test to fail the run.
         node-version: ['24.15.0', '26']

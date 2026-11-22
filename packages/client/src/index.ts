@@ -1,6 +1,6 @@
 /**
- * The Agent API over HTTP, for a program anywhere `fetch` runs: `connectAgent`, its errors and the
- * types. It opens no agent and needs no Node API, so it also runs on Deno and Workers.
+ * The Agent API and Auth API over HTTP, for any runtime where `fetch` exists: `connectAgent`, `connectAuth`,
+ * `AgentError`, and all contract types. Zero Node dependencies, so it also runs on Bun, Deno, and Workers.
  */
 /** @public */
 export type {
