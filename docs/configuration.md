@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, sessions in PostgreSQL, tools, extensions, schedules and run traces."
+description: "Configure a FastAgent agent: fastagent.config.ts, models and custom providers, the prompt, the environment, secrets, ports, paths, sessions in PostgreSQL, tools, extensions and run traces."
 status: current
 ---
 
@@ -51,12 +51,11 @@ The name and description of the agent come from its `package.json`.
 ```
 
 Pass `--harness dsh` (and optionally `--sandbox read-only` or `--sandbox off`) to `dev`, `start`, `invoke`,
-`schedules run`, or `info`, or pass `{ harness: "dsh", sandbox: "workspace" }` to `openAgent()`. Both harnesses
+or `info`, or pass `{ harness: "dsh", sandbox: "workspace" }` to `openAgent()`. Both harnesses
 share the instance's `agent.sqlite` (or PostgreSQL database) in separate table namespaces, so switching between
 `pi-durable` and `dsh` preserves each harness's own sessions without mutating the other's. Modules in
 `src/extensions/` are `pi-durable`-specific and are skipped with a startup warning when running on `dsh`; portable
-tools in `src/tools/` (`defineTool`), `mcpServers`, `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, and
-`src/schedules/` run on both.
+tools in `src/tools/` (`defineTool`), `mcpServers`, `SYSTEM.md`, `AGENTS.md`, `skills/`, and `prompts/` run on both.
 
 ## Model selection
 
@@ -122,7 +121,7 @@ Prompt templates (`prompts/<name>.md`) run on a message that is a bare `/<name>`
 
 A provider's credential comes from the agent's `auth.json`, then the provider's variable, then the global file. A
 container never reads your files: give it its values as environment variables. `--env-file <file>` works on `dev`,
-`start`, `invoke`, `info` and `schedules run`.
+`start`, `invoke` and `info`.
 
 ### Secrets in code
 
@@ -144,7 +143,7 @@ export default needs(
 );
 ```
 
-A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions, schedules and providers.
+A required secret without a value refuses the start, naming the file. `info` lists every declaration. `needs` works around tools, extensions and providers.
 
 A value that differs between deployments but is not secret (a repository name, a team id) is read the same way:
 declare it with `optional: true` and fall back to a default in code.
@@ -178,7 +177,7 @@ Call it with `connectAgent(url, { apiKey })` from `@fastagent-sh/client`, or che
 |---|---|
 | `.fastagent/dev/`, `.fastagent/start/` | The local instances of `dev` and `start`: working directory and state. Safe to delete `dev/` to start over |
 | `<root>/` | The agent's working directory |
-| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)): sessions and schedule runs. One process at a time |
+| `<root>/.state/` | The instance's storage (`agent.sqlite`, unless it is [in PostgreSQL](#sessions-in-postgresql)). One process at a time |
 | `.secrets/` | `.env`, `auth.json`. Never in git or the image |
 
 | Flag | Variable | Default |
@@ -212,8 +211,7 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 - **One process per instance**, on any machine: a second one with the same name waits up to 35 seconds, then stops,
   saying who holds it. A process that dies frees its instance within 30 seconds.
 - **The tables** (`durable_*`) are made at the first start, so the database user must be able to create tables.
-- **Schedule runs** are in the database too. Under the root stay only the agent's working files and
-  what `fastagent login` writes (`auth.json`).
+- Under the root stay only the agent's working files and what `fastagent login` writes (`auth.json`).
 - `fastagent info` shows where the sessions are (`storage:`), without the password.
 - An app gives `openAgent` its database as `database: { url }` ([Embedding](embedding.md#1-open-it)). On Aurora DSQL,
   `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` signs each connection in with the process's AWS
@@ -225,7 +223,6 @@ FASTAGENT_DATABASE_URL='postgres://user:password@host:5432/agents?sslmode=requir
 |---|---|
 | `src/tools/` | a tool: `defineTool` from `@fastagent-sh/fastagent` (Zod v4 / Standard JSON Schema, plain JSON Schema, or `pi-schema`) or `@earendil-works/pi-durable` |
 | `src/extensions/` | an extension: `defineExtension` |
-| `src/schedules/` | a schedule: `defineSchedule` |
 
 Any of them may be wrapped in `needs`. Every file is loaded; there is nothing to register. Tests (`*.test.*`) are
 skipped, and helpers go elsewhere (`lib/`). Rename a file to `<name>.ts.disabled` to turn it off.
@@ -244,30 +241,6 @@ is checked before `execute` runs. A tool that needs its session id calls `await 
 
 An extension (`defineExtension({ name, … })`) bundles tools, prompt sections and hooks. A third-party one is a file in
 `src/extensions/` that re-exports it: `export { default } from "some-extension-package"`.
-
-## Schedules
-
-```ts
-import { defineSchedule } from "@fastagent-sh/fastagent";
-
-export default defineSchedule({
-  cron: "0 9 * * 1-5",
-  tz: "America/New_York",
-  prompt: "Generate today's digest and post it with the post_digest tool.",
-});
-```
-
-- `cron` has 5 fields; `tz` defaults to UTC; `prompt` is text or `({ at }) => text`.
-- Runs at most every 10 minutes; at most 20 schedules.
-- Each schedule has one session that every run continues.
-- It delivers nothing itself: name the send tool and the target in the prompt.
-- Each instant runs at most once. After downtime, one missed run is caught up. A run still going makes the next one
-  `skipped`.
-- `dev` and `start` run the clock.
-
-`fastagent schedules list` shows the next runs and each schedule's last outcome, kept in the instance's storage;
-`fastagent schedules run <name>` runs one now. Both go through the running `dev` when there is one (`--url` for a
-deployment).
 
 ## Logging
 
@@ -290,7 +263,7 @@ argument.
 | `OTEL_RESOURCE_ATTRIBUTES` | More resource attributes, `key=value,…` |
 | `OTEL_SDK_DISABLED=true` | Export nothing |
 
-The protocol is OTLP/HTTP with JSON; any other `OTEL_EXPORTER_OTLP_PROTOCOL` refuses the start. `dev`, `start`,
-`invoke` and `schedules run` read these variables from the environment or the `.secrets/` value files; an app's `openAgent`
+The protocol is OTLP/HTTP with JSON; any other `OTEL_EXPORTER_OTLP_PROTOCOL` refuses the start. `dev`, `start`
+and `invoke` read these variables from the environment or the `.secrets/` value files; an app's `openAgent`
 reads them from its `secrets` ([Embedding](embedding.md#1-open-it)). A collector that is down costs the agent nothing: the
 spans it missed are dropped, and the log says how many.

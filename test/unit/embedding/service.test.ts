@@ -52,19 +52,6 @@ describe("serveAgent over an opened directory", () => {
       await service.close();
     }
   });
-
-  it("a schedule in src/schedules/ reaches the clock", async () => {
-    const dir = await agentDir({
-      "src/schedules/daily.ts": `import { defineSchedule } from "@fastagent-sh/fastagent";
-export default defineSchedule({ cron: "0 9 * * *", prompt: "summarise the day" });\n`,
-    });
-    const service = await createAgentService(dir);
-    try {
-      expect(service.schedules).toEqual([{ name: "daily", cron: "0 9 * * *", prompt: "summarise the day" }]);
-    } finally {
-      await service.close();
-    }
-  });
 });
 
 describe("openAgent: an agent directory opened in an app", () => {

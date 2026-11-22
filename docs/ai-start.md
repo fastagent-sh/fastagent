@@ -1,6 +1,6 @@
 ---
 title: Develop an Agent with FastAgent
-description: "The agent development guide for humans and coding agents: responsibilities, TypeScript tools, local checks, scheduling and deployment."
+description: "The agent development guide for humans and coding agents: responsibilities, TypeScript tools, local checks, embedding and deployment."
 status: current
 ---
 
@@ -11,7 +11,7 @@ with a check you can run.
 
 ```text
 decide what it does → init → prompt, skill, tool → test locally → one real message
-  → schedule → deploy → report what was verified
+  → deploy → report what was verified
 ```
 
 ## 1. Decide what goes where
@@ -25,7 +25,6 @@ existing agent (a directory with `fastagent.config.ts`) and reuse it.
 | Facts about the project it works on | the project's own files, which the agent reads with its tools |
 | Reusable methods | `skills/<name>/SKILL.md` |
 | Exact operations and access to other systems | `src/tools/<name>.ts` |
-| Timed work | `src/schedules/` |
 | Model, providers, MCP servers | `fastagent.config.ts` |
 | Business records | a store you choose; a session's history is not a database |
 
@@ -48,7 +47,7 @@ if that failed) and makes the first git commit. Stay in `my-agent/` for the rest
 
 ## 3. Set up TypeScript
 
-Write tools, schedules, helpers and tests in TypeScript. Node ≥ 24.15 runs it directly by stripping types,
+Write tools, helpers and tests in TypeScript. Node ≥ 24.15 runs it directly by stripping types,
 so:
 - import relative files with `.ts` extensions (`../lib/batches.ts`), and types with `import type`;
 - avoid enums, namespaces, parameter properties, decorators and JSX.
@@ -56,7 +55,7 @@ so:
 ```bash
 npm install --save-dev typescript@^7.0.2 @types/node@22
 npm pkg set 'scripts.typecheck=tsc --noEmit' 'scripts.test=node --test test/*.test.ts'
-mkdir -p lib test skills/review-batches src/tools src/schedules
+mkdir -p lib test skills/review-batches src/tools
 ```
 
 **`tsconfig.json`**
@@ -195,42 +194,14 @@ when the message completed. Check the tool use and the answer, not only the exit
 For ongoing work the owner runs `fastagent dev`: prompt and skill edits apply on the next message, and `src/` edits
 restart it. Restart it yourself after editing `lib/`, which is not watched. Only one `dev` or `start` runs per agent.
 
-## 6. Add a schedule
-
-**`src/schedules/daily-review.ts`**
-
-```ts
-import { defineSchedule } from "@fastagent-sh/fastagent";
-
-export default defineSchedule({
-  cron: "0 9 * * *",
-  tz: "America/New_York",
-  prompt:
-    "Review pending proposals and post a short digest with the post_digest tool. " +
-    "Leave unapproved actions pending.",
-});
-```
-
-
-A schedule's plain reply reaches no one, so its prompt names the tool that delivers it. Each run continues the
-schedule's own session.
-
-```bash
-fastagent schedules list               # next run and last outcome
-fastagent schedules run daily-review   # a real run now, through dev when it runs
-```
-
-A schedule fires only while the agent runs, so run its container without scaling it to zero (or use an alarm-backed host
-like AgentCore).
-
-## 7. Embed it in an app (optional)
+## 6. Embed it in an app (optional)
 
 Open the built package with `openAgent(definition, { root })` and call the [Agent API](agent-api.md): `sessions.create`,
-then `messages.send` with `wait`, or `messages.stream`. `await agent.serve()` adds its schedules. The app
+then `messages.send` with `wait`, or `messages.stream`. The app
 keeps auth, users and data. One instance is one trust domain: give users who must not see each other an instance each
 ([security model](agent-api.md#security)). See [Embedding](embedding.md).
 
-## 8. Deploy
+## 7. Deploy
 
 Choose the host and its cost with the owner, and read [Deploy](deploy.md) before creating anything.
 
@@ -252,19 +223,18 @@ What survives where:
 | Data | Survives |
 |---|---|
 | Prompt, skills, code | in the image; changed only by a new release |
-| Sessions and schedule runs | on the container's volume at `/data`, or in PostgreSQL (`FASTAGENT_DATABASE_URL`) |
+| Sessions | on the container's volume at `/data`, or in PostgreSQL (`FASTAGENT_DATABASE_URL`) |
 | Business notes and artifacts | only in a store you choose: a release replaces the agent's own directory |
 
 An accepted message is answered at least once across a restart, so tools with side effects must tolerate a repeat.
 
-## 9. Report what you verified
+## 8. Report what you verified
 
 | Check | Proves | Does not prove |
 |---|---|---|
 | typecheck, tests, `info --json` | types, logic, what the agent loads | model behavior |
-| `invoke` | a model call and the tool path | clock, deployment |
-| `schedules run` | one run of the schedule | that the clock fires it |
-| `invoke --url` | the deployment answers | its clock |
+| `invoke` | a model call and the tool path | deployment |
+| `invoke --url` | the deployment answers | full end-to-end tool side effects |
 
 Report the commands you ran and their results, the owner's remaining steps, and what was not tested. Keep secrets and
 machine state out of commits, and stop servers you started.

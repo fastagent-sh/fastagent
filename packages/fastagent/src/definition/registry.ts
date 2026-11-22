@@ -1,5 +1,5 @@
 /**
- * The registry: every module in `src/tools/`, `src/extensions/` and `src/schedules/` with what it default-exports, so
+ * The registry: every module in `src/tools/` and `src/extensions/` with what it default-exports, so
  * nothing is imported by hand. A file directly in the directory is a module, and anything else a module imports (a
  * helper) lives outside these directories.
  */
@@ -7,14 +7,14 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REGISTRY_KINDS = ["tools", "extensions", "schedules"] as const;
+export const REGISTRY_KINDS = ["tools", "extensions"] as const;
 type RegistryKind = (typeof REGISTRY_KINDS)[number];
 
 /** One module of the definition: where it is, and what it default-exports. */
 interface RegisteredModule {
   /** Relative to the agent directory, as the author opens it: `src/tools/weather.ts`. */
   file: string;
-  /** The file's name without its extension: a schedule's name. */
+  /** The file's name without its extension. */
   name: string;
   value: unknown;
 }

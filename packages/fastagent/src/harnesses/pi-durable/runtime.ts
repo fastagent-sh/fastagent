@@ -1,19 +1,16 @@
 /**
  * `pi-durable` runtime adapter plugged into `harnesses/serving.ts`: owns pi-durable storage opening,
- * `assembleAgent`, OTLP trace wiring, lease-loss shutdown, and offline clock access.
+ * `assembleAgent`, OTLP trace wiring, and lease-loss shutdown.
  */
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createModels } from "@earendil-works/pi-ai";
-import { Harness, MemoryStorage, type Storage, createRegistry } from "@earendil-works/pi-durable";
+import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
-import type { ClockStore } from "../../schedule/clock.ts";
 import type { HarnessOpenContext, InstancePlace, OpenedHarnessRuntime, ServingStorage } from "../serving.ts";
 import { type PostgresDatabase, messageBytesFor } from "../../postgres.ts";
 import type { DurableAgent } from "./agent.ts";
-import { clockStore } from "./clock.ts";
 import { durableCredentialStore } from "./credentials.ts";
 import { mcpTools } from "../mcp.ts";
 import { assembleAgent } from "./open.ts";
@@ -21,9 +18,9 @@ import { openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
 
 const INSTANCE_HOLDERS =
-  "another `fastagent dev`, `start` or `schedules` command of this agent (or of another agent with the same state root)";
+  "another `fastagent dev` or `start` command of this agent (or of another agent with the same state root)";
 const NAMED_INSTANCE_HOLDERS =
-  "another `fastagent dev`, `start` or `schedules` command of an instance of this name, on this machine or another";
+  "another `fastagent dev` or `start` command of an instance of this name, on this machine or another";
 
 function openInstanceStorage(
   place: InstancePlace,
@@ -57,24 +54,6 @@ function openStorage(
   if (storage === "memory") return new MemoryStorage();
   if (storage === "instance") return openInstanceStorage(place, database, onLost);
   return openLockedStorage(storage.file, storage.holders);
-}
-
-export async function withPiDurableInstanceClock<T>(
-  place: InstancePlace,
-  database: PostgresDatabase | undefined,
-  work: (clock: ClockStore) => Promise<T>,
-): Promise<T> {
-  const storage = await openInstanceStorage(place, database);
-  const harness = await Harness.open(
-    storage,
-    { models: createModels(), registry: createRegistry() },
-    BACKGROUND_CONTEXT,
-  );
-  try {
-    return await work(clockStore(harness, BACKGROUND_CONTEXT));
-  } finally {
-    await harness.close(BACKGROUND_CONTEXT);
-  }
 }
 
 export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<OpenedHarnessRuntime> {
@@ -160,10 +139,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ope
   return {
     agent: managedAgent,
     ...(chosen === "instance"
-      ? {
-          durableCreds: durableCredentialStore(managedAgent.harness, BACKGROUND_CONTEXT),
-          clockStore: clockStore(managedAgent.harness, BACKGROUND_CONTEXT),
-        }
+      ? { durableCreds: durableCredentialStore(managedAgent.harness, BACKGROUND_CONTEXT) }
       : {}),
   };
 }

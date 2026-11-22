@@ -62,14 +62,6 @@ describe("cli: info", () => {
     expect(failed.code).toBe(1);
     expect(failed.stderr).toMatch(/totally-not-a-real-package-xyz/);
     expect(failed.stderr).not.toMatch(/\n\s+at /); // a refusal, not a stack
-
-    // A schedule its cron refuses is the same: the agent would not start on it.
-    const badCron = await agentWorkspace("fa-info-schedfail-", {
-      "src/schedules/bad.ts": 'export default { kind: "fastagent.schedule", cron: "not a cron", prompt: "x" };\n',
-    });
-    const refused = await runInProcess(["-C", badCron, "info"], undefined, withoutModel());
-    expect(refused.code).toBe(1);
-    expect(refused.stderr).toMatch(/src\/schedules\/bad\.ts/);
   });
 });
 

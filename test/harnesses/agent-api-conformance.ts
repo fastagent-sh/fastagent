@@ -16,7 +16,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type Agent,
-  type ClockApi,
   type ContentPart,
   type Entry,
   type Message,
@@ -25,7 +24,6 @@ import {
   type SessionEvent,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
-import type { ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
 
 export interface AgentApiSubject {
   /** A fresh agent over fresh storage. `signedOut` leaves its model provider without a credential. */
@@ -41,10 +39,6 @@ export interface AgentApiSubject {
   effects(): number;
   /** The storage fails every call from now on. */
   failStorage(): void;
-  /** Where the instance's clock keeps its fires; its schedules are `digest` and `long` (a `hold`). */
-  clock(): ClockStore;
-  /** The decoupled Clock API (`schedules`) wired alongside the Agent. */
-  clockApi(): ClockApi;
   /** Whether a send without a key is given one: `connectAgent` keys its own, so that a lost answer can be found. */
   keysSends?: boolean;
   stop(): Promise<void>;
@@ -351,54 +345,6 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const one = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
         const other = await send({ sessionId: await newSession(agent), content: "hi", idempotencyKey: "k" });
         expect(other.id).not.toBe(one.id);
-      });
-    });
-
-    describe("Clock", () => {
-      it("lists its schedules, with when each fires next and its last occurrence once one ran", async () => {
-        const clock = subject.clockApi();
-        const before = await clock.schedules.list();
-        expect(before.map(({ name }) => name).sort()).toEqual(["digest", "long"]);
-        expect(before.find(({ name }) => name === "digest")).toEqual({
-          name: "digest",
-          cron: "0 9 * * *",
-          next: expect.stringMatching(/T09:00:00\.000Z$/),
-        });
-        const fired = await clock.schedules.run("digest", { wait: WAIT });
-        if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
-        // Its outcome is written once its message has ended, a moment after the answer: until then it has none.
-        await vi.waitFor(async () => {
-          const digest = (await clock.schedules.list()).find(({ name }) => name === "digest");
-          expect(digest?.last).toEqual({
-            slot: expect.any(String),
-            firedAt: expect.any(String),
-            outcome: "completed",
-            ms: expect.any(Number),
-          });
-        });
-      });
-
-      it("fires a schedule now in its own session, answering once recorded or, with wait, once ended", async () => {
-        const clock = subject.clockApi();
-        const fired = await clock.schedules.run("digest");
-        if (fired.status !== "sent") throw new Error(`not sent: ${JSON.stringify(fired)}`);
-        expect(fired.message).toMatchObject({ status: expect.stringMatching(/^(queued|running|completed)$/) });
-        expect((await ended(agent, fired.message)).answer?.text).toBe("answer: the digest");
-        const again = await clock.schedules.run("digest", { wait: WAIT });
-        expect(again).toMatchObject({
-          status: "sent",
-          message: { sessionId: fired.message.sessionId, status: "completed", answer: { text: "answer: the digest" } },
-        });
-        await expect(clock.schedules.run("nope")).rejects.toMatchObject({ code: "not_found" });
-      });
-
-      it("skips an occurrence while the schedule's previous run still holds its session", async () => {
-        const clock = subject.clockApi();
-        const first = await clock.schedules.run("long");
-        expect(first.status).toBe("sent");
-        await holding();
-        expect(await clock.schedules.run("long")).toMatchObject({ status: "skipped", reason: expect.any(String) });
-        subject.release();
       });
     });
 

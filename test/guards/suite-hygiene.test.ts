@@ -103,8 +103,6 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts and cor
   const subcommands: Array<[string, string]> = [
     ["deploy", "init"],
     ["deploy", "check"],
-    ["schedules", "list"],
-    ["schedules", "run"],
     ["agentcore", "start"],
     ["agentcore", "invoke"],
   ];

@@ -32,10 +32,9 @@ import type { RunsAs } from "../../serving-command.ts";
 import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import { log } from "../../log.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import { MAX_SCHEDULES, type Schedule, scheduleConfigProblem } from "../../schedule/schedule.ts";
 import { type DurableAgent, type Unfinished, openDurableAgent } from "./agent.ts";
 import { type Needs, isNeeds } from "../../needs.ts";
-import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName, type DefinedSchedule } from "../define.ts";
+import { CODING_TOOL_NAMES, type AgentConfig, type CodingToolName } from "../define.ts";
 import { agentPresentation, checkProgramConfig, resolveCodingTools } from "../config.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "../../definition/definition.ts";
 import { importRegistry } from "../../definition/registry.ts";
@@ -120,18 +119,12 @@ const extensionProblem = (value: unknown): string | undefined =>
     : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
 const providerProblem = (value: unknown): string | undefined =>
   typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
-const scheduleProblem = (value: unknown): string | undefined =>
-  (value as Partial<DefinedSchedule> | null)?.kind !== "fastagent.schedule"
-    ? "must default-export defineSchedule({ ... }), or needs(...) around one"
-    : scheduleConfigProblem(value as DefinedSchedule);
 
 /** The definition's code, built with the values of the secrets it declares. */
 export interface BuiltDefinition {
   tools: ToolRegistration[];
   extensions: Extension[];
   providers: Provider[];
-  /** What the scheduler fires, each named by its file. */
-  schedules: Schedule[];
 }
 
 /**
@@ -156,11 +149,6 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
       ...named(built<Extension>(file, value, values(value), extensionProblem)),
     })),
   ];
-  const schedules = registry.schedules.map(({ file, name, value }) => ({
-    source: file,
-    name,
-    value: built<DefinedSchedule>(file, value, values(value), scheduleProblem),
-  }));
   refuseTwins("tool", tools);
   // pi-durable replaces an extension installed under a name already taken, its tools and sections with it.
   const codingTools = resolveCodingTools(config.codingTools);
@@ -169,22 +157,17 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
     { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
     ...extensions,
   ]);
-  refuseTwins("schedule", schedules);
-  if (schedules.length > MAX_SCHEDULES) {
-    throw new Error(`${schedules.length} schedules in src/schedules/: an agent runs at most ${MAX_SCHEDULES}`);
-  }
   return {
     tools: tools.map(({ value }) => value),
     extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
       built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
     ),
-    schedules: schedules.map(({ name, value: { kind: _kind, ...config } }) => ({ name, ...config })),
   };
 }
 
 /**
- * The definition's code built only to read its shape (which schedules, which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
+ * The definition's code built only to read its shape (which providers): a declared secret `env` holds no value for has a stand-in, since the shape must not depend on whether
  * this machine holds the values. Whatever a build refuses, this refuses too.
  */
 export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.ProcessEnv): BuiltDefinition {

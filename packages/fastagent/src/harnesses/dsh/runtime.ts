@@ -12,8 +12,6 @@ import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import { modelRefOf } from "../../model-ref.ts";
-import type { Change, ClockStore } from "../../schedule/clock.ts";
-import type { Fire } from "../../schedule/state.ts";
 import type { AgentDefinition } from "../../definition/definition.ts";
 import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
 import { agentPresentation, resolveCodingTools } from "../config.ts";
@@ -85,44 +83,6 @@ export async function loadDshModule(): Promise<DshModule> {
     }
     throw error;
   }
-}
-
-function dshClockStore(store: DshKvBackend): ClockStore {
-  const NS = "clock";
-  const locks = new Map<string, Promise<unknown>>();
-  const serialized = <T>(key: string, work: () => Promise<T>): Promise<T> => {
-    const prev = locks.get(key) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(work);
-    const tracked = next.finally(() => {
-      if (locks.get(key) === tracked) locks.delete(key);
-    });
-    locks.set(key, tracked);
-    return next;
-  };
-  const readJson = async <T>(key: string, fallback: T): Promise<T> => {
-    const raw = await store.getKv?.(NS, key);
-    return raw === undefined ? fallback : (JSON.parse(raw) as T);
-  };
-  const mutate = <S, T>(key: string, fallback: S, change: Change<S, T>): Promise<T> =>
-    serialized(key, async () => {
-      const current = await readJson(key, fallback);
-      const { next, result } = change(current);
-      if (next !== undefined) await store.putKv?.(NS, key, JSON.stringify(next));
-      return result;
-    });
-
-  return {
-    fires: (name, change) => mutate<readonly Fire[], ReturnType<typeof change>["result"]>(`fires:${name}`, [], change),
-    sessions: (change) =>
-      mutate<Readonly<Record<string, string>>, ReturnType<typeof change>["result"]>("sessions", {}, change),
-    armed: (change) =>
-      mutate<Readonly<Record<string, string>>, ReturnType<typeof change>["result"]>("armed", {}, change),
-    stored: {
-      fires: (name) => readJson<readonly Fire[]>(`fires:${name}`, []),
-      sessions: () => readJson<Readonly<Record<string, string>>>("sessions", {}),
-      armed: () => readJson<Readonly<Record<string, string>>>("armed", {}),
-    },
-  };
 }
 
 function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
@@ -211,7 +171,7 @@ function openSqliteWithHelpfulLockError(dsh: DshModule, filePath: string): DshKv
     const msg = error instanceof Error ? error.message : String(error);
     if (errcode === 5 || msg.includes("database is locked")) {
       throw new Error(
-        `the storage ${filePath} is held by another process: another fastagent dev, start or schedules command is running. Stop that one first`,
+        `the storage ${filePath} is held by another process: another fastagent dev or start command is running. Stop that one first`,
         { cause: error },
       );
     }
@@ -241,21 +201,6 @@ async function openInstanceDshStore(
     }
   }
   return { store: openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite")) };
-}
-
-export async function withDshInstanceClock<T>(
-  place: InstancePlace,
-  database: PostgresDatabase | undefined,
-  work: (clock: ClockStore) => Promise<T>,
-): Promise<T> {
-  const dsh = await loadDshModule();
-  const { store, ownedPgClose } = await openInstanceDshStore(dsh, place, database);
-  try {
-    return await work(dshClockStore(store));
-  } finally {
-    await store.close().catch(() => {});
-    await ownedPgClose?.().catch(() => {});
-  }
 }
 
 function renderSystemPrompt(
@@ -382,6 +327,5 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
   return {
     agent: managedAgent,
     ...(durableCreds === undefined ? {} : { durableCreds }),
-    ...(chosen === "instance" ? { clockStore: dshClockStore(store) } : {}),
   };
 }

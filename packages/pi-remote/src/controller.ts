@@ -7,15 +7,12 @@ import {
   type Agent,
   AgentError,
   type AgentInfo,
-  type ClockApi,
   type ContentPart,
   type CreateSessionOptions,
   type Entry,
   type Json,
   type Message,
   type QueuedMessage,
-  type ScheduleRun,
-  type ScheduleState,
   type SendRequest,
   type Session,
   type SessionChanges,
@@ -110,7 +107,6 @@ export class RemoteController {
   private readonly maxReconnectMs: number;
 
   private agent?: Agent;
-  private clock?: ClockApi;
   private streamAbort?: AbortController;
   private generation = 0;
   private eventSeq = 0;
@@ -160,7 +156,6 @@ export class RemoteController {
     remoteName: string,
     agent: Agent,
     options: {
-      clock?: ClockApi;
       sessionId?: string;
       after?: string;
       seenEntryIds?: Iterable<string>;
@@ -195,7 +190,6 @@ export class RemoteController {
       const sameSession = this.state.session?.id === session.id;
       const gen = wasConnected ? this.nextGeneration() : beforeGen;
       this.agent = agent;
-      this.clock = options.clock;
       this.seenEntryIds = new Set(options.seenEntryIds ?? []);
       if (!sameSession) {
         this.toolCallArgs.clear();
@@ -225,7 +219,6 @@ export class RemoteController {
     } catch (error) {
       if (!wasConnected && this.generation === beforeGen) {
         this.agent = undefined;
-        this.clock = undefined;
         this.setState({
           status: "disconnected",
           activeTools: [],
@@ -244,7 +237,6 @@ export class RemoteController {
   disconnect(): void {
     this.nextGeneration();
     this.agent = undefined;
-    this.clock = undefined;
     this.seenEntryIds.clear();
     this.toolCallArgs.clear();
     this.lastAssistantText = undefined;
@@ -477,20 +469,6 @@ export class RemoteController {
     if (this.state.session?.id === sessionId) {
       this.disconnect();
     }
-  }
-
-  async listSchedules(): Promise<ScheduleState[]> {
-    return this.requireClock().schedules.list();
-  }
-
-  async runSchedule(name: string): Promise<ScheduleRun> {
-    return this.requireClock().schedules.run(name);
-  }
-
-  private requireClock(): ClockApi {
-    this.requireAgent();
-    if (!this.clock) throw new Error("This remote connection does not expose a clock API");
-    return this.clock;
   }
 
   private nextGeneration(): number {

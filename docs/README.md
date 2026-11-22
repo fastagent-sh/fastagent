@@ -13,7 +13,7 @@ FastAgent serves an agent directory as a live service. Pick what you want to do.
 | Build an agent, step by step (also the guide to give a coding agent) | [Agent development guide](ai-start.md) |
 | Try it in five minutes | [Quickstart](quickstart.md) |
 | Know what FastAgent is and is not | [Overview](overview.md) |
-| Set the model, keys, tools, schedules | [Configuration](configuration.md) |
+| Set the model, keys, tools, MCP, traces | [Configuration](configuration.md) |
 | Give it MCP tools | [MCP servers](mcp.md) |
 | Call it from my app | [Embedding](embedding.md) |
 | Run it on a server | [Deploy](deploy.md) |

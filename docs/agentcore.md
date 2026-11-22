@@ -26,7 +26,7 @@ fastagent deploy init agentcore
 |---|---|
 | `Dockerfile`, `.dockerignore` | The agent's ARM64 image. It runs `fastagent agentcore start`, and leaves out `.secrets/`, `.env` files, state and `agentcore/` |
 | `agentcore/agentcore.json` | The AgentCore project: one runtime, built from the `Dockerfile` |
-| `agentcore/cdk/` | The CDK app the AgentCore CLI deploys. Its stack adds `FastAgentResources`: an Aurora DSQL cluster for the instances, an EventBridge Scheduler group for their alarms, and read access to the agent's secret |
+| `agentcore/cdk/` | The CDK app the AgentCore CLI deploys. Its stack adds `FastAgentResources`: an Aurora DSQL cluster for the instances and read access to the agent's secret |
 
 It installs the CDK app's dependencies (`--no-install` skips that), and prints the values the agent reads. A file of
 yours is kept: `init` never writes over `agentcore/` once it exists, and `--force` regenerates only the container files
@@ -78,26 +78,6 @@ npx -y @aws/agentcore@1.0.3 deploy --target prod
 The runner needs neither Docker nor ARM64. An account whose CDK bootstrap someone else manages takes
 `--skip-bootstrap`.
 
-### Schedules
-
-Each session has one EventBridge Scheduler alarm. When a session has schedules in `src/schedules/`, it
-arms its next due time before AgentCore stops the idle microVM; when the alarm fires, AgentCore wakes the session, holds
-its microVM until the turn finishes, and sets the next alarm (or deletes it when nothing remains). Deploying a new or
-earlier schedule updates existing instances' alarms without starting their microVMs.
-
-In a multi-user app, each user's session starts once your backend calls it, and runs its schedules from then on. For a
-schedule-only or single-instance agent that should run on its clock before anyone calls it, name its session id in
-`agentcore/cdk/lib/cdk-stack.ts`:
-
-```ts
-new FastAgentResources(this, "FastAgent", {
-  runtime: this.application.runtime("agent"),
-  agentDir: join(__dirname, "../../../.."),
-  secretName: "support",
-  instances: ["morning-brief-default-instance-0001"], // 33 to 256 letters, digits, "-" and "_"
-});
-```
-
 ### Your own CDK or Terraform
 
 `FastAgentResources` from `@fastagent-sh/agentcore/cdk` takes any runtime that can be granted permissions and given
@@ -109,9 +89,7 @@ environment variables. Without CDK, the runtime needs:
 | Protocol | HTTP, port 8080 |
 | `FASTAGENT_DSQL_ENDPOINT` | The Aurora DSQL cluster's endpoint |
 | `FASTAGENT_SECRETS` | The secret's name |
-| `FASTAGENT_ALARM_GROUP` | Optional: an EventBridge Scheduler group containing `.deploy` (whose `Target` names the runtime ARN and an invocation role trusted by `scheduler.amazonaws.com` with `bedrock-agentcore:InvokeAgentRuntime` on the runtime) |
-| `FASTAGENT_ALARM_INSTANCES` | Optional: comma-separated session ids armed on deploy |
-| Execution role | `dsql:DbConnectAdmin` on the cluster, `secretsmanager:GetSecretValue` on the secret, `scheduler:GetSchedule`/`CreateSchedule`/`UpdateSchedule`/`DeleteSchedule` on `schedule/<group>/*`, `iam:PassRole` on the invocation role for `scheduler.amazonaws.com`, ECR pull, logs |
+| Execution role | `dsql:DbConnectAdmin` on the cluster, `secretsmanager:GetSecretValue` on the secret, ECR pull, logs |
 
 To try the image off AWS, run it with `FASTAGENT_DATABASE_URL=postgres://…` in place of the cluster, and the values as
 environment variables: it answers on port 8080 as it does on AgentCore.
@@ -159,9 +137,9 @@ streams as it is written. `qualifier` picks a runtime endpoint (`prod`), and wit
   session id reaches only its own instance, and each runs in a microVM of its own: its files and processes are apart
   from every other's. AgentCore authenticates every request: `connectAgentCore` signs each with your AWS credentials,
   and there is no `FASTAGENT_API_KEY`.
-- **The database, the secret and the alarm group are the agent's, not the instance's.** AWS's own guidance: "Any code or
+- **The database and the secret are the agent's, not the instance's.** AWS's own guidance: "Any code or
   actor running inside the microVM can access execution role credentials." An agent that runs commands or code (`bash`,
-  a tool of yours) can use the role too: it can read any instance's sessions, the secret, and the group's schedules.
+  a tool of yours) can use the role too: it can read any instance's sessions and the secret.
   Users are kept apart from each other only from an agent whose tools run neither.
 - **Retryable means it passes by itself.** A request is refused `unavailable` (retryable) only when sending it again,
   with nothing changed, can succeed: AgentCore throttling or starting the session, the instance held by the microVM

@@ -26,18 +26,11 @@ import {
   writeContainer,
 } from "@fastagent-sh/fastagent/platform";
 import type { PostgresDatabase } from "@fastagent-sh/fastagent";
-import { createAlarmGroup } from "./alarms.ts";
 import { dsqlDatabase } from "./dsql.ts";
 import { AGENTCORE_CLI, projectName, writeProject } from "./project.ts";
 import { serveAgentCore } from "./runtime.ts";
 import { secretValues } from "./secrets.ts";
-import {
-  AGENTCORE_ARN_ENV,
-  ALARM_GROUP_ENV,
-  ALARM_INSTANCES_ENV,
-  DSQL_ENDPOINT_ENV,
-  SECRETS_ENV,
-} from "./variables.ts";
+import { AGENTCORE_ARN_ENV, DSQL_ENDPOINT_ENV, SECRETS_ENV } from "./variables.ts";
 
 const USAGE = `Usage: fastagent [-C <dir>] agentcore <command>
 
@@ -127,16 +120,10 @@ function databaseOf(environment: NodeJS.ProcessEnv): PostgresDatabase {
 
 async function start(agentDir: string): Promise<void> {
   const secretName = process.env[SECRETS_ENV];
-  const alarmGroup = process.env[ALARM_GROUP_ENV];
-  const alarmInstances = (process.env[ALARM_INSTANCES_ENV] ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
   const served = await serveAgentCore(await loadAgentBuild(agentDir), {
     database: () => databaseOf(process.env),
     secrets: process.env,
     ...(secretName ? { values: () => secretValues(secretName, process.env) } : {}),
-    ...(alarmGroup ? { alarms: createAlarmGroup({ group: alarmGroup, instances: alarmInstances }) } : {}),
     env: baseEnv(process.env),
   });
   for (const signal of ["SIGTERM", "SIGINT"] as const) {

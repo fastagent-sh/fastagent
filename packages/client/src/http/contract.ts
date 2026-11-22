@@ -33,8 +33,6 @@ import {
   ListOptions,
   Message,
   MessageStreamEvent,
-  ScheduleRun,
-  ScheduleState,
   SendRequest,
   Session,
   SessionChanges,
@@ -268,23 +266,6 @@ const AgentGroup = HttpApiGroup.make("agent")
   .middleware(Authorization)
   .prefix(API_PREFIX);
 
-const ClockGroup = HttpApiGroup.make("clock")
-  .add(
-    HttpApiEndpoint.post("runSchedule", "/schedules/:name/run", {
-      params: { name: Schema.String },
-      query: WaitQuery,
-      success: ScheduleRun,
-      error: Refused,
-    }),
-    HttpApiEndpoint.get("listSchedules", "/schedules", {
-      success: Schema.Array(ScheduleState),
-      error: Refused,
-    }),
-  )
-  .middleware(Malformed)
-  .middleware(Authorization)
-  .prefix(API_PREFIX);
-
 const AuthGroup = HttpApiGroup.make("auth")
   .add(
     HttpApiEndpoint.get("listAuthProviders", "/auth/providers", {
@@ -325,6 +306,5 @@ const AuthGroup = HttpApiGroup.make("auth")
 
 export class AgentHttpApi extends HttpApi.make("fastagent")
   .add(AgentGroup)
-  .add(ClockGroup)
   .add(AuthGroup)
   .annotateMerge(OpenApi.annotations({ title: "FastAgent Agent API", version: "1" })) {}

@@ -15,7 +15,6 @@ export type {
   AuthMethod,
   AuthPromptInfo,
   AuthProviderStatus,
-  ClockApi,
   CompactOptions,
   ContentPart,
   ContextUsage,
@@ -33,8 +32,6 @@ export type {
   ModelRef,
   Page,
   QueuedMessage,
-  ScheduleRun,
-  ScheduleState,
   SendRequest,
   Session,
   SessionChanges,
@@ -51,4 +48,4 @@ export type {
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 /** @public */
-export { connectAgent, connectAuth, connectClock, type ConnectOptions } from "./http/client.ts";
+export { connectAgent, connectAuth, type ConnectOptions } from "./http/client.ts";

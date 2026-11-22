@@ -6,8 +6,8 @@ status: current
 
 # Overview
 
-FastAgent turns an agent directory into a live service: inside your app, over HTTP through its Agent API, or on a
-schedule. You keep writing the agent as files. FastAgent runs it.
+FastAgent turns an agent directory into a live service: inside your app or over HTTP through its Agent API.
+You keep writing the agent as files. FastAgent runs it.
 
 ## An agent is a directory
 
@@ -17,8 +17,7 @@ reviewer/
 ├── SYSTEM.md             # the system prompt
 ├── AGENTS.md             # optional: how this agent is built and changed
 ├── skills/  prompts/     # optional: skills, and prompt templates run as /<name>
-├── src/tools/            # optional: tools
-└── src/schedules/        # optional: prompts run on a cron
+└── src/tools/            # optional: tools
 ```
 
 `fastagent init` creates it as a git repository. The agent can edit its own prompt and skills; a change applies from
@@ -34,7 +33,7 @@ its next message.
 | **Skill** | Markdown know-how the agent loads when it needs it. |
 | **Instance** | One running copy of the agent, with its own storage and secrets. |
 
-Everything (a schedule, `fastagent invoke`, your app, a program over HTTP) talks to the agent through one
+Everything (`fastagent invoke`, your app, a program over HTTP) talks to the agent through one
 interface, the [Agent API](agent-api.md).
 
 ## What FastAgent leaves to you

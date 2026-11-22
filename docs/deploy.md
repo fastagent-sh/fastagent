@@ -17,8 +17,8 @@ host's own tool. Pick a target:
 | Railway | `fastagent deploy init railway` | `railway init` → `railway volume add --mount-path /data` → `railway up` |
 | Amazon Bedrock AgentCore | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | `npx -y @aws/agentcore@1.0.3 deploy` ([AgentCore](agentcore.md)) |
 
-Run **one container** per instance: a second one on the same volume is refused, and schedules require the
-machine to stay running (unless on a scale-to-zero platform with external alarms, such as [AgentCore](agentcore.md)).
+Run **one container** per instance: a second one on the same volume is refused. Scale-to-zero platforms suspend
+idle machines and wake them on demand.
 
 ## Before you build
 
@@ -56,9 +56,9 @@ docker compose up -d --build
 
 ## Fly.io
 
-Fly.io defaults to stopping idle machines and launching two replicas, which breaks scheduled work and contends for
-`/data`. `fastagent deploy init fly` writes a `fly.toml` with `auto_stop_machines = "off"`,
-`min_machines_running = 1`, a `/data` volume mount, and a `GET /health` check:
+Fly.io launches two replicas by default, which contends for `/data`. `fastagent deploy init fly` writes a `fly.toml`
+with scale-to-zero `auto_stop_machines = "suspend"`, `min_machines_running = 0`, a `/data` volume mount, and a
+`GET /health` check:
 
 ```bash
 fastagent deploy init fly
@@ -83,7 +83,7 @@ railway variables --set FASTAGENT_API_KEY=<key> --set <MODEL_API_KEY>=<value>
 railway up
 ```
 
-In the Railway service settings, keep **1 replica** and set the healthcheck path to `/health`.
+In the Railway service settings, keep **1 replica**, enable **Serverless (App Sleeping)** if you want scale-to-zero, and set the healthcheck path to `/health`.
 
 ## What the files hold
 
@@ -117,11 +117,11 @@ environment variables.
 
 ```text
 /data/
-├── .state/           # sessions and schedule runs
+├── .state/           # sessions and instance state
 └── .deployment/      # the lease and the agent the storage belongs to: do not delete
 ```
 
 A new image replaces the program; the volume stays. To keep the sessions in a managed PostgreSQL database instead of
 the volume, give the container `FASTAGENT_DATABASE_URL`
-([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), which keeps the schedule runs too;
+([sessions in PostgreSQL](configuration.md#sessions-in-postgresql));
 the volume then holds only the agent's working files.

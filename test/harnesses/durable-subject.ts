@@ -25,11 +25,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { type DurableAgent, openDurableAgent } from "../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
-import { clockStore } from "../../packages/fastagent/src/harnesses/pi-durable/clock.ts";
-import { type ClockRunner, createClockRunner } from "../../packages/fastagent/src/schedule/runner.ts";
-import type { ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -158,8 +154,6 @@ const sqliteIn: SubjectStorage = (directory) => openNodeSqliteStorage(join(direc
 export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApiSubject {
   let directory = "";
   let current: DurableAgent | undefined;
-  let currentClock: ClockRunner | undefined;
-  let currentStore: ClockStore | undefined;
   let fail: () => void = () => {};
   let held: (() => void)[] = [];
   let effects = 0;
@@ -279,16 +273,6 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
         progress: { partialIntervalMs: 25, outputIntervalMs: 15 },
       },
     });
-    currentStore = clockStore(current.harness, BACKGROUND_CONTEXT);
-    // Its external clock: `digest` answers at once, `long` holds until released.
-    currentClock = createClockRunner({
-      agent: current,
-      store: currentStore,
-      schedules: [
-        { name: "digest", cron: "0 9 * * *", prompt: "the digest" },
-        { name: "long", cron: "0 9 * * *", prompt: "hold" },
-      ],
-    });
     return current;
   };
 
@@ -318,20 +302,10 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     signalled: () => signalled,
     effects: () => effects,
     failStorage: () => fail(),
-    clock: () => {
-      if (currentStore === undefined) throw new Error("the subject is not open");
-      return currentStore;
-    },
-    clockApi: () => {
-      if (currentClock === undefined) throw new Error("the subject is not open");
-      return currentClock.api;
-    },
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);
       current = undefined;
-      currentClock = undefined;
-      currentStore = undefined;
     },
   };
 }

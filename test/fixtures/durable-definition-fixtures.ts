@@ -7,7 +7,6 @@ const ROOT = import.meta.dirname;
 
 export const made: string[] = [];
 
-const DEFINE = "../../../../../packages/fastagent/src/harnesses/define.ts";
 const NEEDS = "../../../../../packages/fastagent/src/needs.ts";
 const IDS = "../../../../../packages/fastagent/src/harnesses/pi-durable/ids.ts";
 
@@ -65,9 +64,6 @@ export default needs(
   "src/tools/weather.test.ts": "throw new Error('a test file is not a module');\n",
   "src/extensions/audit.ts": `import { defineExtension, section } from "@earendil-works/pi-durable";
 export default defineExtension({ name: "audit", sections: [section("audit", () => "Every answer is audited.")] });
-`,
-  "src/schedules/daily.ts": `import { defineSchedule } from "${DEFINE}";
-export default defineSchedule({ cron: "0 9 * * *", tz: "Europe/London", prompt: ({ at }) => \`Report for \${at.toISOString()}\` });
 `,
 };
 

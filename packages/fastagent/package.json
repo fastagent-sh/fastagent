@@ -73,7 +73,6 @@
     "@modelcontextprotocol/client": "2.4.0",
     "chokidar": "^6.0.0",
     "commander": "^15.0.0",
-    "croner": "^11.0.0",
     "effect": "^4.0.7",
     "ignore": "^7.0.14",
     "pg": "^8.23.1",

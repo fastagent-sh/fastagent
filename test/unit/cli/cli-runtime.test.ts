@@ -6,11 +6,6 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
-import { readFires } from "../../../packages/fastagent/src/schedule/state.ts";
-import type { ClockStore } from "../../../packages/fastagent/src/schedule/clock.ts";
-import { withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
-import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { servedPostgres } from "../../doubles/postgres-double.ts";
@@ -19,10 +14,6 @@ vi.mock(
   "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts",
   () => import("../../doubles/storage-no-wait.ts"),
 );
-
-/** `work` over the clock of the CLI's instance of `dir`, which no process serves now. */
-const clockOf = <T>(dir: string, work: (clock: ClockStore) => Promise<T>): Promise<T> =>
-  withInstanceClock({ stateRoot: resolveStateRoot(dir), env: process.env }, work);
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
@@ -193,14 +184,6 @@ registerHooks({
     });
   });
 
-  it("schedules list reads a deployment's clock through its Agent API with --url", async () => {
-    await withServedAgent(async (dir, url) => {
-      const listed = await runInProcess(["-C", dir, "schedules", "list", "--url", url, "--key", "the-key", "--json"]);
-      expect(listed.code, listed.stderr).toBe(0);
-      expect(JSON.parse(listed.stdout)).toEqual({ schedules: [] });
-    });
-  });
-
   it("refuses a key the served instance does not hold, and honors FASTAGENT_API_KEY and --env-file outside any agent directory", async () => {
     await withServedAgent(async (dir, url) => {
       const refused = await runInProcess(["-C", dir, "invoke", "--url", url, "--key", "not-a-key", "hello"]);
@@ -224,7 +207,7 @@ registerHooks({
       );
       expect([fromFile.code, fromFile.stdout.trim()], fromFile.stderr).toEqual([0, "seen 1"]);
 
-      // Shared remotes.json resolution via --remote <name> for both invoke and schedules.
+      // Shared remotes.json resolution via --remote <name>.
       const remotesPath = join(outside, "remotes.json");
       await writeFile(
         remotesPath,
@@ -239,14 +222,6 @@ registerHooks({
       const byRemote = await runInProcess(["-C", outside, "invoke", "--remote", "prod", "hello"], undefined, remoteEnv);
       expect([byRemote.code, byRemote.stdout.trim()], byRemote.stderr).toEqual([0, "seen 1"]);
 
-      const schedByRemote = await runInProcess(
-        ["-C", outside, "schedules", "list", "--remote", "prod", "--json"],
-        undefined,
-        remoteEnv,
-      );
-      expect(schedByRemote.code, schedByRemote.stderr).toBe(0);
-      expect(JSON.parse(schedByRemote.stdout)).toEqual({ schedules: [] });
-
       const both = await runInProcess(
         ["-C", outside, "invoke", "--url", url, "--remote", "prod", "hello"],
         undefined,
@@ -260,114 +235,6 @@ registerHooks({
         remoteEnv,
       );
       expect([unknown.code, unknown.stderr]).toEqual([2, expect.stringContaining("unknown remote")]);
-    });
-  });
-});
-
-const schedule = (cron: string, extra = "") =>
-  `export default { kind: "fastagent.schedule", cron: ${JSON.stringify(cron)}${extra}, prompt: "go" };\n`;
-
-describe("cli: the agent's clock", () => {
-  it("info lists the schedules with their next run, read from the directory, beside a serve that holds the instance", async () => {
-    const dir = await agent("fa-clock-info-", {
-      "src/schedules/daily.ts": schedule("0 9 * * *"),
-      "src/schedules/weekly.ts":
-        'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
-    });
-    await whileServed(dir, async () => {
-      const info = JSON.parse((await runInProcess(["-C", dir, "info", "--json"])).stdout) as {
-        schedules: { name: string; tz: string | null; next: string | null }[];
-      };
-      expect(info.schedules.map((s) => [s.name, s.tz, typeof s.next])).toEqual([
-        ["daily", null, "string"],
-        ["weekly", "Asia/Shanghai", "string"],
-      ]);
-      expect((await runInProcess(["-C", dir, "info"])).stdout).toMatch(/daily \(next \S+\), weekly \(next \S+\)/);
-    });
-  });
-
-  it("schedules list says each schedule's next and last run, holding the instance", async () => {
-    const dir = await agentWorkspace("fa-clock-list-", {
-      "src/schedules/daily.ts": schedule("0 9 * * *"),
-      "src/schedules/weekly.ts":
-        'export default { kind: "fastagent.schedule", cron: "0 9 * * 1", tz: "Asia/Shanghai", prompt: "review" };\n',
-    });
-    await clockOf(dir, async (clock) => {
-      await clock.fires("daily", () => ({
-        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z", outcome: "failed", ms: 12 }],
-        result: undefined,
-      }));
-    });
-
-    const listed = await runInProcess(["-C", dir, "schedules", "list", "--json"]);
-    expect(listed.code, listed.stderr).toBe(0);
-    const clock = JSON.parse(listed.stdout) as {
-      schedules: { name: string; tz?: string; next?: string; last?: { outcome?: string } }[];
-    };
-    expect(clock.schedules.map((s) => [s.name, s.tz, typeof s.next, s.last?.outcome])).toEqual([
-      ["daily", undefined, "string", "failed"],
-      ["weekly", "Asia/Shanghai", "string", undefined],
-    ]);
-    const text = await runInProcess(["-C", dir, "schedules", "list"]);
-    expect(text.stdout).toMatch(/daily {2}"0 9 \* \* \*" {2}next \S+ {2}last failed at 2026-01-01T09:00:00\.000Z/);
-  });
-
-  it("schedules list refuses an instance another process holds, naming it, exit 1", async () => {
-    const dir = await agentWorkspace("fa-clock-held-", { "src/schedules/daily.ts": schedule("0 9 * * *") });
-    const held = await openLockedStorage(join(resolveStateRoot(dir), "agent.sqlite"));
-    try {
-      const listed = await runInProcess(["-C", dir, "schedules", "list"]);
-      expect([listed.code, listed.stdout]).toEqual([1, ""]);
-      expect(listed.stderr).toMatch(/the storage \S+agent\.sqlite is held by another process/);
-    } finally {
-      await held.close(BACKGROUND_CONTEXT);
-    }
-  });
-
-  it("schedules run continues its session and records interrupted and completed claims", async () => {
-    const dir = await agent("fa-schedules-run-", {
-      "src/schedules/digest.ts":
-        'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
-    });
-    // A claim a stopped process left unsettled.
-    await clockOf(dir, (clock) =>
-      clock.fires("digest", () => ({
-        next: [{ slot: "2026-01-01T09:00:00.000Z", firedAt: "2026-01-01T09:00:00.000Z" }],
-        result: undefined,
-      })),
-    );
-
-    const first = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
-    expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
-    const second = await runInProcess(["-C", dir, "schedules", "run", "digest", "--json"]);
-    expect(second.code, second.stderr).toBe(0);
-    expect(JSON.parse(second.stdout)).toMatchObject({
-      status: "completed",
-      answer: { text: "seen 2" },
-    });
-    expect((await clockOf(dir, (clock) => readFires(clock, "digest"))).map((fire) => fire.outcome)).toEqual([
-      "interrupted",
-      "completed",
-      "completed",
-    ]);
-  });
-
-  it("goes through the serve that owns the instance: a schedule fired, a message sent", async () => {
-    const dir = await agent("fa-clock-owner-", {
-      "src/schedules/digest.ts":
-        'export default { kind: "fastagent.schedule", cron: "0 9 * * *", prompt: "write the digest" };\n',
-    });
-    await whileServed(dir, async () => {
-      const fired = await runInProcess(["-C", dir, "schedules", "run", "digest"]);
-      expect([fired.code, fired.stdout.trim()], fired.stderr).toEqual([0, "seen 1"]);
-      const clock = JSON.parse((await runInProcess(["-C", dir, "schedules", "list", "--json"])).stdout) as {
-        schedules: { name: string; last?: { outcome?: string } }[];
-      };
-      expect(clock.schedules).toEqual([
-        expect.objectContaining({ name: "digest", last: expect.objectContaining({ outcome: "completed" }) }),
-      ]);
-      const refused = await runInProcess(["-C", dir, "schedules", "run", "digest", "--model", "faux/m"]);
-      expect([refused.code, refused.stderr]).toEqual([2, expect.stringContaining("drop --model")]);
     });
   });
 });

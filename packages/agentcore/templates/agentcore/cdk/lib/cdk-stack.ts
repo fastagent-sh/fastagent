@@ -21,10 +21,8 @@ export class AgentCoreStack extends Stack {
     super(scope, id, props);
     this.application = new AgentCoreApplication(this, 'Application', props.application);
 
-    // The Aurora DSQL cluster the agent's instances are in, the EventBridge Scheduler group its alarms run on, and read
-    // access to the Secrets Manager secret its values are in (create it yourself, in each account you deploy to: a JSON
-    // object of names to values). For a schedule-only or single-instance agent that runs before any caller connects, pass
-    // `instances: ['<session-id-at-least-33-chars>']`.
+    // The Aurora DSQL cluster the agent's instances are in, and read access to the Secrets Manager secret its values
+    // are in (create it yourself, in each account you deploy to: a JSON object of names to values).
     new FastAgentResources(this, 'FastAgent', {
       runtime: this.application.runtime('agent'),
       agentDir: join(__dirname, '../../../..'),

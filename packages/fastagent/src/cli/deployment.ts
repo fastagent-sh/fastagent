@@ -5,8 +5,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Agent, AuthApi, ClockApi } from "@fastagent-sh/client/agent-api";
-import { connectAgent, connectAuth, connectClock } from "@fastagent-sh/client";
+import type { Agent, AuthApi } from "@fastagent-sh/client/agent-api";
+import { connectAgent, connectAuth } from "@fastagent-sh/client";
 import { expandRemoteEnvRef, parseRemotesJson } from "@fastagent-sh/client/remotes";
 import { applyEnvValues, enterAgentEnv } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
@@ -74,7 +74,7 @@ export async function resolveRemoteTarget(
   dirArg: string,
   target: RemoteTargetFlags,
   instance?: InstanceFlags,
-): Promise<{ agent: Agent; clock: ClockApi; auth: AuthApi; label: string; defaultSessionId?: string } | undefined> {
+): Promise<{ agent: Agent; auth: AuthApi; label: string; defaultSessionId?: string } | undefined> {
   if (target.url !== undefined && target.remote !== undefined) {
     failUsage("pass either --url or --remote, not both");
   }
@@ -93,7 +93,6 @@ export async function resolveRemoteTarget(
     const apiKey = target.key ?? deploymentKey(target.url);
     return {
       agent: connectAgent(target.url, { apiKey }),
-      clock: connectClock(target.url, { apiKey }),
       auth: connectAuth(target.url, { apiKey }),
       label: target.url,
     };
@@ -133,7 +132,6 @@ export async function resolveRemoteTarget(
     }
     return {
       agent: connectAgent(entry.url, { apiKey }),
-      clock: connectClock(entry.url, { apiKey }),
       auth: connectAuth(entry.url, { apiKey }),
       label: `${remoteName} (${entry.url})`,
       ...(entry.sessionId !== undefined ? { defaultSessionId: entry.sessionId } : {}),
@@ -158,7 +156,6 @@ export async function resolveRemoteTarget(
   };
   return {
     agent: agentcore.connectAgentCore(connection),
-    clock: agentcore.connectAgentCoreClock(connection),
     auth: agentcore.connectAgentCoreAuth(connection),
     label: `${remoteName} (${entry.runtimeArn})`,
   };
