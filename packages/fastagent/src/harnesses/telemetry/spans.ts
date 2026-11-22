@@ -1,8 +1,8 @@
 /**
- * pi's telemetry contract (`TelemetryContext`), recorded: every span pi-durable and pi-ai open, handed to `sink` once it
- * settles, with W3C trace context (`traceparent`) as the carrier, so a task resumed by a later process continues the
- * trace it began in. A span ends when its callback settles; one started from a settled span is not recorded, as pi's
- * reference adapter does.
+ * Shared telemetry span recorder (`TelemetryContext`): records every span opened by the active harness (`pi-durable`
+ * or `dsh`) and `pi-ai`, handing each finished span to `sink` with W3C trace context (`traceparent`) propagation so a
+ * task resumed by a later process continues the trace it began in. A span ends when its callback settles; one started
+ * from a settled span is not recorded.
  */
 import { randomBytes } from "node:crypto";
 import type {

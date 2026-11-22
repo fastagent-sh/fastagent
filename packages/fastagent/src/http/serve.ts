@@ -62,8 +62,8 @@ function watchedBody(response: Response, left: () => void): Response {
 }
 
 /**
- * How long `close()` gives the requests in flight before it ends them: a webhook is answered in
- * milliseconds, and a close must fit the CLI's shutdown deadline (`FORCED_EXIT_MS` in `src/cli/serve.ts`).
+ * How long `close()` gives in-flight HTTP requests before ending them, sized to fit the CLI's shutdown deadline
+ * (`FORCED_EXIT_MS` in `src/cli/serve.ts`).
  */
 const GRACEFUL_SHUTDOWN = "500 millis";
 

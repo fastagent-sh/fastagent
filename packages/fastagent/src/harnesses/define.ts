@@ -1,6 +1,6 @@
 /**
- * What an agent's author writes: `defineAgent()` in `fastagent.config.ts` and `needs()` around the
- * code that reads a secret. Each returns what it was given, typed; the assembly (open.ts) reads them back.
+ * What an agent's author writes in `fastagent.config.ts`: `defineAgent()` returns its typed configuration object;
+ * `harnesses/assembly.ts` validates and loads it at startup.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { McpServerDeclaration } from "../mcp/config.ts";

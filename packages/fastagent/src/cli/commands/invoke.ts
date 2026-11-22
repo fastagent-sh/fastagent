@@ -1,7 +1,7 @@
 /**
- * `fastagent invoke [message]`: send ONE message (positional, `-`, or piped stdin) to the opened agent, print its answer, then exit. Every run
- * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
- * served agent instead, over its Agent API, with the same output and exit code.
+ * `fastagent invoke [message]`: send ONE message (positional, `-`, or piped stdin) to the agent, stream its answer,
+ * then exit. `--session <id>` continues an existing session; `--conversation <name>` reuses or creates a caller-named
+ * session; `--url` or `--remote <name>` targets a deployed instance over its Agent API.
  */
 import {
   type Agent,

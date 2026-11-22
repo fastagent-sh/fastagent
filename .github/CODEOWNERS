@@ -3,22 +3,23 @@
 # Fallback so every PR arrives with a reviewer requested. Branch protection does
 # not require code-owner approval, so a later, narrower rule still decides who
 # actually owns a path — this only fills the sidebar.
-*                        @kid7st @Sukitly
+*                                       @kid7st @Sukitly
 
-# The locked contract and its types.
-/docs/SPEC.md            @kid7st @Sukitly
-/src/agent-api.ts        @kid7st @Sukitly
-/src/http/contract.ts    @kid7st @Sukitly
+# The locked Agent API contract and its types.
+/docs/agent-api.md                      @kid7st @Sukitly
+/packages/client/src/agent-api.ts       @kid7st @Sukitly
+/packages/client/src/http/contract.ts   @kid7st @Sukitly
+/packages/client/src/remotes.ts         @kid7st @Sukitly
 
 # Public package boundaries.
-/package.json            @kid7st @Sukitly
-/package-lock.json       @kid7st @Sukitly
-/src/index.ts            @kid7st @Sukitly
-/src/client.ts           @kid7st @Sukitly
-/src/telegram.ts         @kid7st @Sukitly
+/package.json                           @kid7st @Sukitly
+/package-lock.json                      @kid7st @Sukitly
+/packages/*/package.json                @kid7st @Sukitly
+/packages/*/src/index.ts                @kid7st @Sukitly
+/packages/fastagent/src/platform.ts     @kid7st @Sukitly
 
 # Review and release policy.
-/.github/CODEOWNERS      @kid7st @Sukitly
-/.github/dependabot.yml  @kid7st @Sukitly
-/.github/workflows/      @kid7st @Sukitly
-/SECURITY.md             @kid7st @Sukitly
+/.github/CODEOWNERS                     @kid7st @Sukitly
+/.github/dependabot.yml                 @kid7st @Sukitly
+/.github/workflows/                     @kid7st @Sukitly
+/SECURITY.md                            @kid7st @Sukitly

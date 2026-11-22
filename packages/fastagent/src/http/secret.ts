@@ -1,7 +1,4 @@
-/**
- * The ONE constant-time comparison every shared-secret gate uses: a webhook secret token, a signature, a bearer token,
- * an envelope secret.
- */
+/** Constant-time comparison shared by secret gates (Agent API bearer keys and envelope secrets). */
 import { Buffer } from "node:buffer";
 import { timingSafeEqual } from "node:crypto";
 

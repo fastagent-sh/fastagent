@@ -1,8 +1,7 @@
 /**
- * `fastagent login <provider> --check`: whether a provider (or a model's, `provider/modelId`) is ready for the agent
- * here, as pi's `auth check` answers it, for a script or a coding agent: `ready`, `not_ready` or `invalid` on stdout,
- * exit 0, 1 or 2. The answer is the one the agent's
- * messages would get (`ModelEnvironment.authStatus`, a due refresh included).
+ * `fastagent login <provider> --check`: report whether a provider (or `provider/modelId`) is ready locally or on a
+ * remote instance (`--url` / `--remote`): prints `ready`, `not_ready`, or `invalid` (or JSON with `--json`) and exits
+ * 0, 1, or 2.
  */
 import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";

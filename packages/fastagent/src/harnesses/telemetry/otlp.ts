@@ -1,8 +1,9 @@
 /**
- * The instance's run traces, exported over OTLP/HTTP as JSON to the collector the standard OpenTelemetry variables name:
- * every message's admission, each step of its run with the tools it called, and each model request with its tokens and
- * cost. pi records them without content (no prompt, no answer, no tool argument), and this sends what it recorded. A
- * model request also carries the OpenTelemetry GenAI names (`gen_ai.*`), so a backend that reads those shows its tokens.
+ * The instance's run traces, exported over OTLP/HTTP as JSON to the collector the standard OpenTelemetry variables
+ * name, shared across both `pi-durable` and `dsh` harnesses: every message's admission, each step of its run with
+ * the tools it called, and each model request with its tokens and cost. Spans carry no content (no prompt, no answer,
+ * no tool argument). A model request also carries the OpenTelemetry GenAI names (`gen_ai.*`), so a backend that reads
+ * those shows its tokens.
  *
  * Off unless `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Spans go out in batches;
  * one the collector refuses, or cannot be reached for, is dropped with a warning, never retried into a backlog, so a

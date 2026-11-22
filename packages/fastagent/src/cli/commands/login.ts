@@ -1,8 +1,8 @@
 /**
- * `fastagent login [provider]`: sign in to a model provider, into the project-level auth file
- * (`<agentDir>/.secrets/auth.json`), or with `-g` the user-global one. In a terminal it asks, as pi's `/login`
- * does; otherwise (a script, a coding agent: no terminal, `--no-input` or `--json`) nothing is asked and nothing
- * blocks: missing choices or interactive auth return structured `need_choice`/`need_user_action` (exit 2).
+ * `fastagent login [provider]`: sign in to a model provider locally (`<agentDir>/.secrets/auth.json`), globally (`-g`,
+ * `~/.fastagent/.secrets/auth.json`), or on a remote instance (`--url` / `--remote`, stored in durable instance
+ * storage). Interactive in a terminal; non-interactive runs (`--no-input`, `--json`, or no TTY) never block and
+ * return structured `need_choice`/`need_user_action` (exit 2).
  */
 import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";

@@ -1,84 +1,120 @@
 ---
 title: Embedding
-description: "Use FastAgent as a library: open an agent in your app, send it messages, serve it from your server, give it its credentials, and run it in a desktop host."
+description: "Run a FastAgent inside your Node backend or desktop app behind your own authentication, database, and routes."
 status: current
 ---
 
 # Embedding
 
-Run the agent inside your own app, behind your own auth. It is the same agent the CLI runs.
+Embed a compiled FastAgent directly in your Node backend or desktop application when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
 
 ```bash
 npm i @fastagent-sh/fastagent       # Node ≥ 24.15
 ```
 
-Build the agent with `fastagent build`; your app imports the package that makes.
+Compile your agent with `fastagent build`, then import the generated package from your application.
 
-## 1. Open it
+## Choose your embedding pattern
+
+| Scenario | Recommended pattern |
+| --- | --- |
+| **Custom app routes / UI behind your own auth** | Call `openAgent()` and invoke `agent.messages.stream`, `agent.messages.send`, or `agent.invoke` directly from your route handlers. |
+| **Hosting multiple tenant instances in one Node process** | Open one shared pool with `openPostgresDatabase()` and pass it to each `openAgent({ name, database })`. |
+| **Exposing the standard `/v1` Agent API inside an existing web server** | Call `const service = await agent.serve({ apiKeys })` and mount `service.fetch` in Next.js, Hono, Express, or Fastify. |
+| **Local desktop application** | Open with an app-owned `root`, populate model pickers from `agent.info().models`, and handle `info().unusableDefault` gracefully. |
+
+## 1. Open the agent
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
-import support from "@acme/support-agent"; // the default export of a package `fastagent build` made
+import support from "@acme/support-agent"; // built by `fastagent build`
 
 const agent = await openAgent(support, {
   root: "/var/lib/myapp/support",
-  secrets: { ZENDESK_TOKEN: vault.read("zendesk") }, // what the agent's code and model read by name
-  env: baseEnv(process.env), // PATH, HOME, locale and proxy: what its commands start from; without it, nothing
-  model: "openai/gpt-5.5",
+  secrets: {
+    ANTHROPIC_API_KEY: vault.read("anthropic"),
+    ZENDESK_TOKEN: vault.read("zendesk"),
+  },
+  env: baseEnv(process.env), // PATH, HOME, locale, and proxy for agent subprocesses
+  model: "anthropic/claude-sonnet-4-6",
 });
-// ...
-await agent.close(); // on shutdown: releases the instance's storage
+
+// On shutdown: stops any served HTTP endpoints and releases storage locks/leases
+await agent.close();
 ```
 
-- `root` is absolute: the agent's working directory, with its state in `<root>/.state`.
-- The agent reads only the `secrets` and `env` you give it, never your process's environment. `baseEnv(process.env)`
-  passes `PATH`, `HOME`, locale and proxy.
-- Opening refreshes the model lists (`offline: true` skips the network).
-- One process opens an instance at a time. `close()` releases it; a running message is answered at the next open. To
-  stop work for good, `agent.sessions.cancel(sessionId)` first.
-- Pass `harness: "dsh"` (with optional `sandbox: "workspace" | "read-only" | "off"`) to run on `@fastagent-sh/harness-dsh` instead of `pi-durable` (requires `npm i @fastagent-sh/harness-dsh`).
-- [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
-- `database: { url: "postgres://…" }` keeps the sessions in PostgreSQL
-  ([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), under the instance's `name`, which is then
-  required; so does `secrets.FASTAGENT_DATABASE_URL`. To host several instances in one process over a single shared
-  connection pool, open it once with `const db = openPostgresDatabase({ url }, { max: 20 })`, pass `database: db` to
-  each `openAgent` (migration runs once, and each `agent.close()` releases only that instance's lease), and call
-  `await db.close()` on shutdown. On Aurora DSQL, `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` gives
-  the database descriptor (and can also be wrapped with `openPostgresDatabase`).
-- [Run traces](configuration.md#run-traces) are exported when `secrets` holds `OTEL_EXPORTER_OTLP_ENDPOINT` (and the
-  other `OTEL_*` variables). Pass them there, not in `env`: what is in `env` reaches the agent's commands.
+Key options on `openAgent(definition, options)`:
 
-## 2. Send a message
+- **`root` (required, absolute):** Agent working directory; local SQLite state lives under `<root>/.state/`.
+- **`name`:** Instance name (one path segment). Required when using PostgreSQL (`database` or `secrets.FASTAGENT_DATABASE_URL`).
+- **`secrets`:** The sole source of values for `needs()`, MCP `${VAR}` placeholders, model provider credentials, and `OTEL_*` tracing config. `openAgent` never reads `process.env`, `.secrets/`, or `~/.fastagent`.
+- **`env`:** Base environment for subprocesses the agent spawns (`bash`, skill scripts, stdio MCP servers). Defaults to empty; pass `baseEnv(process.env)` for standard `PATH`, `HOME`, locale, and proxy settings. Pass `OTEL_*` variables in `secrets` (not `env`) so agent subprocesses cannot read collector credentials.
+- **`model`:** Optional `provider/modelId` override over `fastagent.config.ts`.
+- **`harness` / `sandbox`:** Optional `"pi-durable"` (default) or `"dsh"` (requires `@fastagent-sh/harness-dsh`), with `sandbox: "workspace" | "read-only" | "off"` on `dsh`.
+- **`database`:** PostgreSQL descriptor (`{ url }`, `openPostgresDatabase(...)`, or `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore`).
+
+### Hosting multiple instances on one PostgreSQL pool
+
+When one process hosts multiple isolated instances over PostgreSQL (or Aurora DSQL), share a single connection pool with `openPostgresDatabase`:
 
 ```ts
-// One question, one answer.
-const session = await agent.sessions.create();
-const message = await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 120 });
-if (message.status === "completed") reply(message.answer?.text);
+import { baseEnv, openAgent, openPostgresDatabase } from "@fastagent-sh/fastagent";
+import support from "@acme/support-agent";
 
-// Its answer as it is written.
+const db = openPostgresDatabase({ url: process.env.DATABASE_URL! }, { max: 20 });
+
+const tenantA = await openAgent(support, {
+  root: "/var/lib/myapp/tenants/a",
+  name: "tenant-a",
+  database: db,
+  secrets: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
+  env: baseEnv(process.env),
+});
+
+// Schema migration runs once; closing one agent releases only its lease, keeping `db` open.
+await tenantA.close();
+// Close the shared pool once during process shutdown.
+await db.close();
+```
+
+## 2. Call the Agent API
+
+`LocalAgent` exposes the full [Agent API](agent-api.md) (`sessions`, `messages`, `invoke`, `invokeStream`) plus lifecycle helpers:
+
+```ts
+// One-shot or caller-named conversation
+const digest = await agent.invoke(
+  { conversation: "daily-digest", content: "/daily-digest" },
+  { wait: 120 },
+);
+
+// Interactive session with live streaming
+const session = await agent.sessions.create();
 for await (const event of agent.messages.stream({ sessionId: session.id, content: "hi" })) {
   if (event.type === "delta" && event.channel === "text") render(event.text);
   if (event.type === "done") finish(event.message);
 }
 ```
 
-Keep `session.id` to continue the conversation. Pass your request's id as `idempotencyKey` so a resend returns the same
-message. Leaving the loop detaches; the agent goes on until `agent.sessions.cancel(sessionId)`. The calls are the
-[Agent API](agent-api.md).
+Lifecycle helpers on `LocalAgent`:
+- **`agent.busy()`:** Returns `true` while any message turn or remote auth flow is active (useful for graceful drain or scale-to-zero probes).
+- **`agent.closed`:** Optional promise that resolves when the instance stops serving—after `close()` or if a PostgreSQL single-writer lease is lost.
+- **`agent.close()`:** Closes any served HTTP endpoints and releases storage. Running turns are interrupted cleanly and resume on next open (call `agent.sessions.cancel(sessionId)` first to stop work permanently).
 
-### Exposing it to your users
+### Streaming to your own end users
 
-Do not give a browser the API key: it opens the whole instance. Write your own routes over these calls, behind your
-auth. Results and events are JSON, so you can forward them, for example as Server-Sent Events:
+Never send `FASTAGENT_API_KEY` to a browser. Authorize the user and their session id in your backend, then stream events directly:
 
 ```ts
+import { AgentError, type MessageStreamEvent } from "@fastagent-sh/fastagent";
+
 app.post("/chat/:session", requireUser, async (req, res) => {
-  const sessionId = await sessionOfUser(req.user, req.params.session); // yours: which session this user may use
+  const sessionId = await sessionOfUser(req.user, req.params.session);
   const events = agent.messages.stream({ sessionId, content: req.body.text })[Symbol.asyncIterator]();
-  // A refused send rejects the first read: answer it before the stream starts.
+  // Refused sends reject on the first read—check before writing SSE headers.
   const first = await events.next().catch((error: unknown) => error);
   if (first instanceof AgentError) return res.status(409).json(first);
+
   res.setHeader("content-type", "text/event-stream");
   for (let next = first as IteratorResult<MessageStreamEvent>; !next.done; next = await events.next()) {
     res.write(`data: ${JSON.stringify(next.value)}\n\n`);
@@ -87,62 +123,50 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 });
 ```
 
-**One instance is one trust domain**: the agent's tools can reach every session in it. Give users who must not see each
-other an instance each ([security model](agent-api.md#security)).
-
-## 3. Serve the Agent API
+## 3. Serve the HTTP Agent API
 
 ```ts
-const service = await agent.serve();
-// mount service.fetch in your app (below), or give it a server of its own:
+const service = await agent.serve({ apiKeys: [process.env.AGENT_API_KEY!] });
+
+// Mount service.fetch inside your existing server, or bind a standalone port:
 const port = await service.listen(8787);
-// ...
-await agent.close(); // closes the service, then releases the storage
+
+// Closing the agent drains the HTTP server (500 ms) and releases storage
+await agent.close();
 ```
 
-- `service.fetch` answers `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
-  under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
-  `@fastagent-sh/client`.
-- `agent.busy()` says whether a message is in flight in the process: for a platform that stops an
-  idle machine, as AgentCore does.
+Without `apiKeys`, `service.fetch` serves only `GET /health`. With `apiKeys`, it serves the full [Agent API](agent-api.md#http-binding) under `/v1`.
 
-### Mounting `fetch`
+### Mounting `service.fetch` in web frameworks
 
-`service.fetch` takes a `Request` and returns a `Response`. It routes on the path (`/health`, `/v1/...`), so mount it
-under a prefix your framework strips. On Node's `(req, res)`, bridge it with `getRequestListener` from
-`@hono/node-server`.
+`service.fetch` accepts a Web `Request` and returns a Web `Response`, routing on `/health` and `/v1/...`. Mount it under a stripped prefix. For Node `(req, res)` servers, bridge with `getRequestListener` from `@hono/node-server`.
 
-> **Mount before your body parser.** A body parser registered ahead of the mount consumes the request stream, which
-> the Agent API reads itself:
+> **Mount before any body parser.** A body parser registered ahead of the mount consumes the raw request stream before `service.fetch` can read it:
 >
 > ```ts
 > app.use("/agent", getRequestListener(service.fetch, { overrideGlobalObjects: false })); // first
-> app.use(express.json()); // then: parses everything else as usual
+> app.use(express.json()); // second
 > ```
->
-> Scoping the parser (`app.use("/other", express.json())`) works too.
 
 ```ts
 const { fetch: handler } = service;
 
-// Next.js App Router — app/agent/[...path]/route.ts: strip the prefix the route lives under
+// Next.js App Router (app/agent/[...path]/route.ts)
 const toAgent = (req: Request) => {
   const url = new URL(req.url);
   url.pathname = url.pathname.slice("/agent".length);
   return handler(new Request(url, req));
 };
-export { toAgent as GET, toAgent as POST };
+export { toAgent as GET, toAgent as POST, toAgent as PATCH, toAgent as DELETE };
 
-// Hono — mount strips the prefix
+// Hono (mount strips the prefix automatically)
 app.mount("/agent", handler);
 
-// Express — getRequestListener bridges (req, res) to the Fetch handler, and app.use strips the prefix. It reads the RAW
-// body stream, so mount it BEFORE any body parser (see the note above). `overrideGlobalObjects: false` leaves this
-// process's global Request and Response alone.
+// Express (mount before express.json())
 import { getRequestListener } from "@hono/node-server";
 app.use("/agent", getRequestListener(handler, { overrideGlobalObjects: false }));
 
-// Fastify — the same bridge on the raw req/res: keep the body stream unread, hijack the reply, strip the prefix
+// Fastify (keep body unread, hijack reply, strip prefix)
 const listener = getRequestListener(handler, { overrideGlobalObjects: false });
 app.register(async (scope) => {
   scope.removeAllContentTypeParsers();
@@ -155,44 +179,17 @@ app.register(async (scope) => {
 });
 ```
 
-## 4. Credentials
+## 4. Isolation & open guarantees
 
-The agent reads provider keys from `secrets` by their variable names (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …), and
-nothing from the project's `.secrets/` or `~/.fastagent`, so a developer's own login never becomes your app's.
+- **Strict input boundary:** Apart from `FASTAGENT_LOG_LEVEL`, `openAgent` reads nothing from `process.env`, `.secrets/`, or `~/.fastagent`, and never mutates `process.env` or the built package. (Third-party cloud SDKs may still read their own ambient credential chains unless overridden.)
+- **Fail fast at open:** A relative `root`, missing required `needs()` secret, held storage lock, missing `name` with PostgreSQL, or incompatible build format rejects `openAgent()` immediately with an actionable message.
+- **Multi-user isolation:** One instance is one trust domain. Give users who must not see each other's data separate instances, or set `codingTools: false` in `fastagent.config.ts`, write custom tools that cannot access shared files/storage, and authorize every session id (including `forkFrom.sessionId`) in your backend.
 
-```ts
-const agent = await openAgent(definition, { root, secrets: { ANTHROPIC_API_KEY: vault.read("anthropic") } });
-```
+## 5. Desktop hosts
 
-A gateway or self-hosted model is a provider in the agent's config ([custom models](configuration.md#custom-models)).
+When running agents inside a local desktop application:
 
-## 5. What an open promises
-
-- **Its inputs, and nothing else.** Of the process's environment FastAgent reads only `FASTAGENT_LOG_LEVEL`: no
-  variable places, configures or serves the instance, and none reaches a process the agent starts. It reads no file its
-  inputs do not name, the machine's model credentials included, and writes neither `process.env` nor the package. A
-  model provider's SDK still reads its own credential chain.
-- **Refusals at open, never later.** A relative `root`, a required secret without a value, a second open over the same
-  state, and a definition built for another FastAgent format each refuse the open, naming what to fix.
-- **What a started process gets**: `env`, the declared packages' commands ahead on its `PATH`, the declared secrets, a
-  stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
-- **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
-  `sessions.cancel` was stopping it.
-- **`serve()`.** `close()` ends the API's event streams and gives requests in flight 500 ms.
-- **Users kept apart are yours.** An app serving its own users over one instance sets `codingTools: false` in
-  `fastagent.config.ts` (so the agent has no `read`, `write`, `edit` or `bash`), uses only tools that cannot reach
-  the instance's storage or files, and checks every session id a request names, a fork's source included.
-
-## 6. A desktop host
-
-An app that runs agents for a person on their machine:
-
-- Open with a `root` of your own to run beside `fastagent dev` on the same project. Each instance has its own
-  sessions.
-- `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
-- A configured default model that the model lists no longer have (a provider retired it, a catalog update renamed it)
-  does not stop the open: `info().defaultModel` is absent, `info().unusableDefault` gives the configured `spec` and the
-  `reason`, and a message that names no model is refused `missing_model`. A `model` given to `openAgent` is stricter: one
-  the lists do not have fails the open.
-- A new agent version is a new build: `close()` and open it again.
-- Agents in one process keep their secrets and packages apart, but share the process: one that crashes it crashes all.
+- Pass an app-owned `root` so it never contends with a developer's `fastagent dev`.
+- Read `agent.info().models` to populate model pickers (includes `contextWindow` and supported `thinkingLevels`).
+- If `fastagent.config.ts` names a retired or renamed default model, `openAgent()` still opens with `info().defaultModel` omitted and `info().unusableDefault` explaining why; messages without an explicit model refuse with `missing_model`. Passing an invalid `options.model` directly to `openAgent()` fails at open.
+- To upgrade to a new compiled build, `await agent.close()` and reopen the new build.

@@ -1,53 +1,49 @@
 ---
-title: AgentCore
-description: "Run an agent on Amazon Bedrock AgentCore: an isolated instance per user, sessions in Aurora DSQL, values in Secrets Manager, deployed with the AgentCore CLI, locally or in CI."
+title: Amazon Bedrock AgentCore
+description: "Deploy isolated per-user FastAgent microVMs on Amazon Bedrock AgentCore with Aurora DSQL persistence, Secrets Manager values, and zero-server client access."
 status: current
 ---
 
-# AgentCore
+# Amazon Bedrock AgentCore
 
-On [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/), each AgentCore session runs in a microVM of
-its own, and FastAgent makes each session one instance of your agent: one per user or chat, with its own sessions,
-files and commands. What an instance keeps lives in Aurora DSQL, so it survives the microVM: AgentCore stops an idle
-one after its timeout, and the next request opens the instance where it left off.
+Choose **Amazon Bedrock AgentCore** when you want automatic **per-user microVM isolation**, pay-for-active-use scale-to-zero, and managed serverless persistence with zero servers to maintain.
 
-## 1. Set it up
+Each AgentCore session runs in its own microVM. FastAgent maps each session to an isolated agent instance—one per user or workspace—storing sessions, durable provider credentials, and conversation mappings in **Amazon Aurora DSQL**. When AgentCore recycles an idle microVM, the next invocation picks up right where it left off.
 
-In the agent directory:
+You use two separate packages depending on your role:
+- **`@fastagent-sh/agentcore`** inside your agent repository (builds and runs the container + CDK infrastructure).
+- **`@fastagent-sh/client-agentcore`** inside your backend or operator machine (zero server/DB/CDK dependencies; calls the runtime over AWS IAM).
+
+## 1. Initialize AgentCore in your agent
 
 ```bash
-npm i @fastagent-sh/agentcore       # adds the `agentcore` target and runtime
+npm i @fastagent-sh/agentcore
 fastagent deploy init agentcore
 ```
 
-`init` writes, for you to commit:
+This writes the files to commit:
 
-| File | What it is |
-|---|---|
-| `Dockerfile`, `.dockerignore` | The agent's ARM64 image. It runs `fastagent agentcore start`, and leaves out `.secrets/`, `.env` files, state and `agentcore/` |
-| `agentcore/agentcore.json` | The AgentCore project: one runtime, built from the `Dockerfile` |
-| `agentcore/cdk/` | The CDK app the AgentCore CLI deploys. Its stack adds `FastAgentResources`: an Aurora DSQL cluster for the instances and read access to the agent's secret |
+| File | Purpose |
+| --- | --- |
+| `Dockerfile`, `.dockerignore` | ARM64 container running `fastagent agentcore start`, excluding `.secrets/`, `.env*`, `.state/`, and `agentcore/` |
+| `agentcore/agentcore.json` | AgentCore project declaring the runtime built from `Dockerfile` |
+| `agentcore/cdk/` | CDK app adding `FastAgentResources` (Aurora DSQL cluster + Secrets Manager read grant) |
 
-It installs the CDK app's dependencies (`--no-install` skips that), and prints the values the agent reads. A file of
-yours is kept: `init` never writes over `agentcore/` once it exists, and `--force` regenerates only the container files
-it generated. Add your own targets, runtime settings and resources to `agentcore/`: it is yours.
+`init` installs CDK dependencies (`--no-install` skips) and prints the secret names your agent expects. Once written, `agentcore/` belongs to you and is never overwritten (`--force` regenerates only FastAgent-managed container files).
 
-## 2. Give it its values
+## 2. Store runtime values in Secrets Manager
 
-Create a Secrets Manager secret named after the agent, in each AWS account and region you deploy to: one JSON object
-of the names `init` printed (the model's API key, what the agent's code declares with `needs`) to their values.
+In each target AWS account and region, create a Secrets Manager secret named after the agent holding a JSON object of key/value strings (model API keys and any secrets declared with `needs()`):
 
 ```bash
 aws secretsmanager create-secret --name support --secret-string file://values.json
 ```
 
-Each session reads it when its instance opens, on its first request after AgentCore starts its microVM. A secret that
-cannot be read (not created yet, no access, not a JSON object of strings) refuses that request with `internal`, naming
-why, and the next request reads it again: create it after the deploy and nothing needs redeploying. A changed
-value reaches a session as AgentCore starts it again. A name the secret lacks refuses the instance's open, naming it. A
-name both the secret and the runtime's environment set is refused too: keep it in one. To use another secret, change `secretName` in `agentcore/cdk/lib/cdk-stack.ts`.
-
-A model on Amazon Bedrock takes a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) in the secret, like any provider's key.
+- Each instance reads the secret on the first invocation after its microVM starts.
+- If the secret does not exist yet or cannot be read, the invocation fails visibly with `internal` and retries on the next call (creating the secret after deploy requires no redeploy).
+- Setting the same key in both Secrets Manager and the runtime environment is refused to avoid silent precedence conflicts.
+- Amazon Bedrock models use `AWS_BEARER_TOKEN_BEDROCK` inside the secret, like any other provider key.
+- To point at a different secret name, edit `secretName` in `agentcore/cdk/lib/cdk-stack.ts`.
 
 ## 3. Deploy
 
@@ -55,19 +51,13 @@ A model on Amazon Bedrock takes a Bedrock API key (`AWS_BEARER_TOKEN_BEDROCK`) i
 npx -y @aws/agentcore@1.0.3 deploy
 ```
 
-The [AgentCore CLI](https://github.com/aws/agentcore-cli) builds the image remotely with CodeBuild (no local Docker or
-ARM64 machine), and creates or updates the runtime, the database and the roles. Run it again for each new version. Its
-other commands are yours too: `agentcore status`, `agentcore logs`, and `agentcore.json`'s targets for more accounts
-or regions.
+The [AgentCore CLI](https://github.com/aws/agentcore-cli) builds the `linux/arm64` image remotely with CodeBuild (no local Docker or ARM64 machine required) and provisions or updates the runtime, Aurora DSQL cluster, and IAM roles.
 
-Every deploy first checks what the image would carry. One that would ship this machine's secrets or state, through a
-`.dockerignore` that lets them through or no `.dockerignore` at all, stops before anything in AWS changes, naming the
-files.
+Every CDK synthesis runs FastAgent's build-context leak check automatically and blocks deployment if `.secrets/`, `.env*`, or `.state/` would ship in the image.
 
-### In CI
+### Deploying from CI
 
-The same command, with AWS credentials from your CI's identity provider (OIDC), and both projects' dependencies
-installed:
+With AWS OIDC credentials configured:
 
 ```bash
 npm ci
@@ -75,82 +65,84 @@ npm ci --prefix agentcore/cdk
 npx -y @aws/agentcore@1.0.3 deploy --target prod
 ```
 
-The runner needs neither Docker nor ARM64. An account whose CDK bootstrap someone else manages takes
-`--skip-bootstrap`.
+Pass `--skip-bootstrap` when CDK bootstrap is managed centrally.
 
-### Your own CDK or Terraform
+### Custom CDK or Terraform
 
-`FastAgentResources` from `@fastagent-sh/agentcore/cdk` takes any runtime that can be granted permissions and given
-environment variables. Without CDK, the runtime needs:
+Import `FastAgentResources` from `@fastagent-sh/agentcore/cdk` into any CDK stack. If deploying with Terraform or CloudFormation directly:
 
-| Setting | Value |
-|---|---|
-| Image | The `Dockerfile`, built for `linux/arm64`, in ECR |
-| Protocol | HTTP, port 8080 |
-| `FASTAGENT_DSQL_ENDPOINT` | The Aurora DSQL cluster's endpoint |
-| `FASTAGENT_SECRETS` | The secret's name |
-| Execution role | `dsql:DbConnectAdmin` on the cluster, `secretsmanager:GetSecretValue` on the secret, ECR pull, logs |
+| Setting | Requirement |
+| --- | --- |
+| Image | `Dockerfile` built for `linux/arm64` in ECR |
+| Protocol & port | HTTP on port `8080` |
+| `FASTAGENT_DSQL_ENDPOINT` | Aurora DSQL cluster endpoint |
+| `FASTAGENT_SECRETS` | Secrets Manager secret name |
+| Execution role | `dsql:DbConnectAdmin` on cluster, `secretsmanager:GetSecretValue` on secret, ECR pull, CloudWatch logs |
 
-To try the image off AWS, run it with `FASTAGENT_DATABASE_URL=postgres://…` in place of the cluster, and the values as
-environment variables: it answers on port 8080 as it does on AgentCore.
+To test the container locally off AWS, pass `FASTAGENT_DATABASE_URL=postgres://...` instead of `FASTAGENT_DSQL_ENDPOINT` and supply secrets as environment variables; it listens on port `8080`.
 
-## 4. Call it
+## 4. Call and operate your deployed runtime
 
-### From the CLI
+### From your backend (`@fastagent-sh/client-agentcore`)
 
-To smoke-test or script a deployed runtime from your terminal (`npm i @fastagent-sh/client-agentcore` once on the
-machine calling it):
+```bash
+npm i @fastagent-sh/client-agentcore
+```
+
+```ts
+import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+
+const connection = {
+  runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
+  sessionId: sessionOf(user), // 33–256 chars: letters, digits, "-" and "_", starting alphanumeric
+  qualifier: "prod",
+};
+
+const agent = connectAgentCore(connection);
+const msg = await agent.invoke({ conversation: "main", content: "hi" }, { wait: 120 });
+
+// Optional: manage provider credentials persisted in Aurora DSQL for this instance
+const auth = connectAgentCoreAuth(connection);
+const providers = await auth.providers();
+```
+
+`@fastagent-sh/client-agentcore` also re-exports `connectAgent`, `connectAuth`, and `AgentError`, so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production. Your caller needs only IAM permission `bedrock-agentcore:InvokeAgentRuntime`—no `FASTAGENT_API_KEY` is used.
+
+### From your terminal (`fastagent agentcore invoke`)
+
+With `@fastagent-sh/client-agentcore` installed on your calling machine:
 
 ```bash
 export FASTAGENT_AGENTCORE_ARN="arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>"
+
 fastagent agentcore invoke "hello"
 echo "summarize this" | fastagent agentcore invoke --json
 fastagent agentcore invoke "follow up" --instance <id> --session <sessionId>
 ```
 
-Each call prints the AgentCore `--instance` id and Agent API `--session` id on `stderr`, and streams the answer (or
-NDJSON events with `--json`) on `stdout` with the same exit codes as `fastagent invoke`. Pass `--arn <arn>` to override
-`FASTAGENT_AGENTCORE_ARN`, `--qualifier <name>` for a named endpoint, and `--model <provider/model>` to pick a model.
+Supports `--arn <arn>`, `--instance <id>`, `--session <id>`, `--qualifier <name>` (default `DEFAULT`), `--model <provider/modelId>`, and `--json`.
 
-### From a backend
+### Via saved remotes (CLI `--remote` & `@fastagent-sh/pi-remote`)
 
-In your backend (`npm i @fastagent-sh/client-agentcore`):
+With `@fastagent-sh/client-agentcore` installed, add an `agentcore` entry to `~/.config/fastagent/remotes.json`:
 
-```ts
-import { connectAgentCore } from "@fastagent-sh/client-agentcore";
-
-const agent = connectAgentCore({
-  runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
-  sessionId: sessionOf(user), // yours: one per user, 33 to 256 letters, digits, "-" and "_"
-});
-const session = await agent.sessions.create();
-const message = await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 120 });
+```json
+{
+  "remotes": {
+    "bedrock": {
+      "type": "agentcore",
+      "runtimeArn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/my_agent",
+      "sessionId": "ops-session-id-at-least-33-characters",
+      "qualifier": "prod"
+    }
+  }
+}
 ```
 
-`agent` is the [Agent API](agent-api.md), as `connectAgent` gives it, and `@fastagent-sh/client-agentcore` re-exports
-`AgentError` and `connectAgent` so the same backend talks to `fastagent dev` locally and to AgentCore in production. It
-loads no server or Node runtime: a backend needs only `@fastagent-sh/client-agentcore` and AWS credentials
-that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime. Each request is one invocation of the session; an answer
-streams as it is written. `qualifier` picks a runtime endpoint (`prod`), and with it the version that answers.
+Then operate it just like an HTTP remote across `fastagent invoke --remote bedrock`, `fastagent login --remote bedrock`, `fastagent logout --remote bedrock`, and [`@fastagent-sh/pi-remote`](remotes.md#interactive-terminal-with-fastagent-shpi-remote).
 
-- **The session id is the instance.** Keep the mapping from your users to session ids. Through the Agent API, a
-  session id reaches only its own instance, and each runs in a microVM of its own: its files and processes are apart
-  from every other's. AgentCore authenticates every request: `connectAgentCore` signs each with your AWS credentials,
-  and there is no `FASTAGENT_API_KEY`.
-- **The database and the secret are the agent's, not the instance's.** AWS's own guidance: "Any code or
-  actor running inside the microVM can access execution role credentials." An agent that runs commands or code (`bash`,
-  a tool of yours) can use the role too: it can read any instance's sessions and the secret.
-  Users are kept apart from each other only from an agent whose tools run neither.
-- **Retryable means it passes by itself.** A request is refused `unavailable` (retryable) only when sending it again,
-  with nothing changed, can succeed: AgentCore throttling or starting the session, the instance held by the microVM
-  AgentCore is replacing, the database or Secrets Manager out of reach for a moment. What needs a person is not
-  retryable, and says what: `unauthorized` for credentials AWS refuses or none to sign with (sign in again, `aws
-  login`), `internal` for an instance that cannot open (a secret not created or not readable, a value it lacks, no
-  database configured, a runtime that does not exist).
+## Security, retries, and limits
 
-## Limits
-
-- A message is at most 6.4 MiB, what one DSQL transaction keeps (`too_large`).
-- Files the agent writes are on the microVM's disk, and go with it.
-- Deleting the stack keeps the database, with the sessions in it: delete the cluster yourself, after turning off its
-  deletion protection.
+- **MicroVM isolation vs. execution role:** Each `sessionId` runs in its own microVM with its own database partition. However, as AWS documents, arbitrary code running inside a microVM can access its execution role (and therefore the shared Aurora DSQL cluster and Secrets Manager secret). For strict multi-tenant user isolation, disable `bash` / arbitrary code execution (`codingTools: false`) or isolate AWS roles per tenant.
+- **Retry semantics:** Transient platform issues (throttling, cold starts, microVM handoff, brief DSQL/Secrets Manager hiccups) return `AgentError("unavailable")` (`retryable: true`). Permission or configuration errors (`unauthorized`, missing secret, invalid config) are non-retryable and fail visibly.
+- **Limits:** Maximum message size is **6.4 MiB** (`details.reason: "too_large"`). Files written to microVM disk do not outlive the microVM. Deleting the CDK stack retains the Aurora DSQL cluster with deletion protection enabled so session history is never dropped accidentally.

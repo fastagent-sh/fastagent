@@ -65,8 +65,8 @@ export interface OpenServingOptions {
    */
   env: Readonly<Record<string, string>>;
   /**
-   * The environment FastAgent's own work for the instance runs in: where a CLI instance's files are, and whether it is
-   * offline. The CLI gives this process's; an app, its `env`. The instance's secrets are added to it.
+   * The environment FastAgent's own work for the instance runs in (such as instance root, harness/sandbox overrides,
+   * and OTLP variables). The CLI gives this process's; an app, its `env`. The instance's secrets are added to it.
    */
   ownEnv: Readonly<Record<string, string | undefined>>;
   /** Who runs the instance: whether its prompt describes a deployment. */

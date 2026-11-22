@@ -1,21 +1,27 @@
 # @fastagent-sh/client-agentcore
 
-The [FastAgent](https://fastagent.sh) Agent API client for Amazon Bedrock AgentCore: `connectAgentCore`,
-`connectAgentCoreAuth`, and the `remotes.json` transport plugin (`type: "agentcore"`) for FastAgent CLI and
-`@fastagent-sh/pi-remote`. Zero server, database, CDK, or Node-only dependencies.
+Call a [FastAgent](https://fastagent.sh) service deployed on Amazon Bedrock AgentCore over AWS IAM—from your backend, FastAgent CLI (`--remote`), or `@fastagent-sh/pi-remote`. Zero server, database, CDK, or Node-only dependencies.
 
 ```bash
 npm i @fastagent-sh/client-agentcore
 ```
 
 ```ts
-import { connectAgent, connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
 
-const agent = connectAgentCore({
+const connection = {
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
-  sessionId: sessionOf(user),
-});
-const message = await agent.invoke({ content: "hi" }, { wait: 60 });
+  sessionId: sessionOf(user), // 33–256 chars
+};
+
+const agent = connectAgentCore(connection);
+const message = await agent.invoke({ content: "hi" }, { wait: 120 });
+console.log(message.answer?.text);
+
+const auth = connectAgentCoreAuth(connection);
+const providers = await auth.providers();
 ```
 
-See [AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md).
+Re-exports `connectAgent`, `connectAuth`, and `AgentError` from `@fastagent-sh/client` so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production.
+
+See [Amazon Bedrock AgentCore](https://fastagent.sh/docs/agentcore/) and [Remotes & clients](https://fastagent.sh/docs/remotes/).
