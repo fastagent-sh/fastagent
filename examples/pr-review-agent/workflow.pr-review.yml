@@ -1,0 +1,42 @@
+# Copy to `.github/workflows/pr-review.yml` in any repository you want reviewed.
+# Required repository secrets: FASTAGENT_URL, FASTAGENT_API_KEY
+name: FastAgent PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Invoke FastAgent over POST /v1/invoke
+        env:
+          FASTAGENT_URL: ${{ secrets.FASTAGENT_URL }}
+          FASTAGENT_API_KEY: ${{ secrets.FASTAGENT_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          OWNER="${REPO%%/*}"
+          NAME="${REPO##*/}"
+          # Same PR reuses one conversation across pushes; head SHA makes retries idempotent.
+          RESPONSE=$(curl -fsS -X POST "${FASTAGENT_URL}/v1/invoke" \
+            -H "Authorization: Bearer ${FASTAGENT_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -H "Idempotency-Key: pr-${PR_NUMBER}-${HEAD_SHA}" \
+            -d "$(jq -n \
+              --arg conv "pr-${OWNER}-${NAME}-${PR_NUMBER}" \
+              --arg content "Review PR #${PR_NUMBER} in ${OWNER}/${NAME} (commit ${HEAD_SHA})." \
+              '{conversation: $conv, content: $content, whenBusy: "steer", wait: 300}')")
+
+          REVIEW=$(echo "$RESPONSE" | jq -r '.answer.text // empty')
+          if [ -z "$REVIEW" ]; then
+            echo "Agent did not complete: $RESPONSE" >&2
+            exit 1
+          fi
+          gh pr comment "$PR_NUMBER" --body "$REVIEW"

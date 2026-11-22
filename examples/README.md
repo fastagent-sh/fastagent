@@ -1,9 +1,10 @@
 # FastAgent Examples
 
-Minimal, runnable examples showing the three main ways developers use FastAgent (requires Node ≥ 24.15).
+Four production-grade examples demonstrating how teams run FastAgent in real workflows (requires Node ≥ 24.15).
 
-| Example | What it demonstrates | Run |
+| Example | Use case | Key FastAgent features |
 | --- | --- | --- |
-| [`basic-agent`](./basic-agent/) | Complete agent directory: `SYSTEM.md`, a skill (`skills/refund-policy/`), and a portable TypeScript tool (`defineTool`) | `cd examples/basic-agent && npm install && npm run dev` |
-| [`embed-hono`](./embed-hono/) | Embed a compiled agent in a Hono app with `openAgent()`, mount `service.fetch`, and stream SSE from a custom `/chat` route | `cd examples/embed-hono && npm install && node server.ts` |
-| [`client-invoke`](./client-invoke/) | Call any deployed HTTP FastAgent with `@fastagent-sh/client` (`invoke` with caller-named `conversation` + `invokeStream`) | `cd examples/client-invoke && npm install && node invoke.ts` |
+| [`pr-review-agent`](./pr-review-agent/) | Background PR code review triggered from GitHub Actions | `dsh` `read-only` OS sandbox, `defineTool`, `needs()`, `POST /v1/invoke` with per-PR `conversation` & `Idempotency-Key` |
+| [`incident-triage-agent`](./incident-triage-agent/) | Scale-to-zero AI SRE for on-call alert triage & root-cause analysis | `@fastagent-sh/client`, alert-storm deduplication, `whenBusy: "steer"`, `mcpServers`, Runbook skills, Fly.io scale-to-zero |
+| [`saas-copilot`](./saas-copilot/) | Multi-tenant B2B SaaS copilot embedded in a Hono backend | `openAgent()`, `openPostgresDatabase()` shared pool, `codingTools: false` isolation, `sessionIdOf()`, resumable SSE (`after` cursor) |
+| [`deep-research-agent`](./deep-research-agent/) | Long-running technical research & scheduled daily brief | Real HN & GitHub Release tools, `/daily-brief` prompt template, durable crash recovery, external Cron `POST /v1/invoke`, `@fastagent-sh/pi-remote` live attach |

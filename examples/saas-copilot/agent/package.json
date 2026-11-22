@@ -1,0 +1,12 @@
+{
+  "name": "saas-copilot-agent",
+  "description": "Embeddable tool-only SaaS copilot agent.",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastagent-sh/fastagent": "^0.34.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

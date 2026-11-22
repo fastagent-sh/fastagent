@@ -61,7 +61,7 @@ fastagent invoke "hello"      # send a message through the Agent API
 
 Inside an agent directory, the global `fastagent` delegates automatically to that agent's installed version. Without a global install, use `npm run dev` / `build` / `start` or `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is a different package).
 
-Follow the 5-minute [Quickstart](https://fastagent.sh/docs/quickstart/) to add a typed TypeScript tool (`defineTool`) and build for production, or browse runnable [examples](https://github.com/fastagent-sh/fastagent/tree/main/examples) (`basic-agent`, `embed-hono`, `client-invoke`).
+Follow the 5-minute [Quickstart](https://fastagent.sh/docs/quickstart/) to add a typed TypeScript tool (`defineTool`) and build for production, or explore production [examples](https://github.com/fastagent-sh/fastagent/tree/main/examples) (`pr-review-agent`, `incident-triage-agent`, `saas-copilot`, `deep-research-agent`).
 
 ## Use it your way
 
