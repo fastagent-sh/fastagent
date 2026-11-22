@@ -30,7 +30,7 @@ const auth = connectAgentCoreAuth(connection);
 try {
   const providers = await auth.providers();
   const ready = providers.filter((p) => p.authenticated).map((p) => p.provider);
-  console.log(`[agentcore] user=${userId} instance=${connection.sessionId} readyProviders=${ready.join(",") || "none"}`);
+  console.log(`[agentcore] instance=${connection.sessionId} readyProviders=${ready.join(",") || "none"}`);
 
   const reply = await agent.invoke(
     {
