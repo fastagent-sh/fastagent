@@ -20,6 +20,7 @@ import {
   type WaitOptions,
   agentError,
 } from "@fastagent-sh/client/agent-api";
+import { log } from "./log.ts";
 import { type PostgresDatabase, acquirePgDatabase } from "./postgres.ts";
 
 interface ConversationSetOptions {
@@ -168,7 +169,13 @@ export function sqliteConversationStore(filePath: string, options: ConversationS
       const current = now();
       const isEphemeral = setOptions?.ephemeral === true ? 1 : 0;
       upsertStmt.run(key, sessionId, isEphemeral, current);
-      if (isEphemeral === 1) pruneStmt.run(current - ttlMs);
+      if (isEphemeral === 1) {
+        try {
+          pruneStmt.run(current - ttlMs);
+        } catch (pruneError) {
+          log.warn(`[fastagent] pruning expired ephemeral conversations failed: ${String(pruneError)}`);
+        }
+      }
     },
     async close() {
       if (closed) return;
@@ -234,10 +241,14 @@ export function postgresConversationStore(
         );
         if (isEphemeral && current - lastPrunedAt >= PG_PRUNE_INTERVAL_MS) {
           lastPrunedAt = current;
-          await db.query(
-            "DELETE FROM fastagent_conversations WHERE instance = $1 AND ephemeral = TRUE AND updated_at <= $2",
-            [instance, current - ttlMs],
-          );
+          await db
+            .query(
+              "DELETE FROM fastagent_conversations WHERE instance = $1 AND ephemeral = TRUE AND updated_at <= $2",
+              [instance, current - ttlMs],
+            )
+            .catch((pruneError: unknown) =>
+              log.warn(`[fastagent] pruning expired ephemeral conversations failed: ${String(pruneError)}`),
+            );
         }
       } catch (error) {
         throw mapPgError(error);
