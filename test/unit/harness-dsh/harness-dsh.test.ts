@@ -8,14 +8,13 @@ import {
   DshInstanceHeldError,
   MemoryDshEventStore,
   openDshAgent,
-  openDshAgentFromDir,
   openPostgresDshStore,
   openSqliteDshStore,
 } from "@fastagent-sh/harness-dsh";
 import { buildDshSandboxPolicy, resolveConfinedPath } from "../../../packages/harness-dsh/src/sandbox.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
-import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
@@ -244,7 +243,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     }
   });
 
-  it("wires codingTools gating, read/write/edit confinement, read-only enforcement, and openDshAgentFromDir", async () => {
+  it("wires codingTools gating, read/write/edit confinement, read-only enforcement, and directory loading via openAgent", async () => {
     const { createFauxCore, createModels, createProvider, fauxAssistantMessage, fauxToolCall } = await import(
       "@earendil-works/pi-ai"
     );
@@ -302,7 +301,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
         }),
       ).rejects.toMatchObject({ code: "invalid_request" });
 
-      // openDshAgentFromDir loads SYSTEM.md, AGENTS.md, skills, prompts, SQLite storage, and codingTools.
+      // openDshAgent with workspace codingTools + protectedPaths + SQLite storage.
       let seenSystem = "";
       let seenUser = "";
       const { models, model } = makeModels((ctx) => {
@@ -345,7 +344,20 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
         return fauxAssistantMessage(`echo:${seenUser}`);
       });
 
-      const agent = await openDshAgentFromDir(agentDir, { models, model, codingTools: ["read", "write", "edit"] });
+      const sqlStore = openSqliteDshStore(join(agentDir, ".fastagent", "dsh.sqlite"));
+      const agent = await openDshAgent({
+        name: "my-agent",
+        workdir: agentDir,
+        systemPrompt: "You are a sandboxed engineer.\nAlways follow workspace rules.\ndeploy",
+        models,
+        model,
+        codingTools: ["read", "write", "edit"],
+        protectedPaths: [join(agentDir, ".fastagent")],
+        commands: () => [
+          { name: "review", description: "Review a branch", expand: (args) => `Please review: ${args}` },
+        ],
+        storage: sqlStore,
+      });
       try {
         const info = await agent.info();
         expect(info.name).toBe("my-agent");
@@ -378,10 +390,13 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
         expect(existsSync(join(agentDir, ".fastagent", "dsh.sqlite"))).toBe(true);
       } finally {
         await agent.close();
+        await sqlStore.close();
       }
 
       // read-only sandbox denies write & edit while still allowing read.
-      const ro = await openDshAgentFromDir(agentDir, {
+      const ro = await openDshAgent({
+        name: "my-agent",
+        workdir: agentDir,
         models,
         model,
         sandbox: "read-only",

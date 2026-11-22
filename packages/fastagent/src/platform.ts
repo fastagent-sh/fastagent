@@ -10,7 +10,7 @@ import { checkContainer } from "./deploy/preflight.ts";
 import { resolveAuthPath } from "./harnesses/models/credentials.ts";
 import { type AgentDefinition, definitionSecrets } from "./definition/definition.ts";
 import { loadProjectBuild } from "./definition/built.ts";
-import { loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "./harnesses/assembly.ts";
 import { instanceName } from "./instance-name.ts";
 
 export { DATABASE_URL_ENV } from "./paths.ts";

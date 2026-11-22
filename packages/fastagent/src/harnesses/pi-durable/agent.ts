@@ -65,6 +65,7 @@ import {
   hasEnded as messageHasEnded,
 } from "@fastagent-sh/client/agent-api";
 import { beginWork } from "../../busy.ts";
+import type { Unfinished } from "../assembly.ts";
 import { type PromiseFailure, fromPromise, abortThenJoin, originalError } from "../../promise-bridge.ts";
 import { log } from "../../log.ts";
 import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
@@ -114,13 +115,6 @@ export interface DurableAgentOptions {
   /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
   maxMessageBytes?: number;
 }
-
-/**
- * What a process does with the messages an earlier one accepted and did not end (it was stopped, or killed). `"resume"`
- * (the default, a serve's): they run on in this one, as its own work. `"refuse"`: the open fails naming them, for a
- * process that runs one thing and would cut the rest off (`fastagent invoke`).
- */
-export type Unfinished = "resume" | "refuse";
 
 export interface DurableAgent extends Agent {
   /** pi-durable's own API, for operating the agent. */

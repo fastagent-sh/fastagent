@@ -13,7 +13,7 @@ import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
 import { readPackageJson } from "../runtime.ts";
 import { HARNESS_PACKAGES } from "../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
-import { loadSourceDefinition } from "./pi-durable/open.ts";
+import { loadSourceDefinition } from "./assembly.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 

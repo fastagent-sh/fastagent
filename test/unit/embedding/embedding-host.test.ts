@@ -8,7 +8,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openAgent } from "../../../packages/fastagent/src/index.ts";
-import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 
 afterEach(() => {

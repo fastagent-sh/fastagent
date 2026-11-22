@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { type ServingAgent, openServing } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
-import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { connectAgent } from "../../../packages/client/src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../../../packages/fastagent/src/service.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";

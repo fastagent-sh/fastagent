@@ -24,7 +24,7 @@ import {
   loginOptionsOver,
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
-import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
 import type { RemoteTargetFlags } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";

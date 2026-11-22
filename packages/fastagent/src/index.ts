@@ -74,7 +74,7 @@ export {
   type StandardJSONSchemaV1,
   type ToolDefinition,
   type ToolParameters,
-} from "./harnesses/pi-durable/tool.ts";
+} from "./harnesses/tool.ts";
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
 export { defineDefinition, type AgentDefinition } from "./definition/definition.ts";

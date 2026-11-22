@@ -10,7 +10,7 @@ import { type InstanceFlags, enterInstance } from "../instance.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { agentPresentation, resolveCodingTools, resolveHarnessSelection } from "../../harnesses/config.ts";
 import { definitionSecrets } from "../../definition/definition.ts";
-import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/pi-durable/open.ts";
+import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
 import { describeInstanceStorage } from "../../harnesses/serving.ts";
 import { readCommands } from "../../harnesses/text.ts";
 import { declareMcp } from "../../mcp/config.ts";

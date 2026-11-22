@@ -14,7 +14,7 @@ const SRC = fileURLToPath(new URL("../../../packages/fastagent/src", import.meta
 export function createAndOpen(dir: string): Promise<string> {
   const script = `
     import { scaffoldAgent } from ${JSON.stringify(join(SRC, "scaffold/init.ts"))};
-    import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/pi-durable/open.ts"))};
+    import { loadSourceDefinition } from ${JSON.stringify(join(SRC, "harnesses/assembly.ts"))};
     import { openServing } from ${JSON.stringify(join(SRC, "harnesses/serving.ts"))};
     await scaffoldAgent(${JSON.stringify(dir)});
     await loadSourceDefinition(${JSON.stringify(dir)}).then((definition) => openServing(definition, { secrets: {}, env: {}, ownEnv: process.env, runsAs: { dev: false, deployed: false }, storage: "memory" })).then(

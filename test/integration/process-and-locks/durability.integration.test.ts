@@ -443,7 +443,7 @@ describe("@fastagent-sh/harness-dsh OS sandbox enforcement (LocalSandboxProvider
 
   it("openAgent with harness: dsh isolates bash subprocess env to declared secrets and baseEnv (no host secret leak)", async () => {
     const { openAgent, baseEnv } = await import("../../../packages/fastagent/src/index.ts");
-    const { loadSourceDefinition } = await import("../../../packages/fastagent/src/harnesses/pi-durable/open.ts");
+    const { loadSourceDefinition } = await import("../../../packages/fastagent/src/harnesses/assembly.ts");
 
     const agentDir = freshDir("fa-dsh-env-iso-");
     const root = freshDir("fa-dsh-env-root-");

@@ -7,7 +7,7 @@ import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { listModels, providerOf } from "../../harnesses/models/models.ts";
-import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
+import { definitionProviders } from "../../harnesses/assembly.ts";
 import { enterAgentEnv } from "../../env.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { formatModelsCommand } from "../models-view.ts";

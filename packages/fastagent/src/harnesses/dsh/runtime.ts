@@ -4,10 +4,9 @@
  * `@deepseek-ai/*`, shares `agent.sqlite` / PostgreSQL via `dsh_*` tables, forwards the sanitized
  * `processEnv` to sandboxed `bash` commands, and warns-and-skips `pi-durable`-only `src/extensions/*`.
  */
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Agent, ModelRef } from "@fastagent-sh/client/agent-api";
-import type { Credential, CredentialInfo, Models } from "@earendil-works/pi-ai";
+import type { Models } from "@earendil-works/pi-ai";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
@@ -16,9 +15,8 @@ import type { AgentDefinition } from "../../definition/definition.ts";
 import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
 import { agentPresentation, resolveCodingTools } from "../config.ts";
 import { mcpTools } from "../mcp.ts";
-import type { DurableCredentialStore } from "../models/credentials.ts";
 import { definitionSections, readCommands } from "../text.ts";
-import type { HarnessOpenContext, InstancePlace, OpenServingOptions, OpenedHarnessRuntime } from "../serving.ts";
+import type { HarnessOpenContext, InstancePlace, OpenServingOptions, ServingAgent } from "../serving.ts";
 
 const DSH_PACKAGE_NAME = ["@fastagent-sh", "harness-dsh"].join("/");
 
@@ -85,84 +83,6 @@ export async function loadDshModule(): Promise<DshModule> {
   }
 }
 
-function dshCredentialStore(store: DshKvBackend): DurableCredentialStore {
-  const NS = "auth";
-  const CRED_KEY = "credentials";
-  const DEVICE_KEY = "device_id";
-  const providerQueues = new Map<string, Promise<unknown>>();
-  let commitQueue: Promise<unknown> = Promise.resolve();
-  const perProvider = <T>(key: string, work: () => Promise<T>): Promise<T> => {
-    const prev = providerQueues.get(key) ?? Promise.resolve();
-    const run = prev.catch(() => undefined).then(work);
-    const tracked = run.finally(() => {
-      if (providerQueues.get(key) === tracked) providerQueues.delete(key);
-    });
-    providerQueues.set(key, tracked);
-    return run;
-  };
-  const serializedCommit = <T>(work: () => Promise<T>): Promise<T> => {
-    const run = commitQueue.catch(() => undefined).then(work);
-    commitQueue = run;
-    return run;
-  };
-  const readAll = async (): Promise<Record<string, Credential>> => {
-    const raw = await store.getKv?.(NS, CRED_KEY);
-    return raw === undefined ? {} : (JSON.parse(raw) as Record<string, Credential>);
-  };
-  const validCredential = (value: unknown): Credential | undefined => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-    const type = (value as { type?: unknown }).type;
-    return type === "oauth" || type === "api_key" ? (value as Credential) : undefined;
-  };
-
-  return {
-    async read(providerId) {
-      return validCredential((await readAll())[providerId]);
-    },
-    async list() {
-      const all = await readAll();
-      const out: CredentialInfo[] = [];
-      for (const [providerId, raw] of Object.entries(all)) {
-        const cred = validCredential(raw);
-        if (cred !== undefined) out.push({ providerId, type: cred.type });
-      }
-      return out;
-    },
-    modify(providerId, fn) {
-      return perProvider(providerId, async () => {
-        const current = validCredential((await readAll())[providerId]);
-        const next = await fn(current);
-        if (next === undefined) return current;
-        await serializedCommit(async () => {
-          const latest = await readAll();
-          latest[providerId] = next;
-          await store.putKv?.(NS, CRED_KEY, JSON.stringify(latest));
-        });
-        return next;
-      });
-    },
-    async delete(providerId) {
-      await perProvider(providerId, async () => {
-        await serializedCommit(async () => {
-          const latest = await readAll();
-          if (!(providerId in latest)) return;
-          delete latest[providerId];
-          await store.putKv?.(NS, CRED_KEY, JSON.stringify(latest));
-        });
-      });
-    },
-    getOrCreateDeviceId() {
-      return perProvider(DEVICE_KEY, async () => {
-        const existing = await store.getKv?.(NS, DEVICE_KEY);
-        if (existing) return existing;
-        const created = randomUUID();
-        await store.putKv?.(NS, DEVICE_KEY, created);
-        return created;
-      });
-    },
-  };
-}
-
 function openSqliteWithHelpfulLockError(dsh: DshModule, filePath: string): DshKvBackend & { close(): Promise<void> } {
   try {
     return dsh.openSqliteDshStore(filePath);
@@ -223,7 +143,7 @@ function renderSystemPrompt(
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
-export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshModule): Promise<OpenedHarnessRuntime> {
+export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshModule): Promise<ServingAgent> {
   const dsh = preloaded ?? (await loadDshModule());
   const {
     definition,
@@ -262,9 +182,6 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     ownedPgClose = opened.ownedPgClose;
     if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
   }
-
-  const durableCreds = chosen === "instance" ? dshCredentialStore(store) : undefined;
-  if (durableCreds !== undefined) ctx.setDurableCreds(durableCreds);
 
   const codingTools = resolveCodingTools(config.codingTools);
   const presentation = agentPresentation(definition);
@@ -324,8 +241,5 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
       })()),
   };
 
-  return {
-    agent: managedAgent,
-    ...(durableCreds === undefined ? {} : { durableCreds }),
-  };
+  return managedAgent;
 }

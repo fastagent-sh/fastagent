@@ -9,7 +9,7 @@ import type { Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
 import { type ModelEnvironment, modelEnvironment } from "../../harnesses/models/environment.ts";
 import { providerOf } from "../../harnesses/models/models.ts";
-import { definitionProviders } from "../../harnesses/pi-durable/open.ts";
+import { definitionProviders } from "../../harnesses/assembly.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import type { RemoteTargetFlags } from "../deployment.ts";
 import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";

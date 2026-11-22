@@ -3,7 +3,7 @@ import ignore from "ignore";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildDefinition, loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
+import { buildDefinition, loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { readSkills } from "../../../packages/fastagent/src/harnesses/text.ts";
 import { scaffoldAgent } from "../../../packages/fastagent/src/scaffold/init.ts";
 import { freshDir, exists } from "../../fixtures/init-fixtures.ts";
