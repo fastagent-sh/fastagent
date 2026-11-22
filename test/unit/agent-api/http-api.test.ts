@@ -1,5 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
+import {
+  createInvoker,
+  memoryConversationStore,
+  postgresConversationStore,
+  sqliteConversationStore,
+} from "../../../packages/fastagent/src/conversations.ts";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
 import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
@@ -182,6 +191,58 @@ describe("the Agent API over HTTP", () => {
         .invokeStream({ conversation: "ops", sessionId: created.id, content: "hi" })
         [Symbol.asyncIterator]();
       await expect(badIter.next()).rejects.toMatchObject({ code: "invalid_request" });
+    });
+
+    it("expires and bounds ephemeral idempotency bindings without evicting named conversations, honors AbortSignal, and maps transient PG failures to unavailable", async () => {
+      let clock = 1_000;
+      const mem = memoryConversationStore({ ephemeralTtlMs: 100, maxEphemeral: 2, now: () => clock });
+      await mem.set("c:ops", "s-ops", { ephemeral: false });
+      await mem.set("i:1", "s-1", { ephemeral: true });
+      await mem.set("i:2", "s-2", { ephemeral: true });
+      await mem.set("i:3", "s-3", { ephemeral: true });
+      expect(await mem.get("i:1")).toBeUndefined();
+      expect(await mem.get("i:2")).toBe("s-2");
+      expect(await mem.get("i:3")).toBe("s-3");
+      expect(await mem.get("c:ops")).toBe("s-ops");
+      clock += 200;
+      expect(await mem.get("i:2")).toBeUndefined();
+      expect(await mem.get("i:3")).toBeUndefined();
+      expect(await mem.get("c:ops")).toBe("s-ops");
+
+      const dir = mkdtempSync(join(tmpdir(), "fa-conv-ttl-"));
+      try {
+        const sql = sqliteConversationStore(join(dir, "conversations.sqlite"), {
+          ephemeralTtlMs: 100,
+          now: () => clock,
+        });
+        await sql.set("c:ops", "s-ops", { ephemeral: false });
+        await sql.set("i:old", "s-old", { ephemeral: true });
+        clock += 200;
+        await sql.set("i:new", "s-new", { ephemeral: true });
+        expect(await sql.get("i:old")).toBeUndefined();
+        expect(await sql.get("i:new")).toBe("s-new");
+        expect(await sql.get("c:ops")).toBe("s-ops");
+        await sql.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+
+      const invoker = createInvoker(agent, memoryConversationStore());
+      const beforeCount = (await agent.sessions.list()).data.length;
+      const aborted = new AbortController();
+      aborted.abort(new Error("caller left"));
+      await expect(
+        invoker.invoke({ conversation: "never", content: "hi" }, { signal: aborted.signal }),
+      ).rejects.toThrow("caller left");
+      const streamIter = invoker
+        .invokeStream({ conversation: "never", content: "hi" }, { signal: aborted.signal })
+        [Symbol.asyncIterator]();
+      await expect(streamIter.next()).rejects.toThrow("caller left");
+      expect((await agent.sessions.list()).data.length).toBe(beforeCount);
+
+      const brokenPg = postgresConversationStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
+      await expect(brokenPg.get("c:ops")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      await brokenPg.close();
     });
   });
 });

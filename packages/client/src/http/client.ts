@@ -193,13 +193,12 @@ function createTransport(url: string, options: ConnectOptions) {
     first: (wait: number | undefined) => Promise<Message>,
     waitOptions: WaitOptions | undefined,
     failureAfter: (message: Message) => (error: unknown) => AgentError = () => read,
-    firstCapSeconds: number = LIMITS.httpWaitSeconds,
   ) => {
     const wait = waitOptions?.wait === undefined ? undefined : checked(Wait, waitOptions.wait, "wait");
     const deadline = wait === undefined ? undefined : Date.now() + wait * 1000;
     const remaining = () => (deadline === undefined ? 0 : Math.max(0, deadline - Date.now()) / 1000);
-    const capped = (limit: number = LIMITS.httpWaitSeconds) => Math.min(remaining(), limit);
-    let message = await first(wait === undefined ? undefined : capped(firstCapSeconds));
+    const capped = () => Math.min(remaining(), LIMITS.httpWaitSeconds);
+    let message = await first(wait === undefined ? undefined : capped());
     while (!hasEnded(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
       message = await request(
@@ -437,7 +436,6 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
           ),
         invokeOptions,
         (message) => sent({ sessionId: message.sessionId, key: stage.key, messageId: message.id }),
-        LIMITS.invokeWaitSeconds,
       );
     },
     invokeStream: (invokeRequest, streamOptions) => {
