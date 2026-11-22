@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/client-agentcore",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "FastAgent Agent API client for Amazon Bedrock AgentCore: connectAgentCore, connectAgentCoreAuth, and remotes.json transport plugin. Zero server or Node-only dependencies.",
   "keywords": [
     "agent",
@@ -48,6 +48,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
-    "@fastagent-sh/client": "0.33.0"
+    "@fastagent-sh/client": "0.34.0"
   }
 }
