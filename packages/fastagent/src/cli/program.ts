@@ -311,7 +311,57 @@ const logout: CommandSpec = {
   },
 };
 
-const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, build, start, deploy];
+const remote: CommandSpec = {
+  name: "remote",
+  summary: "manage saved remote FastAgent endpoints (~/.config/fastagent/remotes.json)",
+  subcommands: [
+    {
+      name: "list",
+      summary: "list saved remotes (shared with --remote and @fastagent-sh/pi-remote)",
+      flags: [JSON_FLAG],
+      examples: [{ cmd: "fastagent remote list" }, { cmd: "fastagent remote list --json" }],
+      run: async (_args, f) => (await import("./commands/remote.ts")).runRemoteList({ json: f.json === true }),
+    },
+    {
+      name: "add",
+      summary: "save or update a named HTTP remote",
+      args: [
+        { name: "<name>", description: "remote name (e.g. prod)" },
+        { name: "<url>", description: "Agent API base URL (https://...)" },
+      ],
+      flags: [
+        { flags: "--key <key>", description: "API key or $ENV_VAR reference (prefer $ENV_VAR)" },
+        { flags: "--session <id>", description: "default session id for this remote" },
+        { flags: "--default", description: "make this the default remote" },
+      ],
+      examples: [
+        { cmd: "fastagent remote add prod https://agent.example.com --key '$PROD_AGENT_KEY'", note: "env ref" },
+      ],
+      run: async (args, f) =>
+        (await import("./commands/remote.ts")).runRemoteAdd(args[0] as string, args[1] as string, {
+          ...(typeof f.key === "string" ? { key: f.key } : {}),
+          ...(typeof f.session === "string" ? { session: f.session } : {}),
+          default: f.default === true,
+        }),
+    },
+    {
+      name: "remove",
+      summary: "remove a saved remote",
+      args: [{ name: "<name>", description: "remote name" }],
+      examples: [{ cmd: "fastagent remote remove prod" }],
+      run: async (args) => (await import("./commands/remote.ts")).runRemoteRemove(args[0] as string),
+    },
+    {
+      name: "default",
+      summary: "set the default saved remote",
+      args: [{ name: "<name>", description: "remote name" }],
+      examples: [{ cmd: "fastagent remote default prod" }],
+      run: async (args) => (await import("./commands/remote.ts")).runRemoteDefault(args[0] as string),
+    },
+  ],
+};
+
+const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, build, start, deploy, remote];
 
 /** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {

@@ -20,7 +20,7 @@ import {
   type TUI,
   matchesKey,
 } from "@earendil-works/pi-tui";
-import { AgentError, type Entry, type ModelRef, type ThinkingLevel } from "@fastagent-sh/client";
+import type { Entry, ModelRef, ThinkingLevel } from "@fastagent-sh/client";
 import { RemoteController, type RemoteViewState, buildSendContent } from "./controller.ts";
 import {
   type HttpRemoteConfig,
@@ -72,8 +72,7 @@ const PRIMARY_SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "title", description: "Rename the current remote session [title|--clear]" },
   { name: "fork", description: "Fork the current remote session" },
   { name: "model", description: "Select remote model [provider/modelId]" },
-  { name: "login", description: "Update remote server API key [remote]" },
-  { name: "logout", description: "Clear saved remote server API key [remote]" },
+  { name: "key", description: "Update or clear remote server API key [--clear] [remote]" },
   { name: "remotes", description: "Add, remove, or switch saved remotes" },
   { name: "off", description: "Disconnect and return to local Pi" },
 ];
@@ -90,8 +89,7 @@ const RESERVED_SUBCOMMANDS = new Set([
   "fork",
   "clone",
   "copy",
-  "login",
-  "logout",
+  "key",
   "model",
   "model-cycle",
   "thinking",
@@ -107,18 +105,6 @@ const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "med
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function withUpgradeHint(error: unknown, feature: string): string {
-  const base = errorText(error);
-  if (
-    error instanceof AgentError &&
-    ((error.code === "not_found" && base.includes("no such route")) ||
-      (error.code === "invalid_request" && base.includes("Nothing to update")))
-  ) {
-    return `${base} (the remote FastAgent server may need an upgrade to support ${feature})`;
-  }
-  return base;
 }
 
 function parseModelSpec(spec: string): ModelRef | undefined {
@@ -153,9 +139,9 @@ export function parseInterceptedRemoteBuiltin(raw: string): { command: string; a
     case "thinking":
       return { command: "thinking", args };
     case "login":
-      return { command: "login", args };
+      return { command: "provider-auth-hint", args: "login" };
     case "logout":
-      return { command: "logout", args };
+      return { command: "provider-auth-hint", args: "logout" };
     default:
       return undefined;
   }
@@ -744,8 +730,8 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       { label: "Compact session (/compact)", cmd: "compact" },
       { label: "Copy last assistant reply (/copy)", cmd: "copy" },
       { label: "Delete a session (/fa delete)", cmd: "delete" },
-      { label: "Update remote credentials (/login)", cmd: "login" },
-      { label: "Clear remote credentials (/logout)", cmd: "logout" },
+      { label: "Update remote server API key (/fa key)", cmd: "key" },
+      { label: "Clear remote server API key (/fa key --clear)", cmd: "key-clear" },
       { label: "Switch / manage remotes (/fa remotes)", cmd: "remotes" },
       { label: "Disconnect to local Pi (/fa off)", cmd: "off" },
     ];
@@ -942,7 +928,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           const updated = await controller.updateSession({ title: nextTitle });
           ctx.ui.notify(updated.title ? `Session title set to "${updated.title}"` : "Session title cleared", "info");
         } catch (error) {
-          ctx.ui.notify(`Failed to update title: ${withUpgradeHint(error, "session titles")}`, "error");
+          ctx.ui.notify(`Failed to update title: ${errorText(error)}`, "error");
         }
         return;
       }
@@ -984,7 +970,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           if (deletingCurrent) activeRemoteConfig = undefined;
           ctx.ui.notify(`Deleted remote session ${shortId(targetId)}`, "info");
         } catch (error) {
-          ctx.ui.notify(`Failed to delete session: ${withUpgradeHint(error, "session deletion")}`, "error");
+          ctx.ui.notify(`Failed to delete session: ${errorText(error)}`, "error");
         }
         return;
       }
@@ -1033,30 +1019,77 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         }
         return;
       }
-      case "login": {
+      case "provider-auth-hint": {
+        const verb = rest[0] === "logout" ? "logout" : "login";
+        const remoteName = controller.getState().remoteName;
+        const target =
+          remoteName === undefined
+            ? "--url <url>"
+            : isHttpUrl(remoteName)
+              ? `--url ${remoteName}`
+              : `--remote ${remoteName}`;
+        ctx.ui.notify(
+          `To ${verb} a model provider on the remote FastAgent server, run: fastagent ${verb} ${target}. ` +
+            "To update or clear the FastAgent server API key in remotes.json, run: /fa key [--clear].",
+          "info",
+        );
+        return;
+      }
+      case "key":
+      case "key-clear": {
+        const clear = sub === "key-clear" || rest.includes("--clear");
+        const argsWithoutFlag = rest.filter((token) => token !== "--clear");
         const loaded = loadConfigSafe(ctx);
         if (!loaded) return;
-        const targetName = rest[0]?.trim() || controller.getState().remoteName;
+        const targetName = argsWithoutFlag[0]?.trim() || controller.getState().remoteName;
         if (!targetName) {
-          ctx.ui.notify("No remote connected or specified. Usage: /fa login <remote>", "warning");
+          ctx.ui.notify("No remote connected or specified. Usage: /fa key [--clear] <remote>", "warning");
           return;
         }
         const savedRemote = loaded.config.remotes[targetName];
-        const currentRemote =
-          savedRemote ?? (targetName === controller.getState().remoteName ? activeRemoteConfig : undefined);
+        const isCurrent = controller.isConnected() && controller.getState().remoteName === targetName;
+        const currentRemote = savedRemote ?? (isCurrent ? activeRemoteConfig : undefined);
         if (!currentRemote) {
           ctx.ui.notify(`Unknown remote "${targetName}". Use /fa remotes add to save one first.`, "error");
           return;
         }
         if (!isHttpRemote(currentRemote)) {
+          if (clear && isCurrent) {
+            activeRemoteConfig = undefined;
+            controller.disconnect();
+          }
           ctx.ui.notify(
             `Remote "${targetName}" uses the "${currentRemote.type}" transport (no saved HTTP API key). Manage credentials via that platform's CLI.`,
             "info",
           );
           return;
         }
+        if (clear) {
+          let clearedSaved = false;
+          if (savedRemote && isHttpRemote(savedRemote) && savedRemote.apiKey !== undefined) {
+            const { apiKey: _dropped, ...withoutKey } = savedRemote;
+            try {
+              saveRemote(targetName, withoutKey);
+              clearedSaved = true;
+            } catch (error) {
+              ctx.ui.notify(`Failed to clear saved key: ${errorText(error)}`, "error");
+              return;
+            }
+          }
+          if (isCurrent) {
+            activeRemoteConfig = undefined;
+            controller.disconnect();
+          }
+          ctx.ui.notify(
+            clearedSaved
+              ? `Cleared saved server API key for "${targetName}"${isCurrent ? " and disconnected" : ""}`
+              : `No stored server API key for "${targetName}" (env FASTAGENT_API_KEY applies)${isCurrent ? "; disconnected" : ""}`,
+            "info",
+          );
+          return;
+        }
         const entered = await ctx.ui.input(
-          `API key for remote "${targetName}"`,
+          `Server API key for remote "${targetName}"`,
           currentRemote.apiKey?.startsWith("$")
             ? `Current: ${currentRemote.apiKey} — enter new $ENV_VAR or raw key`
             : "$FASTAGENT_API_KEY or raw API key",
@@ -1064,7 +1097,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         if (entered === undefined) return;
         const nextKey = entered.trim();
         if (!nextKey) {
-          ctx.ui.notify("API key unchanged (use /logout to clear a stored key)", "info");
+          ctx.ui.notify("Server API key unchanged (use /fa key --clear to clear a stored key)", "info");
           return;
         }
         const updatedRemote: HttpRemoteConfig = { ...currentRemote, apiKey: nextKey };
@@ -1074,7 +1107,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           if (savedRemote) {
             saveRemote(targetName, updatedRemote);
           }
-          if (controller.isConnected() && controller.getState().remoteName === targetName) {
+          if (isCurrent) {
             const currentState = controller.getState();
             const currentSessionId = currentState.session?.id;
             await connectResolved(ctx, targetName, updatedRemote, {
@@ -1085,9 +1118,9 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
               allowHandoff: false,
               showBanner: false,
             });
-            ctx.ui.notify(`Verified credentials and reconnected to "${targetName}"`, "info");
+            ctx.ui.notify(`Verified server API key and reconnected to "${targetName}"`, "info");
           } else {
-            ctx.ui.notify(`Verified and updated API key for "${targetName}" in ${loaded.path}`, "info");
+            ctx.ui.notify(`Verified and updated server API key for "${targetName}" in ${loaded.path}`, "info");
           }
         } catch (error) {
           ctx.ui.notify(
@@ -1095,62 +1128,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
             "error",
           );
         }
-        return;
-      }
-      case "logout": {
-        const loaded = loadConfigSafe(ctx);
-        if (!loaded) return;
-        const targetName = rest[0]?.trim() || controller.getState().remoteName;
-        if (!targetName) {
-          ctx.ui.notify("No remote connected or specified. Usage: /fa logout <remote>", "warning");
-          return;
-        }
-        const savedRemote = loaded.config.remotes[targetName];
-        const isCurrent = controller.isConnected() && controller.getState().remoteName === targetName;
-        if (!savedRemote && !isCurrent) {
-          ctx.ui.notify(`Unknown remote "${targetName}"`, "error");
-          return;
-        }
-        const nonHttpType =
-          savedRemote && savedRemote.type !== "http"
-            ? savedRemote.type
-            : !savedRemote && activeRemoteConfig && activeRemoteConfig.type !== "http"
-              ? activeRemoteConfig.type
-              : undefined;
-        if (nonHttpType !== undefined) {
-          if (isCurrent) {
-            activeRemoteConfig = undefined;
-            controller.disconnect();
-          }
-          ctx.ui.notify(
-            isCurrent
-              ? `Disconnected from "${targetName}" (${nonHttpType} transport). Credentials are managed by that platform's CLI.`
-              : `Remote "${targetName}" uses the "${nonHttpType}" transport; credentials are managed by that platform's CLI.`,
-            "info",
-          );
-          return;
-        }
-        let clearedSaved = false;
-        if (savedRemote && isHttpRemote(savedRemote) && savedRemote.apiKey !== undefined) {
-          const { apiKey: _dropped, ...withoutKey } = savedRemote;
-          try {
-            saveRemote(targetName, withoutKey);
-            clearedSaved = true;
-          } catch (error) {
-            ctx.ui.notify(`Failed to clear saved key: ${errorText(error)}`, "error");
-            return;
-          }
-        }
-        if (isCurrent) {
-          activeRemoteConfig = undefined;
-          controller.disconnect();
-        }
-        ctx.ui.notify(
-          clearedSaved
-            ? `Cleared saved API key for "${targetName}"${isCurrent ? " and disconnected" : ""}`
-            : `No stored API key for "${targetName}" (env FASTAGENT_API_KEY applies)${isCurrent ? "; disconnected" : ""}`,
-          "info",
-        );
         return;
       }
       case "model-cycle": {
@@ -1506,7 +1483,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
         return items.length > 0 ? items : null;
       }
       const [sub, arg = ""] = trimmed.split(/\s+/, 2);
-      if (sub === "connect" || sub === "remove" || sub === "login" || sub === "logout") {
+      if (sub === "connect" || sub === "remove" || sub === "key") {
         try {
           const { config } = loadRemotes();
           const items = Object.keys(config.remotes)

@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
 import {
   type ExtensionRemoteConfig,
@@ -19,6 +19,7 @@ import {
   parseRemoteEntry,
   parseRemotesJson,
   removeRemoteConfig,
+  resolveRemotesPath,
   upsertRemoteConfig,
 } from "@fastagent-sh/client/remotes";
 
@@ -31,11 +32,7 @@ export interface LoadRemotesOptions {
 }
 
 export function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.FASTAGENT_REMOTES_PATH?.trim();
-  if (override) return override;
-  const xdg = env.XDG_CONFIG_HOME?.trim();
-  const base = xdg || join(homedir(), ".config");
-  return join(base, "fastagent", "remotes.json");
+  return resolveRemotesPath(env, homedir());
 }
 
 export function loadRemotes(options: LoadRemotesOptions = {}): { path: string; config: RemotesFile } {

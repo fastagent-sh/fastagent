@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, login, logout, dev, invoke, info, models, build, start and deploy, with their flags, and the commands an extension adds."
+description: "The fastagent CLI reference: init, login, logout, dev, invoke, info, models, build, start, deploy and remote, with their flags, and the commands an extension adds."
 status: current
 ---
 
@@ -39,6 +39,7 @@ subdirectory, a command names the agent's root and stops.
 | `start` | serve the build |
 | `deploy init <target>` | write container and platform files (`docker`, `compose`, `fly`, `railway`, or an installed extension such as `agentcore`) ([Deploy](deploy.md)) |
 | `deploy check` | verify the definition loads and the build context leaks no local secrets or state (`--json`) |
+| `remote list\|add\|remove\|default` | manage saved remote endpoints in `~/.config/fastagent/remotes.json` (shared with `--remote` and `@fastagent-sh/pi-remote`) |
 
 An extension the agent installs adds a `deploy init <target>` target and commands of its own:
 `npm i @fastagent-sh/agentcore` adds `fastagent deploy init agentcore` and `fastagent agentcore`

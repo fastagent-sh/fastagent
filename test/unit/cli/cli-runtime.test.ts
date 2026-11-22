@@ -296,6 +296,65 @@ registerHooks({
   });
 });
 
+describe("cli: remote", () => {
+  it("adds, lists (redacting literal keys), sets default, invokes via --remote, and removes saved remotes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-cli-remote-"));
+    const remotesPath = join(dir, "remotes.json");
+    const env = { ...process.env, FASTAGENT_REMOTES_PATH: remotesPath };
+
+    const empty = await runInProcess(["remote", "list", "--json"], dir, env);
+    expect(empty.code, empty.stderr).toBe(0);
+    expect(JSON.parse(empty.stdout)).toEqual({ path: remotesPath, remotes: {} });
+
+    const added1 = await runInProcess(
+      ["remote", "add", "prod", "https://prod.example.com", "--key", "$raw-secret-123"],
+      dir,
+      env,
+    );
+    expect(added1.code, added1.stderr).toBe(0);
+
+    const added2 = await runInProcess(
+      ["remote", "add", "staging", "https://staging.example.com", "--key", "$STAGING_KEY", "--default"],
+      dir,
+      env,
+    );
+    expect(added2.code, added2.stderr).toBe(0);
+
+    const listedJson = await runInProcess(["remote", "list", "--json"], dir, env);
+    expect(listedJson.code, listedJson.stderr).toBe(0);
+    expect(listedJson.stdout).not.toContain("$raw-secret-123");
+    expect(JSON.parse(listedJson.stdout)).toEqual({
+      path: remotesPath,
+      default: "staging",
+      remotes: {
+        prod: { type: "http", url: "https://prod.example.com", apiKey: "***" },
+        staging: { type: "http", url: "https://staging.example.com", apiKey: "$STAGING_KEY" },
+      },
+    });
+
+    const listedText = await runInProcess(["remote", "list"], dir, env);
+    expect(listedText.code, listedText.stderr).toBe(0);
+    expect(listedText.stdout).not.toContain("$raw-secret-123");
+    expect(listedText.stdout).toContain("* staging");
+
+    const setDef = await runInProcess(["remote", "default", "prod"], dir, env);
+    expect(setDef.code, setDef.stderr).toBe(0);
+    expect(JSON.parse((await runInProcess(["remote", "list", "--json"], dir, env)).stdout).default).toBe("prod");
+
+    const badDef = await runInProcess(["remote", "default", "missing"], dir, env);
+    expect([badDef.code, badDef.stderr]).toEqual([2, expect.stringContaining('Unknown remote "missing"')]);
+
+    const removed = await runInProcess(["remote", "remove", "staging"], dir, env);
+    expect(removed.code, removed.stderr).toBe(0);
+    expect(
+      Object.keys(JSON.parse((await runInProcess(["remote", "list", "--json"], dir, env)).stdout).remotes),
+    ).toEqual(["prod"]);
+
+    const badRemove = await runInProcess(["remote", "remove", "staging"], dir, env);
+    expect([badRemove.code, badRemove.stderr]).toEqual([2, expect.stringContaining('unknown remote "staging"')]);
+  });
+});
+
 describe("cli: dev", () => {
   it("refuses with exit 2 when no model resolves and --no-input is set", async () => {
     const dir = await agentWorkspace("fa-cli-dev-");
