@@ -147,12 +147,14 @@ export async function resolveRemoteTarget(
 
   const cwd = resolve(dirArg);
   const loadModule = async (specifier: string): Promise<unknown> => {
+    let resolved: string | undefined;
     try {
-      const resolved = createRequire(join(cwd, "package.json")).resolve(specifier);
-      return await import(pathToFileURL(resolved).href);
-    } catch {
-      return await import(specifier);
+      resolved = createRequire(join(cwd, "package.json")).resolve(specifier);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "MODULE_NOT_FOUND" && code !== "ERR_MODULE_NOT_FOUND") throw error;
     }
+    return resolved !== undefined ? await import(pathToFileURL(resolved).href) : await import(specifier);
   };
   try {
     return await connectExtensionRemote(remoteName, entry, {

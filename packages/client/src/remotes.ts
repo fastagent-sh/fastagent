@@ -208,10 +208,14 @@ export async function connectExtensionRemote(
   try {
     mod = (await load(specifier)) as Partial<RemoteTransportModule>;
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`Remote "${name}" uses transport "${remote.type}"; install ${pkg} to connect (${msg})`, {
-      cause: error,
-    });
+    const code = (error as { code?: unknown })?.code;
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Remote "${name}" uses transport "${remote.type}"; install ${pkg} to connect (${msg})`, {
+        cause: error,
+      });
+    }
+    throw error;
   }
   if (typeof mod.connectRemote !== "function") {
     throw new Error(`Transport package ${specifier} does not export connectRemote()`);
