@@ -24,8 +24,9 @@ jobs:
         run: |
           OWNER="${REPO%%/*}"
           NAME="${REPO##*/}"
+          BASE_URL="${FASTAGENT_URL%/}"
           # Same PR reuses one conversation across pushes; head SHA makes retries idempotent.
-          RESPONSE=$(curl -fsS -X POST "${FASTAGENT_URL}/v1/invoke" \
+          RESPONSE=$(curl -fsS -X POST "${BASE_URL}/v1/invoke" \
             -H "Authorization: Bearer ${FASTAGENT_API_KEY}" \
             -H "Content-Type: application/json" \
             -H "Idempotency-Key: pr-${PR_NUMBER}-${HEAD_SHA}" \
@@ -39,4 +40,4 @@ jobs:
             echo "Agent did not complete: $RESPONSE" >&2
             exit 1
           fi
-          gh pr comment "$PR_NUMBER" --body "$REVIEW"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$REVIEW"

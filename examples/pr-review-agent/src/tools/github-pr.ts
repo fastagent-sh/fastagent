@@ -24,9 +24,10 @@ export default needs(
           ...(GITHUB_TOKEN ? { authorization: `Bearer ${GITHUB_TOKEN}` } : {}),
         };
 
+        const signal = AbortSignal.timeout(15_000);
         const [metaRes, diffRes] = await Promise.all([
-          fetch(base, { headers: { ...authHeaders, accept: "application/vnd.github+json" } }),
-          fetch(base, { headers: { ...authHeaders, accept: "application/vnd.github.v3.diff" } }),
+          fetch(base, { headers: { ...authHeaders, accept: "application/vnd.github+json" }, signal }),
+          fetch(base, { headers: { ...authHeaders, accept: "application/vnd.github.v3.diff" }, signal }),
         ]);
 
         if (!metaRes.ok) {
@@ -43,7 +44,16 @@ export default needs(
           additions?: number;
           deletions?: number;
         };
-        const rawDiff = diffRes.ok ? await diffRes.text() : "";
+        if (!diffRes.ok) {
+          return JSON.stringify({
+            title: pr.title,
+            state: pr.state,
+            headSha: pr.head?.sha,
+            changedFiles: pr.changed_files,
+            error: `GitHub diff request returned HTTP ${diffRes.status} (diff unavailable)`,
+          });
+        }
+        const rawDiff = await diffRes.text();
         const truncated = rawDiff.length > MAX_DIFF_CHARS;
 
         return JSON.stringify({

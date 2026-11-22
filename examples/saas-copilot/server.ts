@@ -43,10 +43,17 @@ function getTenantAgent(tenantId: string): Promise<LocalAgent> {
       },
       env: baseEnv(process.env),
       ...(process.env.FASTAGENT_MODEL ? { model: process.env.FASTAGENT_MODEL } : {}),
-    }).catch((error) => {
-      tenants.delete(tenantId);
-      throw error;
-    });
+    })
+      .then((agent) => {
+        void agent.closed?.then(() => {
+          if (tenants.get(tenantId) === pending) tenants.delete(tenantId);
+        });
+        return agent;
+      })
+      .catch((error) => {
+        if (tenants.get(tenantId) === pending) tenants.delete(tenantId);
+        throw error;
+      });
     tenants.set(tenantId, pending);
   }
   return pending;
@@ -100,14 +107,16 @@ app.get("/api/sessions/:sessionId/events", async (c) => {
   const agent = await getTenantAgent(tenantId);
   const after = c.req.query("after") ?? c.req.header("last-event-id") ?? undefined;
   const controller = new AbortController();
+  const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
   const iterator = agent.sessions
-    .events(c.req.param("sessionId"), { ...(after ? { after } : {}), signal: controller.signal })
+    .events(c.req.param("sessionId"), { ...(after ? { after } : {}), signal })
     [Symbol.asyncIterator]();
 
   let first: IteratorResult<SessionEvent>;
   try {
     first = await iterator.next();
   } catch (error) {
+    controller.abort();
     if (error instanceof AgentError) {
       return c.json({ error: { code: error.code, message: error.message } }, error.code === "not_found" ? 404 : 409);
     }
@@ -116,13 +125,17 @@ app.get("/api/sessions/:sessionId/events", async (c) => {
 
   return streamSSE(c, async (stream) => {
     stream.onAbort(() => controller.abort());
-    for (let next = first; !next.done; next = await iterator.next()) {
-      const event = next.value;
-      await stream.writeSSE({
-        event: event.type,
-        data: JSON.stringify(event),
-        ...(event.type === "entry" ? { id: event.entry.id } : {}),
-      });
+    try {
+      for (let next = first; !next.done; next = await iterator.next()) {
+        const event = next.value;
+        await stream.writeSSE({
+          event: event.type,
+          data: JSON.stringify(event),
+          ...(event.type === "entry" ? { id: event.entry.id } : {}),
+        });
+      }
+    } finally {
+      controller.abort();
     }
   });
 });
