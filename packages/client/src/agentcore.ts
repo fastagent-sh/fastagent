@@ -13,7 +13,7 @@ import {
   InvokeAgentRuntimeCommand,
   type InvokeAgentRuntimeCommandOutput,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { type Agent, type AuthApi, type ErrorCode, agentError, errorData } from "./agent-api.ts";
+import { type AuthApi, type ErrorCode, type RemoteAgent, agentError, errorData } from "./agent-api.ts";
 import {
   type EnvelopedResponse,
   SESSION_ID_PATTERN,
@@ -44,6 +44,8 @@ export type {
   EntriesOptions,
   Entry,
   ErrorCode,
+  InvokeApi,
+  InvokeRequest,
   Json,
   ListOptions,
   Message,
@@ -54,6 +56,7 @@ export type {
   ModelRef,
   Page,
   QueuedMessage,
+  RemoteAgent,
   SendRequest,
   Session,
   SessionChanges,
@@ -185,7 +188,7 @@ function agentCoreTransport({ runtimeArn, sessionId, qualifier }: AgentCoreConne
  * The Agent of the session `sessionId` on the runtime `runtimeArn`.
  * @public
  */
-export function connectAgentCore(connection: AgentCoreConnection): Agent {
+export function connectAgentCore(connection: AgentCoreConnection): RemoteAgent {
   const { url, fetch } = agentCoreTransport(connection);
   return connectAgent(url, { fetch });
 }

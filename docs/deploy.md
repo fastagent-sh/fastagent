@@ -111,6 +111,11 @@ fastagent invoke --url https://<your-host> "hello"
 Rotate a key with `FASTAGENT_API_KEY=new,old`, move the callers, then drop `old`. Without a key the API is not
 served.
 
+For scheduled or event-driven work on scale-to-zero hosts (Cloud Scheduler, EventBridge, GitHub Actions, Railway Cron,
+webhooks), send a single `POST /v1/invoke` with an `Idempotency-Key`, an optional `conversation` name, and `wait`
+(up to 600 s) or `"stream": true` so the host wakes the container, holds it awake for the turn, and suspends it again
+once finished.
+
 ## What ships
 
 The image holds the agent directory at `/app`. It installs `git` when the agent is a repository. The volume holds what

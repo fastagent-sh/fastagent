@@ -311,6 +311,8 @@ export type EntriesOptions = typeof EntriesOptions.Type;
 
 export const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
 
+const ConversationName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
+
 export const SendRequest = Schema.Struct({
   sessionId: Schema.String,
   /** A string is one text part. */
@@ -335,6 +337,26 @@ export const MessageKey = Schema.Union([
   Schema.Struct({ sessionId: Schema.String, idempotencyKey: IdempotencyKey }),
 ]);
 export type MessageKey = typeof MessageKey.Type;
+
+export const InvokeRequest = Schema.Struct({
+  /** Text or content parts; supports `/<command>` templates from `prompts/` and `skills/`. */
+  content: SendRequest.fields.content,
+  /**
+   * Caller-chosen conversation name (e.g. `"daily-digest"`, `"slack:C123:456"`). Reuses its mapped session, or
+   * creates one titled with this name if absent or previously deleted. Mutually exclusive with `sessionId`.
+   */
+  conversation: Schema.optional(ConversationName),
+  /** Existing session id to send into (strict: refuses `not_found` if absent). Mutually exclusive with `conversation`. */
+  sessionId: Schema.optional(Schema.String),
+  /** Settings applied when creating a session, or updating an existing session when explicitly given. */
+  session: Schema.optional(SessionSettings),
+  /** Caller key preventing duplicate sessions (when ephemeral) and duplicate messages on retry. */
+  idempotencyKey: Schema.optional(IdempotencyKey),
+  metadata: Schema.optional(Metadata),
+  /** What the message is when the session is busy with another. Default: "queue". */
+  whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
+});
+export type InvokeRequest = typeof InvokeRequest.Type;
 
 export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;
@@ -365,6 +387,15 @@ export interface Agent {
     get(key: MessageKey, options?: WaitOptions): Promise<Message>;
   };
 }
+
+/** Single-call invocation over an Agent, resolving or creating a session by `conversation` or ephemeral key. */
+export interface InvokeApi {
+  invoke(request: InvokeRequest, options?: WaitOptions): Promise<Message>;
+  invokeStream(request: InvokeRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
+}
+
+/** An Agent client that also exposes single-call `invoke` / `invokeStream`. */
+export interface RemoteAgent extends Agent, InvokeApi {}
 
 export const AuthMethod = Schema.Literals(["oauth", "api_key"]);
 export type AuthMethod = typeof AuthMethod.Type;
@@ -475,6 +506,8 @@ export const LIMITS = {
   pageBytes: 4 << 20,
   /** The longest one HTTP request waits for a message; `connectAgent` asks again until its Caller's `wait` is met. */
   httpWaitSeconds: 60,
+  /** The longest a single `POST /v1/invoke` request may wait for a turn to finish (for scale-to-zero callers). */
+  invokeWaitSeconds: 600,
 } as const;
 
 const RETRYABLE_CODES: ReadonlySet<string> = new Set<ErrorCode>(["busy", "unavailable"]);

@@ -185,7 +185,7 @@ export async function serveAgentCore(
 ): Promise<{ close(): Promise<void> }> {
   const handler = agentCoreHandler(definition, options);
   const scope = Scope.makeUnsafe();
-  const server = NodeHttpServer.layer(() => createServer(), {
+  const server = NodeHttpServer.layer(() => createServer({ requestTimeout: 0, headersTimeout: 60_000 }), {
     port: PORT,
     host: "0.0.0.0",
     gracefulShutdownTimeout: "500 millis",

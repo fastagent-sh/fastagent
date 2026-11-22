@@ -32,7 +32,7 @@ subdirectory, a command names the agent's root and stops.
 | `login [provider]` | sign in to a model provider; `--check` reports whether one is ready (exit 0, 1 or 2) |
 | `logout [provider]` | remove a credential `login` stored |
 | `dev` | serve locally, restarting on code edits |
-| `invoke [message]` | send one message (positional, `-`, or piped `stdin`) and print the answer (`--url` for a deployment) |
+| `invoke [message]` | send one message (positional, `-`, or piped `stdin`) and print the answer (`--session`, `--conversation`, `--url`) |
 | `info` | show what the agent loads, without serving |
 | `models [search]` | list model specs |
 | `build` | compile the agent into `dist/` |

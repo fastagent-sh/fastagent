@@ -73,7 +73,7 @@ async function serverLayer(options: {
   host?: string;
 }): Promise<Layer.Layer<HttpServer.HttpServer, HttpServerError.ServeError>> {
   const { layer } = await import("@effect/platform-node/NodeHttpServer");
-  return layer(() => createServer(), {
+  return layer(() => createServer({ requestTimeout: 0, headersTimeout: 60_000 }), {
     port: options.port,
     ...(options.host === undefined ? {} : { host: options.host }),
     gracefulShutdownTimeout: GRACEFUL_SHUTDOWN,

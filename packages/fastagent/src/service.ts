@@ -5,7 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import type { Agent, AuthApi } from "@fastagent-sh/client/agent-api";
+import type { Agent, AuthApi, InvokeApi } from "@fastagent-sh/client/agent-api";
 import { type Handler, serveHandler, totalFetch } from "./http/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -105,9 +105,10 @@ export interface ServeOptions {
   apiKeys?: readonly string[];
 }
 
-/** What the assembly serves: the opened agent and its optional auth manager. */
+/** What the assembly serves: the opened agent, its invoker, and its optional auth manager. */
 interface ServableAgent {
   agent: Agent;
+  invoker?: InvokeApi;
   auth?: AuthApi;
 }
 
@@ -125,10 +126,11 @@ function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
 
 /** The assembly itself: `/health` and the Agent API with a key, composed into one handler. */
 export async function serveAgent(opened: ServableAgent, options: ServeOptions = {}): Promise<ServedAgent> {
-  const { agent, auth } = opened;
+  const { agent, invoker, auth } = opened;
   const api = options.apiKeys?.length
     ? apiHandler(agent, {
         keys: options.apiKeys,
+        ...(invoker === undefined ? {} : { invoker }),
         ...(auth === undefined ? {} : { auth }),
       })
     : undefined;

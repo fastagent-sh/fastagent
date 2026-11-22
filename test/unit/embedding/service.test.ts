@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { type ServingAgent, openServing } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { openSource } from "../../harnesses/open-source.ts";
+import { fauxAgent } from "../../doubles/cli-run.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
 import { connectAgent } from "../../../packages/client/src/http/client.ts";
 import { type ServeOptions, serveAgent } from "../../../packages/fastagent/src/service.ts";
@@ -98,5 +99,18 @@ describe("openAgent: an agent directory opened in an app", () => {
       "the Agent API needs at least one key, and no key may be empty",
     );
     await unset.close();
+  });
+
+  it("persists named conversations across restarts on SQLite via openAgent().invoke()", async () => {
+    const dir = await fauxAgent("fa-emb-conv-");
+    const first = await openSource(dir);
+    const msg1 = await first.invoke({ conversation: "daily-digest", content: "run 1" }, { wait: 15 });
+    expect(msg1).toMatchObject({ status: "completed", answer: { text: "seen 1" } });
+    await first.close();
+
+    const second = await openSource(dir);
+    const msg2 = await second.invoke({ conversation: "daily-digest", content: "run 2" }, { wait: 15 });
+    expect(msg2).toMatchObject({ status: "completed", sessionId: msg1.sessionId, answer: { text: "seen 2" } });
+    await second.close();
   });
 });
