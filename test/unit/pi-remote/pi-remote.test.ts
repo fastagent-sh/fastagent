@@ -865,8 +865,8 @@ describe("rendering and native builtin interception", () => {
     expect(parseInterceptedRemoteBuiltin("/resume")).toEqual({ command: "sessions", args: "" });
     expect(parseInterceptedRemoteBuiltin("/fork")).toEqual({ command: "fork", args: "" });
     expect(parseInterceptedRemoteBuiltin("/clone")).toEqual({ command: "fork", args: "" });
-    expect(parseInterceptedRemoteBuiltin("/login ops")).toEqual({ command: "login", args: "ops" });
-    expect(parseInterceptedRemoteBuiltin("/logout")).toEqual({ command: "logout", args: "" });
+    expect(parseInterceptedRemoteBuiltin("/login ops")).toEqual({ command: "provider-auth-hint", args: "login" });
+    expect(parseInterceptedRemoteBuiltin("/logout")).toEqual({ command: "provider-auth-hint", args: "logout" });
     expect(parseInterceptedRemoteBuiltin("/compact")).toBeUndefined();
     expect(parseInterceptedRemoteBuiltin("/quit")).toBeUndefined();
     expect(parseInterceptedRemoteBuiltin("/fa off")).toBeUndefined();
@@ -1168,22 +1168,22 @@ describe("Pi extension host integration", () => {
       await fa.handler("thinking-cycle", mock.ctx);
       expect(mock.notifications.at(-1)?.message).toContain("Remote thinking level: high");
 
-      // /fa login verifies the new API key before saving; invalid keys keep existing config intact.
+      // /fa key verifies the new server API key before saving; invalid keys keep existing config intact.
       mock.ctx.ui.input = async () => "wrong-key";
-      await fa.handler("login ops", mock.ctx);
+      await fa.handler("key ops", mock.ctx);
       expect(mock.notifications.at(-1)?.type).toBe("error");
       expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("test-key");
 
-      const entriesBeforeLogin = mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length;
+      const entriesBeforeKey = mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length;
       mock.ctx.ui.input = async () => "rotated-key";
-      await fa.handler("login ops", mock.ctx);
-      await waitFor(() => mock.notifications.some((n) => n.message.includes("Verified credentials")));
+      await fa.handler("key ops", mock.ctx);
+      await waitFor(() => mock.notifications.some((n) => n.message.includes("Verified server API key")));
       expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBe("rotated-key");
-      // Reconnecting the same session after /login must not duplicate already-rendered remote entries.
-      expect(mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length).toBe(entriesBeforeLogin);
+      // Reconnecting the same session after /fa key must not duplicate already-rendered remote entries.
+      expect(mock.appendedEntries.filter((e) => e.customType === REMOTE_ENTRY_TYPE).length).toBe(entriesBeforeKey);
 
-      // /fa logout clears the stored API key and disconnects; restore test-key for subsequent assertions.
-      await fa.handler("logout ops", mock.ctx);
+      // /fa key --clear clears the stored server API key and disconnects; restore test-key for subsequent assertions.
+      await fa.handler("key --clear ops", mock.ctx);
       expect((loadRemotes({ path: cfgPath }).config.remotes.ops as any).apiKey).toBeUndefined();
       expect(mock.getFooter()).toBeUndefined();
       saveRemote("ops", { type: "http", url: `http://127.0.0.1:${port}`, apiKey: "test-key" }, { path: cfgPath });

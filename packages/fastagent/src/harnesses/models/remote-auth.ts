@@ -178,8 +178,8 @@ export function createAuthManager(options: {
       if (flow.settledAt !== undefined) {
         if (now - flow.settledAt >= SETTLED_FLOW_TTL_MS) flows.delete(id);
       } else if (now - flow.startedAt >= activeFlowTtlMs) {
+        // cancelFlow stamps settledAt; keep the settled record until SETTLED_FLOW_TTL_MS so getLogin() observes "canceled".
         cancelFlow(flow, "login flow timed out", now);
-        flows.delete(id);
       }
     }
   };

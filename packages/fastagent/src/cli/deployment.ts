@@ -14,6 +14,7 @@ import {
   expandRemoteEnvRef,
   isHttpRemote,
   parseRemotesJson,
+  resolveRemotesPath,
 } from "@fastagent-sh/client/remotes";
 import { applyEnvValues, enterAgentEnv } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
@@ -28,12 +29,8 @@ export interface RemoteTargetFlags {
   remote?: string;
 }
 
-function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.FASTAGENT_REMOTES_PATH?.trim();
-  if (override) return override;
-  const xdg = env.XDG_CONFIG_HOME?.trim();
-  const base = xdg || join(homedir(), ".config");
-  return join(base, "fastagent", "remotes.json");
+export function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveRemotesPath(env, homedir());
 }
 
 function rejectPlacedInstance(instance: InstanceFlags | undefined, flagName: string): string | undefined {

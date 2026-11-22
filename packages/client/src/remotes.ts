@@ -57,6 +57,15 @@ export function isHttpRemote(remote: RemoteConfig): remote is HttpRemoteConfig {
   return remote.type === "http";
 }
 
+/** Resolve the path to `remotes.json` from `FASTAGENT_REMOTES_PATH`, `XDG_CONFIG_HOME`, or `homeDir`. */
+export function resolveRemotesPath(env: Readonly<Record<string, string | undefined>>, homeDir: string): string {
+  const override = env.FASTAGENT_REMOTES_PATH?.trim();
+  if (override) return override;
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  const base = (xdg || `${homeDir.replace(/[\\/]+$/, "")}/.config`).replace(/[\\/]+$/, "");
+  return `${base}/fastagent/remotes.json`;
+}
+
 /** The package specifier that provides the transport for non-HTTP remote `type`. */
 function remoteTransportSpecifier(type: string): string {
   return `@fastagent-sh/client-${type}`;
@@ -170,6 +179,16 @@ export function upsertRemoteConfig(
       [trimmed]: validated,
     },
   };
+}
+
+export function setDefaultRemoteConfig(config: RemotesFile, name: string): RemotesFile {
+  const trimmed = name.trim();
+  if (!(trimmed in config.remotes)) {
+    const names = Object.keys(config.remotes);
+    const available = names.length > 0 ? ` (configured: ${names.join(", ")})` : " (no remotes configured)";
+    throw new Error(`Unknown remote "${trimmed}"${available}`);
+  }
+  return { ...config, default: trimmed };
 }
 
 export function removeRemoteConfig(config: RemotesFile, name: string): { config: RemotesFile; removed: boolean } {
