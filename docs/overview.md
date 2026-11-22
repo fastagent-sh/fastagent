@@ -76,7 +76,7 @@ my-agent/
 | **Chat platform connectors** | Slack, Telegram, Discord, and web UIs are external callers of the Agent API, not runtime plugins. |
 | **End-user auth & billing** | One API key controls a whole instance. Your application keeps user authentication, tenancy, and routing. |
 | **Fixed DAG workflows & cron schedulers** | The agent decides its own tool steps. Drive scheduled or event-driven work externally with single-call `POST /v1/invoke` (Cloud Scheduler, EventBridge, GitHub Actions, webhooks). |
-| **Opinionated UI** | Use [`@fastagent-sh/pi-remote`](remotes.md#interactive-terminal-with-fastagent-shpi-remote) for interactive terminal access, or build any UI over `sessions.events` and `messages.stream`. |
+| **Opinionated UI** | Use [`@fastagent-sh/pi-remote`](remotes.md#4-chat-interactively-from-your-terminal-fastagent-shpi-remote) for interactive terminal access, or build any UI over `sessions.events` and `messages.stream`. |
 
 ## Current boundaries
 

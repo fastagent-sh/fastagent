@@ -39,7 +39,7 @@ FastAgent publishes six version-locked npm packages so you install only what you
 | **`@fastagent-sh/client/remotes`** | Building pluggable `remotes.json` transport packages (`@fastagent-sh/client-<type>`) | `RemotesFile`, `RemoteConfig`, `HttpRemoteConfig`, `ExtensionRemoteConfig`, `RemoteConnection`, `resolveRemotesPath`, `parseRemotesJson`, `upsertRemoteConfig`, `removeRemoteConfig`, `setDefaultRemoteConfig`, `expandRemoteEnvRef`, `connectExtensionRemote` |
 | **`@fastagent-sh/client/agent-api`** | Validating or composing Agent API Effect Schemas directly | Effect Schemas for every Agent API type, event, auth flow, `AgentError`, `LIMITS`, `hasEnded`, `decodeRequest` |
 | **`@fastagent-sh/client/http/contract`** | Integrating directly with the HTTP contract & OpenAPI schema | `AgentHttpApi`, `API_PREFIX`, `statusOf`, `Refusal`, `Authorization`, `Malformed`, `SessionEventFrame`, `MessageStreamEventFrame` |
-| **`@fastagent-sh/client/stream`** | Composing `messages.stream` over an `Agent` implementation | Shared stream helper |
+| **`@fastagent-sh/client/stream`** | Composing `messages.stream` over an `Agent` implementation | `messageStream`, `StreamSource`, `leavableIterator` |
 
 ## Guides by task
 

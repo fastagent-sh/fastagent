@@ -132,8 +132,6 @@ const providers = await auth.providers();
 
 ## 4. Chat interactively from your terminal (`@fastagent-sh/pi-remote`)
 
-### Interactive terminal with `@fastagent-sh/pi-remote`
-
 `@fastagent-sh/pi-remote` connects your local [Pi](https://pi.dev) TUI directly to any deployed FastAgent instance (HTTP or AgentCore), sharing `~/.config/fastagent/remotes.json`.
 
 ```bash

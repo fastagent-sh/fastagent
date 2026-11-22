@@ -47,7 +47,7 @@ Key options on `openAgent(definition, options)`:
 
 - **`root` (required, absolute):** Agent working directory; local SQLite state lives under `<root>/.state/`.
 - **`name`:** Instance name (one path segment). Required when using PostgreSQL (`database` or `secrets.FASTAGENT_DATABASE_URL`).
-- **`secrets`:** The sole source of values for `needs()`, MCP `${VAR}` placeholders, model provider credentials, and `OTEL_*` tracing config. `openAgent` never reads `process.env`, `.secrets/`, or `~/.fastagent`.
+- **`secrets`:** The sole environment-value source for `needs()`, MCP `${VAR}` placeholders, env-based model provider keys, and `OTEL_*` tracing config. `openAgent` never reads `process.env`, `.secrets/`, or `~/.fastagent` (model provider credentials may also come from the instance's own durable credential store via `/v1/auth/*` / `service.auth`, or `<root>/.state/auth.json`).
 - **`env`:** Base environment for subprocesses the agent spawns (`bash`, skill scripts, stdio MCP servers). Defaults to empty; pass `baseEnv(process.env)` for standard `PATH`, `HOME`, locale, and proxy settings. Pass `OTEL_*` variables in `secrets` (not `env`) so agent subprocesses cannot read collector credentials.
 - **`model`:** Optional `provider/modelId` override over `fastagent.config.ts`.
 - **`harness` / `sandbox`:** Optional `"pi-durable"` (default) or `"dsh"` (requires `@fastagent-sh/harness-dsh`), with `sandbox: "workspace" | "read-only" | "off"` on `dsh`.

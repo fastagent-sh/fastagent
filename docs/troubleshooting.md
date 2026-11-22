@@ -107,6 +107,6 @@ npm install @fastagent-sh/harness-dsh
 
 ### `deploy init` or `deploy check` fails, or the container exits on boot
 
-- **`persistent storage is not mounted at /data`:** Attach a volume at `/data` (`-v <name>-data:/data`), or configure `FASTAGENT_DATABASE_URL`.
+- **`persistent storage is not mounted at /data`:** Attach a persistent volume at `/data` (`-v <name>-data:/data`). Generated containers (`FASTAGENT_DEPLOYED=1`) always require a mounted `/data` volume for working files and the deployment lease, even when sessions are stored in PostgreSQL via `FASTAGENT_DATABASE_URL`.
 - **`FASTAGENT_NAME is required for a deployment`:** Ensure your `Dockerfile` sets `ENV FASTAGENT_NAME=<name>` (or pass it in container env).
 - **Build context leak reported:** Your `.dockerignore` is missing or does not exclude `.secrets/`, `.env*`, `.state/`, or `.fastagent/`. Update `.dockerignore` or run `fastagent deploy init <target> --force` to regenerate the FastAgent-managed file.

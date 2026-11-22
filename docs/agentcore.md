@@ -139,7 +139,7 @@ With `@fastagent-sh/client-agentcore` installed, add an `agentcore` entry to `~/
 }
 ```
 
-Then operate it just like an HTTP remote across `fastagent invoke --remote bedrock`, `fastagent login --remote bedrock`, `fastagent logout --remote bedrock`, and [`@fastagent-sh/pi-remote`](remotes.md#interactive-terminal-with-fastagent-shpi-remote).
+Then operate it just like an HTTP remote across `fastagent invoke --remote bedrock`, `fastagent login --remote bedrock`, `fastagent logout --remote bedrock`, and [`@fastagent-sh/pi-remote`](remotes.md#4-chat-interactively-from-your-terminal-fastagent-shpi-remote).
 
 ## Security, retries, and limits
 

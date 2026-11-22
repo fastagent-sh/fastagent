@@ -59,9 +59,10 @@ Global options (`-C <dir>`, `-v`/`--version`) come before the command name; comm
 | `--root <dir>` | `dev`, `start`, `invoke`, `info` | Instance root override (`--root` > `FASTAGENT_ROOT` > `.fastagent/<mode>`) |
 | `--name <name>` | `dev`, `start`, `invoke`, `info` | Instance name override (`--name` > `FASTAGENT_NAME`) |
 | `--env-file <file>` | `dev`, `start`, `invoke`, `info`, `login`, `logout` | Secret/value file override (default `.secrets/.env`; must exist) |
-| `--session <id>` | `invoke` | Continue an existing session id |
+| `--session <id>` | `invoke`, `remote add` | Continue an existing session id (`invoke`) or set a default session id for a saved remote (`remote add`) |
 | `--conversation <name>` | `invoke` | Reuse or create a caller-named conversation session |
-| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout` | Target a served deployment instead of the local directory. Prefer `FASTAGENT_API_KEY` or `$ENV_VAR` in `remotes.json` over `--key` |
+| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `remote add` (`--key`) | Target a served deployment instead of the local directory (or save an API key / `$ENV_VAR` reference with `remote add`). Prefer `FASTAGENT_API_KEY` or `$ENV_VAR` in `remotes.json` over literal `--key` |
+| `--default` | `remote add` | Make the added or updated remote the default in `remotes.json` |
 | `-g, --global` | `login`, `logout`, `models` | Target global `~/.fastagent/.secrets/auth.json` (`login`/`logout`) or built-in models only (`models`) |
 | `--check` | `login` | Report provider/model auth readiness without signing in (exit `0` ready, `1` not_ready, `2` invalid) |
 | `--method <account\|api-key>` | `login` | Select sign-in method non-interactively |
