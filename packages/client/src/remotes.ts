@@ -57,12 +57,20 @@ export function isHttpRemote(remote: RemoteConfig): remote is HttpRemoteConfig {
   return remote.type === "http";
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && (value.charCodeAt(end - 1) === 47 || value.charCodeAt(end - 1) === 92)) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 /** Resolve the path to `remotes.json` from `FASTAGENT_REMOTES_PATH`, `XDG_CONFIG_HOME`, or `homeDir`. */
 export function resolveRemotesPath(env: Readonly<Record<string, string | undefined>>, homeDir: string): string {
   const override = env.FASTAGENT_REMOTES_PATH?.trim();
   if (override) return override;
   const xdg = env.XDG_CONFIG_HOME?.trim();
-  const base = (xdg || `${homeDir.replace(/[\\/]+$/, "")}/.config`).replace(/[\\/]+$/, "");
+  const base = stripTrailingSlashes(xdg || `${stripTrailingSlashes(homeDir)}/.config`);
   return `${base}/fastagent/remotes.json`;
 }
 
