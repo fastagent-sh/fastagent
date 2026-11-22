@@ -1,6 +1,6 @@
 # @fastagent-sh/pi-remote
 
-Pi extension for connecting directly to deployed [FastAgent](https://fastagent.sh) instances over HTTP or Amazon Bedrock AgentCore.
+Pi extension for connecting directly to deployed [FastAgent](https://fastagent.sh) instances over HTTP or installed cloud transport packages (such as `@fastagent-sh/client-agentcore`).
 
 ## Install
 
@@ -16,7 +16,7 @@ pi -e npm:@fastagent-sh/pi-remote
 
 ## Configure remotes
 
-Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`, shared with `fastagent invoke --remote <name>`):
+Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`, shared with `fastagent invoke --remote <name>`; non-HTTP types load `@fastagent-sh/client-<type>`, e.g. `npm i @fastagent-sh/client-agentcore`):
 
 ```json
 {

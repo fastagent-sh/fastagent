@@ -1,8 +1,9 @@
 /**
- * Pure schema and resolution helpers for the shared `remotes.json` configuration used by FastAgent CLI
- * (`--remote`) and remote clients (`@fastagent-sh/pi-remote`). Imports no Node APIs so `@fastagent-sh/client`
- * remains runtime-neutral.
+ * Pure schema, resolution, and transport-plugin contract for the shared `remotes.json` configuration used by
+ * FastAgent CLI (`--remote`) and remote clients (`@fastagent-sh/pi-remote`). Imports no Node APIs and no
+ * cloud-vendor packages so `@fastagent-sh/client` stays completely runtime- and cloud-neutral.
  */
+import type { AuthApi, RemoteAgent } from "./agent-api.ts";
 
 export interface HttpRemoteConfig {
   type: "http";
@@ -11,22 +12,54 @@ export interface HttpRemoteConfig {
   sessionId?: string;
 }
 
-export interface AgentCoreRemoteConfig {
-  type: "agentcore";
-  runtimeArn: string;
-  sessionId: string;
-  qualifier?: string;
+/** A remote backed by a cloud transport client package (`@fastagent-sh/client-<type>`). */
+export interface ExtensionRemoteConfig {
+  type: string;
+  [field: string]: unknown;
 }
 
-export type RemoteConfig = HttpRemoteConfig | AgentCoreRemoteConfig;
+export type RemoteConfig = HttpRemoteConfig | ExtensionRemoteConfig;
 
 export interface RemotesFile {
   default?: string;
   remotes: Record<string, RemoteConfig>;
 }
 
+/** What a resolved remote transport returns to CLI or UI clients. */
+export interface RemoteConnection {
+  readonly agent: RemoteAgent;
+  readonly auth: AuthApi;
+  readonly label: string;
+  readonly defaultSessionId?: string;
+}
+
+export interface RemoteConnectOptions {
+  readonly key?: string;
+  readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
+/** Entry contract exported by `@fastagent-sh/client-<type>` for non-HTTP remotes in `remotes.json`. */
+interface RemoteTransportModule {
+  connectRemote(
+    name: string,
+    config: ExtensionRemoteConfig,
+    options?: RemoteConnectOptions,
+  ): RemoteConnection | Promise<RemoteConnection>;
+}
+
+const EXTENSION_TYPE = /^[a-z][a-z0-9-]*$/;
+
 export function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
+}
+
+export function isHttpRemote(remote: RemoteConfig): remote is HttpRemoteConfig {
+  return remote.type === "http";
+}
+
+/** The package specifier that provides the transport for non-HTTP remote `type`. */
+function remoteTransportSpecifier(type: string): string {
+  return `@fastagent-sh/client-${type}`;
 }
 
 export function expandRemoteEnvRef(
@@ -49,7 +82,12 @@ export function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
     throw new Error(`Remote "${name}" must be an object`);
   }
   const obj = raw as Record<string, unknown>;
-  const type = obj.type ?? (typeof obj.runtimeArn === "string" ? "agentcore" : "http");
+  const type = obj.type ?? "http";
+  if (typeof type !== "string" || !EXTENSION_TYPE.test(type)) {
+    throw new Error(
+      `Remote "${name}" has invalid type "${String(type)}" (expected "http" or a lowercase extension name)`,
+    );
+  }
 
   if (type === "http") {
     if (typeof obj.url !== "string" || obj.url.trim() === "") {
@@ -79,25 +117,7 @@ export function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
     };
   }
 
-  if (type === "agentcore") {
-    if (typeof obj.runtimeArn !== "string" || obj.runtimeArn.trim() === "") {
-      throw new Error(`Remote "${name}" requires a non-empty "runtimeArn"`);
-    }
-    if (typeof obj.sessionId !== "string" || obj.sessionId.trim() === "") {
-      throw new Error(`Remote "${name}" requires a non-empty "sessionId" for AgentCore`);
-    }
-    if (obj.qualifier !== undefined && typeof obj.qualifier !== "string") {
-      throw new Error(`Remote "${name}" field "qualifier" must be a string`);
-    }
-    return {
-      type: "agentcore",
-      runtimeArn: obj.runtimeArn.trim(),
-      sessionId: obj.sessionId.trim(),
-      ...(obj.qualifier !== undefined ? { qualifier: obj.qualifier } : {}),
-    };
-  }
-
-  throw new Error(`Remote "${name}" has unsupported type "${String(type)}" (expected "http" or "agentcore")`);
+  return { ...obj, type };
 }
 
 export function parseRemotesJson(raw: string, sourceLabel: string): RemotesFile {
@@ -167,4 +187,41 @@ export function removeRemoteConfig(config: RemotesFile, name: string): { config:
     },
     removed: true,
   };
+}
+
+/**
+ * Load and invoke a cloud transport client package (`@fastagent-sh/client-<type>`) for a non-HTTP remote entry.
+ * Callers may supply a custom `loadModule` resolver (e.g. resolving from an agent directory's `node_modules`).
+ */
+export async function connectExtensionRemote(
+  name: string,
+  remote: ExtensionRemoteConfig,
+  options: RemoteConnectOptions & { readonly loadModule?: (specifier: string) => Promise<unknown> } = {},
+): Promise<RemoteConnection> {
+  if (!EXTENSION_TYPE.test(remote.type) || remote.type === "http") {
+    throw new Error(`Remote "${name}" has unsupported transport type "${remote.type}"`);
+  }
+  const pkg = remoteTransportSpecifier(remote.type);
+  const specifier = pkg;
+  const load = options.loadModule ?? ((spec: string) => import(spec));
+  let mod: Partial<RemoteTransportModule>;
+  try {
+    mod = (await load(specifier)) as Partial<RemoteTransportModule>;
+  } catch (error) {
+    const code = (error as { code?: unknown })?.code;
+    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Remote "${name}" uses transport "${remote.type}"; install ${pkg} to connect (${msg})`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  if (typeof mod.connectRemote !== "function") {
+    throw new Error(`Transport package ${specifier} does not export connectRemote()`);
+  }
+  return mod.connectRemote(name, remote, {
+    ...(options.key === undefined ? {} : { key: options.key }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+  });
 }

@@ -10,10 +10,10 @@ npx -y @aws/agentcore@1.0.3 deploy   # here or in CI
 fastagent agentcore invoke "hello" --arn <runtimeArn>   # smoke-test from the terminal
 ```
 
-From a backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):
+From a backend (`npm i @fastagent-sh/client-agentcore`):
 
 ```ts
-import { connectAgentCore } from "@fastagent-sh/client/agentcore";
+import { connectAgentCore } from "@fastagent-sh/client-agentcore";
 
 const agent = connectAgentCore({ runtimeArn, sessionId: sessionOf(user) });
 const session = await agent.sessions.create();

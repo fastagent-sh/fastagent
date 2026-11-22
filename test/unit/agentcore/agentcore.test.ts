@@ -4,8 +4,9 @@ import { basename, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "@fastagent-sh/agentcore";
 import { AgentError as RootAgentError } from "@fastagent-sh/client";
-import { AgentError, connectAgentCore } from "@fastagent-sh/client/agentcore";
-import { envelopeResponse, unwrapResponse } from "@fastagent-sh/client/agentcore/contract";
+import { AgentError, connectAgentCore, connectRemote as connectAgentCoreRemote } from "@fastagent-sh/client-agentcore";
+import { envelopeResponse } from "../../../packages/agentcore/src/contract.ts";
+import { unwrapResponse } from "../../../packages/client-agentcore/src/contract.ts";
 import { readInvokeMessage } from "@fastagent-sh/fastagent/platform";
 import { SESSION_HEADER, agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
 import { secretValues } from "../../../packages/agentcore/src/secrets.ts";
@@ -118,8 +119,15 @@ describe("an agent on AgentCore", () => {
       for (let next = await stream.next(); !next.done; next = await stream.next()) last = next;
       expect(last.value).toMatchObject({ type: "done" });
       // A refusal keeps its code through AgentCore, which would have made a 404 its own 424, and rejects with the
-      // same AgentError class both `@fastagent-sh/client` and `@fastagent-sh/client/agentcore` export.
+      // same AgentError class both `@fastagent-sh/client` and `@fastagent-sh/client-agentcore` export.
       expect(AgentError).toBe(RootAgentError);
+      // Pluggable remote transport contract works through connectRemote.
+      const viaPlugin = connectAgentCoreRemote("ac-prod", {
+        type: "agentcore",
+        runtimeArn: RUNTIME,
+        sessionId,
+      });
+      expect((await viaPlugin.agent.info()).name).toBe(sessionId);
       const missing = await agent.sessions.get("no-such-session").catch((e: unknown) => e);
       expect(missing).toBeInstanceOf(AgentError);
       expect(missing).toMatchObject({ code: "not_found" });

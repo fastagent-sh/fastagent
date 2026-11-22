@@ -17,7 +17,7 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer } from "effect/http";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
-import { type EnvelopedRequest, envelopeResponse, isEventStream } from "@fastagent-sh/client/agentcore/contract";
+import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./contract.ts";
 import { statusOf } from "@fastagent-sh/client/http/contract";
 import {
   type AgentDefinition,
@@ -35,7 +35,7 @@ export const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
 /** AgentCore's HTTP protocol: the port its invocations and `/ping` reach. */
 const PORT = 8080;
 
-export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model"> {
+export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model" | "harness" | "sandbox"> {
   /**
    * Where the instances are: on AWS, `dsqlDatabase(...)`. Or how to find it as an instance opens, so a runtime without
    * one says so to every invocation rather than exiting where only its log tells.

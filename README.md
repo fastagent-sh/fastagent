@@ -69,8 +69,9 @@ Your app keeps its auth, database and routes. See [Embedding](https://fastagent.
 | Package | Role |
 |---|---|
 | [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | The durable runtime, Agent API server, `openAgent` embedding, and the `fastagent` CLI |
-| [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | The Agent API client: `connectAgent` (HTTP, zero Node deps) and `@fastagent-sh/client/agentcore` |
-| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore runtime, Aurora DSQL, Secrets Manager, and CDK construct |
+| [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | The cloud-agnostic Agent API client (`connectAgent`, HTTP/SSE, pluggable transport protocol, zero Node deps) |
+| [`@fastagent-sh/client-agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client-agentcore/README.md) | Pure Amazon Bedrock AgentCore client and `remotes.json` transport plugin (zero server or Node deps) |
+| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore server runtime, Aurora DSQL, Secrets Manager, CLI, and CDK construct |
 | [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Experimental DeepSeek Harness (`@deepseek-ai/dsh`) adapter with OS sandboxing (`--harness dsh`) |
 
 ## Documentation

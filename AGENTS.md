@@ -10,10 +10,11 @@ that API from outside the runtime: channels are not part of it.
   what the file owns and why it is that way, next to the code the reason is about. Read the code and its headers. Start
   from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
-- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, and
-  `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI),
-  `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager,
-  and its CDK construct), `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
+- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the cloud-agnostic Agent API, `connectAgent`, and
+  pluggable remote transport contracts; it imports no runtime or cloud SDK), `@fastagent-sh/client-agentcore` (pure
+  Amazon Bedrock AgentCore client and `remotes.json` transport plugin; zero server or Node deps), `@fastagent-sh/fastagent`
+  (the runtime and the CLI), `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore server runtime, Aurora DSQL, Secrets Manager,
+  CLI, and CDK construct), `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
   FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`), and
   `@fastagent-sh/harness-dsh` (optional second runtime harness backed by `@deepseek-ai/dsh` with native OS sandboxing;
   loaded lazily by `@fastagent-sh/fastagent` so core carries zero `@deepseek-ai/*` dependencies). A package reaches

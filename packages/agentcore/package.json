@@ -78,11 +78,15 @@
     "effect": "^4.0.7"
   },
   "peerDependencies": {
+    "@fastagent-sh/client-agentcore": "0.33.0",
     "@fastagent-sh/fastagent": "0.33.0",
     "aws-cdk-lib": "^2.269.0",
     "constructs": "^10.7.0"
   },
   "peerDependenciesMeta": {
+    "@fastagent-sh/client-agentcore": {
+      "optional": true
+    },
     "@fastagent-sh/fastagent": {
       "optional": true
     },

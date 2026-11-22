@@ -1,13 +1,20 @@
 /**
  * A served instance elsewhere, named either by `--url` or by `--remote <name>` from `~/.config/fastagent/remotes.json`:
- * its Agent API, called with the key or AgentCore credentials configured for it.
+ * its Agent API, over HTTP or any installed `@fastagent-sh/client-<type>` transport package.
  */
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { AuthApi, RemoteAgent } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectAuth } from "@fastagent-sh/client";
-import { expandRemoteEnvRef, parseRemotesJson } from "@fastagent-sh/client/remotes";
+import {
+  connectExtensionRemote,
+  expandRemoteEnvRef,
+  isHttpRemote,
+  parseRemotesJson,
+} from "@fastagent-sh/client/remotes";
 import { applyEnvValues, enterAgentEnv } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { installProxyFetch } from "../proxy.ts";
@@ -117,7 +124,7 @@ export async function resolveRemoteTarget(
     failUsage(`--remote ${remoteName}: unknown remote in ${remotesPath}${available}`);
   }
 
-  if (entry.type === "http") {
+  if (isHttpRemote(entry)) {
     let apiKey: string;
     if (target.key !== undefined) {
       apiKey = target.key;
@@ -138,25 +145,24 @@ export async function resolveRemoteTarget(
     };
   }
 
-  if (target.key !== undefined) {
-    failUsage(`--key cannot be used with AgentCore remote "${remoteName}"`);
-  }
-  let agentcore: typeof import("@fastagent-sh/client/agentcore");
+  const cwd = resolve(dirArg);
+  const loadModule = async (specifier: string): Promise<unknown> => {
+    let resolved: string | undefined;
+    try {
+      resolved = createRequire(join(cwd, "package.json")).resolve(specifier);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "MODULE_NOT_FOUND" && code !== "ERR_MODULE_NOT_FOUND") throw error;
+    }
+    return resolved !== undefined ? await import(pathToFileURL(resolved).href) : await import(specifier);
+  };
   try {
-    agentcore = await import("@fastagent-sh/client/agentcore");
+    return await connectExtensionRemote(remoteName, entry, {
+      ...(target.key === undefined ? {} : { key: target.key }),
+      env: process.env,
+      loadModule,
+    });
   } catch (error) {
-    failUsage(
-      `remote "${remoteName}" uses AgentCore; install @aws-sdk/client-bedrock-agentcore (${error instanceof Error ? error.message : String(error)})`,
-    );
+    failUsage(error instanceof Error ? error.message : String(error));
   }
-  const connection = {
-    runtimeArn: entry.runtimeArn,
-    sessionId: entry.sessionId,
-    ...(entry.qualifier !== undefined ? { qualifier: entry.qualifier } : {}),
-  };
-  return {
-    agent: agentcore.connectAgentCore(connection),
-    auth: agentcore.connectAgentCoreAuth(connection),
-    label: `${remoteName} (${entry.runtimeArn})`,
-  };
 }

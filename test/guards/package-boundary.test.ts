@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * (`@fastagent-sh/client`) imports no runtime, so its root entry loads where only `fetch` is.
  */
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PACKAGES = ["client", "fastagent", "agentcore", "pi-remote", "harness-dsh"] as const;
+const PACKAGES = ["client", "client-agentcore", "fastagent", "agentcore", "pi-remote", "harness-dsh"] as const;
 const srcOf = (name: string) => resolve(repo, "packages", name, "src");
 const manifestOf = (name: string) =>
   JSON.parse(readFileSync(resolve(repo, "packages", name, "package.json"), "utf8")) as {
@@ -97,11 +97,42 @@ describe("package lines", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("@fastagent-sh/client/agentcore, a Caller's, reaches no Node API and no package but effect and @aws-sdk/client-bedrock-agentcore", () => {
-    const entry = resolve(srcOf("client"), "agentcore.ts");
+  it("@fastagent-sh/client-agentcore, a Caller's, reaches no Node API and no server package", () => {
+    const entry = resolve(srcOf("client-agentcore"), "index.ts");
     const packages = [...staticPackageGraph(entry)].map(packageOf);
-    expect(packages.filter((p) => p !== "effect" && p !== "@aws-sdk/client-bedrock-agentcore")).toEqual([]);
+    expect(
+      packages.filter(
+        (p) => p !== "effect" && p !== "@fastagent-sh/client" && p !== "@aws-sdk/client-bedrock-agentcore",
+      ),
+    ).toEqual([]);
     expect([...staticPackageGraph(entry, true)]).toEqual([]);
+    const manifest = manifestOf("client-agentcore");
+    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
+      "@aws-sdk/client-bedrock-agentcore",
+      "@fastagent-sh/client",
+    ]);
+  });
+
+  it("@fastagent-sh/agentcore server dependencies stay free of @aws-sdk/client-bedrock-agentcore and @fastagent-sh/client-agentcore", () => {
+    const deps = Object.keys(manifestOf("agentcore").dependencies ?? {});
+    expect(deps).not.toContain("@aws-sdk/client-bedrock-agentcore");
+    expect(deps).not.toContain("@fastagent-sh/client-agentcore");
+  });
+
+  it("@fastagent-sh/client, @fastagent-sh/fastagent, and @fastagent-sh/pi-remote never statically import cloud-vendor SDKs or AgentCore packages", () => {
+    for (const pkg of ["client", "fastagent", "pi-remote"] as const) {
+      const offenders = filesUnder(srcOf(pkg)).flatMap((file) =>
+        importsOf(file)
+          .bare.filter(
+            (spec) =>
+              spec.startsWith("@aws-sdk/") ||
+              spec.startsWith("@fastagent-sh/agentcore") ||
+              spec.startsWith("@fastagent-sh/client-agentcore"),
+          )
+          .map((spec) => `${relative(repo, file)} → ${spec}`),
+      );
+      expect(offenders).toEqual([]);
+    }
   });
 
   it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
@@ -219,8 +250,10 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
-    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"))]).toEqual([]);
-    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"), true)]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"), true)]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client-agentcore"), "contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client-agentcore"), "contract.ts"), true)]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"), true)]).toEqual([]);

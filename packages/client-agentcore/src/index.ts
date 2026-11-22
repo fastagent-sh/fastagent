@@ -1,11 +1,13 @@
 /**
  * An agent on Amazon Bedrock AgentCore, from wherever the AWS SDK runs: the Agent API, as `connectAgent` gives it,
  * each request one `InvokeAgentRuntime` on the session (signed with the SDK's credentials), wrapped as the runtime
- * unwraps it (`agentcore/contract.ts`). AgentCore's refusals of an invocation it did not deliver come back as the
- * Agent API's.
+ * unwraps it (`contract.ts`). AgentCore's refusals of an invocation it did not deliver come back as the Agent API's.
  *
- * Install `@aws-sdk/client-bedrock-agentcore` alongside `@fastagent-sh/client` when importing this subpath; the root
- * `@fastagent-sh/client` entry loads no AWS package.
+ * Also implements FastAgent's pluggable `RemoteTransportModule` (`connectRemote`) so `remotes.json` entries with
+ * `type: "agentcore"` work automatically across FastAgent CLI and `@fastagent-sh/pi-remote` without hardcoding
+ * AgentCore inside `@fastagent-sh/client`, `@fastagent-sh/fastagent`, or `@fastagent-sh/pi-remote`.
+ *
+ * Zero server, database, CDK, or Node-only dependencies; installs `@aws-sdk/client-bedrock-agentcore` and `@fastagent-sh/client` directly.
  */
 import {
   BedrockAgentCoreClient,
@@ -13,16 +15,17 @@ import {
   InvokeAgentRuntimeCommand,
   type InvokeAgentRuntimeCommandOutput,
 } from "@aws-sdk/client-bedrock-agentcore";
-import { type AuthApi, type ErrorCode, type RemoteAgent, agentError, errorData } from "./agent-api.ts";
+import { type AuthApi, type ErrorCode, type RemoteAgent, agentError, errorData } from "@fastagent-sh/client/agent-api";
+import { connectAgent, connectAuth } from "@fastagent-sh/client";
+import { statusOf } from "@fastagent-sh/client/http/contract";
+import type { ExtensionRemoteConfig, RemoteConnection, RemoteConnectOptions } from "@fastagent-sh/client/remotes";
 import {
   type EnvelopedResponse,
   SESSION_ID_PATTERN,
   envelopeRequest,
   isEventStream,
   unwrapResponse,
-} from "./agentcore/contract.ts";
-import { connectAgent, connectAuth } from "./http/client.ts";
-import { statusOf } from "./http/contract.ts";
+} from "./contract.ts";
 
 /** @public */
 export type {
@@ -68,11 +71,11 @@ export type {
   Tokens,
   Usage,
   WaitOptions,
-} from "./agent-api.ts";
+} from "@fastagent-sh/client/agent-api";
 /** @public */
-export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
+export { AgentError, LIMITS, hasEnded } from "@fastagent-sh/client/agent-api";
 /** @public */
-export { type ConnectOptions, connectAgent, connectAuth } from "./http/client.ts";
+export { type ConnectOptions, connectAgent, connectAuth } from "@fastagent-sh/client";
 
 /** @public */
 export interface AgentCoreConnection {
@@ -89,15 +92,9 @@ export interface AgentCoreConnection {
 
 const RUNTIME_ARN = /^arn:aws[a-z-]*:bedrock-agentcore:([a-z0-9-]+):\d{12}:runtime\/[A-Za-z0-9_-]+$/;
 
-/**
- * AgentCore's refusals of an invocation it did not deliver, as the Agent API's: no runtime of that ARN, or a request it
- * does not take, is not one to send again. Any other (`RuntimeClientError`, its own failure) may have reached the agent,
- * and fails the request as one that got no answer.
- */
 const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
   AccessDeniedException: "unauthorized",
   UnauthorizedException: "unauthorized",
-  // Credentials AWS took for none: expired, or not a key it knows. Refreshing them is the Caller's.
   ExpiredTokenException: "unauthorized",
   UnrecognizedClientException: "unauthorized",
   InvalidSignatureException: "unauthorized",
@@ -108,7 +105,6 @@ const PLATFORM_REFUSALS: Record<string, ErrorCode> = {
   ValidationException: "internal",
 };
 
-/** One client a region, for every connection: a backend connects a session a user, and each would resolve credentials. */
 const clients = new Map<string, BedrockAgentCoreClient>();
 const clientIn = (region: string): BedrockAgentCoreClient => {
   let client = clients.get(region);
@@ -119,10 +115,6 @@ const clientIn = (region: string): BedrockAgentCoreClient => {
   return client;
 };
 
-/**
- * The Agent of the session `sessionId` on the runtime `runtimeArn`.
- * @public
- */
 function agentCoreTransport({ runtimeArn, sessionId, qualifier }: AgentCoreConnection): {
   url: string;
   fetch: typeof fetch;
@@ -155,7 +147,6 @@ function agentCoreTransport({ runtimeArn, sessionId, qualifier }: AgentCoreConne
         { abortSignal: request.signal },
       );
     } catch (error) {
-      // No credentials to sign with, or a session to sign in again (`aws login`): no retry finds others.
       if ((error as Error).name === "CredentialsProviderError") {
         const refusal = errorData(
           agentError("unauthorized", `no AWS credentials to call AgentCore with: ${(error as Error).message}`),
@@ -200,4 +191,40 @@ export function connectAgentCore(connection: AgentCoreConnection): RemoteAgent {
 export function connectAgentCoreAuth(connection: AgentCoreConnection): AuthApi {
   const { url, fetch } = agentCoreTransport(connection);
   return connectAuth(url, { fetch });
+}
+
+/**
+ * Pluggable `remotes.json` transport entry for `type: "agentcore"`, invoked lazily by FastAgent CLI and
+ * `@fastagent-sh/pi-remote`.
+ * @public
+ */
+export function connectRemote(
+  name: string,
+  config: ExtensionRemoteConfig,
+  options?: RemoteConnectOptions,
+): RemoteConnection {
+  if (options?.key !== undefined) {
+    throw new Error(`--key cannot be used with AgentCore remote "${name}"`);
+  }
+  const runtimeArn = typeof config.runtimeArn === "string" ? config.runtimeArn.trim() : "";
+  if (!runtimeArn) {
+    throw new Error(`Remote "${name}" requires a non-empty "runtimeArn"`);
+  }
+  const sessionId = typeof config.sessionId === "string" ? config.sessionId.trim() : "";
+  if (!sessionId) {
+    throw new Error(`Remote "${name}" requires a non-empty "sessionId" for AgentCore`);
+  }
+  if (config.qualifier !== undefined && typeof config.qualifier !== "string") {
+    throw new Error(`Remote "${name}" field "qualifier" must be a string`);
+  }
+  const connection: AgentCoreConnection = {
+    runtimeArn,
+    sessionId,
+    ...(config.qualifier !== undefined ? { qualifier: config.qualifier } : {}),
+  };
+  return {
+    agent: connectAgentCore(connection),
+    auth: connectAgentCoreAuth(connection),
+    label: `${name} (${runtimeArn})`,
+  };
 }

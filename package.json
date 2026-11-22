@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": [
     "packages/client",
+    "packages/client-agentcore",
     "packages/fastagent",
     "packages/agentcore",
     "packages/pi-remote",
