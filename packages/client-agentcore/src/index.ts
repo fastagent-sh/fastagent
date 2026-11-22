@@ -7,8 +7,7 @@
  * `type: "agentcore"` work automatically across FastAgent CLI and `@fastagent-sh/pi-remote` without hardcoding
  * AgentCore inside `@fastagent-sh/client`, `@fastagent-sh/fastagent`, or `@fastagent-sh/pi-remote`.
  *
- * Install `@aws-sdk/client-bedrock-agentcore` alongside `@fastagent-sh/agentcore` when importing this subpath;
- * this entry uses no Node-only APIs.
+ * Zero server, database, CDK, or Node-only dependencies; installs `@aws-sdk/client-bedrock-agentcore` and `@fastagent-sh/client` directly.
  */
 import {
   BedrockAgentCoreClient,

@@ -12,7 +12,7 @@ export interface HttpRemoteConfig {
   sessionId?: string;
 }
 
-/** A remote backed by a cloud transport extension package (`@fastagent-sh/<type>/client`). */
+/** A remote backed by a cloud transport client package (`@fastagent-sh/client-<type>`). */
 export interface ExtensionRemoteConfig {
   type: string;
   [field: string]: unknown;
@@ -38,7 +38,7 @@ export interface RemoteConnectOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
-/** Entry contract exported by `@fastagent-sh/<type>/client` for non-HTTP remotes in `remotes.json`. */
+/** Entry contract exported by `@fastagent-sh/client-<type>` for non-HTTP remotes in `remotes.json`. */
 interface RemoteTransportModule {
   connectRemote(
     name: string,
@@ -59,7 +59,7 @@ export function isHttpRemote(remote: RemoteConfig): remote is HttpRemoteConfig {
 
 /** The package specifier that provides the transport for non-HTTP remote `type`. */
 function remoteTransportSpecifier(type: string): string {
-  return `@fastagent-sh/${type}/client`;
+  return `@fastagent-sh/client-${type}`;
 }
 
 export function expandRemoteEnvRef(
@@ -190,7 +190,7 @@ export function removeRemoteConfig(config: RemotesFile, name: string): { config:
 }
 
 /**
- * Load and invoke a cloud transport plugin (`@fastagent-sh/<type>/client`) for a non-HTTP remote entry.
+ * Load and invoke a cloud transport client package (`@fastagent-sh/client-<type>`) for a non-HTTP remote entry.
  * Callers may supply a custom `loadModule` resolver (e.g. resolving from an agent directory's `node_modules`).
  */
 export async function connectExtensionRemote(
@@ -201,8 +201,8 @@ export async function connectExtensionRemote(
   if (!EXTENSION_TYPE.test(remote.type) || remote.type === "http") {
     throw new Error(`Remote "${name}" has unsupported transport type "${remote.type}"`);
   }
-  const pkg = `@fastagent-sh/${remote.type}`;
-  const specifier = remoteTransportSpecifier(remote.type);
+  const pkg = remoteTransportSpecifier(remote.type);
+  const specifier = pkg;
   const load = options.loadModule ?? ((spec: string) => import(spec));
   let mod: Partial<RemoteTransportModule>;
   try {

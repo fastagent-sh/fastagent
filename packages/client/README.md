@@ -13,7 +13,7 @@ console.log(message.answer?.text);
 ```
 
 `@fastagent-sh/client` is the Agent API and `connectAgent`, and needs only `fetch`. Cloud-specific transports
-(such as `@fastagent-sh/agentcore/client`) plug in through `@fastagent-sh/client/remotes`. Its contract entries
+(such as `@fastagent-sh/client-agentcore`) plug in through `@fastagent-sh/client/remotes`. Its contract entries
 (`/agent-api`, `/http/contract`) are the ones FastAgent's runtime builds its servers from.
 
 See [the Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md).

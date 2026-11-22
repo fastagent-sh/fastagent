@@ -263,7 +263,7 @@ describe("remotes config", () => {
     expect(() => loadRemotes({ path: cfgPath })).toThrow(/invalid type "BAD TYPE"/);
 
     await expect(connectRemote("custom", { type: "uninstalled-cloud" })).rejects.toThrow(
-      /install @fastagent-sh\/uninstalled-cloud to connect/,
+      /install @fastagent-sh\/client-uninstalled-cloud to connect/,
     );
 
     writeFileSync(cfgPath, JSON.stringify({ remotes: { badUrl: { url: "not-a-url" } } }));

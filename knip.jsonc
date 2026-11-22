@@ -14,9 +14,13 @@
       "project": ["src/**/*.ts"],
       "includeEntryExports": true
     },
+    "packages/client-agentcore": {
+      "project": ["src/**/*.ts"],
+      "includeEntryExports": true
+    },
     "packages/agentcore": {
       "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@aws-sdk/client-bedrock-agentcore", "@fastagent-sh/fastagent", "aws-cdk-lib", "constructs"]
+      "ignoreDependencies": ["@fastagent-sh/client-agentcore", "@fastagent-sh/fastagent", "aws-cdk-lib", "constructs"]
     },
     "packages/fastagent": {
       "entry": ["src/cli.ts"],

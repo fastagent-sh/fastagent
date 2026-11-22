@@ -1,6 +1,6 @@
 /**
  * A served instance elsewhere, named either by `--url` or by `--remote <name>` from `~/.config/fastagent/remotes.json`:
- * its Agent API, over HTTP or any installed `@fastagent-sh/<type>/client` transport extension.
+ * its Agent API, over HTTP or any installed `@fastagent-sh/client-<type>` transport package.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";

@@ -31,10 +31,11 @@ sh("mkdir", ["-p", tools], work);
 sh("npm", ["init", "-y"], tools);
 sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], tools);
 
+const serverTarballs = tarballs.filter((t) => !t.includes("fastagent-sh-client-agentcore-"));
 const agent = join(work, "agent");
 sh(join(tools, "node_modules", ".bin", "fastagent"), ["init", agent, "--no-install"], work);
-// The agent's own dependencies as `init` declares them, but this build of fastagent instead of the registry's.
-sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], agent);
+// Production agent installs omit @fastagent-sh/client-agentcore (server image stays free of client SDK).
+sh("npm", ["install", "--no-audit", "--no-fund", ...serverTarballs], agent);
 writeFileSync(
   join(agent, "fastagent.config.ts"),
   `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
@@ -62,14 +63,14 @@ expectEqual(
   sh(join(tools, "node_modules", ".bin", "fastagent"), ["-C", agent, "agentcore", "--help"], work).split("\n")[0],
   "Usage: fastagent [-C <dir>] agentcore <command>",
 );
-// Production installs of `@fastagent-sh/agentcore` omit `@aws-sdk/client-bedrock-agentcore`; invoking without it exits 2 naming it.
+// Production installs of `@fastagent-sh/agentcore` omit `@fastagent-sh/client-agentcore`; invoking without it exits 2 naming it.
 const missingSdk = spawnSync(
   fastagent,
   ["agentcore", "invoke", "ping", "--arn", "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/demo"],
   { cwd: agent, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
 );
-expectEqual("agentcore invoke without aws sdk exits 2", missingSdk.status, 2);
-if (!missingSdk.stderr.includes("npm install @aws-sdk/client-bedrock-agentcore")) {
+expectEqual("agentcore invoke without client-agentcore exits 2", missingSdk.status, 2);
+if (!missingSdk.stderr.includes("npm install @fastagent-sh/client-agentcore")) {
   throw new Error(`expected install hint in stderr, got: ${missingSdk.stderr}`);
 }
 
