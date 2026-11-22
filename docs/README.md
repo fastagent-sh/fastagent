@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-Take your AI agent from prototype to production — without a black-box framework. FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents.
+FastAgent is the open-source TypeScript & Node.js runtime for production AI agents. Author with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and AWS AgentCore.
 
 ## Start here
 

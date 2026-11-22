@@ -1,6 +1,6 @@
 # FastAgent
 
-> Take your AI agent from prototype to production — without a black-box framework. FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents: embed in Next.js, Hono, Express, or Fastify keeping your own auth and database, or deploy to Docker, Fly.io, Railway, and Amazon Bedrock AgentCore with durable sessions (SQLite / PostgreSQL / Aurora DSQL), idempotent webhooks (`POST /v1/invoke`), MCP tools, OS sandboxing (`--harness dsh`), remote OAuth auth, and OpenTelemetry traces.
+> The TypeScript runtime for production AI agents. Author agents with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — embed in Next.js, Hono, Express, or Fastify keeping your own auth and database, self-host with Docker, or deploy to Fly.io, Railway, and Amazon Bedrock AgentCore with durable sessions (SQLite / PostgreSQL / Aurora DSQL), idempotent webhooks (`POST /v1/invoke`), OS sandboxing (`--harness dsh`), remote OAuth auth, and OpenTelemetry traces.
 
 Key facts:
 

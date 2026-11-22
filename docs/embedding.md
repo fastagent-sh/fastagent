@@ -27,13 +27,13 @@ Compile your agent with `fastagent build`, then import the generated package fro
 
 ```ts
 import { baseEnv, openAgent } from "@fastagent-sh/fastagent";
-import support from "@acme/support-agent"; // built by `fastagent build`
+import copilot from "@acme/saas-copilot"; // built by `fastagent build`
 
-const agent = await openAgent(support, {
-  root: "/var/lib/myapp/support",
+const agent = await openAgent(copilot, {
+  root: "/var/lib/myapp/copilot",
   secrets: {
     ANTHROPIC_API_KEY: vault.read("anthropic"),
-    ZENDESK_TOKEN: vault.read("zendesk"),
+    LINEAR_API_KEY: vault.read("linear"),
   },
   env: baseEnv(process.env), // PATH, HOME, locale, and proxy for agent subprocesses
   model: "anthropic/claude-sonnet-4-6",
@@ -59,11 +59,11 @@ When one process hosts multiple isolated instances over PostgreSQL (or Aurora DS
 
 ```ts
 import { baseEnv, openAgent, openPostgresDatabase } from "@fastagent-sh/fastagent";
-import support from "@acme/support-agent";
+import copilot from "@acme/saas-copilot";
 
 const db = openPostgresDatabase({ url: process.env.DATABASE_URL! }, { max: 20 });
 
-const tenantA = await openAgent(support, {
+const tenantA = await openAgent(copilot, {
   root: "/var/lib/myapp/tenants/a",
   name: "tenant-a",
   database: db,

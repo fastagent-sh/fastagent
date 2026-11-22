@@ -1,14 +1,14 @@
 ---
 title: Overview
-description: "Take your AI agent from prototype to production without a black-box framework: the problems FastAgent solves, how it works, where it runs, and when to choose it."
+description: "The TypeScript runtime for production AI agents: author with Markdown, skills, typed tools, and MCP — embed in your Node.js app, self-host with Docker, or deploy to any cloud."
 status: current
 ---
 
 # Overview
 
-**Take your AI agent from prototype to production — without a black-box framework.**
+**The TypeScript runtime for production AI agents.**
 
-FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents. Keep authoring your agent as plain Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`) and typed TypeScript tools (`defineTool`) or MCP servers—and get the production backend you need out of the box, without rewriting into a proprietary workflow framework or locking into one model vendor or cloud.
+FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents. Author your agent with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools (`defineTool`), and MCP servers — then embed it directly in Next.js, Hono, Express, or Fastify (keeping your own auth and database), self-host it with Docker, or deploy to Fly.io, Railway, and AWS AgentCore behind one Agent API.
 
 ## The production problems FastAgent solves
 
