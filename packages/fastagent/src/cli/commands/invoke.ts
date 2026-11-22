@@ -38,21 +38,6 @@ export interface InvokeOptions {
   instance?: InstanceFlags;
 }
 
-/**
- * The session to send into, a new one or `sessionId`, set to the model this run resolved: every run answers with the
- * model its flags and configuration name, a continued session included.
- */
-async function sessionFor(agent: Agent, sessionId: string | undefined, settings: SessionSettings, where: string) {
-  if (sessionId === undefined) return (await agent.sessions.create(settings)).id;
-  await agent.sessions.update(sessionId, settings).catch((error: unknown) => {
-    if (error instanceof AgentError && error.code === "not_found") {
-      throw new Error(`--session ${sessionId}: no such session in ${where}; pass an id an earlier invoke printed`);
-    }
-    throw error;
-  });
-  return sessionId;
-}
-
 /** A refusal as the line an operator reads: its code, then what it says. */
 const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
@@ -278,7 +263,6 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
       LOCAL_AUTH_HINT,
     );
   });
-  const stateRoot = resolveStateRoot(agentDir);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const selection = (() => {
     try {
@@ -298,21 +282,29 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
     // What an earlier serve accepted is a serve's to finish: this process would cut it off at its exit.
     unfinished: "refuse",
   }).catch(failStartup);
-  console.error(`[fastagent] invoke: ${agentDir} (${modelSpec})`);
-  await reportAuth(models, modelSpec, agentDir);
   const { thinkingLevel } = config;
   const settings = {
     model: modelRefOf(modelSpec, "the model"),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   };
+  const invokable: RemoteAgent = {
+    ...agent,
+    invoke: invoker.invoke,
+    invokeStream: invoker.invokeStream,
+  };
   let exitCode: number;
-  if (opts.conversation !== undefined) {
-    const events = invoker.invokeStream({ conversation: opts.conversation, content: message, session: settings });
-    exitCode = await answer(announceSession(events), opts.json, LOCAL_AUTH_HINT);
-  } else {
-    const sessionId = await sessionFor(agent, opts.session, settings, stateRoot).catch(failStartup);
-    console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-    exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json, LOCAL_AUTH_HINT);
+  try {
+    await reportAuth(models, modelSpec, agentDir);
+    exitCode = await invokeOverApi(invokable, `${agentDir} (${modelSpec})`, message, {
+      session: opts.session,
+      conversation: opts.conversation,
+      settings,
+      json: opts.json,
+      authHint: LOCAL_AUTH_HINT,
+    });
+  } catch (error) {
+    await agent.close().catch(() => undefined);
+    failStartup(error);
   }
   await agent.close();
   // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the event loop open

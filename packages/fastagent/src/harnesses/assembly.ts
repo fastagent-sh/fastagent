@@ -3,11 +3,14 @@
  * `AgentDefinition`, resolves `needs()` secrets, validates tools/extensions/providers, and resolves model specs.
  */
 import { basename, resolve } from "node:path";
-import type { Provider } from "@earendil-works/pi-ai";
+import type { Models, Provider } from "@earendil-works/pi-ai";
 import type { Extension, ToolRegistration } from "@earendil-works/pi-durable";
+import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import { describeSecrets, missingSecrets } from "../declared-secrets.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "../definition/definition.ts";
 import { importRegistry } from "../definition/registry.ts";
+import { log } from "../log.ts";
+import { modelRefOf } from "../model-ref.ts";
 import { type Needs, isNeeds } from "../needs.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
@@ -164,4 +167,32 @@ export function buildDefinitionShape(definition: AgentDefinition, env: NodeJS.Pr
 /** Providers declared by the definition in `agentDir`, built with stand-ins for unset secrets. */
 export async function definitionProviders(agentDir: string, env: NodeJS.ProcessEnv): Promise<Provider[]> {
   return buildDefinitionShape(await loadSourceDefinition(agentDir), env).providers;
+}
+
+/**
+ * Resolve the configured or overridden default model against `models`. Explicit overrides (`chosen`) fail fast when
+ * unknown; a missing configured default degrades to `unusableDefault` so `info()` reports why.
+ */
+export function resolveDefaultModel(
+  spec: string | undefined,
+  chosen: boolean,
+  models: Models,
+): { model?: ModelRef; unusableDefault?: NonNullable<AgentInfo["unusableDefault"]> } {
+  if (spec === undefined) return {};
+  const model = modelRefOf(spec, "the default model");
+  if (models.getModel(model.provider, model.modelId) !== undefined) return { model };
+  const reason = `no provider "${model.provider}" offers "${model.modelId}"`;
+  if (chosen) throw new Error(`unknown model "${spec}": ${reason}`);
+  log.warn(`[fastagent] the default model "${spec}" is unusable: ${reason}`);
+  return { unusableDefault: { spec, reason } };
+}
+
+/** Refuse MCP tools whose exposed names collide with authored tools or extension tools. */
+export function assertNoMcpToolConflicts(code: BuiltDefinition, mcpTools: readonly { name: string }[]): void {
+  const authoredNames = new Set(
+    [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].map((tool) => tool.name),
+  );
+  for (const tool of mcpTools) {
+    if (authoredNames.has(tool.name)) throw new Error(`MCP tool ${tool.name} conflicts with an authored tool`);
+  }
 }

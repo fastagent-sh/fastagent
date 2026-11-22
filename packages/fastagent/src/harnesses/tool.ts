@@ -2,7 +2,7 @@
  * Harness-neutral tool authoring: `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect
  * `Schema.toStandardJSONSchemaV1`), plain JSON Schema objects (with `as const` inference), or `pi-schema` / TypeBox
  * schemas, converting to JSON Schema once at definition time and running Standard Schema validation/transforms before
- * `execute()`.
+ * `execute()`, and `sessionIdOf` resolves the active session id on both `pi-durable` and `dsh`.
  */
 import type { Context } from "@earendil-works/chord/context";
 import type { JsonValue } from "@earendil-works/chord/json";
@@ -211,4 +211,44 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
       return typeof outcome === "string" ? { output: [{ type: "text", text: outcome }] } : outcome;
     },
   });
+}
+
+interface SessionToolApi {
+  readonly output?: unknown;
+  readonly commit?: unknown;
+  readonly conversationId?: number;
+  readonly abortSignal?: never;
+  readonly sessionId?: never;
+}
+
+interface SessionToolContext {
+  readonly abortSignal?: AbortSignal;
+  readonly sessionId?: string;
+  readonly output?: never;
+  readonly commit?: never;
+}
+
+export type SessionIdResolver = (api: SessionToolApi, context: SessionToolContext) => Promise<string | undefined>;
+
+let piSessionIdResolver: SessionIdResolver | undefined;
+
+/** Register the `pi-durable` implementation of `sessionIdOf` when the `pi-durable` runtime loads. */
+export function registerPiSessionIdResolver(resolver: SessionIdResolver): void {
+  piSessionIdResolver = resolver;
+}
+
+/**
+ * The session id of the conversation a tool runs in, as the Agent hands it out, or `undefined` when that conversation
+ * is not a session (a subagent's). Works on both `pi-durable` and `dsh`.
+ * @public
+ */
+export async function sessionIdOf(api: SessionToolApi, context: SessionToolContext): Promise<string | undefined> {
+  if (typeof context?.sessionId === "string") return context.sessionId;
+  if (typeof api?.commit === "function" && typeof api?.conversationId === "number") {
+    if (piSessionIdResolver === undefined) {
+      throw new Error("pi-durable sessionIdOf resolver is not initialized");
+    }
+    return piSessionIdResolver(api, context);
+  }
+  return undefined;
 }

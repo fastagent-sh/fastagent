@@ -1,21 +1,26 @@
 /**
- * The process's work in flight: every message not yet settled (counted by the Agent, pi-durable/agent.ts) and active
- * remote auth flows. Open requests cannot tell whether the process is idle; this can. Read by `dev`'s restart and
- * AgentCore's `/ping`.
+ * Per-instance work tracker counting unsettled message turns and active remote auth flows.
+ * Each opened agent instance owns its own tracker so concurrent instances in one process never
+ * report another instance's work as busy.
  */
-let inFlight = 0;
-
-/** Mark background work as started. */
-export function beginWork(): () => void {
-  inFlight += 1;
-  let done = false;
-  return () => {
-    if (done) return;
-    done = true;
-    inFlight -= 1;
-  };
+export interface WorkTracker {
+  begin(): () => void;
+  active(): number;
 }
 
-export function activeWork(): number {
-  return inFlight;
+/** Create an isolated work tracker for one agent instance. */
+export function createWorkTracker(): WorkTracker {
+  let inFlight = 0;
+  return {
+    begin() {
+      inFlight += 1;
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        inFlight -= 1;
+      };
+    },
+    active: () => inFlight,
+  };
 }

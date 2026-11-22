@@ -526,3 +526,13 @@ export function errorData(error: AgentErrorData): AgentErrorData {
   const { code, message, retryable, details } = error;
   return { code, message, retryable, ...(details === undefined ? {} : { details }) };
 }
+
+/** Validate `input` against an Agent API Schema, throwing `AgentError("invalid_request")` on failure. */
+export function decodeRequest<S extends Schema.Top>(schema: S, input: unknown, what: string): S["Type"] {
+  try {
+    return (Schema.decodeUnknownSync as (s: S) => (u: unknown) => S["Type"])(schema)(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.replace(/\s*\n\s*/g, " ") : String(error);
+    throw agentError("invalid_request", `${what}: ${message}`);
+  }
+}

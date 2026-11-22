@@ -63,13 +63,6 @@ CREATE TABLE IF NOT EXISTS dsh_attachments (
   data       BLOB NOT NULL,
   PRIMARY KEY (session_id, ref)
 );
-
-CREATE TABLE IF NOT EXISTS dsh_kv (
-  namespace  TEXT NOT NULL,
-  key        TEXT NOT NULL,
-  value_json TEXT NOT NULL,
-  PRIMARY KEY (namespace, key)
-);
 `;
 
 const clone = <T>(value: T): T => structuredClone(value);
@@ -179,13 +172,6 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
   const stmtSelectAttachment = db.prepare(
     "SELECT mime_type, data FROM dsh_attachments WHERE session_id = ? AND ref = ?",
   );
-  const stmtSelectKv = db.prepare("SELECT value_json FROM dsh_kv WHERE namespace = ? AND key = ?");
-  const stmtUpsertKv = db.prepare(
-    `INSERT INTO dsh_kv (namespace, key, value_json)
-     VALUES (?, ?, ?)
-     ON CONFLICT(namespace, key) DO UPDATE SET value_json = excluded.value_json`,
-  );
-  const stmtListKv = db.prepare("SELECT key, value_json FROM dsh_kv WHERE namespace = ? ORDER BY key ASC");
 
   const eventCountOf = (sessionId: string): number => {
     const row = stmtCountEvents.get(sessionId) as { count: number } | undefined;
@@ -404,23 +390,6 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
         mimeType: row.mime_type,
         data: new Uint8Array(row.data),
       } satisfies DshStoredAttachment;
-    },
-
-    async getKv(namespace, key) {
-      assertDbOpen();
-      const row = stmtSelectKv.get(namespace, key) as { value_json: string } | undefined;
-      return row?.value_json;
-    },
-
-    async putKv(namespace, key, valueJson) {
-      assertDbOpen();
-      stmtUpsertKv.run(namespace, key, valueJson);
-    },
-
-    async listKv(namespace) {
-      assertDbOpen();
-      const rows = stmtListKv.all(namespace) as Array<{ key: string; value_json: string }>;
-      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
     },
 
     async close() {

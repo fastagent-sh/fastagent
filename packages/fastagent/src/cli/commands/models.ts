@@ -1,7 +1,7 @@
 /**
  * `fastagent models [search]`: print every "provider/modelId" the agent here can name (pi-ai's built-ins with their
  * published catalogs, and the providers its definition declares), or, outside an agent, the built-ins; `[search]`
- * filters by substring. `--refresh` asks the network for the lists even when the kept ones are fresh.
+ * filters by substring.
  */
 import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";

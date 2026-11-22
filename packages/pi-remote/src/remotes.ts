@@ -8,7 +8,6 @@ import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
 import {
-  type ExtensionRemoteConfig,
   type HttpRemoteConfig,
   type RemoteConfig,
   type RemotesFile,
@@ -16,6 +15,7 @@ import {
   expandRemoteEnvRef,
   isHttpRemote,
   isHttpUrl,
+  parseApiKeys,
   parseRemoteEntry,
   parseRemotesJson,
   removeRemoteConfig,
@@ -23,7 +23,7 @@ import {
   upsertRemoteConfig,
 } from "@fastagent-sh/client/remotes";
 
-export type { ExtensionRemoteConfig, HttpRemoteConfig, RemoteConfig, RemotesFile };
+export type { HttpRemoteConfig, RemoteConfig, RemotesFile };
 export { isHttpRemote, isHttpUrl };
 
 export interface LoadRemotesOptions {
@@ -31,7 +31,7 @@ export interface LoadRemotesOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-export function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
+function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
   return resolveRemotesPath(env, homedir());
 }
 
@@ -89,7 +89,7 @@ export async function connectRemote(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ agent: Agent; defaultSessionId?: string }> {
   if (isHttpRemote(remote)) {
-    const rawKey = remote.apiKey?.trim() || env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
+    const rawKey = remote.apiKey?.trim() || parseApiKeys(env.FASTAGENT_API_KEY)[0];
     if (!rawKey) {
       throw new Error(`Remote "${name}" has no apiKey configured and FASTAGENT_API_KEY is not set`);
     }

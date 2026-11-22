@@ -1,9 +1,10 @@
-/** MCP tools on pi-durable. No replay promise is inferred from a server's annotations. */
+/** MCP tools bridged into FastAgent's harness-neutral `defineTool`. No replay promise is inferred from a server's annotations. */
 import type { JsonObject } from "@earendil-works/pi-ai";
-import { defineTool, type ToolRegistration } from "@earendil-works/pi-durable";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { Schema } from "@earendil-works/pi-schema";
 import type { McpTool } from "../mcp/client.ts";
 import { McpError } from "../mcp-api.ts";
+import { defineTool } from "./tool.ts";
 
 export function mcpTools(tools: readonly McpTool[]): ToolRegistration[] {
   return tools.map((tool) =>

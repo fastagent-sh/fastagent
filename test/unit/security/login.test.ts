@@ -14,7 +14,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
-import { activeWork } from "../../../packages/fastagent/src/busy.ts";
+import { createWorkTracker } from "../../../packages/fastagent/src/busy.ts";
 import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-login.ts";
 import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
 import { createAuthManager } from "../../../packages/fastagent/src/harnesses/models/remote-auth.ts";
@@ -309,6 +309,10 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
       const brokenPg = postgresDurableCredentialStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
       await expect(brokenPg.read("openai-codex")).rejects.toMatchObject({ code: "unavailable", retryable: true });
       await brokenPg.close();
+
+      const badDb = join(dir, "not-sqlite.sqlite");
+      await writeFile(badDb, "not a sqlite file\n");
+      expect(() => sqliteDurableCredentialStore(badDb)).toThrow(/not a database/);
     } finally {
       await store2.close();
     }
@@ -536,17 +540,18 @@ export default { model: "remote-keyed/m1", providers: [provider] };
     const models = await modelEnvironment(undefined, { authPath: null }, [slowProvider], {
       credentialStore: () => durableStore,
     });
-    const manager = createAuthManager({ models, durableStore, providers: [slowProvider], activeFlowTtlMs: 80 });
-    const baseline = activeWork();
+    const work = createWorkTracker();
+    const manager = createAuthManager({ models, durableStore, providers: [slowProvider], activeFlowTtlMs: 80, work });
+    const baseline = work.active();
     try {
       const started = await manager.startLogin({ provider: "slow-oauth", method: "oauth" });
       expect(started.status).toBe("awaiting_input");
-      expect(activeWork()).toBeGreaterThan(baseline);
+      expect(work.active()).toBeGreaterThan(baseline);
 
       await vi.waitFor(async () => {
         expect((await manager.getLogin(started.flowId)).status).toBe("canceled");
       });
-      expect(activeWork()).toBe(baseline);
+      expect(work.active()).toBe(baseline);
     } finally {
       manager.close();
       await durableStore.close();

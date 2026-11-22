@@ -38,16 +38,21 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   setLogLevel("debug"); // dev posture: verbose, includes the debug turn trace (content) — supervisor and worker both
   markDevServe(); // the worker inherits this mark
   const isWorker = process.env.FASTAGENT_DEV_WORKER === "1";
+  let instanceBusy: (() => boolean) | undefined;
   // First, so a restart asked for while the worker is still assembling is heard: with nothing running it stops at once.
   if (isWorker)
     process.on(
       "message",
-      listenForRestart(() => process.kill(process.pid, "SIGTERM")),
+      listenForRestart(() => process.kill(process.pid, "SIGTERM"), {
+        busy: () => (instanceBusy?.() ? 1 : 0),
+      }),
     );
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
   const { agentDir, modelSpec } = await enterAgentCommand(dirArg, { ...opts, input: isWorker ? false : opts.input });
   if (isWorker || opts.watch === false) {
-    await serveOnce(agentDir, modelSpec, opts);
+    await serveOnce(agentDir, modelSpec, opts, (busy) => {
+      instanceBusy = busy;
+    });
     return;
   }
   // Flag-shape checks before spawning.
@@ -70,7 +75,12 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
 }
 
 /** Assemble the agent and serve it once (the dev worker; also the --no-watch path). */
-async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions): Promise<void> {
+async function serveOnce(
+  agentDir: string,
+  modelSpec: string,
+  opts: DevOptions,
+  onOpened?: (busy: () => boolean) => void,
+): Promise<void> {
   const portFlag = parsePort(opts.port, "--port", "flag");
   const host = parseBind(opts.bind) ?? DEV_BIND;
   const opened = await loadSourceDefinition(agentDir)
@@ -87,6 +97,7 @@ async function serveOnce(agentDir: string, modelSpec: string, opts: DevOptions):
       });
     })
     .catch(failStartup);
+  onOpened?.(() => opened.busy());
   await reportAssembly(opened, modelSpec);
   // This machine's other commands reach the instance through the serve that owns it (owner.ts).
   const key = ownerKey();

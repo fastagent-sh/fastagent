@@ -6,7 +6,7 @@
 import { dirname, isAbsolute, join } from "node:path";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
-import { activeWork } from "../busy.ts";
+import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
 import {
   type ConversationStore,
@@ -37,8 +37,16 @@ import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
 import { openPiDurableRuntime } from "./pi-durable/runtime.ts";
 import { type AgentDefinition, assertDefinition } from "../definition/definition.ts";
-import { type PostgresDatabase, describeDatabase } from "../postgres.ts";
+import {
+  type PostgresDatabase,
+  type SharedPostgresDatabase,
+  describeDatabase,
+  messageBytesFor,
+  openPostgresDatabase,
+  sharedHandleOf,
+} from "../postgres.ts";
 import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
+import { log } from "../log.ts";
 
 export interface OpenServingOptions {
   /** Override the credentials file, or `null` to read no credentials file at all. */
@@ -105,6 +113,8 @@ export type ServingStorage = "instance" | { file: string; holders?: string } | "
 /** An opened agent from either harness: the Agent API plus lifecycle and optional `pi-durable` harness handle. */
 export interface ServingAgent extends Agent {
   readonly harness?: Harness;
+  /** Resolves once the runtime has stopped (explicit close or single-writer lease loss). */
+  readonly closed?: Promise<void>;
   busy?(): boolean;
   close(): Promise<void>;
 }
@@ -113,6 +123,8 @@ export interface OpenedServing {
   agent: ServingAgent;
   /** Single-call invoker backed by this instance's conversation store. */
   invoker: InvokeApi;
+  /** Whether this instance has any unsettled turn or active remote auth flow. */
+  busy(): boolean;
   /** The active runtime harness (`"pi-durable"` or `"dsh"`). */
   harness: HarnessName;
   /** The active OS sandbox mode when `harness === "dsh"`. */
@@ -160,6 +172,7 @@ export interface HarnessOpenContext {
   readonly chosen: ServingStorage;
   readonly place: InstancePlace;
   readonly database: PostgresDatabase | undefined;
+  readonly maxMessageBytes: number | undefined;
   readonly storageDescription: string;
   readonly secrets: Readonly<Record<string, string>>;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -167,6 +180,7 @@ export interface HarnessOpenContext {
   readonly code: BuiltDefinition;
   readonly models: ModelEnvironment;
   readonly traces: Traces | undefined;
+  readonly work: WorkTracker;
   openMcp(): Promise<McpClients>;
   closeAuth(): void;
 }
@@ -228,7 +242,12 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     ...(options.name === undefined ? {} : { name }),
     ...(options.database === undefined ? {} : { database: options.database }),
   };
-  const database = chosen === "instance" ? databaseOf(place) : undefined;
+  const rawDatabase = chosen === "instance" ? databaseOf(place) : undefined;
+  const ownedSharedPg: SharedPostgresDatabase | undefined =
+    rawDatabase !== undefined && sharedHandleOf(rawDatabase) === undefined
+      ? openPostgresDatabase(rawDatabase)
+      : undefined;
+  const database: PostgresDatabase | undefined = ownedSharedPg ?? rawDatabase;
   const storageDescription = describeInstanceStorage(place);
   // Fail fast on invalid OTLP settings before opening credentials or harness storage.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
@@ -255,10 +274,12 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     });
   } catch (error) {
     await durableCreds?.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     await traces?.close();
     throw error;
   }
 
+  const work = createWorkTracker();
   let auth: AuthManager | undefined;
   const ctx: HarnessOpenContext = {
     definition,
@@ -271,6 +292,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     chosen,
     place,
     database,
+    maxMessageBytes: messageBytesFor(database?.limits),
     storageDescription,
     secrets,
     env,
@@ -278,6 +300,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     code,
     models,
     traces,
+    work,
     openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
     closeAuth: () => auth?.close(),
   };
@@ -287,6 +310,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     runtimeAgent = dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
   } catch (error) {
     await durableCreds?.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     await traces?.close();
     throw error;
   }
@@ -299,6 +323,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         durableStore: durableCreds,
         providers: code.providers,
         environment: secrets,
+        work,
       });
     }
     conversations =
@@ -313,29 +338,52 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     auth?.close();
     await durableCreds?.close().catch(() => undefined);
     await runtimeAgent.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     throw error;
   }
+
+  let markClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
 
   let closingAgent: Promise<void> | undefined;
   const wrappedAgent: ServingAgent = {
     ...runtimeAgent,
+    closed,
     close: () =>
       (closingAgent ??= (async () => {
         const failures: unknown[] = [];
-        auth?.close();
-        await runtimeAgent.close().catch((error: unknown) => failures.push(error));
-        await durableCreds?.close().catch((error: unknown) => failures.push(error));
-        await conversations.close().catch((error: unknown) => failures.push(error));
+        try {
+          auth?.close();
+          await runtimeAgent.close().catch((error: unknown) => failures.push(error));
+          await durableCreds?.close().catch((error: unknown) => failures.push(error));
+          await conversations.close().catch((error: unknown) => failures.push(error));
+          await ownedSharedPg?.close().catch((error: unknown) => failures.push(error));
+        } finally {
+          markClosed();
+        }
         if (failures.length > 0) {
           throw failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed");
         }
       })()),
   };
+  void runtimeAgent.closed?.then(
+    () =>
+      wrappedAgent.close().catch((error: unknown) => {
+        log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
+      }),
+    () =>
+      wrappedAgent.close().catch((error: unknown) => {
+        log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
+      }),
+  );
   const invoker = createInvoker(wrappedAgent, conversations, { keyPrefix: `${selection.harness}:` });
 
   return {
     agent: wrappedAgent,
     invoker,
+    busy: () => work.active() > 0 || (runtimeAgent.busy?.() ?? false),
     harness: selection.harness,
     ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...(auth === undefined ? {} : { auth }),
@@ -360,6 +408,8 @@ export interface LocalAgent extends Agent, InvokeApi {
   serve(options?: ServeAgentOptions): Promise<Service>;
   /** pi-durable's own API when running on `harness: "pi-durable"`; absent on `harness: "dsh"`. */
   readonly harness?: Harness;
+  /** Resolves once the instance stops serving (explicit `close()` or single-writer lease loss). */
+  readonly closed?: Promise<void>;
   /**
    * Whether the process has work in flight (a message not yet ended or an active login flow).
    * For a platform that reclaims an idle machine (AgentCore's `HealthyBusy`).
@@ -445,7 +495,8 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     invoke: invoker.invoke,
     invokeStream: invoker.invokeStream,
     ...(piHarness === undefined ? {} : { harness: piHarness }),
-    busy: () => activeWork() > 0 || (agent.busy?.() ?? piHarness?.wake().active ?? false),
+    ...(agent.closed === undefined ? {} : { closed: agent.closed }),
+    busy: () => opened.busy(),
     serve(serveOptions = {}) {
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
       if (served !== undefined) return Promise.reject(new Error("this agent is already served"));

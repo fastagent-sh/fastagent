@@ -9,7 +9,7 @@ import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent, ServingStorage } from "../serving.ts";
-import { type PostgresDatabase, messageBytesFor } from "../../postgres.ts";
+import type { PostgresDatabase } from "../../postgres.ts";
 import type { DurableAgent } from "./agent.ts";
 import { mcpTools } from "../mcp.ts";
 import { assembleAgent } from "./open.ts";
@@ -64,13 +64,14 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     chosen,
     place,
     database,
+    maxMessageBytes,
     storageDescription,
     processEnv,
     code,
     models,
     traces,
+    work,
   } = ctx;
-  const maxMessageBytes = messageBytesFor(database?.limits);
 
   let stopRuns: ((error: Error) => void) | undefined;
   const storage = await openStorage(place, database, chosen, (error) => stopRuns?.(error));
@@ -93,6 +94,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(traces === undefined ? {} : { telemetry: traces.context }),
       ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
+      work,
     });
   } catch (error) {
     const failures: unknown[] = [error];
@@ -124,8 +126,9 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
 
   const closeAgent = agent.close.bind(agent);
   let closing: Promise<void> | undefined;
-  const managedAgent: DurableAgent = {
+  const managedAgent: ServingAgent = {
     ...agent,
+    closed: agent.harness.closed.then(() => undefined),
     close: () =>
       (closing ??= (async () => {
         const failures: unknown[] = [];

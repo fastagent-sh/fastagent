@@ -254,8 +254,7 @@ const fileText = (path: string): string | undefined => {
 
 /**
  * The prompt the definition contributes: `SYSTEM.md` as written, `AGENTS.md` as project context, the skills, where it
- * works, and, deployed, what of a change it makes to itself lasts. `wake`: the agent has the wake tool; `runsAs` says
- * whether it is deployed, and where.
+ * works, and, deployed, what of a change it makes to itself lasts. `runsAs` says whether it is deployed, and where.
  */
 export function definitionSections(
   agentDir: string,
@@ -287,6 +286,25 @@ export function definitionSections(
     ),
     section("self_change", () => (options.runsAs.deployed ? selfChangeSection({ canWrite, canExec }) : undefined)),
   ];
+}
+
+/** Render the definition's current prompt sections into a single prompt string (evaluated per turn). */
+export function renderDefinitionPrompt(
+  agentDir: string,
+  options: {
+    runsAs: RunsAs;
+    workdir?: string;
+    source?: boolean;
+    codingTools?: readonly CodingToolName[];
+  },
+): string | undefined {
+  const sections = definitionSections(agentDir, options);
+  const texts: string[] = [];
+  for (const entry of sections) {
+    const content = typeof entry.render === "function" ? entry.render({} as never, {} as never) : entry.render;
+    if (typeof content === "string" && content.trim().length > 0) texts.push(content.trim());
+  }
+  return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
 function selfChangeSection(capabilities: { canWrite: boolean; canExec: boolean }): string | undefined {

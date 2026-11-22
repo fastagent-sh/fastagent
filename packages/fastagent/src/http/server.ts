@@ -22,6 +22,7 @@ import {
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
+import { parseApiKeys } from "@fastagent-sh/client/remotes";
 import { createInvoker, memoryConversationStore } from "../conversations.ts";
 import type { Handler } from "./serve.ts";
 import { secretEquals } from "./secret.ts";
@@ -39,12 +40,7 @@ import {
 /** The instance's keys: several, separated by commas, so a key is replaced without a gap. */
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
-export function apiKeysFrom(value: string | undefined): string[] {
-  return (value ?? "")
-    .split(",")
-    .map((key) => key.trim())
-    .filter((key) => key !== "");
-}
+export const apiKeysFrom = parseApiKeys;
 
 const MAX_BODY = ByteSize.mebibytes(32);
 /** Proxies close a connection that says nothing for a minute or so; a comment keeps an event stream open. */

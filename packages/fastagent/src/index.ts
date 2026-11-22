@@ -70,6 +70,7 @@ export {
 } from "./harnesses/define.ts";
 export {
   defineTool,
+  sessionIdOf,
   type InferToolArgs,
   type StandardJSONSchemaV1,
   type ToolDefinition,
@@ -78,5 +79,3 @@ export {
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
 export { defineDefinition, type AgentDefinition } from "./definition/definition.ts";
-// The session a tool runs in, as the Agent hands it out.
-export { sessionIdOf } from "./harnesses/pi-durable/ids.ts";

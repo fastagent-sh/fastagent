@@ -33,6 +33,8 @@ export interface PostgresDshStoreOptions {
   readonly waitMs?: number;
   /** Custom owner identifier for diagnostics. Default: random UUID. */
   readonly owner?: string;
+  /** Invoked once if the single-writer lease is lost or fails renewal before expiry. */
+  readonly onLost?: (error: Error) => void;
 }
 
 export interface PostgresDshEventStore extends DshEventStoreBackend {
@@ -91,13 +93,6 @@ const MIGRATION_STATEMENTS: readonly string[] = [
     mime_type  TEXT NOT NULL,
     data_b64   TEXT NOT NULL,
     PRIMARY KEY (instance, session_id, ref)
-  )`,
-  `CREATE TABLE IF NOT EXISTS dsh_kv (
-    instance   TEXT NOT NULL,
-    namespace  TEXT NOT NULL,
-    key        TEXT NOT NULL,
-    value_json TEXT NOT NULL,
-    PRIMARY KEY (instance, namespace, key)
   )`,
 ];
 
@@ -171,11 +166,23 @@ export async function openPostgresDshStore(
 
   let storeClosed = false;
   let leaseLost = false;
+  let renewedAt = Date.now();
+  let onLost = options.onLost;
   const writers = new Set<string>();
+
+  const lostError = (reason?: string) => new Error(reason ?? `PostgreSQL DSH lease for "${instance}" was lost`);
+
+  const giveUp = (error: Error) => {
+    leaseLost = true;
+    clearInterval(renewTimer);
+    const cb = onLost;
+    onLost = undefined;
+    cb?.(error);
+  };
 
   const assertStoreOpen = () => {
     if (storeClosed) throw new Error(`PostgreSQL DSH store for "${instance}" is closed`);
-    if (leaseLost) throw new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
+    if (leaseLost) throw lostError();
   };
 
   const assertLeaseInTx = async (tx: DshPgExecutor): Promise<void> => {
@@ -187,14 +194,16 @@ export async function openPostgresDshStore(
       [instance, owner, leaseMs],
     );
     if (rows.length === 0) {
-      leaseLost = true;
-      throw new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
+      const error = lostError();
+      giveUp(error);
+      throw error;
     }
+    renewedAt = Date.now();
   };
 
-  const renewIntervalMs = Math.max(100, Math.floor(leaseMs / 3));
+  const renewIntervalMs = Math.max(100, Math.floor(leaseMs / 4));
   const renewTimer = setInterval(() => {
-    if (storeClosed) return;
+    if (storeClosed || leaseLost) return;
     void database
       .query<{ owner: string }>(
         `UPDATE dsh_leases
@@ -204,10 +213,21 @@ export async function openPostgresDshStore(
         [instance, owner, leaseMs],
       )
       .then((rows) => {
-        if (rows.length === 0) leaseLost = true;
+        if (rows.length === 0) {
+          giveUp(lostError());
+        } else {
+          renewedAt = Date.now();
+        }
       })
-      .catch(() => {
-        // Transient DB hiccup; next renewal tick will retry or lease will expire.
+      .catch((error: unknown) => {
+        const unrenewedMs = Date.now() - renewedAt;
+        if (unrenewedMs >= leaseMs * (2 / 3)) {
+          giveUp(
+            lostError(
+              `PostgreSQL DSH lease for "${instance}" went ${Math.round(unrenewedMs / 1000)}s without renewal (${String(error)})`,
+            ),
+          );
+        }
       });
   }, renewIntervalMs);
   renewTimer.unref?.();
@@ -540,40 +560,10 @@ export async function openPostgresDshStore(
       } satisfies DshStoredAttachment;
     },
 
-    async getKv(namespace, key) {
-      assertStoreOpen();
-      const rows = await database.query<{ value_json: string }>(
-        "SELECT value_json FROM dsh_kv WHERE instance = $1 AND namespace = $2 AND key = $3",
-        [instance, namespace, key],
-      );
-      return rows[0]?.value_json;
-    },
-
-    async putKv(namespace, key, valueJson) {
-      assertStoreOpen();
-      await database.transaction(async (tx) => {
-        await assertLeaseInTx(tx);
-        await tx.query(
-          `INSERT INTO dsh_kv (instance, namespace, key, value_json)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (instance, namespace, key) DO UPDATE SET value_json = EXCLUDED.value_json`,
-          [instance, namespace, key, valueJson],
-        );
-      });
-    },
-
-    async listKv(namespace) {
-      assertStoreOpen();
-      const rows = await database.query<{ key: string; value_json: string }>(
-        "SELECT key, value_json FROM dsh_kv WHERE instance = $1 AND namespace = $2 ORDER BY key ASC",
-        [instance, namespace],
-      );
-      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
-    },
-
     async close() {
       if (storeClosed) return;
       storeClosed = true;
+      onLost = undefined;
       clearInterval(renewTimer);
       writers.clear();
       await database

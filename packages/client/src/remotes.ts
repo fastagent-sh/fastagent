@@ -57,6 +57,14 @@ export function isHttpRemote(remote: RemoteConfig): remote is HttpRemoteConfig {
   return remote.type === "http";
 }
 
+/** Parse comma-separated `FASTAGENT_API_KEY` values, trimming whitespace and dropping blanks. */
+export function parseApiKeys(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => key !== "");
+}
+
 function stripTrailingSlashes(value: string): string {
   let end = value.length;
   while (end > 0 && (value.charCodeAt(end - 1) === 47 || value.charCodeAt(end - 1) === 92)) {

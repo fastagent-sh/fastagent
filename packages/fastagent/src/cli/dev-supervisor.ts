@@ -8,7 +8,6 @@ import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, isUnderDir } from "../paths.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { log } from "../log.ts";
-import { activeWork } from "../busy.ts";
 
 /** The agent's code (its tools and extensions), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
@@ -38,15 +37,15 @@ function devWatchIgnored(root: string, envFile: string): (path: string) => boole
 const DEV_RESTART_WAIT_MS = 10 * 60_000;
 
 /**
- * In the dev worker: on the supervisor's `restart`, wait until no turn runs (`activeWork`, which every leased session
- * counts), then `stop`. Bounded by `limitMs`, after which it stops anyway and says it cut work off: a chat that
- * keeps the worker busy must not hold an edit back forever. A second `restart` while waiting is the same restart.
+ * In the dev worker: on the supervisor's `restart`, wait until no turn runs (`busy`, which the worker's opened
+ * instance supplies), then `stop`. Bounded by `limitMs`, after which it stops anyway and says it cut work off: a chat
+ * that keeps the worker busy must not hold an edit back forever. A second `restart` while waiting is the same restart.
  */
 export function listenForRestart(
   stop: () => void,
   options: { busy?: () => number; limitMs?: number; pollMs?: number } = {},
 ): (message: unknown) => void {
-  const { busy = activeWork, limitMs = DEV_RESTART_WAIT_MS, pollMs = 100 } = options;
+  const { busy = () => 0, limitMs = DEV_RESTART_WAIT_MS, pollMs = 100 } = options;
   let restarting = false;
   return (message) => {
     if ((message as { type?: unknown } | null)?.type !== "restart" || restarting) return;
