@@ -197,13 +197,16 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
   const toolsList: FastAgentToolLike[] = [...builtInCodingTools, ...userTools];
   for (const tool of toolsList) state.toolsByName.set(tool.name, tool);
 
-  if (options.systemPrompt !== undefined && options.systemPrompt.length > 0) {
-    ctx.systemPrompt.section({
-      name: "fastagent-system",
-      order: 10,
-      text: options.systemPrompt,
-      interpolate: false,
-    });
+  if (options.systemPrompt !== undefined) {
+    const prompt = options.systemPrompt;
+    if (typeof prompt === "function" || prompt.length > 0) {
+      ctx.systemPrompt.section({
+        name: "fastagent-system",
+        order: 10,
+        text: typeof prompt === "function" ? () => prompt() ?? "" : prompt,
+        interpolate: false,
+      });
+    }
   }
 
   if (options.models !== undefined) {
@@ -278,6 +281,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         })),
         models: modelsList,
         ...(options.model !== undefined ? { defaultModel: options.model } : {}),
+        ...(options.unusableDefault !== undefined ? { unusableDefault: options.unusableDefault } : {}),
       };
     },
 

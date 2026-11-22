@@ -138,9 +138,6 @@ export interface DshEventStoreBackend {
   listMessages?(sessionId?: string): Promise<readonly DshStoredMessage[]>;
   putAttachment?(attachment: DshStoredAttachment): Promise<void>;
   getAttachment?(sessionId: string, ref: string): Promise<DshStoredAttachment | undefined>;
-  getKv?(namespace: string, key: string): Promise<string | undefined>;
-  putKv?(namespace: string, key: string, valueJson: string): Promise<void>;
-  listKv?(namespace: string): Promise<readonly { readonly key: string; readonly valueJson: string }[]>;
 }
 
 /** Runtime helper object passed to FastAgent tools (`defineTool`). */
@@ -218,12 +215,14 @@ export interface DshHarnessOptions {
   readonly starters?: readonly string[];
   /** Absolute working directory for the agent instance. */
   readonly workdir: string;
-  /** System prompt text (from `SYSTEM.md` / `AGENTS.md`). */
-  readonly systemPrompt?: string;
+  /** System prompt text or per-turn provider (from `SYSTEM.md` / `AGENTS.md` / `skills/`). */
+  readonly systemPrompt?: string | (() => string | undefined);
   /** Model registry (`@earendil-works/pi-ai`) supplying providers, auth, and streaming. */
   readonly models?: Models;
   /** Default model selection (`provider` + `modelId`). */
   readonly model?: ModelRef;
+  /** Configured default model that cannot be resolved (`info().unusableDefault`). */
+  readonly unusableDefault?: { readonly spec: string; readonly reason: string };
   readonly thinkingLevel?: ThinkingLevel;
   /** Portable FastAgent tools to bridge into DSH's `ToolsService`. */
   readonly tools?: readonly FastAgentToolLike[];
@@ -243,6 +242,8 @@ export interface DshHarnessOptions {
   readonly sandboxNetwork?: boolean;
   /** What becomes of unsettled messages from an earlier process on startup. Default: `"resume"`. */
   readonly unfinished?: "resume" | "refuse";
+  /** Maximum serialized message size accepted by the backing storage. */
+  readonly maxMessageBytes?: number;
   /** Optional telemetry context for exporting content-free model and tool run spans. */
   readonly telemetry?: DshTelemetryContext;
   /** Event log + ledger storage backend. Defaults to in-memory storage when omitted. */

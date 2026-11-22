@@ -88,6 +88,17 @@ export async function admitMessage(
     throw agentError("invalid_request", `invalid whenBusy: ${String(whenBusy)}`);
   }
   const { rawParts, expandedParts } = normalizeSendContent(request.content, commands);
+  const maxMessageBytes = state.options.maxMessageBytes;
+  if (maxMessageBytes !== undefined) {
+    const bytes = Buffer.byteLength(JSON.stringify(rawParts));
+    if (bytes > maxMessageBytes) {
+      throw agentError(
+        "invalid_request",
+        `The message is ${bytes} bytes, over the ${maxMessageBytes} this agent's storage takes`,
+        { reason: "too_large" },
+      );
+    }
+  }
 
   let releaseAdmit!: () => void;
   const prevChain = live.admitChain;
@@ -111,7 +122,12 @@ export async function admitMessage(
 
     const effectiveModel = live.meta.model ?? state.options.model;
     if (effectiveModel === undefined) {
-      throw agentError("missing_model", "no model configured for session or agent");
+      throw agentError(
+        "missing_model",
+        state.options.unusableDefault === undefined
+          ? "no model configured for session or agent"
+          : `This session names no model, and the agent's default ${state.options.unusableDefault.spec} is unusable: ${state.options.unusableDefault.reason}`,
+      );
     }
     if (
       state.options.models !== undefined &&
