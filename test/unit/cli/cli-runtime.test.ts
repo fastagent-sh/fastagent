@@ -235,7 +235,64 @@ registerHooks({
         remoteEnv,
       );
       expect([unknown.code, unknown.stderr]).toEqual([2, expect.stringContaining("unknown remote")]);
+
+      // --conversation reuses one session across single-call HTTP invokes.
+      const conv1 = await runInProcess([
+        "-C",
+        outside,
+        "invoke",
+        "--url",
+        url,
+        "--key",
+        "the-key",
+        "--conversation",
+        "daily-digest",
+        "first",
+      ]);
+      expect([conv1.code, conv1.stdout.trim()], conv1.stderr).toEqual([0, "seen 1"]);
+      const conv2 = await runInProcess([
+        "-C",
+        outside,
+        "invoke",
+        "--url",
+        url,
+        "--key",
+        "the-key",
+        "--conversation",
+        "daily-digest",
+        "second",
+      ]);
+      expect([conv2.code, conv2.stdout.trim()], conv2.stderr).toEqual([0, "seen 2"]);
+      expect(sessionOf(conv2)).toBe(sessionOf(conv1));
+
+      const conflict = await runInProcess([
+        "-C",
+        outside,
+        "invoke",
+        "--url",
+        url,
+        "--key",
+        "the-key",
+        "--session",
+        sessionOf(conv1),
+        "--conversation",
+        "daily-digest",
+        "bad",
+      ]);
+      expect([conflict.code, conflict.stderr]).toEqual([
+        2,
+        expect.stringContaining("either --session or --conversation"),
+      ]);
     });
+  });
+
+  it("invoke --conversation persists its session mapping locally across cold runs", async () => {
+    const dir = await agent("fa-cli-conv-local-");
+    const first = await runInProcess(["-C", dir, "invoke", "--conversation", "ops-check", "hello"]);
+    expect([first.code, first.stdout.trim()], first.stderr).toEqual([0, "seen 1"]);
+    const second = await runInProcess(["-C", dir, "invoke", "--conversation", "ops-check", "again"]);
+    expect([second.code, second.stdout.trim()], second.stderr).toEqual([0, "seen 2"]);
+    expect(sessionOf(second)).toBe(sessionOf(first));
   });
 });
 

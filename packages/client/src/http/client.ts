@@ -18,12 +18,14 @@ import {
   StartAuthLoginRequest,
   CreateSessionOptions,
   EntriesOptions,
+  InvokeRequest,
   LIMITS,
   ListOptions,
   type Message,
   MessageKey,
   type MessageStreamEvent,
   type Page,
+  type RemoteAgent,
   SendRequest,
   type SessionEvent,
   SessionChanges,
@@ -117,7 +119,7 @@ function readFailure(baseUrl: string, error: unknown): AgentError {
 
 /** How far a send got: its key once it is made, and its message's id once that is known. */
 interface SendStage {
-  sessionId: string;
+  sessionId?: string;
   key: string;
   messageId?: string;
 }
@@ -129,7 +131,11 @@ interface SendStage {
  */
 function sendFailure(baseUrl: string, stage: SendStage, error: unknown): AgentError {
   const { sessionId, key, messageId } = stage;
-  const finds = { sessionId, idempotencyKey: key, ...(messageId === undefined ? {} : { messageId }) };
+  const finds = {
+    ...(sessionId === undefined ? {} : { sessionId }),
+    idempotencyKey: key,
+    ...(messageId === undefined ? {} : { messageId }),
+  };
   if (error instanceof AgentError && error.code === "unconfirmed") {
     const known = typeof error.details === "object" && error.details !== null ? error.details : {};
     return new AgentError({ ...errorData(error), details: { ...known, ...finds } });
@@ -187,12 +193,13 @@ function createTransport(url: string, options: ConnectOptions) {
     first: (wait: number | undefined) => Promise<Message>,
     waitOptions: WaitOptions | undefined,
     failureAfter: (message: Message) => (error: unknown) => AgentError = () => read,
+    firstCapSeconds: number = LIMITS.httpWaitSeconds,
   ) => {
     const wait = waitOptions?.wait === undefined ? undefined : checked(Wait, waitOptions.wait, "wait");
     const deadline = wait === undefined ? undefined : Date.now() + wait * 1000;
     const remaining = () => (deadline === undefined ? 0 : Math.max(0, deadline - Date.now()) / 1000);
-    const capped = () => Math.min(remaining(), LIMITS.httpWaitSeconds);
-    let message = await first(wait === undefined ? undefined : capped());
+    const capped = (limit: number = LIMITS.httpWaitSeconds) => Math.min(remaining(), limit);
+    let message = await first(wait === undefined ? undefined : capped(firstCapSeconds));
     while (!hasEnded(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
       message = await request(
@@ -207,7 +214,7 @@ function createTransport(url: string, options: ConnectOptions) {
   return { api, sending, read, sent, request, waited };
 }
 
-export function connectAgent(url: string, options: ConnectOptions): Agent {
+export function connectAgent(url: string, options: ConnectOptions): RemoteAgent {
   const { api, sending, read, sent, request, waited } = createTransport(url, options);
   const client = api.agent;
 
@@ -276,6 +283,23 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
   const keyed = (sendRequest: SendRequest, what: string) => {
     const { sessionId, idempotencyKey, ...body } = checked(SendRequest, sendRequest, what);
     return { stage: { sessionId, key: idempotencyKey ?? crypto.randomUUID() }, body };
+  };
+
+  const keyedInvoke = (invokeRequest: InvokeRequest, what: string) => {
+    const { idempotencyKey, ...body } = checked(InvokeRequest, invokeRequest, what);
+    if (body.conversation !== undefined && body.sessionId !== undefined) {
+      throw agentError("invalid_request", `${what}: pass either conversation or sessionId, not both`);
+    }
+    if (body.conversation !== undefined && body.conversation.trim() === "") {
+      throw agentError("invalid_request", `${what}: conversation must not be blank`);
+    }
+    return {
+      stage: {
+        ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
+        key: idempotencyKey ?? crypto.randomUUID(),
+      },
+      body,
+    };
   };
 
   return {
@@ -398,6 +422,47 @@ export function connectAgent(url: string, options: ConnectOptions): Agent {
           getOptions,
         );
       },
+    },
+    invoke: async (invokeRequest, invokeOptions) => {
+      const { stage, body } = keyedInvoke(invokeRequest, "invoke");
+      return waited(
+        (wait) =>
+          request(
+            client.invoke({
+              headers: { "idempotency-key": stage.key },
+              payload: { ...body, wait },
+            }) as Effect.Effect<Message, unknown>,
+            invokeOptions?.signal,
+            sent(stage),
+          ),
+        invokeOptions,
+        (message) => sent({ sessionId: message.sessionId, key: stage.key, messageId: message.id }),
+        LIMITS.invokeWaitSeconds,
+      );
+    },
+    invokeStream: (invokeRequest, streamOptions) => {
+      let stage: SendStage | undefined;
+      let messageId: string | undefined;
+      return watched<MessageStreamEvent>(
+        Effect.try({ try: () => keyedInvoke(invokeRequest, "invokeStream"), catch: (error) => error }).pipe(
+          Effect.flatMap((keying) => {
+            stage = keying.stage;
+            return client.invoke({
+              headers: { "idempotency-key": keying.stage.key },
+              payload: { ...keying.body, stream: true },
+            }) as Effect.Effect<Stream.Stream<{ readonly type: string }, unknown>, unknown>;
+          }),
+        ),
+        {
+          known: MESSAGE_STREAM_EVENT_TYPES,
+          isLast: (event) => {
+            if (event.type === "message") messageId = event.message.id;
+            return event.type === "done" && event.message.id === messageId;
+          },
+          refused: (error) => (stage === undefined ? read(error) : sent(stage)(error)),
+          signal: streamOptions?.signal,
+        },
+      );
     },
   };
 }

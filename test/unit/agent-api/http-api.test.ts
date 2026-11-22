@@ -59,6 +59,7 @@ describe("the Agent API over HTTP", () => {
       "/v1/auth/login/{flowId}/input",
       "/v1/auth/providers",
       "/v1/auth/providers/{provider}",
+      "/v1/invoke",
       "/v1/openapi.json",
       "/v1/sessions",
       "/v1/sessions/{sessionId}",
@@ -86,6 +87,102 @@ describe("the Agent API over HTTP", () => {
     });
     await expect(authClient.cancelLogin("missing")).rejects.toMatchObject({ code: "not_found" });
     await expect(authClient.logout("openai")).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  describe("POST /v1/invoke", () => {
+    it("creates an ephemeral session, deduplicates retries by Idempotency-Key without creating a second session, and streams SSE", async () => {
+      const client = connectAgent(server.url, { apiKey: KEY });
+
+      const first = await client.invoke({ content: "hello", idempotencyKey: "ephemeral-1" }, { wait: 30 });
+      expect(first).toMatchObject({ status: "completed", answer: { text: "answer: hello" } });
+
+      // Retrying with the same idempotency key returns the exact same message and creates no second session.
+      const retried = await client.invoke({ content: "hello", idempotencyKey: "ephemeral-1" }, { wait: 30 });
+      expect(retried).toEqual(first);
+      expect((await client.sessions.list()).data).toHaveLength(1);
+
+      // Streaming invoke delivers message -> events -> done over SSE in a single HTTP request.
+      const events: string[] = [];
+      let streamedSessionId: string | undefined;
+      for await (const event of client.invokeStream({ content: "streamed" })) {
+        events.push(event.type);
+        if (event.type === "message") streamedSessionId = event.message.sessionId;
+      }
+      expect(streamedSessionId).toBeDefined();
+      expect(streamedSessionId).not.toBe(first.sessionId);
+      expect(events[0]).toBe("message");
+      expect(events.at(-1)).toBe("done");
+    });
+
+    it("resolves named conversations across calls, serializes concurrent first calls, self-heals after delete, and honors whenBusy", async () => {
+      const client = connectAgent(server.url, { apiKey: KEY });
+
+      // Concurrent first invokes on the same new conversation create exactly one session titled with its name.
+      const [a, b] = await Promise.all([
+        client.invoke({ conversation: "daily-digest", content: "first" }, { wait: 30 }),
+        client.invoke({ conversation: "daily-digest", content: "second" }, { wait: 30 }),
+      ]);
+      expect(a.sessionId).toBe(b.sessionId);
+      expect((await client.sessions.get(a.sessionId)).title).toBe("daily-digest");
+      expect((await client.sessions.list()).data).toHaveLength(1);
+
+      // Deleting the underlying session causes the next invoke to self-heal with a fresh session.
+      await client.sessions.delete(a.sessionId);
+      const healed = await client.invoke({ conversation: "daily-digest", content: "after delete" }, { wait: 30 });
+      expect(healed.sessionId).not.toBe(a.sessionId);
+      expect(healed.answer?.text).toBe("answer: after delete");
+
+      // Busy conversation refuses concurrent invoke when whenBusy: "reject".
+      const holding = await client.invoke({ conversation: "daily-digest", content: "hold" });
+      await vi.waitFor(() => expect(subject.held()).toBe(1));
+      await expect(
+        client.invoke({ conversation: "daily-digest", content: "overlap", whenBusy: "reject" }),
+      ).rejects.toMatchObject({ code: "busy" });
+      subject.release();
+      await client.messages.get({ sessionId: holding.sessionId, messageId: holding.id }, { wait: 30 });
+    });
+
+    it("enforces strict 404 on explicit sessionId and refuses invalid invoke requests with 400", async () => {
+      const client = connectAgent(server.url, { apiKey: KEY });
+      const created = await client.sessions.create();
+
+      const ok = await client.invoke({ sessionId: created.id, content: "ping" }, { wait: 30 });
+      expect(ok).toMatchObject({ sessionId: created.id, status: "completed", answer: { text: "answer: ping" } });
+
+      await expect(client.invoke({ sessionId: "no-such-session", content: "hi" })).rejects.toMatchObject({
+        code: "not_found",
+      });
+
+      // Mutually exclusive conversation + sessionId, blank conversation, and stream + wait are refused 400.
+      const both = await fetch(`${server.url}/v1/invoke`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ conversation: "ops", sessionId: created.id, content: "hi" }),
+      });
+      expect(both.status).toBe(400);
+      expect(await both.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+      const blank = await fetch(`${server.url}/v1/invoke`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ conversation: "   ", content: "hi" }),
+      });
+      expect(blank.status).toBe(400);
+
+      const streamWait = await fetch(`${server.url}/v1/invoke`, {
+        method: "POST",
+        headers: auth(),
+        body: JSON.stringify({ content: "hi", stream: true, wait: 10 }),
+      });
+      expect(streamWait.status).toBe(400);
+      expect(await streamWait.json()).toMatchObject({ error: { code: "invalid_request" } });
+
+      // invokeStream refuses invalid requests on first read.
+      const badIter = client
+        .invokeStream({ conversation: "ops", sessionId: created.id, content: "hi" })
+        [Symbol.asyncIterator]();
+      await expect(badIter.next()).rejects.toMatchObject({ code: "invalid_request" });
+    });
   });
 });
 

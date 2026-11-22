@@ -69,6 +69,7 @@ may write into one session, so the session's status says it is busy, not whether
 | `messages.send` | Send a message; answers once it is recorded, or with `wait` (seconds) once it has ended |
 | `messages.stream` | Send a message and receive it as it is written |
 | `messages.get` | A message by id or by its key, with `wait` too |
+| `invoke`, `invokeStream` | Single-call send (`POST /v1/invoke`): fresh session, caller-named `conversation` (auto-created/reused), or strict `sessionId`, with `Idempotency-Key` deduplication |
 
 A `signal` lets go of a wait or a stream, never of the work: the message goes on. Only `cancel` stops the agent. A
 `wait` is an upper bound: the answer may come before the message ends, so check `status`.
@@ -178,6 +179,7 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`; `messages.stream` with `"stream": true` |
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
+| `POST /v1/invoke` | Single-call `invoke` (`wait` up to 600 s); `invokeStream` with `"stream": true` |
 | `GET /v1/auth/providers` | `auth.providers` |
 | `POST /v1/auth/login` | `auth.startLogin` |
 | `GET /v1/auth/login/{flowId}?wait` | `auth.getLogin` |
@@ -197,6 +199,11 @@ SEND=$(uuidgen)   # one key per message: running this again is the same message
 curl -s https://support.example.com/v1/sessions/$SESSION/messages -H "Authorization: Bearer $KEY" \
   -H "Content-Type: application/json" -H "Idempotency-Key: $SEND" \
   -d '{"content": "Where is order 9231?", "wait": 60}'
+
+# Or single-call invoke (for external schedulers, webhooks, or stateless callers):
+curl -s https://support.example.com/v1/invoke -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" -H "Idempotency-Key: daily-2026-04-15" \
+  -d '{"conversation": "daily-digest", "content": "/daily-digest", "whenBusy": "reject", "wait": 300}'
 ```
 
 ## Security

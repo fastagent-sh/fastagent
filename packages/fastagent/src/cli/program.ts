@@ -132,6 +132,7 @@ const invoke: CommandSpec = {
     NO_INPUT,
     { flags: "--json", description: "print receipt and message events as JSON lines" },
     { flags: "--session <id>", description: "continue an existing session" },
+    { flags: "--conversation <name>", description: "reuse or create a session named by caller key" },
     ...URL_FLAGS,
     ...INSTANCE_FLAGS,
     ENV_FILE_FLAG,
@@ -140,6 +141,7 @@ const invoke: CommandSpec = {
     { cmd: `fastagent invoke "summarize today's inbox"` },
     { cmd: `echo "summarize this" | fastagent invoke`, note: "from stdin" },
     { cmd: `fastagent invoke --session <id> "which number?"` },
+    { cmd: `fastagent invoke --conversation daily-digest "/daily-digest"`, note: "named conversation" },
     { cmd: `fastagent invoke --url https://agent.example.com "hello"`, note: "a deployment" },
   ],
   run: async (args, f) =>
@@ -149,6 +151,7 @@ const invoke: CommandSpec = {
       input: f.input !== false,
       json: f.json === true,
       ...(typeof f.session === "string" ? { session: f.session } : {}),
+      ...(typeof f.conversation === "string" ? { conversation: f.conversation } : {}),
       ...urlOptions(f),
       instance: instanceFlags(f),
     }),

@@ -30,6 +30,7 @@ import {
   Entry,
   EntriesOptions,
   IdempotencyKey,
+  InvokeRequest,
   ListOptions,
   Message,
   MessageStreamEvent,
@@ -172,6 +173,16 @@ const SendBody = Schema.Struct({
   stream: Schema.optional(Schema.Boolean),
 });
 
+const { idempotencyKey: ___, ...invokeBody } = InvokeRequest.fields;
+
+/** `POST /v1/invoke`: single-call send without its key (`Idempotency-Key`). */
+const InvokeBody = Schema.Struct({
+  ...invokeBody,
+  wait: Schema.optional(Wait),
+  /** `invokeStream`: the answer is the message's events. */
+  stream: Schema.optional(Schema.Boolean),
+});
+
 /**
  * A key as a header carries it: percent-encoded, as in the `by-key` path, since a header holds only Latin-1 and loses
  * the spaces around a value, while a key may be any 1 to 256 characters.
@@ -259,6 +270,12 @@ const AgentGroup = HttpApiGroup.make("agent")
       params: { ...sessionPath, idempotencyKey: IdempotencyKey },
       query: WaitQuery,
       success: Message,
+      error: Refused,
+    }),
+    HttpApiEndpoint.post("invoke", "/invoke", {
+      headers: { "idempotency-key": Schema.optional(KeyHeader) },
+      payload: InvokeBody,
+      success: [Message, HttpApiSchema.StreamSse({ events: MessageStreamEventFrame })],
       error: Refused,
     }),
   )

@@ -3,7 +3,14 @@
  * prints its session's id; `--session <id>` sends the message into that session, continuing it. `--url` sends it to a
  * served agent instead, over its Agent API, with the same output and exit code.
  */
-import { type Agent, AgentError, type MessageStreamEvent, type SessionSettings } from "@fastagent-sh/client/agent-api";
+import {
+  type Agent,
+  AgentError,
+  type InvokeApi,
+  type MessageStreamEvent,
+  type RemoteAgent,
+  type SessionSettings,
+} from "@fastagent-sh/client/agent-api";
 import { modelRefOf } from "../../model-ref.ts";
 import { connectAgent } from "@fastagent-sh/client";
 import { resolveStateRoot } from "../../paths.ts";
@@ -21,6 +28,7 @@ export interface InvokeOptions {
   input?: boolean;
   json?: boolean;
   session?: string;
+  conversation?: string;
   /** A served agent's base URL: the message goes there, over its Agent API. */
   url?: string;
   /** A named remote from ~/.config/fastagent/remotes.json. */
@@ -60,22 +68,49 @@ async function answer(
   authHint: string,
 ): Promise<number> {
   // Both renderers exit 1 unless the message completed: CI gates on it.
+  let wrote = false;
   const exitCode = json
     ? await runInvokeJson(events, (line) => process.stdout.write(`${line}\n`))
     : await runInvokeStream(
         events,
-        (text) => process.stdout.write(text),
+        (text) => {
+          wrote = true;
+          process.stdout.write(text);
+        },
         (line) => console.error(line),
         authHint,
       );
-  if (!json) process.stdout.write("\n");
+  if (!json && wrote) process.stdout.write("\n");
   return exitCode;
+}
+
+function announceSession(
+  events: AsyncIterable<MessageStreamEvent>,
+  continueFlags?: (sessionId: string) => string,
+): AsyncIterable<MessageStreamEvent> {
+  async function* tapped(): AsyncGenerator<MessageStreamEvent> {
+    let announced = false;
+    for await (const event of events) {
+      if (!announced && event.type === "message") {
+        announced = true;
+        const sid = event.message.sessionId;
+        const flags = continueFlags ? continueFlags(sid) : `--session ${sid}`;
+        console.error(`[fastagent] session ${sid} (continue it with ${flags})`);
+      }
+      yield event;
+    }
+  }
+  return tapped();
+}
+
+function hasInvokeStream(agent: Agent): agent is RemoteAgent {
+  return typeof (agent as Partial<InvokeApi>).invokeStream === "function";
 }
 
 /** `--url` / `--remote`: send through a served agent's Agent API; nothing opens locally. */
 async function runRemoteInvoke(
   message: string,
-  target: { agent: Agent; label: string; defaultSessionId?: string },
+  target: { agent: RemoteAgent; label: string; defaultSessionId?: string },
   opts: InvokeOptions,
 ) {
   let settings: SessionSettings | undefined;
@@ -85,7 +120,7 @@ async function runRemoteInvoke(
     failUsage(error instanceof Error ? error.message : String(error));
   }
   const effectiveOpts =
-    opts.session === undefined && target.defaultSessionId !== undefined
+    opts.session === undefined && opts.conversation === undefined && target.defaultSessionId !== undefined
       ? { ...opts, session: target.defaultSessionId }
       : opts;
   await invokeThrough(target.agent, target.label, message, effectiveOpts, settings, DEPLOYED_AUTH_HINT);
@@ -94,6 +129,7 @@ async function runRemoteInvoke(
 /** Options for sending one message over an Agent API client (`invoke --url`, `agentcore invoke`, local serve). */
 export interface InvokeOverApiOptions {
   session?: string;
+  conversation?: string;
   settings?: SessionSettings;
   json?: boolean;
   authHint: string;
@@ -112,6 +148,17 @@ export async function invokeOverApi(
   opts: InvokeOverApiOptions,
 ): Promise<number> {
   console.error(`[fastagent] invoke: ${where}`);
+  if (opts.session === undefined && hasInvokeStream(agent)) {
+    const events = agent.invokeStream({
+      content: message,
+      ...(opts.conversation === undefined ? {} : { conversation: opts.conversation }),
+      ...(opts.settings === undefined ? {} : { session: opts.settings }),
+    });
+    return answer(announceSession(events, opts.continueFlags), opts.json, opts.authHint);
+  }
+  if (opts.conversation !== undefined) {
+    throw new Error(`--conversation is not supported by ${where}`);
+  }
   const sessionId = await remoteSession(agent, opts.session, opts.settings, where).catch((error: unknown) => {
     throw refusal(error);
   });
@@ -131,6 +178,7 @@ async function invokeThrough(
 ): Promise<never> {
   const exitCode = await invokeOverApi(agent, where, message, {
     session: opts.session,
+    conversation: opts.conversation,
     settings,
     json: opts.json,
     authHint,
@@ -189,6 +237,12 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
   if (opts.url === undefined && opts.remote === undefined && opts.key !== undefined) {
     failUsage("--key is the key --url or --remote calls with: pass --url or --remote too");
   }
+  if (opts.session !== undefined && opts.conversation !== undefined) {
+    failUsage("pass either --session or --conversation, not both");
+  }
+  if (opts.conversation !== undefined && opts.conversation.trim() === "") {
+    failUsage("--conversation must not be empty");
+  }
   const input = await readInvokeMessage(given);
   if (!input.ok) failUsage(input.error);
   const message = input.message;
@@ -236,7 +290,7 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
       return failUsage(error instanceof Error ? error.message : String(error));
     }
   })();
-  const { agent, models, config } = await openServing(definition, {
+  const { agent, invoker, models, config } = await openServing(definition, {
     model: modelSpec,
     harness: selection.harness,
     ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
@@ -251,9 +305,15 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
     model: modelRefOf(modelSpec, "the model"),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   };
-  const sessionId = await sessionFor(agent, opts.session, settings, stateRoot).catch(failStartup);
-  console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
-  const exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json, LOCAL_AUTH_HINT);
+  let exitCode: number;
+  if (opts.conversation !== undefined) {
+    const events = invoker.invokeStream({ conversation: opts.conversation, content: message, session: settings });
+    exitCode = await answer(announceSession(events), opts.json, LOCAL_AUTH_HINT);
+  } else {
+    const sessionId = await sessionFor(agent, opts.session, settings, stateRoot).catch(failStartup);
+    console.error(`[fastagent] session ${sessionId} (continue it with --session ${sessionId})`);
+    exitCode = await answer(agent.messages.stream({ sessionId, content: message }), opts.json, LOCAL_AUTH_HINT);
+  }
   await agent.close();
   // Always exit explicitly: the undici proxy agent's keep-alive sockets would otherwise hold the event loop open
   // after a successful one-shot message.

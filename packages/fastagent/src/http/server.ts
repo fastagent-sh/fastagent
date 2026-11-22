@@ -16,11 +16,13 @@ import {
   type Agent,
   AgentError,
   type AuthApi,
+  type InvokeApi,
   LIMITS,
   type SessionEvent,
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
+import { createInvoker, memoryConversationStore } from "../conversations.ts";
 import type { Handler } from "./serve.ts";
 import { secretEquals } from "./secret.ts";
 import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
@@ -65,6 +67,8 @@ export interface ApiHandler {
 
 export interface ApiOptions {
   keys: readonly string[];
+  /** Single-call invoker mounted under `POST /v1/invoke`; defaults to an in-memory conversation store. */
+  invoker?: InvokeApi;
   /** Optional remote auth operations mounted under `/v1/auth`. */
   auth?: AuthApi;
   /** For tests: the longest a request waits, and how often a quiet stream says it is open. */
@@ -140,9 +144,12 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
     throw new Error("the Agent API needs at least one key, and no key may be empty");
   }
   const keys = [...options.keys];
+  const invoker = options.invoker ?? createInvoker(agent, memoryConversationStore());
   const waitCap = options.waitCapSeconds ?? LIMITS.httpWaitSeconds;
+  const invokeWaitCap = options.waitCapSeconds ?? LIMITS.invokeWaitSeconds;
   const keepAlive = options.keepAliveMs ?? KEEP_ALIVE_MS;
   const capped = (wait: number | undefined) => (wait === undefined ? undefined : Math.min(wait, waitCap));
+  const invokeCapped = (wait: number | undefined) => (wait === undefined ? undefined : Math.min(wait, invokeWaitCap));
   const closing = new AbortController();
   /** The event streams being written, each until it has ended. */
   const streaming = new Set<Promise<void>>();
@@ -262,7 +269,18 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       )
       .handle("getMessageByKey", ({ params, query }) =>
         call("messages.get", (signal) => agent.messages.get(params, { wait: capped(query.wait), signal })),
-      ),
+      )
+      .handle("invoke", ({ headers, payload }) => {
+        const { wait, stream, ...rest } = payload;
+        const request = { ...rest, idempotencyKey: headers["idempotency-key"] };
+        if (!stream) {
+          return call("invoke", (signal) => invoker.invoke(request, { wait: invokeCapped(wait), signal }));
+        }
+        if (wait !== undefined) {
+          return Effect.fail(agentError("invalid_request", "a streamed invoke is watched, not waited for: drop wait"));
+        }
+        return serverSent("invokeStream", MessageStreamEventFrame, () => invoker.invokeStream(request));
+      }),
   );
 
   const { auth } = options;

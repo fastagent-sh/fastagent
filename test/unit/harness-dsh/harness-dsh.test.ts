@@ -623,6 +623,8 @@ export default defineTool({
       const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
       const dshMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-ping" }, { wait: 15 });
       expect(dshMsg.answer?.text).toBe("tool-ok:pong:hi");
+      const dshConv1 = await dshAgent1.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
+      expect(dshConv1.answer?.text).toBe("tool-ok:pong:hi");
       const service = await dshAgent1.serve({ apiKeys: ["k"] });
       const health = await service.fetch(new Request("http://local/health"));
       expect(health.status).toBe(200);
@@ -633,9 +635,11 @@ export default defineTool({
       expect((await piAgent2.sessions.get(piSession.id)).title).toBe("pi-session");
       await piAgent2.close();
 
-      // 4) Switch back to dsh on the same agent.sqlite: dsh-session is intact.
+      // 4) Switch back to dsh on the same agent.sqlite: dsh-session and named conversation are intact.
       const dshAgent2 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       expect((await dshAgent2.sessions.get(dshSession.id)).title).toBe("dsh-session");
+      const dshConv2 = await dshAgent2.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
+      expect(dshConv2.sessionId).toBe(dshConv1.sessionId);
       await dshAgent2.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

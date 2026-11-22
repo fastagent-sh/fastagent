@@ -428,12 +428,22 @@ describe("openPostgresDatabase: shared connection pool across multiple instances
         "completed",
       );
 
+      // Named conversations persist in PostgreSQL and stay isolated per instance.
+      const convB = await b.invoke({ conversation: "ops", content: "from b" }, { wait: 15 });
+      expect(convB.status).toBe("completed");
+
       // Reopening tenant-a reuses the shared pool and runs zero additional migrations.
       const aAgain = await openSource(dir, { name: "tenant-a", database: shared });
       expect(createIndexCalls).toBe(callsAfterFirst);
       expect((await aAgain.sessions.get(sessionA.id)).id).toBe(sessionA.id);
-
+      const convA1 = await aAgain.invoke({ conversation: "ops", content: "from a 1" }, { wait: 15 });
+      expect(convA1.sessionId).not.toBe(convB.sessionId);
       await aAgain.close();
+
+      const aThird = await openSource(dir, { name: "tenant-a", database: shared });
+      const convA2 = await aThird.invoke({ conversation: "ops", content: "from a 2" }, { wait: 15 });
+      expect(convA2.sessionId).toBe(convA1.sessionId);
+      await aThird.close();
       await b.close();
       await c.close();
 

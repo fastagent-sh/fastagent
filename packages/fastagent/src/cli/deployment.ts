@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { Agent, AuthApi } from "@fastagent-sh/client/agent-api";
+import type { AuthApi, RemoteAgent } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectAuth } from "@fastagent-sh/client";
 import { expandRemoteEnvRef, parseRemotesJson } from "@fastagent-sh/client/remotes";
 import { applyEnvValues, enterAgentEnv } from "../env.ts";
@@ -74,7 +74,7 @@ export async function resolveRemoteTarget(
   dirArg: string,
   target: RemoteTargetFlags,
   instance?: InstanceFlags,
-): Promise<{ agent: Agent; auth: AuthApi; label: string; defaultSessionId?: string } | undefined> {
+): Promise<{ agent: RemoteAgent; auth: AuthApi; label: string; defaultSessionId?: string } | undefined> {
   if (target.url !== undefined && target.remote !== undefined) {
     failUsage("pass either --url or --remote, not both");
   }

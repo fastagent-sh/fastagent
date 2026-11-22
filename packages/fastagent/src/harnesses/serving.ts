@@ -4,10 +4,17 @@
  * selected harness (`pi-durable` or `dsh`).
  */
 import { dirname, isAbsolute, join } from "node:path";
-import type { Agent } from "@fastagent-sh/client/agent-api";
+import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
 import { activeWork } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
+import {
+  type ConversationStore,
+  createInvoker,
+  memoryConversationStore,
+  postgresConversationStore,
+  sqliteConversationStore,
+} from "../conversations.ts";
 import { definedValues } from "../declared-secrets.ts";
 import { instanceName, INSTANCE_NAME_ENV } from "../instance-name.ts";
 import { type McpClients, openMcpClients } from "../mcp/client.ts";
@@ -100,6 +107,8 @@ export interface ServingAgent extends Agent {
 
 export interface OpenedServing {
   agent: ServingAgent;
+  /** Single-call invoker backed by this instance's conversation store. */
+  invoker: InvokeApi;
   /** The active runtime harness (`"pi-durable"` or `"dsh"`). */
   harness: HarnessName;
   /** The active OS sandbox mode when `harness === "dsh"`. */
@@ -279,8 +288,40 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     });
   }
 
+  let conversations: ConversationStore;
+  try {
+    conversations =
+      chosen === "memory"
+        ? memoryConversationStore()
+        : chosen !== "instance"
+          ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
+          : database !== undefined
+            ? postgresConversationStore(database, place.name ?? name)
+            : sqliteConversationStore(join(stateRoot, "conversations.sqlite"));
+  } catch (error) {
+    await openedRuntime.agent.close().catch(() => undefined);
+    throw error;
+  }
+
+  const runtimeAgent = openedRuntime.agent;
+  let closingAgent: Promise<void> | undefined;
+  const wrappedAgent: ServingAgent = {
+    ...runtimeAgent,
+    close: () =>
+      (closingAgent ??= (async () => {
+        const failures: unknown[] = [];
+        await runtimeAgent.close().catch((error: unknown) => failures.push(error));
+        await conversations.close().catch((error: unknown) => failures.push(error));
+        if (failures.length > 0) {
+          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed");
+        }
+      })()),
+  };
+  const invoker = createInvoker(wrappedAgent, conversations, { keyPrefix: `${selection.harness}:` });
+
   return {
-    agent: openedRuntime.agent,
+    agent: wrappedAgent,
+    invoker,
     harness: selection.harness,
     ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
     ...(auth === undefined ? {} : { auth }),
@@ -297,7 +338,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
 }
 
 /** An agent opened in this process: the Agent API, and how it is served and operated. */
-export interface LocalAgent extends Agent {
+export interface LocalAgent extends Agent, InvokeApi {
   /**
    * `/health` and the Agent API under `/v1` when `apiKeys` holds a key: a Fetch
    * handler, or a server of its own (`listen`).
@@ -378,7 +419,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
     ...(options.database === undefined ? {} : { database: options.database }),
   });
-  const { agent } = opened;
+  const { agent, invoker } = opened;
   const piHarness = agent.harness;
   let served: Promise<Service> | undefined;
   let closing: Promise<void> | undefined;
@@ -387,6 +428,8 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     usage: agent.usage,
     sessions: agent.sessions,
     messages: agent.messages,
+    invoke: invoker.invoke,
+    invokeStream: invoker.invokeStream,
     ...(piHarness === undefined ? {} : { harness: piHarness }),
     busy: () => activeWork() > 0 || (agent.busy?.() ?? piHarness?.wake().active ?? false),
     serve(serveOptions = {}) {
