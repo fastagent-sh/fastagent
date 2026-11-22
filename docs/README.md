@@ -6,7 +6,7 @@ status: current
 
 # Documentation
 
-Take your agent from prototype to durable service. FastAgent is the durable runtime and serving layer that turns your prompts, skills, and TypeScript tools into a live service—embedded in your app or served over HTTP behind one Agent API.
+Take your AI agent from prototype to production — without a black-box framework. FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents.
 
 ## Start here
 

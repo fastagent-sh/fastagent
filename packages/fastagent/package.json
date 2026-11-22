@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
   "version": "0.34.0",
-  "description": "Take your agent from prototype to durable service: turn prompts, skills, and TypeScript tools into a live service embedded in your app or over HTTP behind one Agent API.",
+  "description": "Open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents — durable sessions, OS sandboxing, MCP, and scale-to-zero.",
   "keywords": [
     "agent",
     "ai-agent",
