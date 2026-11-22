@@ -8,11 +8,13 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
 import {
-  type AgentCoreRemoteConfig,
+  type ExtensionRemoteConfig,
   type HttpRemoteConfig,
   type RemoteConfig,
   type RemotesFile,
+  connectExtensionRemote,
   expandRemoteEnvRef,
+  isHttpRemote,
   isHttpUrl,
   parseRemoteEntry,
   parseRemotesJson,
@@ -20,8 +22,8 @@ import {
   upsertRemoteConfig,
 } from "@fastagent-sh/client/remotes";
 
-export type { AgentCoreRemoteConfig, HttpRemoteConfig, RemoteConfig, RemotesFile };
-export { isHttpUrl };
+export type { ExtensionRemoteConfig, HttpRemoteConfig, RemoteConfig, RemotesFile };
+export { isHttpRemote, isHttpUrl };
 
 export interface LoadRemotesOptions {
   path?: string;
@@ -89,7 +91,7 @@ export async function connectRemote(
   remote: RemoteConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ agent: Agent; defaultSessionId?: string }> {
-  if (remote.type === "http") {
+  if (isHttpRemote(remote)) {
     const rawKey = remote.apiKey?.trim() || env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
     if (!rawKey) {
       throw new Error(`Remote "${name}" has no apiKey configured and FASTAGENT_API_KEY is not set`);
@@ -101,20 +103,9 @@ export async function connectRemote(
     };
   }
 
-  let agentcore: typeof import("@fastagent-sh/client/agentcore");
-  try {
-    agentcore = await import("@fastagent-sh/client/agentcore");
-  } catch (error) {
-    throw new Error(
-      `Remote "${name}" uses AgentCore; install @aws-sdk/client-bedrock-agentcore to connect (${error instanceof Error ? error.message : String(error)})`,
-    );
-  }
-  const connection = {
-    runtimeArn: remote.runtimeArn,
-    sessionId: remote.sessionId,
-    ...(remote.qualifier !== undefined ? { qualifier: remote.qualifier } : {}),
-  };
+  const connected = await connectExtensionRemote(name, remote, { env });
   return {
-    agent: agentcore.connectAgentCore(connection),
+    agent: connected.agent,
+    ...(connected.defaultSessionId !== undefined ? { defaultSessionId: connected.defaultSessionId } : {}),
   };
 }

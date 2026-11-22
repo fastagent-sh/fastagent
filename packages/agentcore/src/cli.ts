@@ -4,7 +4,7 @@
  *   - `start` is the container's command on AgentCore, as `fastagent start` is a container's elsewhere: it serves the
  *     build in `<agent>/dist`, with its instances in the Aurora DSQL cluster and its values in the Secrets Manager
  *     secret the runtime names (cdk.ts), read as each instance opens, over the runtime's own environment.
- *   - `invoke` sends one message to a deployed AgentCore runtime through `@fastagent-sh/client/agentcore` (loaded
+ *   - `invoke` sends one message to a deployed AgentCore runtime through `@fastagent-sh/agentcore/client` (loaded
  *     lazily so production images running `start` need no `@aws-sdk/client-bedrock-agentcore`).
  */
 import { spawnSync } from "node:child_process";
@@ -141,7 +141,7 @@ async function start(agentDir: string): Promise<void> {
 
 async function loadAgentCoreClient() {
   try {
-    return await import("@fastagent-sh/client/agentcore");
+    return await import("./client.ts");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {

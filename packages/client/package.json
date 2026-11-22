@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/client",
   "version": "0.33.0",
-  "description": "The FastAgent Agent API and its client: talk to an agent FastAgent serves, over HTTP or on Amazon Bedrock AgentCore.",
+  "description": "The FastAgent Agent API and its client: talk to any FastAgent service over HTTP or pluggable cloud transports.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -23,28 +23,11 @@
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "typesVersions": {
-    "*": {
-      "agentcore": [
-        "./dist/agentcore.d.ts"
-      ]
-    }
-  },
   "exports": {
     ".": {
       "@fastagent-sh/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./agentcore": {
-      "@fastagent-sh/source": "./src/agentcore.ts",
-      "types": "./dist/agentcore.d.ts",
-      "default": "./dist/agentcore.js"
-    },
-    "./agentcore/contract": {
-      "@fastagent-sh/source": "./src/agentcore/contract.ts",
-      "types": "./dist/agentcore/contract.d.ts",
-      "default": "./dist/agentcore/contract.js"
     },
     "./agent-api": {
       "@fastagent-sh/source": "./src/agent-api.ts",
@@ -84,13 +67,5 @@
   },
   "dependencies": {
     "effect": "^4.0.7"
-  },
-  "peerDependencies": {
-    "@aws-sdk/client-bedrock-agentcore": "^3.1170.0"
-  },
-  "peerDependenciesMeta": {
-    "@aws-sdk/client-bedrock-agentcore": {
-      "optional": true
-    }
   }
 }

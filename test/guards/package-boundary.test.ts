@@ -97,11 +97,26 @@ describe("package lines", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("@fastagent-sh/client/agentcore, a Caller's, reaches no Node API and no package but effect and @aws-sdk/client-bedrock-agentcore", () => {
-    const entry = resolve(srcOf("client"), "agentcore.ts");
+  it("@fastagent-sh/agentcore/client, a Caller's, reaches no Node API and no package outside @fastagent-sh/client, effect, and @aws-sdk/client-bedrock-agentcore", () => {
+    const entry = resolve(srcOf("agentcore"), "client.ts");
     const packages = [...staticPackageGraph(entry)].map(packageOf);
-    expect(packages.filter((p) => p !== "effect" && p !== "@aws-sdk/client-bedrock-agentcore")).toEqual([]);
+    expect(
+      packages.filter(
+        (p) => p !== "effect" && p !== "@fastagent-sh/client" && p !== "@aws-sdk/client-bedrock-agentcore",
+      ),
+    ).toEqual([]);
     expect([...staticPackageGraph(entry, true)]).toEqual([]);
+  });
+
+  it("@fastagent-sh/client, @fastagent-sh/fastagent, and @fastagent-sh/pi-remote never statically import cloud-vendor SDKs or @fastagent-sh/agentcore", () => {
+    for (const pkg of ["client", "fastagent", "pi-remote"] as const) {
+      const offenders = filesUnder(srcOf(pkg)).flatMap((file) =>
+        importsOf(file)
+          .bare.filter((spec) => spec.startsWith("@aws-sdk/") || spec.startsWith("@fastagent-sh/agentcore"))
+          .map((spec) => `${relative(repo, file)} → ${spec}`),
+      );
+      expect(offenders).toEqual([]);
+    }
   });
 
   it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
@@ -219,8 +234,8 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
-    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"))]).toEqual([]);
-    expect([...staticPackageGraph(resolve(srcOf("client"), "agentcore/contract.ts"), true)]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"), true)]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"))]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("client"), "remotes.ts"), true)]).toEqual([]);

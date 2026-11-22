@@ -1,6 +1,6 @@
 /**
  * `@fastagent-sh/pi-remote`: Pi extension for connecting directly to deployed FastAgent instances over HTTP or
- * Amazon Bedrock AgentCore.
+ * installed cloud transport extensions.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { REMOTE_ENTRY_TYPE, registerFastAgentRemoteExtension } from "./extension.ts";
@@ -28,7 +28,7 @@ export {
 
 /** @public */
 export {
-  type AgentCoreRemoteConfig,
+  type ExtensionRemoteConfig,
   type HttpRemoteConfig,
   type LoadRemotesOptions,
   type RemoteConfig,

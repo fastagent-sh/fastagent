@@ -27,6 +27,7 @@ import {
   type RemoteConfig,
   type RemotesFile,
   connectRemote,
+  isHttpRemote,
   isHttpUrl,
   loadRemotes,
   removeRemote,
@@ -1047,9 +1048,9 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`Unknown remote "${targetName}". Use /fa remotes add to save one first.`, "error");
           return;
         }
-        if (currentRemote.type === "agentcore") {
+        if (!isHttpRemote(currentRemote)) {
           ctx.ui.notify(
-            `Remote "${targetName}" uses AWS AgentCore (IAM credentials). Refresh credentials via AWS CLI (e.g. aws sso login).`,
+            `Remote "${targetName}" uses the "${currentRemote.type}" transport (no saved HTTP API key). Manage credentials via that platform's CLI.`,
             "info",
           );
           return;
@@ -1110,21 +1111,27 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           ctx.ui.notify(`Unknown remote "${targetName}"`, "error");
           return;
         }
-        if (savedRemote?.type === "agentcore" || (!savedRemote && activeRemoteConfig?.type === "agentcore")) {
+        const nonHttpType =
+          savedRemote && savedRemote.type !== "http"
+            ? savedRemote.type
+            : !savedRemote && activeRemoteConfig && activeRemoteConfig.type !== "http"
+              ? activeRemoteConfig.type
+              : undefined;
+        if (nonHttpType !== undefined) {
           if (isCurrent) {
             activeRemoteConfig = undefined;
             controller.disconnect();
           }
           ctx.ui.notify(
             isCurrent
-              ? `Disconnected from AgentCore remote "${targetName}". AWS IAM credentials are managed by AWS CLI.`
-              : `AgentCore remote "${targetName}" uses AWS IAM credentials managed by AWS CLI.`,
+              ? `Disconnected from "${targetName}" (${nonHttpType} transport). Credentials are managed by that platform's CLI.`
+              : `Remote "${targetName}" uses the "${nonHttpType}" transport; credentials are managed by that platform's CLI.`,
             "info",
           );
           return;
         }
         let clearedSaved = false;
-        if (savedRemote && savedRemote.type === "http" && savedRemote.apiKey !== undefined) {
+        if (savedRemote && isHttpRemote(savedRemote) && savedRemote.apiKey !== undefined) {
           const { apiKey: _dropped, ...withoutKey } = savedRemote;
           try {
             saveRemote(targetName, withoutKey);

@@ -253,14 +253,18 @@ describe("remotes config", () => {
     await expect(connectRemote("ops", config.remotes.ops!, {})).rejects.toThrow(/Environment variable OPS_KEY/);
   });
 
-  it("refuses malformed remote entries with an actionable message", () => {
+  it("refuses malformed remote entries with an actionable message and reports missing transport extensions", async () => {
     const dir = makeTempDir();
     const cfgPath = join(dir, "remotes.json");
     writeFileSync(cfgPath, JSON.stringify({ remotes: { broken: { type: "http" } } }));
     expect(() => loadRemotes({ path: cfgPath })).toThrow(/requires a non-empty "url"/);
 
-    writeFileSync(cfgPath, JSON.stringify({ remotes: { bad: { type: "grpc", url: "http://localhost" } } }));
-    expect(() => loadRemotes({ path: cfgPath })).toThrow(/unsupported type "grpc"/);
+    writeFileSync(cfgPath, JSON.stringify({ remotes: { bad: { type: "BAD TYPE" } } }));
+    expect(() => loadRemotes({ path: cfgPath })).toThrow(/invalid type "BAD TYPE"/);
+
+    await expect(connectRemote("custom", { type: "uninstalled-cloud" })).rejects.toThrow(
+      /install @fastagent-sh\/uninstalled-cloud to connect/,
+    );
 
     writeFileSync(cfgPath, JSON.stringify({ remotes: { badUrl: { url: "not-a-url" } } }));
     expect(() => loadRemotes({ path: cfgPath })).toThrow(/invalid URL "not-a-url"/);

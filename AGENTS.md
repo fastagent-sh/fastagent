@@ -10,8 +10,8 @@ that API from outside the runtime: channels are not part of it.
   what the file owns and why it is that way, next to the code the reason is about. Read the code and its headers. Start
   from `packages/fastagent/src/index.ts` (the package), `packages/client/src/agent-api.ts` (the Agent API),
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
-- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, and
-  `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI),
+- **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the cloud-agnostic Agent API, `connectAgent`, and
+  pluggable remote transport contracts; it imports no runtime or cloud SDK), `@fastagent-sh/fastagent` (the runtime and the CLI),
   `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager,
   and its CDK construct), `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
   FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`), and

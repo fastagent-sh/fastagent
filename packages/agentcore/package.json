@@ -31,6 +31,9 @@
       ],
       "cli": [
         "./dist/cli.d.ts"
+      ],
+      "client": [
+        "./dist/client.d.ts"
       ]
     }
   },
@@ -39,6 +42,11 @@
       "@fastagent-sh/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./client": {
+      "@fastagent-sh/source": "./src/client.ts",
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
     },
     "./cli": {
       "@fastagent-sh/source": "./src/cli.ts",
@@ -78,11 +86,15 @@
     "effect": "^4.0.7"
   },
   "peerDependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
     "@fastagent-sh/fastagent": "0.33.0",
     "aws-cdk-lib": "^2.269.0",
     "constructs": "^10.7.0"
   },
   "peerDependenciesMeta": {
+    "@aws-sdk/client-bedrock-agentcore": {
+      "optional": true
+    },
     "@fastagent-sh/fastagent": {
       "optional": true
     },

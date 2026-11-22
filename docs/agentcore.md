@@ -114,10 +114,10 @@ NDJSON events with `--json`) on `stdout` with the same exit codes as `fastagent 
 
 ### From a backend
 
-In your backend (`npm i @fastagent-sh/client @aws-sdk/client-bedrock-agentcore`):
+In your backend (`npm i @fastagent-sh/agentcore @aws-sdk/client-bedrock-agentcore`):
 
 ```ts
-import { connectAgentCore } from "@fastagent-sh/client/agentcore";
+import { connectAgentCore } from "@fastagent-sh/agentcore/client";
 
 const agent = connectAgentCore({
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
@@ -127,9 +127,9 @@ const session = await agent.sessions.create();
 const message = await agent.messages.send({ sessionId: session.id, content: "hi" }, { wait: 120 });
 ```
 
-`agent` is the [Agent API](agent-api.md), as `connectAgent` gives it, and `@fastagent-sh/client/agentcore` re-exports
-`AgentError` and `connectAgent` so the same backend talks to `fastagent dev` locally and to AgentCore in production. It
-loads no runtime: a backend needs only `@fastagent-sh/client`, `@aws-sdk/client-bedrock-agentcore`, and AWS credentials
+`agent` is the [Agent API](agent-api.md), as `connectAgent` gives it, and `@fastagent-sh/agentcore/client` re-exports
+`AgentError` and `connectAgent` so the same backend talks to `fastagent dev` locally and to AgentCore in production. Its
+`/client` entry loads no Node runtime: a backend needs only `@fastagent-sh/agentcore`, `@aws-sdk/client-bedrock-agentcore`, and AWS credentials
 that may `bedrock-agentcore:InvokeAgentRuntime` on the runtime. Each request is one invocation of the session; an answer
 streams as it is written. `qualifier` picks a runtime endpoint (`prod`), and with it the version that answers.
 

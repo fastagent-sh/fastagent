@@ -9,7 +9,7 @@
  *   node --conditions=@fastagent-sh/source test/smoke/agentcore/live.ts <runtime ARN> <idle timeout seconds>
  */
 import assert from "node:assert/strict";
-import { connectAgentCore } from "@fastagent-sh/client/agentcore";
+import { connectAgentCore } from "@fastagent-sh/agentcore/client";
 
 const [runtimeArn, idle] = process.argv.slice(2);
 if (runtimeArn === undefined || idle === undefined) {
