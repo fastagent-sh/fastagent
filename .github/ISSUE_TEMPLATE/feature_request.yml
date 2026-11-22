@@ -28,11 +28,12 @@ body:
     attributes:
       label: Area
       options:
-        - Agent Handler SPEC
-        - pi reference implementation
+        - Agent API
+        - Runtime harnesses (pi-durable / dsh)
         - CLI / developer experience
-        - HTTP / channels
+        - HTTP / clients / remotes
         - Sessions / storage
-        - Build / deploy targets
+        - Embedding / SDK
+        - Build / deploy / AgentCore
         - Documentation
         - Other

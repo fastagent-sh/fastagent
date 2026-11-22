@@ -8,7 +8,7 @@ test/
 ├── doubles/      # Shared test doubles
 ├── harnesses/    # Multi-suite conformance and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
-├── unit/         # [L1] domain suites: agent-api, agentcore, cli, definition, deploy, embedding, security, storage, traces
+├── unit/         # [L1] domain suites: agent-api, agentcore, cli, definition, deploy, embedding, harness-dsh, pi-remote, security, storage, traces
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
 └── smoke/        # [L3] CI packed E2E (`e2e/packed.ts`) and manual live AWS scripts (`agentcore/live.ts`, `dsql/live.ts`)
 ```
@@ -26,7 +26,7 @@ Use these shared seams instead of writing per-file mocks:
 | `doubles/storage-no-wait.ts` | `packages/fastagent/src/harnesses/pi-durable/storage.ts` lock wait | Fails immediately on held SQLite lock |
 | `doubles/codex-model.ts` | Model providers | pi-ai's `fauxProvider` |
 | `doubles/scripted-agent.ts` | In-memory scripted `Agent` double | Conforms to `packages/client/src/agent-api.ts` |
-| `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable` and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts` |
+| `harnesses/agent-api-conformance.ts`, `durable-subject.ts`, `http-subject.ts` | `Agent` API contract over `pi-durable`, `dsh`, and HTTP | `unit/agent-api/{durable-agent,http-api}.test.ts`, `unit/harness-dsh/dsh-conformance.test.ts` |
 
 ## Quick Commands
 

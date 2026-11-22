@@ -84,8 +84,8 @@ describe("embedding: Express", () => {
   });
 
   it("mount-before-parser is the documented order: the agent gets the raw body, the app its parsed one", async () => {
-    // docs/embedding.md's note. Node's request is one-shot: a parser registered FIRST consumes it and the agent gets
-    // nothing, and a webhook signature is computed over the raw bytes.
+    // docs/embedding.md's note. Node's request stream is one-shot: a parser registered FIRST consumes it before
+    // service.fetch can read the body.
     const good = express();
     good.use("/agent", listenerOf(echoRaw));
     good.use(express.json());
