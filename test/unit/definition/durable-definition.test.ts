@@ -678,3 +678,73 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     );
   });
 });
+
+describe("repository examples load and execute their tools end-to-end", () => {
+  const repoRoot = new URL("../../../", import.meta.url).pathname;
+
+  it("loads every example agent directory with expected tools, codingTools, and secrets", async () => {
+    const specs = [
+      { dir: "examples/pr-review-agent", secrets: {}, tools: ["fetch_github_pr"] },
+      { dir: "examples/incident-triage-agent", secrets: {}, tools: ["probe_endpoint", "recent_commits"] },
+      { dir: "examples/saas-copilot/agent", secrets: { TENANT_ID: "acme" }, tools: ["get_workspace_metrics"] },
+      { dir: "examples/agentcore-per-user", secrets: {}, tools: ["format_brief"] },
+      { dir: "examples/deep-research-agent", secrets: {}, tools: ["github_releases", "search_hacker_news"] },
+    ];
+    for (const spec of specs) {
+      const def = await loadSourceDefinition(join(repoRoot, spec.dir));
+      const built = buildDefinition(def, spec.secrets);
+      expect(built.tools.map((t) => t.name).sort(), spec.dir).toEqual(spec.tools);
+    }
+  });
+
+  it("executes saas-copilot, agentcore-per-user, and incident-triage SSRF guard through assembled agents", async () => {
+    const runTool = async (
+      relDir: string,
+      secrets: Record<string, string>,
+      toolName: string,
+      toolArgs: Record<string, string | number | string[]>,
+    ) => {
+      const def = await loadSourceDefinition(join(repoRoot, relDir));
+      const code = buildDefinition(def, secrets);
+      const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+      faux.setResponses([
+        fauxAssistantMessage([fauxToolCall(toolName, toolArgs)], { stopReason: "toolUse" }),
+        (context) => fauxAssistantMessage(lastToolResult(context)),
+      ]);
+      const agent = await assembleAgent(def, {
+        storage: new MemoryStorage(),
+        runsAs: NOT_HOSTED,
+        code,
+        models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
+        model: "gw/m1",
+        processEnv: {},
+      });
+      try {
+        const session = await agent.sessions.create();
+        const msg = await agent.messages.send({ sessionId: session.id, content: "run" }, { wait: 10 });
+        expect(msg.status).toBe("completed");
+        return { sessionId: session.id, text: msg.answer?.text ?? "" };
+      } finally {
+        await agent.close();
+      }
+    };
+
+    const saas = await runTool("examples/saas-copilot/agent", { TENANT_ID: "acme" }, "get_workspace_metrics", {
+      windowDays: 14,
+    });
+    expect(JSON.parse(saas.text)).toMatchObject({ tenantId: "acme", sessionId: saas.sessionId, windowDays: 14 });
+
+    const brief = await runTool("examples/agentcore-per-user", {}, "format_brief", {
+      title: "Weekly Sync",
+      highlights: ["Shipped v0.34"],
+      actionItems: ["Deploy AgentCore"],
+    });
+    expect(brief.text).toContain("# Weekly Sync");
+    expect(brief.text).toContain(`_Session: ${brief.sessionId}_`);
+
+    const blocked = await runTool("examples/incident-triage-agent", {}, "probe_endpoint", {
+      url: "https://127.0.0.1/admin",
+    });
+    expect(JSON.parse(blocked.text)).toMatchObject({ ok: false, error: expect.stringContaining("not permitted") });
+  });
+});
