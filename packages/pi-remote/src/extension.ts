@@ -1,45 +1,20 @@
 /**
  * Pi ExtensionAPI host glue for `@fastagent-sh/pi-remote`:
- * - Streamlined `/fa` entry (`/fa` smart picker/menu, `/fa <name|url>`, `/fa sessions`, `/fa remotes`, `/fa off`)
- * - Native Pi command & keybinding handoff while connected (`/model`, `/name`, `/new`, `/resume`, `/fork`, `/thinking`,
- *   `Alt+Enter` queue, `Enter` steer, `Esc` cancel, `/compact`, `Shift+Tab`) via a thin `CustomEditor` wrapper
- * - Pi-native 2-line footer (preserving other extensions' statuses), live widget, banner, and terminal/cmux title sync
+ * mounts the 2-line footer, live widget, RemoteEditor, session banner/entries, terminal status,
+ * session_start/resume/input lifecycle hooks, and `/fa` command registration.
  */
-import {
-  CustomEditor,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-  type KeybindingsManager,
-  copyToClipboard,
-} from "@earendil-works/pi-coding-agent";
-import {
-  type AutocompleteItem,
-  type AutocompleteProvider,
-  type EditorTheme,
-  type TUI,
-  matchesKey,
-} from "@earendil-works/pi-tui";
-import type { Entry, ModelRef, ThinkingLevel } from "@fastagent-sh/client";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { matchesKey } from "@earendil-works/pi-tui";
+import type { Entry } from "@fastagent-sh/client";
+import { createCommandDispatcher, getFaArgumentCompletions } from "./commands.ts";
 import { RemoteController, type RemoteViewState, buildSendContent } from "./controller.ts";
-import {
-  type HttpRemoteConfig,
-  type RemoteConfig,
-  type RemotesFile,
-  connectRemote,
-  isHttpRemote,
-  isHttpUrl,
-  loadRemotes,
-  removeRemote,
-  saveRemote,
-} from "./remotes.ts";
+import { RemoteEditor, wrapAutocompleteWithRemoteCommands } from "./editor.ts";
+import { type HttpRemoteConfig, type RemoteConfig, connectRemote, isHttpUrl } from "./remotes.ts";
+import { addRemoteFlow, errorText, loadConfigSafe } from "./remotes-ui.ts";
 import {
   type RemoteBannerPayload,
   type RemoteEntryPayload,
   createLiveWidgetComponent,
-  formatContextSummary,
-  formatRelativeTime,
-  formatUsageSummary,
   hasLiveContent,
   renderRemoteBanner,
   renderRemoteEntry,
@@ -62,219 +37,39 @@ interface PendingHandoff extends RemoteBinding {
   remote: RemoteConfig;
 }
 
-// Plain data handed across Pi's ctx.newSession() replacement boundary (new extension instance runs session_start
-// before options.setup executes). Never holds session-bound Pi objects or writes secrets to session JSONL.
-let pendingHandoff: PendingHandoff | undefined;
-
-const PRIMARY_SUBCOMMANDS: readonly { name: string; description: string }[] = [
-  { name: "sessions", description: "Switch, create, or delete remote sessions" },
-  { name: "new", description: "Start a new remote session" },
-  { name: "title", description: "Rename the current remote session [title|--clear]" },
-  { name: "fork", description: "Fork the current remote session" },
-  { name: "model", description: "Select remote model [provider/modelId]" },
-  { name: "key", description: "Update or clear remote server API key [--clear] [remote]" },
-  { name: "remotes", description: "Add, remove, or switch saved remotes" },
-  { name: "off", description: "Disconnect and return to local Pi" },
-];
-
-const RESERVED_SUBCOMMANDS = new Set([
-  "connect",
-  "disconnect",
-  "off",
-  "status",
-  "sessions",
-  "title",
-  "delete",
-  "new",
-  "fork",
-  "clone",
-  "copy",
-  "key",
-  "model",
-  "model-cycle",
-  "thinking",
-  "thinking-cycle",
-  "compact",
-  "cancel",
-  "remotes",
-  "add",
-  "remove",
-]);
-
-const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function parseModelSpec(spec: string): ModelRef | undefined {
-  const slash = spec.indexOf("/");
-  if (slash <= 0 || slash === spec.length - 1) return undefined;
-  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
-}
-
-/** Match Pi's built-in slash commands that should route to the connected remote while in remote mode. */
-export function parseInterceptedRemoteBuiltin(raw: string): { command: string; args: string } | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("/")) return undefined;
-  const space = trimmed.indexOf(" ");
-  const cmd = (space === -1 ? trimmed.slice(1) : trimmed.slice(1, space)).toLowerCase();
-  const args = space === -1 ? "" : trimmed.slice(space + 1).trim();
-  switch (cmd) {
-    case "model":
-      return { command: "model", args };
-    case "name":
-      return { command: "title", args };
-    case "session":
-      return { command: "status", args };
-    case "copy":
-      return { command: "copy", args };
-    case "new":
-      return { command: "new", args };
-    case "resume":
-      return { command: "sessions", args };
-    case "fork":
-    case "clone":
-      return { command: "fork", args };
-    case "thinking":
-      return { command: "thinking", args };
-    case "login":
-      return { command: "provider-auth-hint", args: "login" };
-    case "logout":
-      return { command: "provider-auth-hint", args: "logout" };
-    default:
-      return undefined;
-  }
-}
-
-interface RemoteEditorCallbacks {
-  isConnected: () => boolean;
-  isRunning: () => boolean;
-  onQueueMessage: (text: string) => void;
-}
-
-class RemoteEditor extends CustomEditor {
-  private readonly kb: KeybindingsManager;
-  private readonly callbacks: RemoteEditorCallbacks;
-  private hostOnSubmit?: (text: string) => void;
-  private wrappedOnSubmit?: (text: string) => void;
-
-  constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, callbacks: RemoteEditorCallbacks) {
-    super(tui, theme, keybindings);
-    this.kb = keybindings;
-    this.callbacks = callbacks;
-    // Wrap host-assigned onSubmit so every submit path (including slash-command autocomplete fall-through)
-    // rewrites intercepted built-in commands (/model, /name, /new, /resume, /fork, /thinking) to /fa.
-    Object.defineProperty(this, "onSubmit", {
-      configurable: true,
-      enumerable: true,
-      get: (): ((text: string) => void) | undefined => this.wrappedOnSubmit,
-      set: (fn: ((text: string) => void) | undefined) => {
-        this.hostOnSubmit = fn;
-        this.wrappedOnSubmit = fn
-          ? (text: string) => {
-              if (this.callbacks.isConnected()) {
-                const builtin = parseInterceptedRemoteBuiltin(text);
-                if (builtin) {
-                  const line = builtin.args ? `/fa ${builtin.command} ${builtin.args}` : `/fa ${builtin.command}`;
-                  fn(line);
-                  return;
-                }
-              }
-              fn(text);
-            }
-          : undefined;
-      },
-    });
-  }
-
-  private submitFa(command: string, args = ""): void {
-    const line = args ? `/fa ${command} ${args}` : `/fa ${command}`;
-    this.hostOnSubmit?.(line);
-  }
-
-  override handleInput(data: string): void {
-    if (this.callbacks.isConnected() && !this.isShowingAutocomplete()) {
-      if (this.kb.matches(data, "app.message.followUp") && this.callbacks.isRunning()) {
-        const text = (this.getExpandedText?.() ?? this.getText()).trim();
-        if (text) {
-          this.addToHistory?.(text);
-          this.setText("");
-          this.callbacks.onQueueMessage(text);
-          return;
-        }
+/**
+ * Plain handoff slot crossing Pi's `ctx.newSession()` replacement boundary (the new extension instance's
+ * `session_start` fires before `options.setup` runs). Never holds session-bound Pi objects or secrets on disk.
+ */
+const sessionHandoff = {
+  pending: undefined as PendingHandoff | undefined,
+  take(): PendingHandoff | undefined {
+    const next = this.pending;
+    this.pending = undefined;
+    return next;
+  },
+  async run(ctx: ExtensionContext, handoff: PendingHandoff): Promise<"handed_off" | "cancelled" | "unsupported"> {
+    const cmdCtx = ctx as Partial<ExtensionCommandContext>;
+    if (typeof cmdCtx.newSession !== "function") return "unsupported";
+    this.pending = handoff;
+    try {
+      const res = await cmdCtx.newSession({
+        setup: async (sessionManager) => {
+          const binding: RemoteBinding = { remoteName: handoff.remoteName, sessionId: handoff.sessionId };
+          sessionManager.appendCustomEntry(REMOTE_BINDING_TYPE, binding);
+        },
+      });
+      if (res.cancelled) {
+        this.pending = undefined;
+        return "cancelled";
       }
-      if (this.kb.matches(data, "app.model.select")) {
-        this.submitFa("model");
-        return;
-      }
-      if (this.kb.matches(data, "app.model.cycleForward")) {
-        this.submitFa("model-cycle", "next");
-        return;
-      }
-      if (this.kb.matches(data, "app.model.cycleBackward")) {
-        this.submitFa("model-cycle", "prev");
-        return;
-      }
-      if (this.kb.matches(data, "app.thinking.cycle")) {
-        this.submitFa("thinking-cycle");
-        return;
-      }
-      if (this.kb.matches(data, "app.message.copy")) {
-        this.submitFa("copy");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.new")) {
-        this.submitFa("new");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.resume")) {
-        this.submitFa("sessions");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.fork")) {
-        this.submitFa("fork");
-        return;
-      }
+      return "handed_off";
+    } catch (error) {
+      this.pending = undefined;
+      throw error;
     }
-    super.handleInput(data);
-  }
-}
-
-function wrapAutocompleteWithRemoteCommands(
-  base: AutocompleteProvider,
-  getState: () => RemoteViewState,
-): AutocompleteProvider {
-  return {
-    ...(base.triggerCharacters ? { triggerCharacters: base.triggerCharacters } : {}),
-    ...(base.shouldTriggerFileCompletion
-      ? { shouldTriggerFileCompletion: base.shouldTriggerFileCompletion.bind(base) }
-      : {}),
-    applyCompletion: base.applyCompletion.bind(base),
-    async getSuggestions(lines, cursorLine, cursorCol, options) {
-      const baseResult = await base.getSuggestions(lines, cursorLine, cursorCol, options);
-      const state = getState();
-      if (state.status === "disconnected" || !state.agentInfo?.commands.length) return baseResult;
-      const line = lines[cursorLine] ?? "";
-      const beforeCursor = line.slice(0, cursorCol);
-      if (!beforeCursor.startsWith("/") || beforeCursor.includes(" ")) return baseResult;
-
-      const prefix = beforeCursor.slice(1).toLowerCase();
-      const remoteItems: AutocompleteItem[] = state.agentInfo.commands
-        .filter((cmd) => cmd.name.toLowerCase().startsWith(prefix))
-        .map((cmd) => ({
-          value: `/${cmd.name}`,
-          label: `/${cmd.name}`,
-          description: cmd.description ? `[remote] ${cmd.description}` : "[remote]",
-        }));
-      if (remoteItems.length === 0) return baseResult;
-
-      const existing = new Set((baseResult?.items ?? []).map((item) => item.value));
-      const merged = [...(baseResult?.items ?? []), ...remoteItems.filter((item) => !existing.has(item.value))];
-      return { items: merged, prefix: baseResult?.prefix ?? beforeCursor };
-    },
-  };
-}
+  },
+};
 
 export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
   let activeCtx: ExtensionContext | undefined;
@@ -415,6 +210,21 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
   };
 
+  const appendBanner = (state: RemoteViewState, isFresh: boolean) => {
+    if (!state.remoteName || !state.session) return;
+    const model = state.session.model ?? state.agentInfo?.defaultModel;
+    const modelStr = model ? `${model.provider}/${model.modelId}` : undefined;
+    pi.appendEntry<RemoteBannerPayload>(REMOTE_BANNER_TYPE, {
+      remoteName: state.remoteName,
+      agentName: state.agentInfo?.name ?? state.remoteName,
+      sessionId: state.session.id,
+      ...(state.session.title ? { title: state.session.title } : {}),
+      ...(modelStr ? { model: modelStr } : {}),
+      ...(state.session.thinkingLevel ? { thinkingLevel: state.session.thinkingLevel } : {}),
+      ...(isFresh && state.agentInfo?.starters?.length ? { starters: state.agentInfo.starters } : {}),
+    });
+  };
+
   const controller = new RemoteController({
     onStateChange: (state) => {
       syncUi(state);
@@ -479,55 +289,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const loadConfigSafe = (ctx: ExtensionContext): { path: string; config: RemotesFile } | undefined => {
-    try {
-      return loadRemotes();
-    } catch (error) {
-      ctx.ui.notify(errorText(error), "error");
-      return undefined;
-    }
-  };
-
-  const handoffToCleanView = async (
-    ctx: ExtensionContext,
-    handoff: PendingHandoff,
-  ): Promise<"handed_off" | "cancelled" | "unsupported"> => {
-    const cmdCtx = ctx as Partial<ExtensionCommandContext>;
-    if (typeof cmdCtx.newSession !== "function") return "unsupported";
-    pendingHandoff = handoff;
-    try {
-      const res = await cmdCtx.newSession({
-        setup: async (sessionManager) => {
-          const binding: RemoteBinding = { remoteName: handoff.remoteName, sessionId: handoff.sessionId };
-          sessionManager.appendCustomEntry(REMOTE_BINDING_TYPE, binding);
-        },
-      });
-      if (res.cancelled) {
-        pendingHandoff = undefined;
-        return "cancelled";
-      }
-      return "handed_off";
-    } catch (error) {
-      pendingHandoff = undefined;
-      throw error;
-    }
-  };
-
-  const appendBanner = (state: RemoteViewState, isFresh: boolean) => {
-    if (!state.remoteName || !state.session) return;
-    const model = state.session.model ?? state.agentInfo?.defaultModel;
-    const modelStr = model ? `${model.provider}/${model.modelId}` : undefined;
-    pi.appendEntry<RemoteBannerPayload>(REMOTE_BANNER_TYPE, {
-      remoteName: state.remoteName,
-      agentName: state.agentInfo?.name ?? state.remoteName,
-      sessionId: state.session.id,
-      ...(state.session.title ? { title: state.session.title } : {}),
-      ...(modelStr ? { model: modelStr } : {}),
-      ...(state.session.thinkingLevel ? { thinkingLevel: state.session.thinkingLevel } : {}),
-      ...(isFresh && state.agentInfo?.starters?.length ? { starters: state.agentInfo.starters } : {}),
-    });
-  };
-
   const connectResolved = async (
     ctx: ExtensionContext,
     name: string,
@@ -549,7 +310,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function"
     ) {
       const session = targetSession ? await agent.sessions.get(targetSession) : await agent.sessions.create();
-      const outcome = await handoffToCleanView(ctx, { remoteName: name, remote, sessionId: session.id });
+      const outcome = await sessionHandoff.run(ctx, { remoteName: name, remote, sessionId: session.id });
       if (outcome !== "unsupported") return;
     }
     const session = await controller.connect(name, agent, {
@@ -590,50 +351,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       await connectResolved(ctx, displayName, remote);
     } catch (error) {
       ctx.ui.notify(`Failed to connect to ${displayName}: ${errorText(error)}`, "error");
-    }
-  };
-
-  const addRemoteFlow = async (
-    ctx: ExtensionContext,
-    argName?: string,
-    argUrl?: string,
-    argKey?: string,
-  ): Promise<string | undefined> => {
-    let name = argName?.trim() || undefined;
-    if (!name) {
-      const entered = await ctx.ui.input("Remote name", "e.g. fly, ops, or local");
-      if (!entered?.trim()) return undefined;
-      name = entered.trim();
-    }
-
-    let url = argUrl?.trim() || undefined;
-    if (!url) {
-      const entered = await ctx.ui.input(`URL for "${name}"`, "https://agent.example.com or http://127.0.0.1:8787");
-      if (!entered?.trim()) return undefined;
-      url = entered.trim();
-    }
-
-    let apiKey = argKey?.trim() || undefined;
-    if (argKey === undefined && ctx.hasUI) {
-      const entered = await ctx.ui.input(
-        `API key for "${name}" (optional)`,
-        "$FASTAGENT_API_KEY, raw key, or leave empty to use env FASTAGENT_API_KEY",
-      );
-      if (entered === undefined) return undefined;
-      apiKey = entered.trim() || undefined;
-    }
-
-    try {
-      const saved = saveRemote(name, {
-        type: "http",
-        url,
-        ...(apiKey !== undefined ? { apiKey } : {}),
-      });
-      ctx.ui.notify(`Saved remote "${name}" to ${saved.path}`, "info");
-      return name;
-    } catch (error) {
-      ctx.ui.notify(`Failed to save remote: ${errorText(error)}`, "error");
-      return undefined;
     }
   };
 
@@ -692,632 +409,18 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const openSmartHome = async (ctx: ExtensionContext): Promise<void> => {
-    if (!controller.isConnected()) {
-      const loaded = loadConfigSafe(ctx);
-      if (!loaded) return;
-      const names = Object.keys(loaded.config.remotes);
-      if (names.length === 0) {
-        const added = await addRemoteFlow(ctx);
-        if (added) await connectByName(ctx, added);
-        return;
-      }
-      const options = [...names.map((n) => (n === loaded.config.default ? `${n} (default)` : n)), "+ Add a remote…"];
-      const picked = await ctx.ui.select("Connect to FastAgent remote", options);
-      if (!picked) return;
-      if (picked === "+ Add a remote…") {
-        const added = await addRemoteFlow(ctx);
-        if (added) await connectByName(ctx, added);
-        return;
-      }
-      const idx = options.indexOf(picked);
-      const chosen = names[idx];
-      if (chosen) await connectByName(ctx, chosen);
-      return;
-    }
-
-    const state = controller.getState();
-    const label = state.session?.title
-      ? `${state.remoteName} · ${state.session.title}`
-      : (state.remoteName ?? "remote");
-    const actions: Array<{ label: string; cmd: string }> = [
-      { label: "Resume / switch session (/resume)", cmd: "sessions" },
-      { label: "New remote session (/new)", cmd: "new" },
-      { label: "Rename session (/name)", cmd: "title" },
-      { label: "Fork session (/fork)", cmd: "fork" },
-      { label: "Switch model (/model)", cmd: "model" },
-      { label: "Thinking level (/thinking)", cmd: "thinking" },
-      { label: "Compact session (/compact)", cmd: "compact" },
-      { label: "Copy last assistant reply (/copy)", cmd: "copy" },
-      { label: "Delete a session (/fa delete)", cmd: "delete" },
-      { label: "Update remote server API key (/fa key)", cmd: "key" },
-      { label: "Clear remote server API key (/fa key --clear)", cmd: "key-clear" },
-      { label: "Switch / manage remotes (/fa remotes)", cmd: "remotes" },
-      { label: "Disconnect to local Pi (/fa off)", cmd: "off" },
-    ];
-    const picked = await ctx.ui.select(
-      `FastAgent (${label})`,
-      actions.map((a) => a.label),
-    );
-    if (!picked) return;
-    const action = actions.find((a) => a.label === picked);
-    if (action) await dispatchAction(action.cmd, [], ctx);
-  };
-
-  const openRemotesPanel = async (ctx: ExtensionContext, rest: string[]): Promise<void> => {
-    const sub = rest[0]?.toLowerCase();
-    if (sub === "add") {
-      const added = await addRemoteFlow(ctx, rest[1], rest[2], rest[3]);
-      if (added) await connectByName(ctx, added);
-      return;
-    }
-    if (sub === "rm" || sub === "remove") {
-      await removeRemoteFlow(ctx, rest[1]);
-      return;
-    }
-
-    const loaded = loadConfigSafe(ctx);
-    if (!loaded) return;
-    const names = Object.keys(loaded.config.remotes);
-    const options = [
-      ...names.map((n) => `Connect: ${n}${n === loaded.config.default ? " (default)" : ""}`),
-      "+ Add a remote…",
-      ...(names.length > 0 ? ["- Remove a remote…"] : []),
-    ];
-    const picked = await ctx.ui.select("FastAgent remotes", options);
-    if (!picked) return;
-    if (picked === "+ Add a remote…") {
-      const added = await addRemoteFlow(ctx);
-      if (added) await connectByName(ctx, added);
-      return;
-    }
-    if (picked === "- Remove a remote…") {
-      await removeRemoteFlow(ctx);
-      return;
-    }
-    const idx = options.indexOf(picked);
-    const chosen = names[idx];
-    if (chosen) await connectByName(ctx, chosen);
-  };
-
-  const removeRemoteFlow = async (ctx: ExtensionContext, requested?: string): Promise<void> => {
-    const loaded = loadConfigSafe(ctx);
-    if (!loaded) return;
-    const names = Object.keys(loaded.config.remotes);
-    if (names.length === 0) {
-      ctx.ui.notify("No saved remotes to remove", "info");
-      return;
-    }
-    let target = requested?.trim() || undefined;
-    if (!target) {
-      const picked = await ctx.ui.select("Remove saved remote", names);
-      if (!picked) return;
-      target = picked;
-    }
-    try {
-      const res = removeRemote(target);
-      ctx.ui.notify(
-        res.removed ? `Removed remote "${target}" from ${res.path}` : `Remote "${target}" not found`,
-        res.removed ? "info" : "warning",
-      );
-    } catch (error) {
-      ctx.ui.notify(`Failed to remove remote: ${errorText(error)}`, "error");
-    }
-  };
-
-  const dispatchAction = async (sub: string, rest: string[], ctx: ExtensionContext): Promise<void> => {
-    attachContext(ctx);
-    switch (sub) {
-      case "connect": {
-        await connectByName(ctx, rest[0], rest[1]);
-        return;
-      }
-      case "add": {
-        const added = await addRemoteFlow(ctx, rest[0], rest[1], rest[2]);
-        if (added) await connectByName(ctx, added);
-        return;
-      }
-      case "remove": {
-        await removeRemoteFlow(ctx, rest[0]);
-        return;
-      }
-      case "remotes": {
-        await openRemotesPanel(ctx, rest);
-        return;
-      }
-      case "off":
-      case "disconnect": {
-        if (controller.getState().status === "disconnected") {
-          ctx.ui.notify("Not connected to any remote", "info");
-          return;
-        }
-        const name = controller.getState().remoteName;
-        activeRemoteConfig = undefined;
-        controller.disconnect();
-        ctx.ui.notify(`Disconnected from ${name ?? "remote"}`, "info");
-        return;
-      }
-      case "status": {
-        const state = controller.getState();
-        if (!controller.isConnected()) {
-          const loaded = loadConfigSafe(ctx);
-          const names = loaded ? Object.keys(loaded.config.remotes) : [];
-          ctx.ui.notify(
-            names.length > 0
-              ? `Disconnected. Configured remotes: ${names.join(", ")} (run /fa or /fa <name>)`
-              : `Disconnected. No remotes configured in ${loaded?.path ?? "remotes.json"} (run /fa to set up)`,
-            "info",
-          );
-          return;
-        }
-        const model = state.session?.model ?? state.agentInfo?.defaultModel;
-        const modelStr = model ? `${model.provider}/${model.modelId}` : "default";
-        const parts = [`Connected to ${state.remoteName}`];
-        if (state.session?.title) parts.push(`"${state.session.title}"`);
-        parts.push(`session ${state.session?.id}`);
-        parts.push(String(state.session?.status ?? "idle"));
-        parts.push(modelStr);
-        const ctxStr = formatContextSummary(state.session?.contextUsage);
-        if (ctxStr) parts.push(`ctx ${ctxStr}`);
-        const usageStr = formatUsageSummary(state.session?.usage);
-        if (usageStr) parts.push(usageStr);
-        ctx.ui.notify(parts.join(" · "), "info");
-        return;
-      }
-      case "sessions": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const sessions = await controller.listSessions(30);
-          const currentId = controller.getState().session?.id;
-          const labels = sessions.map((s) => {
-            const mark = s.id === currentId ? "* " : "  ";
-            const title = s.title ? `${s.title} · ` : "";
-            const age = formatRelativeTime(s.updatedAt ?? s.createdAt);
-            const agePart = age ? ` · ${age}` : "";
-            const model = s.model ? ` [${s.model.provider}/${s.model.modelId}]` : "";
-            return `${mark}${title}${s.id} (${s.status}${agePart})${model}`;
-          });
-          const newOption = "+ New remote session…";
-          const picked = await ctx.ui.select("Switch remote session", [...labels, newOption]);
-          if (!picked) return;
-          if (picked === newOption) {
-            await dispatchAction("new", [], ctx);
-            return;
-          }
-          const idx = labels.indexOf(picked);
-          const chosen = sessions[idx];
-          if (!chosen || chosen.id === currentId) return;
-          const remoteName = controller.getState().remoteName;
-          if (remoteName && activeRemoteConfig) {
-            const outcome = await handoffToCleanView(ctx, {
-              remoteName,
-              remote: activeRemoteConfig,
-              sessionId: chosen.id,
-            });
-            if (outcome !== "unsupported") return;
-          }
-          await controller.switchSession(chosen.id);
-          ctx.ui.notify(`Switched to session ${shortId(chosen.id)}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to list sessions: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "title": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        let nextTitle: string | null | undefined;
-        if (rest[0] === "--clear") {
-          nextTitle = null;
-        } else if (rest.length > 0) {
-          nextTitle = rest.join(" ").trim();
-        } else {
-          const entered = await ctx.ui.input(
-            "Session title",
-            controller.getState().session?.title ?? "Enter a title (leave empty to clear)",
-          );
-          if (entered === undefined) return;
-          nextTitle = entered.trim() === "" ? null : entered.trim();
-        }
-        try {
-          const updated = await controller.updateSession({ title: nextTitle });
-          ctx.ui.notify(updated.title ? `Session title set to "${updated.title}"` : "Session title cleared", "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to update title: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "delete": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        let targetId = rest[0]?.trim() || undefined;
-        if (!targetId) {
-          try {
-            const sessions = await controller.listSessions(30);
-            if (sessions.length === 0) {
-              ctx.ui.notify("No remote sessions to delete", "info");
-              return;
-            }
-            const currentId = controller.getState().session?.id;
-            const labels = sessions.map((s) => {
-              const mark = s.id === currentId ? "* " : "  ";
-              const title = s.title ? `${s.title} · ` : "";
-              return `${mark}${title}${s.id} (${s.status})`;
-            });
-            const picked = await ctx.ui.select("Delete remote session", labels);
-            if (!picked) return;
-            targetId = sessions[labels.indexOf(picked)]?.id;
-          } catch (error) {
-            ctx.ui.notify(`Failed to list sessions: ${errorText(error)}`, "error");
-            return;
-          }
-        }
-        if (!targetId) return;
-        const confirmed = ctx.hasUI
-          ? await ctx.ui.confirm("Delete remote session", `Delete remote session ${targetId}?`)
-          : true;
-        if (!confirmed) return;
-        try {
-          const deletingCurrent = controller.getState().session?.id === targetId;
-          await controller.deleteSession(targetId);
-          if (deletingCurrent) activeRemoteConfig = undefined;
-          ctx.ui.notify(`Deleted remote session ${shortId(targetId)}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to delete session: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "new": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const remoteName = controller.getState().remoteName;
-          if (
-            remoteName &&
-            activeRemoteConfig &&
-            typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function"
-          ) {
-            const created = await controller.createRemoteSession();
-            const outcome = await handoffToCleanView(ctx, {
-              remoteName,
-              remote: activeRemoteConfig,
-              sessionId: created.id,
-            });
-            if (outcome !== "unsupported") return;
-          }
-          const session = await controller.createSession();
-          ctx.ui.notify(`Started new remote session ${shortId(session.id)}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to create session: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "copy": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        const text = controller.getLastAssistantText();
-        if (!text) {
-          ctx.ui.notify("No remote assistant reply to copy yet", "warning");
-          return;
-        }
-        try {
-          await copyToClipboard(text);
-          ctx.ui.notify("Copied last remote assistant reply to clipboard", "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to copy to clipboard: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "provider-auth-hint": {
-        const verb = rest[0] === "logout" ? "logout" : "login";
-        const remoteName = controller.getState().remoteName;
-        const target =
-          remoteName === undefined
-            ? "--url <url>"
-            : isHttpUrl(remoteName)
-              ? `--url ${remoteName}`
-              : `--remote ${remoteName}`;
-        ctx.ui.notify(
-          `To ${verb} a model provider on the remote FastAgent server, run: fastagent ${verb} ${target}. ` +
-            "To update or clear the FastAgent server API key in remotes.json, run: /fa key [--clear].",
-          "info",
-        );
-        return;
-      }
-      case "key":
-      case "key-clear": {
-        const clear = sub === "key-clear" || rest.includes("--clear");
-        const argsWithoutFlag = rest.filter((token) => token !== "--clear");
-        const loaded = loadConfigSafe(ctx);
-        if (!loaded) return;
-        const targetName = argsWithoutFlag[0]?.trim() || controller.getState().remoteName;
-        if (!targetName) {
-          ctx.ui.notify("No remote connected or specified. Usage: /fa key [--clear] <remote>", "warning");
-          return;
-        }
-        const savedRemote = loaded.config.remotes[targetName];
-        const isCurrent = controller.isConnected() && controller.getState().remoteName === targetName;
-        const currentRemote = savedRemote ?? (isCurrent ? activeRemoteConfig : undefined);
-        if (!currentRemote) {
-          ctx.ui.notify(`Unknown remote "${targetName}". Use /fa remotes add to save one first.`, "error");
-          return;
-        }
-        if (!isHttpRemote(currentRemote)) {
-          if (clear && isCurrent) {
-            activeRemoteConfig = undefined;
-            controller.disconnect();
-          }
-          ctx.ui.notify(
-            `Remote "${targetName}" uses the "${currentRemote.type}" transport (no saved HTTP API key). Manage credentials via that platform's CLI.`,
-            "info",
-          );
-          return;
-        }
-        if (clear) {
-          let clearedSaved = false;
-          if (savedRemote && isHttpRemote(savedRemote) && savedRemote.apiKey !== undefined) {
-            const { apiKey: _dropped, ...withoutKey } = savedRemote;
-            try {
-              saveRemote(targetName, withoutKey);
-              clearedSaved = true;
-            } catch (error) {
-              ctx.ui.notify(`Failed to clear saved key: ${errorText(error)}`, "error");
-              return;
-            }
-          }
-          if (isCurrent) {
-            activeRemoteConfig = undefined;
-            controller.disconnect();
-          }
-          ctx.ui.notify(
-            clearedSaved
-              ? `Cleared saved server API key for "${targetName}"${isCurrent ? " and disconnected" : ""}`
-              : `No stored server API key for "${targetName}" (env FASTAGENT_API_KEY applies)${isCurrent ? "; disconnected" : ""}`,
-            "info",
-          );
-          return;
-        }
-        const entered = await ctx.ui.input(
-          `Server API key for remote "${targetName}"`,
-          currentRemote.apiKey?.startsWith("$")
-            ? `Current: ${currentRemote.apiKey} — enter new $ENV_VAR or raw key`
-            : "$FASTAGENT_API_KEY or raw API key",
-        );
-        if (entered === undefined) return;
-        const nextKey = entered.trim();
-        if (!nextKey) {
-          ctx.ui.notify("Server API key unchanged (use /fa key --clear to clear a stored key)", "info");
-          return;
-        }
-        const updatedRemote: HttpRemoteConfig = { ...currentRemote, apiKey: nextKey };
-        try {
-          const { agent } = await connectRemote(targetName, updatedRemote);
-          await agent.info();
-          if (savedRemote) {
-            saveRemote(targetName, updatedRemote);
-          }
-          if (isCurrent) {
-            const currentState = controller.getState();
-            const currentSessionId = currentState.session?.id;
-            await connectResolved(ctx, targetName, updatedRemote, {
-              ...(currentSessionId !== undefined ? { sessionId: currentSessionId } : {}),
-              ...(currentState.lastEntryId !== undefined ? { after: currentState.lastEntryId } : {}),
-              seenEntryIds: controller.getSeenEntryIds(),
-              persistBinding: false,
-              allowHandoff: false,
-              showBanner: false,
-            });
-            ctx.ui.notify(`Verified server API key and reconnected to "${targetName}"`, "info");
-          } else {
-            ctx.ui.notify(`Verified and updated server API key for "${targetName}" in ${loaded.path}`, "info");
-          }
-        } catch (error) {
-          ctx.ui.notify(
-            `Failed to authenticate "${targetName}" (existing config unchanged): ${errorText(error)}`,
-            "error",
-          );
-        }
-        return;
-      }
-      case "model-cycle": {
-        if (!controller.isConnected()) return;
-        const models = controller.getState().agentInfo?.models ?? [];
-        if (models.length <= 1) {
-          ctx.ui.notify(
-            models.length === 0 ? "Remote reports no selectable models" : "Only one model available on this remote",
-            models.length === 0 ? "warning" : "info",
-          );
-          return;
-        }
-        const current = controller.getState().session?.model ?? controller.getState().agentInfo?.defaultModel;
-        const idx = current
-          ? models.findIndex((m) => m.provider === current.provider && m.modelId === current.modelId)
-          : -1;
-        const delta = rest[0] === "prev" ? -1 : 1;
-        const nextIdx = idx === -1 ? 0 : (idx + delta + models.length) % models.length;
-        const next = models[nextIdx];
-        if (!next) return;
-        try {
-          await controller.updateSession({ model: { provider: next.provider, modelId: next.modelId } });
-          ctx.ui.notify(`Remote model: ${next.provider}/${next.modelId}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to switch remote model: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "thinking-cycle": {
-        if (!controller.isConnected()) return;
-        const info = controller.getState().agentInfo;
-        const current = controller.getState().session?.model ?? info?.defaultModel;
-        const declared = current
-          ? info?.models.find((m) => m.provider === current.provider && m.modelId === current.modelId)?.thinkingLevels
-          : undefined;
-        const levels = declared && declared.length > 0 ? declared : THINKING_LEVELS;
-        if (levels.length <= 1) {
-          ctx.ui.notify("Current remote model does not support changing thinking level", "info");
-          return;
-        }
-        const activeLevel = controller.getState().session?.thinkingLevel ?? levels[0];
-        const idx = activeLevel ? levels.indexOf(activeLevel) : -1;
-        const next = levels[(idx + 1) % levels.length];
-        if (!next) return;
-        try {
-          await controller.updateSession({ thinkingLevel: next });
-          ctx.ui.notify(`Remote thinking level: ${next}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to update remote thinking level: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "clone":
-      case "fork": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const remoteName = controller.getState().remoteName;
-          if (
-            remoteName &&
-            activeRemoteConfig &&
-            typeof (ctx as Partial<ExtensionCommandContext>).newSession === "function"
-          ) {
-            const forked = await controller.forkRemoteSession();
-            const outcome = await handoffToCleanView(ctx, {
-              remoteName,
-              remote: activeRemoteConfig,
-              sessionId: forked.id,
-            });
-            if (outcome !== "unsupported") return;
-          }
-          const forked = await controller.forkSession();
-          ctx.ui.notify(`Forked into session ${shortId(forked.id)}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to fork session: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "model": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        const info = controller.getState().agentInfo;
-        let target: ModelRef | undefined;
-        if (rest[0]) {
-          target = parseModelSpec(rest[0]);
-          if (!target) {
-            ctx.ui.notify('Expected "provider/modelId"', "error");
-            return;
-          }
-        } else {
-          const models = info?.models ?? [];
-          if (models.length === 0) {
-            ctx.ui.notify("Remote reports no selectable models", "warning");
-            return;
-          }
-          const current = controller.getState().session?.model ?? info?.defaultModel;
-          const labels = models.map((m) => {
-            const isCurrent = current?.provider === m.provider && current?.modelId === m.modelId;
-            return `${isCurrent ? "* " : "  "}${m.provider}/${m.modelId}`;
-          });
-          const picked = await ctx.ui.select("Select remote model", labels);
-          if (!picked) return;
-          const idx = labels.indexOf(picked);
-          const chosen = models[idx];
-          if (chosen) target = { provider: chosen.provider, modelId: chosen.modelId };
-        }
-        if (!target) return;
-        try {
-          await controller.updateSession({ model: target });
-          ctx.ui.notify(`Remote model set to ${target.provider}/${target.modelId}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to switch model: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "thinking": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        let level = rest[0] as ThinkingLevel | undefined;
-        if (!level) {
-          const picked = await ctx.ui.select("Select remote thinking level", [...THINKING_LEVELS]);
-          if (!picked) return;
-          level = picked as ThinkingLevel;
-        }
-        if (!THINKING_LEVELS.includes(level)) {
-          ctx.ui.notify(`Invalid thinking level "${level}". Expected one of: ${THINKING_LEVELS.join(", ")}`, "error");
-          return;
-        }
-        try {
-          await controller.updateSession({ thinkingLevel: level });
-          ctx.ui.notify(`Remote thinking level set to ${level}`, "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to update thinking level: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "compact": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const instructions = rest.length > 0 ? rest.join(" ") : undefined;
-          await controller.compact(instructions);
-          ctx.ui.notify("Requested remote compaction", "info");
-        } catch (error) {
-          ctx.ui.notify(`Remote compaction failed: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "cancel": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Not connected to any remote", "warning");
-          return;
-        }
-        try {
-          const res = await controller.cancel();
-          ctx.ui.notify(
-            res.stopped.length > 0 ? `Canceled ${res.stopped.length} message(s)` : "Remote session is idle",
-            "info",
-          );
-        } catch (error) {
-          ctx.ui.notify(`Cancel failed: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      default: {
-        // Treat `/fa <name|url>` as direct connect so users do not need to type `/fa connect`.
-        if (isHttpUrl(sub)) {
-          await connectDirectUrl(ctx, sub, rest[0]);
-          return;
-        }
-        const loaded = loadConfigSafe(ctx);
-        if (loaded?.config.remotes[sub]) {
-          await connectByName(ctx, sub, rest[0]);
-          return;
-        }
-        ctx.ui.notify(
-          `Unknown remote or /fa subcommand "${sub}". Run /fa for menu, or /fa remotes to manage remotes.`,
-          "error",
-        );
-      }
-    }
-  };
+  const { dispatchAction, openSmartHome } = createCommandDispatcher({
+    controller,
+    attachContext,
+    getActiveRemoteConfig: () => activeRemoteConfig,
+    clearActiveRemoteConfig: () => {
+      activeRemoteConfig = undefined;
+    },
+    connectByName,
+    connectDirectUrl,
+    connectResolved,
+    handoffToCleanView: (ctx, handoff) => sessionHandoff.run(ctx, handoff),
+  });
 
   pi.registerFlag("fa", {
     description: "Connect to a configured FastAgent remote on startup",
@@ -1345,9 +448,8 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     requestWidgetRender = undefined;
     attachContext(ctx);
 
-    if (pendingHandoff) {
-      const handoff = pendingHandoff;
-      pendingHandoff = undefined;
+    const handoff = sessionHandoff.take();
+    if (handoff) {
       try {
         await connectResolved(ctx, handoff.remoteName, handoff.remote, {
           sessionId: handoff.sessionId,
@@ -1461,63 +563,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("fa", {
     description: "Connect to and control a remote FastAgent instance",
-    getArgumentCompletions: (prefix: string): AutocompleteItem[] | null => {
-      const trimmed = prefix.trimStart();
-      if (!trimmed.includes(" ")) {
-        const items: AutocompleteItem[] = [];
-        try {
-          const { config } = loadRemotes();
-          for (const name of Object.keys(config.remotes)) {
-            if (!RESERVED_SUBCOMMANDS.has(name) && name.startsWith(trimmed)) {
-              items.push({ value: name, label: name, description: "connect to saved remote" });
-            }
-          }
-        } catch {
-          // Ignore malformed remotes.json during tab completion.
-        }
-        for (const s of PRIMARY_SUBCOMMANDS) {
-          if (s.name.startsWith(trimmed)) {
-            items.push({ value: s.name, label: s.name, description: s.description });
-          }
-        }
-        return items.length > 0 ? items : null;
-      }
-      const [sub, arg = ""] = trimmed.split(/\s+/, 2);
-      if (sub === "connect" || sub === "remove" || sub === "key") {
-        try {
-          const { config } = loadRemotes();
-          const items = Object.keys(config.remotes)
-            .filter((name) => name.startsWith(arg))
-            .map((name) => ({ value: `${sub} ${name}`, label: name, description: "remote" }));
-          return items.length > 0 ? items : null;
-        } catch {
-          return null;
-        }
-      }
-      if (sub === "remotes") {
-        const subs = [
-          { value: "remotes add", label: "add", description: "Add and save a remote" },
-          { value: "remotes remove", label: "remove", description: "Remove a saved remote" },
-        ].filter((item) => item.label.startsWith(arg));
-        return subs.length > 0 ? subs : null;
-      }
-      if (sub === "thinking") {
-        const items = THINKING_LEVELS.filter((l) => l.startsWith(arg)).map((l) => ({
-          value: `thinking ${l}`,
-          label: l,
-        }));
-        return items.length > 0 ? items : null;
-      }
-      if (sub === "model") {
-        const models = controller.getState().agentInfo?.models ?? [];
-        const items = models
-          .map((m) => `${m.provider}/${m.modelId}`)
-          .filter((spec) => spec.startsWith(arg))
-          .map((spec) => ({ value: `model ${spec}`, label: spec }));
-        return items.length > 0 ? items : null;
-      }
-      return null;
-    },
+    getArgumentCompletions: (prefix: string) => getFaArgumentCompletions(prefix, controller),
     handler: async (rawArgs, ctx) => {
       attachContext(ctx);
       const tokens = rawArgs.trim() ? rawArgs.trim().split(/\s+/) : [];

@@ -32,14 +32,14 @@ export interface LiveReply {
   thinking: string;
 }
 
-export interface RetryNotice {
+interface RetryNotice {
   attempt: number;
   maxAttempts: number;
   delayMs: number;
   reason: string;
 }
 
-export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "reconnecting";
+type ConnectionStatus = "disconnected" | "connecting" | "connected" | "reconnecting";
 
 export interface RemoteViewState {
   status: ConnectionStatus;

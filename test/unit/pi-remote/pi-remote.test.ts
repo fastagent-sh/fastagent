@@ -14,19 +14,12 @@ import {
   type Session,
   type SessionEvent,
 } from "@fastagent-sh/client";
-import {
-  REMOTE_ENTRY_TYPE,
-  RemoteController,
-  TerminalStatusReporter,
-  buildSendContent,
-  connectRemote,
-  loadRemotes,
-  registerFastAgentRemoteExtension,
-  removeRemote,
-  saveRemote,
-} from "@fastagent-sh/pi-remote";
-import { parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/extension";
+import { RemoteController, buildSendContent } from "@fastagent-sh/pi-remote/controller";
+import { parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/editor";
+import { REMOTE_ENTRY_TYPE, registerFastAgentRemoteExtension } from "@fastagent-sh/pi-remote/extension";
+import { connectRemote, loadRemotes, removeRemote, saveRemote } from "@fastagent-sh/pi-remote/remotes";
 import { renderRemoteEntry, renderRemoteFooterLines } from "@fastagent-sh/pi-remote/render";
+import { TerminalStatusReporter } from "@fastagent-sh/pi-remote/terminal-status";
 
 const tempDirs: string[] = [];
 
