@@ -4,7 +4,14 @@
  */
 import { randomUUID } from "node:crypto";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { type ContentPart, type Message, type SendRequest, agentError, hasEnded } from "@fastagent-sh/client/agent-api";
+import {
+  type ContentPart,
+  type Message,
+  SendRequest,
+  agentError,
+  decodeRequest,
+  hasEnded,
+} from "@fastagent-sh/client/agent-api";
 import { applyScopedSettings, ensureDshAgent } from "./event-bridge.ts";
 import { toPublicMessage } from "./projection.ts";
 import {
@@ -17,7 +24,7 @@ import {
   requireSession,
 } from "./session-state.ts";
 import type { DshCommand, DshStoredMessage } from "./types.ts";
-import { decodeIdempotencyKey, decodeMetadata, normalizeSendContent, toDshBlocks } from "./validation.ts";
+import { normalizeSendContent, toDshBlocks } from "./validation.ts";
 
 export async function waitForMessage(
   state: DshRuntimeState,
@@ -73,20 +80,15 @@ export async function waitForMessage(
 
 export async function admitMessage(
   state: DshRuntimeState,
-  request: SendRequest,
+  rawRequest: SendRequest,
   commands: readonly DshCommand[],
 ): Promise<{ message: Message; replayed: boolean }> {
-  if (typeof request.sessionId !== "string" || request.sessionId.length === 0) {
-    throw agentError("invalid_request", "sessionId must be a non-empty string");
-  }
+  const request = decodeRequest(SendRequest, rawRequest, "messages.send");
   const live = requireSession(state, request.sessionId);
 
-  const idempotencyKey = decodeIdempotencyKey(request.idempotencyKey);
-  const metadata = decodeMetadata(request.metadata);
+  const idempotencyKey = request.idempotencyKey;
+  const metadata = request.metadata;
   const whenBusy = request.whenBusy ?? "queue";
-  if (whenBusy !== "queue" && whenBusy !== "steer" && whenBusy !== "reject") {
-    throw agentError("invalid_request", `invalid whenBusy: ${String(whenBusy)}`);
-  }
   const { rawParts, expandedParts } = normalizeSendContent(request.content, commands);
   const maxMessageBytes = state.options.maxMessageBytes;
   if (maxMessageBytes !== undefined) {

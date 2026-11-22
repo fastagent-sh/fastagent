@@ -26,21 +26,25 @@ import {
   AgentError,
   type AgentErrorData,
   type AgentInfo,
-  type CreateSessionOptions,
+  CompactOptions,
+  CreateSessionOptions,
   type EntriesOptions,
   type Entry,
-  type ListOptions,
+  LIMITS,
+  ListOptions,
   type Message,
-  type MessageKey,
+  MessageKey,
   type MessageStreamEvent,
   type Page,
   type SendRequest,
   type Session,
-  type SessionChanges,
+  SessionChanges,
   type SessionEvent,
   type ThinkingLevel,
   type Usage,
+  Wait,
   agentError,
+  decodeRequest,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
 import { buildCodingTools, resolveEnabledCodingTools } from "./coding-tools.ts";
@@ -86,14 +90,7 @@ import type {
   DshStoredSession,
   FastAgentToolLike,
 } from "./types.ts";
-import {
-  DEFAULT_THINKING_LEVELS,
-  decodeIdempotencyKey,
-  makeAgentOptions,
-  validateThinkingLevel,
-  validateTitle,
-  validateWait,
-} from "./validation.ts";
+import { DEFAULT_THINKING_LEVELS, makeAgentOptions } from "./validation.ts";
 
 /**
  * Open a FastAgent instance on the experimental DSH harness.
@@ -291,11 +288,10 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
 
     sessions: {
       async create(createOptions: CreateSessionOptions = {}): Promise<Session> {
-        const title = createOptions.title !== undefined ? validateTitle(createOptions.title) : undefined;
-        const thinkingLevel =
-          createOptions.thinkingLevel !== undefined ? validateThinkingLevel(createOptions.thinkingLevel) : undefined;
-        if (createOptions.tools !== undefined) {
-          const invalid = createOptions.tools.filter((name) => !state.toolsByName.has(name));
+        const decoded = decodeRequest(CreateSessionOptions, createOptions, "sessions.create");
+        const { title, thinkingLevel } = decoded;
+        if (decoded.tools !== undefined) {
+          const invalid = decoded.tools.filter((name) => !state.toolsByName.has(name));
           if (invalid.length > 0) {
             throw agentError("invalid_request", `unknown tools: ${invalid.join(", ")}`, { tools: invalid });
           }
@@ -309,14 +305,14 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         let inheritedContextUsage: { readonly tokens: number; readonly contextWindow?: number } | undefined;
         let parentSession: ReturnType<typeof SessionId> | undefined;
 
-        if (createOptions.forkFrom !== undefined) {
-          const sourceLive = requireSession(state, createOptions.forkFrom.sessionId);
+        if (decoded.forkFrom !== undefined) {
+          const sourceLive = requireSession(state, decoded.forkFrom.sessionId);
           const sourceEvents = await readSessionRawEvents(state, sourceLive);
           let cutSeq: number;
-          if (createOptions.forkFrom.entryId !== undefined) {
-            const targetSeq = seqForEntryId(createOptions.forkFrom.entryId);
+          if (decoded.forkFrom.entryId !== undefined) {
+            const targetSeq = seqForEntryId(decoded.forkFrom.entryId);
             if (targetSeq === undefined || targetSeq >= sourceEvents.length) {
-              throw agentError("not_found", `entry "${createOptions.forkFrom.entryId}" not found`);
+              throw agentError("not_found", `entry "${decoded.forkFrom.entryId}" not found`);
             }
             cutSeq = targetSeq;
           } else {
@@ -342,10 +338,10 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           order: state.nextSessionOrder++,
           deleted: false,
           ...(title !== undefined ? { title } : {}),
-          ...(createOptions.model !== undefined ? { model: createOptions.model } : {}),
+          ...(decoded.model !== undefined ? { model: decoded.model } : {}),
           ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
-          ...(createOptions.instructions !== undefined ? { instructions: createOptions.instructions } : {}),
-          ...(createOptions.tools !== undefined ? { tools: [...createOptions.tools] } : {}),
+          ...(decoded.instructions !== undefined ? { instructions: decoded.instructions } : {}),
+          ...(decoded.tools !== undefined ? { tools: [...decoded.tools] } : {}),
           inheritedEntryCount,
           ...(inheritedContextUsage !== undefined ? { inheritedContextUsage } : {}),
           usage: emptyUsage(),
@@ -378,17 +374,15 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       },
 
       async list(listOptions: ListOptions = {}): Promise<Page<Session>> {
-        const limit = listOptions.limit ?? 100;
-        if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-          throw agentError("invalid_request", `limit must be between 1 and 500, got ${String(limit)}`);
-        }
+        const decoded = decodeRequest(ListOptions, listOptions, "sessions.list");
+        const limit = decoded.limit ?? LIMITS.pageDefault;
         const ordered = [...state.liveSessions.values()]
           .filter((live) => !live.meta.deleted)
           .sort((a, b) => b.meta.order - a.meta.order);
         let start = 0;
-        if (listOptions.after !== undefined) {
-          const idx = ordered.findIndex((live) => live.meta.id === listOptions.after);
-          if (idx === -1) throw agentError("not_found", `unknown session cursor "${listOptions.after}"`);
+        if (decoded.after !== undefined) {
+          const idx = ordered.findIndex((live) => live.meta.id === decoded.after);
+          if (idx === -1) throw agentError("not_found", `unknown session cursor "${decoded.after}"`);
           start = idx + 1;
         }
         const slice = ordered.slice(start, start + limit);
@@ -401,54 +395,55 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       },
 
       async update(sessionId: string, changes: SessionChanges): Promise<Session> {
+        const decoded = decodeRequest(SessionChanges, changes, "sessions.update");
         const live = requireSession(state, sessionId);
-        const keys = Object.keys(changes).filter((k) => changes[k as keyof SessionChanges] !== undefined);
+        const keys = Object.keys(decoded).filter((k) => decoded[k as keyof SessionChanges] !== undefined);
         if (keys.length === 0) {
           throw agentError("invalid_request", "update requires at least one field");
         }
         let nextMeta = { ...live.meta };
-        if (changes.title !== undefined) {
-          if (changes.title === null) {
+        if (decoded.title !== undefined) {
+          if (decoded.title === null) {
             const { title: _dropped, ...rest } = nextMeta;
             nextMeta = rest;
           } else {
-            nextMeta = { ...nextMeta, title: validateTitle(changes.title) };
+            nextMeta = { ...nextMeta, title: decoded.title };
           }
         }
-        if (changes.model !== undefined) {
-          if (changes.model === null) {
+        if (decoded.model !== undefined) {
+          if (decoded.model === null) {
             const { model: _dropped, ...rest } = nextMeta;
             nextMeta = rest;
           } else {
-            nextMeta = { ...nextMeta, model: changes.model };
+            nextMeta = { ...nextMeta, model: decoded.model };
           }
         }
-        if (changes.thinkingLevel !== undefined) {
-          if (changes.thinkingLevel === null) {
+        if (decoded.thinkingLevel !== undefined) {
+          if (decoded.thinkingLevel === null) {
             const { thinkingLevel: _dropped, ...rest } = nextMeta;
             nextMeta = rest;
           } else {
-            nextMeta = { ...nextMeta, thinkingLevel: validateThinkingLevel(changes.thinkingLevel) };
+            nextMeta = { ...nextMeta, thinkingLevel: decoded.thinkingLevel };
           }
         }
-        if (changes.instructions !== undefined) {
-          if (changes.instructions === null) {
+        if (decoded.instructions !== undefined) {
+          if (decoded.instructions === null) {
             const { instructions: _dropped, ...rest } = nextMeta;
             nextMeta = rest;
           } else {
-            nextMeta = { ...nextMeta, instructions: changes.instructions };
+            nextMeta = { ...nextMeta, instructions: decoded.instructions };
           }
         }
-        if (changes.tools !== undefined) {
-          if (changes.tools === null) {
+        if (decoded.tools !== undefined) {
+          if (decoded.tools === null) {
             const { tools: _dropped, ...rest } = nextMeta;
             nextMeta = rest;
           } else {
-            const invalid = changes.tools.filter((name) => !state.toolsByName.has(name));
+            const invalid = decoded.tools.filter((name) => !state.toolsByName.has(name));
             if (invalid.length > 0) {
               throw agentError("invalid_request", `unknown tools: ${invalid.join(", ")}`, { tools: invalid });
             }
-            nextMeta = { ...nextMeta, tools: [...changes.tools] };
+            nextMeta = { ...nextMeta, tools: [...decoded.tools] };
           }
         }
 
@@ -540,6 +535,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       },
 
       async compact(sessionId: string, compactOptions?: { instructions?: string }): Promise<void> {
+        const decoded = decodeRequest(CompactOptions, compactOptions ?? {}, "sessions.compact");
         const live = requireSession(state, sessionId);
         const dshAgent = await ensureDshAgent(state, live);
         live.compacting = true;
@@ -553,7 +549,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
               return ev !== undefined && ev.type !== "system/message";
             });
             const summaryParts = [
-              compactOptions?.instructions ? `Instructions: ${compactOptions.instructions}` : undefined,
+              decoded.instructions ? `Instructions: ${decoded.instructions}` : undefined,
               `Compacted ${replaceableSeqs.length} prior conversation messages.`,
             ].filter(Boolean);
             const summary = summaryParts.join(" ");
@@ -651,12 +647,12 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
 
     messages: {
       async send(request: SendRequest, sendOptions?: { wait?: number; signal?: AbortSignal }): Promise<Message> {
-        validateWait(sendOptions?.wait);
+        const wait = sendOptions?.wait === undefined ? undefined : decodeRequest(Wait, sendOptions.wait, "wait");
         if (sendOptions?.signal?.aborted) throw sendOptions.signal.reason;
         const { message } = await admitMessage(state, request, commandsOf());
         const live = state.liveSessions.get(message.sessionId);
         if (live === undefined) return message;
-        return waitForMessage(state, live, message.id, sendOptions?.wait, sendOptions?.signal);
+        return waitForMessage(state, live, message.id, wait, sendOptions?.signal);
       },
 
       stream(request: SendRequest, streamOptions?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent> {
@@ -680,20 +676,18 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       },
 
       async get(key: MessageKey, getOptions?: { wait?: number; signal?: AbortSignal }): Promise<Message> {
-        validateWait(getOptions?.wait);
+        const decodedKey = decodeRequest(MessageKey, key, "messages.get");
+        const wait = getOptions?.wait === undefined ? undefined : decodeRequest(Wait, getOptions.wait, "wait");
         if (getOptions?.signal?.aborted) throw getOptions.signal.reason;
-        const live = requireSession(state, key.sessionId);
-        let messageId: string | undefined;
-        if ("messageId" in key) {
-          messageId = key.messageId;
-        } else {
-          const validKey = decodeIdempotencyKey(key.idempotencyKey);
-          messageId = validKey !== undefined ? state.messagesByKey.get(live.meta.id)?.get(validKey) : undefined;
-        }
+        const live = requireSession(state, decodedKey.sessionId);
+        const messageId =
+          "messageId" in decodedKey
+            ? decodedKey.messageId
+            : state.messagesByKey.get(live.meta.id)?.get(decodedKey.idempotencyKey);
         if (messageId === undefined || getStoredMessage(state, live.meta.id, messageId) === undefined) {
           throw agentError("not_found", "message not found");
         }
-        return waitForMessage(state, live, messageId, getOptions?.wait, getOptions?.signal);
+        return waitForMessage(state, live, messageId, wait, getOptions?.signal);
       },
     },
 

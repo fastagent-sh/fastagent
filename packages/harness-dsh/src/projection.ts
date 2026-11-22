@@ -9,14 +9,16 @@ import {
   type AgentErrorData,
   type ContentPart,
   type ContextUsage,
-  type EntriesOptions,
+  EntriesOptions,
   type Entry,
   type Json,
+  LIMITS,
   type Message,
   type Page,
   type Tokens,
   type Usage,
   agentError,
+  decodeRequest,
 } from "@fastagent-sh/client/agent-api";
 import type { DshStoredMessage } from "./types.ts";
 
@@ -305,14 +307,12 @@ export function deriveContextUsage(
 /**
  * Cursor pagination over projected entries matching `agent-api-conformance.ts`.
  */
-export function paginateEntries(entries: readonly Entry[], options: EntriesOptions = {}): Page<Entry> {
+export function paginateEntries(entries: readonly Entry[], rawOptions: EntriesOptions = {}): Page<Entry> {
+  const options = decodeRequest(EntriesOptions, rawOptions, "sessions.entries");
   if (options.after !== undefined && options.before !== undefined) {
     throw agentError("invalid_request", "entries accepts either after or before, not both");
   }
-  const limit = options.limit ?? 100;
-  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-    throw agentError("invalid_request", `limit must be an integer between 1 and 500, got ${String(limit)}`);
-  }
+  const limit = options.limit ?? LIMITS.pageDefault;
 
   if (options.after !== undefined) {
     const idx = entries.findIndex((entry) => entry.id === options.after);

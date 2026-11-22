@@ -1,11 +1,10 @@
 /**
- * Pure request validation, command expansion, and content conversion helpers for `@fastagent-sh/harness-dsh`.
+ * Command expansion and DSH content block conversion helpers for `@fastagent-sh/harness-dsh`.
  */
 import type { AgentOptions } from "@deepseek-ai/dsh-agent";
 import type { ContentBlock, ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import {
   type ContentPart,
-  type Metadata,
   type ModelRef,
   type SendRequest,
   type ThinkingLevel,
@@ -14,59 +13,7 @@ import {
 import { IMAGE_REF_PREFIX } from "./llm-pi-ai.ts";
 import type { DshCommand } from "./types.ts";
 
-const VALID_THINKING_LEVELS: ReadonlySet<string> = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
 export const DEFAULT_THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
-
-export function decodeMetadata(metadata: unknown): Metadata | undefined {
-  if (metadata === undefined) return undefined;
-  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
-    throw agentError("invalid_request", "metadata must be a string record");
-  }
-  const entries = Object.entries(metadata);
-  if (entries.length > 16) {
-    throw agentError("invalid_request", "metadata may contain at most 16 keys");
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of entries) {
-    if (key.length < 1 || key.length > 64) {
-      throw agentError("invalid_request", "a metadata key must be 1 to 64 characters");
-    }
-    if (typeof value !== "string" || value.length > 512) {
-      throw agentError("invalid_request", "each metadata value must be a string of at most 512 characters");
-    }
-    out[key] = value;
-  }
-  return out;
-}
-
-export function decodeIdempotencyKey(key: unknown): string | undefined {
-  if (key === undefined) return undefined;
-  if (typeof key !== "string" || key.length < 1 || key.length > 256) {
-    throw agentError("invalid_request", "idempotencyKey must be 1 to 256 characters");
-  }
-  return key;
-}
-
-export function validateTitle(title: unknown): string {
-  if (typeof title !== "string" || title.length < 1 || title.length > 200) {
-    throw agentError("invalid_request", "session title must be 1 to 200 characters");
-  }
-  return title;
-}
-
-export function validateThinkingLevel(level: unknown): ThinkingLevel {
-  if (typeof level !== "string" || !VALID_THINKING_LEVELS.has(level)) {
-    throw agentError("invalid_request", `invalid thinkingLevel: ${String(level)}`);
-  }
-  return level as ThinkingLevel;
-}
-
-export function validateWait(wait: number | undefined): void {
-  if (wait !== undefined && (typeof wait !== "number" || Number.isNaN(wait) || wait < 0)) {
-    throw agentError("invalid_request", `wait must be a non-negative number, got ${String(wait)}`);
-  }
-}
 
 function expandCommandText(text: string, commands: readonly DshCommand[]): string {
   if (!text.startsWith("/")) return text;

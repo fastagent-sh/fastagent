@@ -470,7 +470,32 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           updatedAt: 1,
         }),
       ).rejects.toThrow(/lease.*lost/);
+
       await successor.close();
+
+      let lostReason: Error | undefined;
+      const instanceWatched = freshInstance();
+      const watchedHolder = await openPostgresDshStore(db, instanceWatched, {
+        leaseMs: 5_000,
+        waitMs: 0,
+        owner: "holder-watched",
+        onLost: (error) => {
+          lostReason = error;
+        },
+      });
+      await db.query("UPDATE dsh_leases SET lease_until = 1 WHERE instance = $1", [instanceWatched]);
+      const takeover = await openPostgresDshStore(db, instanceWatched, {
+        leaseMs: 5_000,
+        waitMs: 0,
+        owner: "holder-takeover",
+      });
+      const hWatched = await watchedHolder
+        .create({ version: 4, id: "lost-id", createdAt: 1, isSeeded: false })
+        .catch(() => undefined);
+      expect(hWatched).toBeUndefined();
+      expect(lostReason?.message).toMatch(/lease.*lost/);
+      await takeover.close();
+      await watchedHolder.close();
       await hA.close();
       await hB.close();
       await other.close();
@@ -582,10 +607,13 @@ const stream = (...args) => {
     core.appendResponses([fauxAssistantMessage("tool-ok:" + text)]);
   } else {
     const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content) ? last.content.map((p) => p.text ?? "").join("") : "";
+    const sys = args[1].messages.filter((m) => m.role === "system").map((m) => String(m.content)).join("\\n");
     core.appendResponses([
       text === "use-ping"
         ? fauxAssistantMessage([fauxToolCall("ping", { msg: "hi" })], { stopReason: "toolUse" })
-        : fauxAssistantMessage("reply:" + text),
+        : text === "check-live"
+          ? fauxAssistantMessage("sys:" + (sys.includes("Updated live prompt.") ? "updated" : "stale"))
+          : fauxAssistantMessage("reply:" + text),
     ]);
   }
   return core.streamSimple(...args);
@@ -606,12 +634,15 @@ export default defineAgent({
       );
       writeFileSync(
         join(dir, "src", "tools", "ping.ts"),
-        `import { defineTool } from "@fastagent-sh/fastagent";
+        `import { defineTool, sessionIdOf } from "@fastagent-sh/fastagent";
 export default defineTool({
   name: "ping",
   description: "Echo a ping message",
   parameters: { type: "object", properties: { msg: { type: "string" } }, required: ["msg"] } as const,
-  execute: async ({ msg }) => "pong:" + msg,
+  execute: async ({ msg }, api, context) => {
+    const sid = await sessionIdOf(api, context);
+    return "pong:" + msg + ":" + String(sid);
+  },
 });
 `,
       );
@@ -637,9 +668,16 @@ export default defineTool({
       expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "ping"]);
       const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
       const dshMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-ping" }, { wait: 15 });
-      expect(dshMsg.answer?.text).toBe("tool-ok:pong:hi");
+      expect(dshMsg.answer?.text).toBe(`tool-ok:pong:hi:${dshSession.id}`);
       const dshConv1 = await dshAgent1.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
-      expect(dshConv1.answer?.text).toBe("tool-ok:pong:hi");
+      expect(dshConv1.answer?.text).toBe(`tool-ok:pong:hi:${dshConv1.sessionId}`);
+      // Live SYSTEM.md updates take effect on the next DSH message without restarting.
+      writeFileSync(join(dir, "SYSTEM.md"), "Updated live prompt.\n");
+      const liveSystemReply = await dshAgent1.messages.send(
+        { sessionId: dshSession.id, content: "check-live" },
+        { wait: 15 },
+      );
+      expect(liveSystemReply.answer?.text).toBe("sys:updated");
       const service = await dshAgent1.serve({ apiKeys: ["k"] });
       const health = await service.fetch(new Request("http://local/health"));
       expect(health.status).toBe(200);
@@ -656,6 +694,28 @@ export default defineTool({
       const dshConv2 = await dshAgent2.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
       expect(dshConv2.sessionId).toBe(dshConv1.sessionId);
       await dshAgent2.close();
+
+      // 5) Enforce maxMessageBytes and unusableDefault on openDshAgent parity.
+      const limited = await openDshAgent({
+        name: "limited",
+        workdir: dir,
+        unusableDefault: { spec: "sw/retired", reason: 'no provider "sw" offers "retired"' },
+        maxMessageBytes: 32,
+        sandbox: "off",
+      });
+      try {
+        expect((await limited.info()).unusableDefault).toEqual({
+          spec: "sw/retired",
+          reason: 'no provider "sw" offers "retired"',
+        });
+        const ls = await limited.sessions.create();
+        await expect(limited.messages.send({ sessionId: ls.id, content: "x".repeat(64) })).rejects.toMatchObject({
+          code: "invalid_request",
+          details: { reason: "too_large" },
+        });
+      } finally {
+        await limited.close();
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });

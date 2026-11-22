@@ -130,10 +130,7 @@ const COMMAND = /^\/([^\s]+)(?:\s+([\s\S]*))?$/;
 
 export async function openDurableAgent(options: DurableAgentOptions): Promise<DurableAgent> {
   registerPiSessionIdResolver((api, ctx) =>
-    piSessionIdOf(
-      api as Parameters<typeof piSessionIdOf>[0],
-      ctx as Parameters<typeof piSessionIdOf>[1],
-    ),
+    piSessionIdOf(api as Parameters<typeof piSessionIdOf>[0], ctx as Parameters<typeof piSessionIdOf>[1]),
   );
   const context = BACKGROUND_CONTEXT;
   const harness = await Harness.open(

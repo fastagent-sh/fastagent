@@ -170,8 +170,7 @@ export async function openPostgresDshStore(
   let onLost = options.onLost;
   const writers = new Set<string>();
 
-  const lostError = (reason?: string) =>
-    new Error(reason ?? `PostgreSQL DSH lease for "${instance}" was lost`);
+  const lostError = (reason?: string) => new Error(reason ?? `PostgreSQL DSH lease for "${instance}" was lost`);
 
   const giveUp = (error: Error) => {
     leaseLost = true;
