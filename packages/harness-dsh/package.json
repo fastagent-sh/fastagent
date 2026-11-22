@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/harness-dsh",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "Experimental DeepSeek Harness (@deepseek-ai/dsh) adapter implementing the FastAgent Agent API with OS sandboxing.",
   "keywords": [
     "agent",
@@ -63,6 +63,6 @@
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
     "@earendil-works/pi-ai": "^1.5.2",
-    "@fastagent-sh/client": "0.33.0"
+    "@fastagent-sh/client": "0.34.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/fastagent",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "Vibe first. Then FastAgent: turn a local agent directory into a live service in your app or behind the Agent API, durable across restarts.",
   "keywords": [
     "agent",
@@ -69,7 +69,7 @@
     "@earendil-works/pi-schema": "1.5.2",
     "@earendil-works/pi-telemetry": "1.5.2",
     "@effect/platform-node": "^4.0.7",
-    "@fastagent-sh/client": "0.33.0",
+    "@fastagent-sh/client": "0.34.0",
     "@modelcontextprotocol/client": "2.4.0",
     "chokidar": "^6.0.0",
     "commander": "^15.0.0",
