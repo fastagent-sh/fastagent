@@ -94,7 +94,7 @@ describe("init: scaffoldAgent", () => {
     // The scaffolded agent builds, from the directory itself.
     const definition = await loadSourceDefinition(dir);
     expect(definition.name).toBe("reviewer");
-    expect(buildDefinition(definition, {})).toMatchObject({ tools: [], schedules: [] });
+    expect(buildDefinition(definition, {})).toMatchObject({ tools: [] });
     expect(readSkills(dir).map((s) => s.name)).toEqual(["writing-great-skills"]);
   });
 

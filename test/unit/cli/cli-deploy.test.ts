@@ -56,8 +56,8 @@ describe("cli: deploy init", () => {
     const flyToml = await readFile(join(flyDir, "fly.toml"), "utf8");
     expect(flyToml).toContain(`app = "${"a".repeat(62)}"`);
     expect(flyToml).toContain('destination = "/data"');
-    expect(flyToml).toContain('auto_stop_machines = "off"');
-    expect(flyToml).toContain("min_machines_running = 1");
+    expect(flyToml).toContain('auto_stop_machines = "suspend"');
+    expect(flyToml).toContain("min_machines_running = 0");
     expect(flyToml).toContain('path = "/health"');
     expect(await readFile(join(flyDir, ".dockerignore"), "utf8")).toMatch(/^\/fly\.toml$/m);
     await writeFile(join(flyDir, "fly.toml"), "# custom fly\n");

@@ -1,6 +1,6 @@
 /**
  * Pi ExtensionAPI host glue for `@fastagent-sh/pi-remote`:
- * - Streamlined `/fa` entry (`/fa` smart picker/menu, `/fa <name|url>`, `/fa sessions`, `/fa clock`, `/fa remotes`, `/fa off`)
+ * - Streamlined `/fa` entry (`/fa` smart picker/menu, `/fa <name|url>`, `/fa sessions`, `/fa remotes`, `/fa off`)
  * - Native Pi command & keybinding handoff while connected (`/model`, `/name`, `/new`, `/resume`, `/fork`, `/thinking`,
  *   `Alt+Enter` queue, `Enter` steer, `Esc` cancel, `/compact`, `Shift+Tab`) via a thin `CustomEditor` wrapper
  * - Pi-native 2-line footer (preserving other extensions' statuses), live widget, banner, and terminal/cmux title sync
@@ -71,7 +71,6 @@ const PRIMARY_SUBCOMMANDS: readonly { name: string; description: string }[] = [
   { name: "title", description: "Rename the current remote session [title|--clear]" },
   { name: "fork", description: "Fork the current remote session" },
   { name: "model", description: "Select remote model [provider/modelId]" },
-  { name: "clock", description: "View and run remote schedules" },
   { name: "login", description: "Update remote server API key [remote]" },
   { name: "logout", description: "Clear saved remote server API key [remote]" },
   { name: "remotes", description: "Add, remove, or switch saved remotes" },
@@ -98,9 +97,6 @@ const RESERVED_SUBCOMMANDS = new Set([
   "thinking-cycle",
   "compact",
   "cancel",
-  "clock",
-  "schedules",
-  "run",
   "remotes",
   "add",
   "remove",
@@ -558,7 +554,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       showBanner?: boolean;
     } = {},
   ): Promise<void> => {
-    const { agent, clock, defaultSessionId } = await connectRemote(name, remote);
+    const { agent, defaultSessionId } = await connectRemote(name, remote);
     const targetSession = options.sessionId ?? defaultSessionId;
     if (
       options.allowHandoff !== false &&
@@ -570,7 +566,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       if (outcome !== "unsupported") return;
     }
     const session = await controller.connect(name, agent, {
-      clock,
       ...(targetSession !== undefined ? { sessionId: targetSession } : {}),
       ...(options.after !== undefined ? { after: options.after } : {}),
       ...(options.seenEntryIds !== undefined ? { seenEntryIds: options.seenEntryIds } : {}),
@@ -746,7 +741,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       { label: "Switch model (/model)", cmd: "model" },
       { label: "Thinking level (/thinking)", cmd: "thinking" },
       { label: "Compact session (/compact)", cmd: "compact" },
-      { label: "Schedules (/fa clock)", cmd: "clock" },
       { label: "Copy last assistant reply (/copy)", cmd: "copy" },
       { label: "Delete a session (/fa delete)", cmd: "delete" },
       { label: "Update remote credentials (/login)", cmd: "login" },
@@ -761,44 +755,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
     if (!picked) return;
     const action = actions.find((a) => a.label === picked);
     if (action) await dispatchAction(action.cmd, [], ctx);
-  };
-
-  const openClockPanel = async (ctx: ExtensionContext): Promise<void> => {
-    if (!controller.isConnected()) {
-      ctx.ui.notify("Connect first with /fa", "warning");
-      return;
-    }
-    try {
-      const schedules = await controller.listSchedules();
-      if (schedules.length === 0) {
-        ctx.ui.notify("No schedules on this remote", "info");
-        return;
-      }
-      const items = schedules.map((s) => {
-        const next = s.next ? `next ${s.next}` : "no next run";
-        const last = s.last?.outcome ? `last ${s.last.outcome}` : s.last ? "running" : "never ran";
-        return {
-          label: `[run schedule] ${s.name} (${s.cron}) — ${next}, ${last}`,
-          id: s.name,
-        };
-      });
-      const picked = await ctx.ui.select(
-        "Remote schedules (select to run now)",
-        items.map((i) => i.label),
-      );
-      if (!picked) return;
-      const chosen = items.find((i) => i.label === picked);
-      if (!chosen) return;
-      const run = await controller.runSchedule(chosen.id);
-      ctx.ui.notify(
-        run.status === "sent"
-          ? `Schedule "${chosen.id}" started (message ${shortId(run.message.id)})`
-          : `Schedule "${chosen.id}" skipped: ${run.reason}`,
-        run.status === "sent" ? "info" : "warning",
-      );
-    } catch (error) {
-      ctx.ui.notify(`Failed to read remote clock: ${errorText(error)}`, "error");
-    }
   };
 
   const openRemotesPanel = async (ctx: ExtensionContext, rest: string[]): Promise<void> => {
@@ -1357,55 +1313,6 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
           );
         } catch (error) {
           ctx.ui.notify(`Cancel failed: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "clock": {
-        await openClockPanel(ctx);
-        return;
-      }
-      case "schedules": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        try {
-          const schedules = await controller.listSchedules();
-          if (schedules.length === 0) {
-            ctx.ui.notify("No schedules defined on this remote", "info");
-            return;
-          }
-          const lines = schedules.map((s) => {
-            const next = s.next ? `next ${s.next}` : "no next run";
-            const last = s.last?.outcome ? `last ${s.last.outcome}` : s.last ? "running" : "never ran";
-            return `${s.name} (${s.cron}) — ${next}, ${last}`;
-          });
-          ctx.ui.notify(lines.join("\n"), "info");
-        } catch (error) {
-          ctx.ui.notify(`Failed to list schedules: ${errorText(error)}`, "error");
-        }
-        return;
-      }
-      case "run": {
-        if (!controller.isConnected()) {
-          ctx.ui.notify("Connect first with /fa", "warning");
-          return;
-        }
-        const name = rest[0];
-        if (!name) {
-          ctx.ui.notify("Usage: /fa run <schedule-name>", "error");
-          return;
-        }
-        try {
-          const run = await controller.runSchedule(name);
-          ctx.ui.notify(
-            run.status === "sent"
-              ? `Schedule "${name}" started (message ${shortId(run.message.id)})`
-              : `Schedule "${name}" skipped: ${run.reason}`,
-            run.status === "sent" ? "info" : "warning",
-          );
-        } catch (error) {
-          ctx.ui.notify(`Failed to run schedule "${name}": ${errorText(error)}`, "error");
         }
         return;
       }

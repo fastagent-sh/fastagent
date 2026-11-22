@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, sessions, schedules, and deployment."
+description: "Fixes for common FastAgent setup and runtime issues: missing model, login and auth, ports, sessions, and deployment."
 status: current
 ---
 
@@ -34,7 +34,7 @@ key (`OPENAI_API_KEY`, …) in `.secrets/.env`.
 
 `Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file in `src/`. Check:
 - `npm install` ran, and `package.json` has `"type": "module"` and the packages the code imports;
-- the file sits directly in `src/tools/`, `src/extensions/` or `src/schedules/` and default-exports
+- the file sits directly in `src/tools/` or `src/extensions/` and default-exports
   what that directory holds; helpers live outside them.
 
 ### `Invalid schema for function '…'`
@@ -48,7 +48,7 @@ the tool. Use a pattern: `str({ pattern: "^https?://\\S+$" })`.
 
 ### `the storage … is held by another process`
 
-Another process holds this instance: a `start`, or an `invoke` or `schedules` command that opened it while no `dev`
+Another process holds this instance: a `start`, or an `invoke` command that opened it while no `dev`
 ran. Stop it, or run the command again once it ends. A running `dev` is reached through its Agent API instead.
 
 ## Local development
@@ -58,11 +58,6 @@ ran. Stop it, or run the command again once it ends. A running `dev` is reached 
 Prompt, `AGENTS.md`, skill and template edits apply on the next message. Code (`src/`, config, `package.json`,
 `.secrets/.env`) restarts the worker once running messages finish. Anything else, such as `lib/`, needs a manual
 restart. After a broken edit, fix it and save again.
-
-### A schedule did not fire
-
-Only a running `dev` or `start` fires schedules (`invoke` does not). A run missed while down is caught up once. A container
-that was stopped or scaled to zero sleeps through it. `fastagent schedules list` shows the next and last runs.
 
 ### `busy`
 

@@ -16,7 +16,7 @@ pi -e npm:@fastagent-sh/pi-remote
 
 ## Configure remotes
 
-Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`, shared with `fastagent invoke --remote <name>` and `fastagent schedules --remote <name>`):
+Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`, shared with `fastagent invoke --remote <name>`):
 
 ```json
 {
@@ -44,4 +44,4 @@ Run `/fa` inside Pi to add a remote interactively, or create `~/.config/fastagen
   - `/resume`, `/new`, `/name`, `/session`, `/copy`, `/fork`, `/clone`, `/model`, `/thinking`, `/compact`, `/login`, `/logout`, and shortcuts (`Ctrl+L`, `Ctrl+P`, `Shift+Tab`, copy, session shortcuts) route directly to the connected remote and restore local Pi behavior after `/fa off`.
   - Send text and images normally. While the remote agent is running, `Enter` steers, `Alt+Enter` queues, and `Esc` cancels.
   - The first user message on an untitled session automatically sets a concise session title.
-- **Remote management commands:** `/fa off`, `/fa sessions`, `/fa clock` (schedules), `/fa login` / `/fa logout` (remote server credentials), `/fa remotes` (add/remove/switch), `/fa delete`, `/fa status`.
+- **Remote management commands:** `/fa off`, `/fa sessions`, `/fa login` / `/fa logout` (remote server credentials), `/fa remotes` (add/remove/switch), `/fa delete`, `/fa status`.

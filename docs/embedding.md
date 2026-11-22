@@ -38,7 +38,7 @@ await agent.close(); // on shutdown: releases the instance's storage
   stop work for good, `agent.sessions.cancel(sessionId)` first.
 - Pass `harness: "dsh"` (with optional `sandbox: "workspace" | "read-only" | "off"`) to run on `@fastagent-sh/harness-dsh` instead of `pi-durable` (requires `npm i @fastagent-sh/harness-dsh`).
 - [MCP servers](mcp.md) read their `${NAME}` references from `secrets`.
-- `database: { url: "postgres://…" }` keeps the sessions and the clock in PostgreSQL
+- `database: { url: "postgres://…" }` keeps the sessions in PostgreSQL
   ([sessions in PostgreSQL](configuration.md#sessions-in-postgresql)), under the instance's `name`, which is then
   required; so does `secrets.FASTAGENT_DATABASE_URL`. To host several instances in one process over a single shared
   connection pool, open it once with `const db = openPostgresDatabase({ url }, { max: 20 })`, pass `database: db` to
@@ -90,7 +90,7 @@ app.post("/chat/:session", requireUser, async (req, res) => {
 **One instance is one trust domain**: the agent's tools can reach every session in it. Give users who must not see each
 other an instance each ([security model](agent-api.md#security)).
 
-## 3. Serve its schedules and the Agent API
+## 3. Serve the Agent API
 
 ```ts
 const service = await agent.serve();
@@ -103,9 +103,8 @@ await agent.close(); // closes the service, then releases the storage
 - `service.fetch` answers `GET /health`. `serve({ apiKeys: [key] })` adds the Agent API
   under `/v1`, which another service calls with `connectAgent(url, { apiKey })` from
   `@fastagent-sh/client`.
-- `agent.busy()` says whether a message or a schedule's fire is in flight in the process: for a platform that stops an
-  idle machine, as AgentCore does. `serve({ alarm })` keeps one external alarm set for when the instance next needs a
-  process, and `service.tick()` claims and runs what is due when that alarm wakes it.
+- `agent.busy()` says whether a message is in flight in the process: for a platform that stops an
+  idle machine, as AgentCore does.
 
 ### Mounting `fetch`
 
@@ -179,7 +178,7 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
   stdio MCP server's own `env`, and `GIT_CEILING_DIRECTORIES` at the workspace's parent.
 - **`close()`** interrupts a running message as a process stop does: it is answered at the next open, unless
   `sessions.cancel` was stopping it.
-- **`serve()`.** `close()` ends the API's event streams, gives requests in flight 500 ms, then stops the schedules.
+- **`serve()`.** `close()` ends the API's event streams and gives requests in flight 500 ms.
 - **Users kept apart are yours.** An app serving its own users over one instance sets `codingTools: false` in
   `fastagent.config.ts` (so the agent has no `read`, `write`, `edit` or `bash`), uses only tools that cannot reach
   the instance's storage or files, and checks every session id a request names, a fork's source included.
@@ -189,7 +188,7 @@ A gateway or self-hosted model is a provider in the agent's config ([custom mode
 An app that runs agents for a person on their machine:
 
 - Open with a `root` of your own to run beside `fastagent dev` on the same project. Each instance has its own
-  sessions. Only one of them should `serve()`, or schedules fire twice.
+  sessions.
 - `agent.info().models` lists the models a session may use, with their context windows and thinking levels.
 - A configured default model that the model lists no longer have (a provider retired it, a catalog update renamed it)
   does not stop the open: `info().defaultModel` is absent, `info().unusableDefault` gives the configured `spec` and the

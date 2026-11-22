@@ -94,11 +94,11 @@ function flyConfig(app: string, port: number): string {
 [http_service]
   internal_port = ${port}
   force_https = true
-  # Keep one machine running: auto-stop pauses schedules, and a second machine cannot share the ${STORAGE_DIR}
-  # volume lock (deploy with --ha=false).
-  auto_stop_machines = "off"
+  # Suspend to zero when idle and resume on demand (keep requests open via stream/wait while turns run, or set
+  # min_machines_running = 1 for fire-and-forget background turns); keep one machine (--ha=false) for ${STORAGE_DIR}.
+  auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [[http_service.checks]]
     grace_period = "10s"
@@ -177,7 +177,7 @@ async function runBuiltinInit(agentDir: string, target: BuiltinTarget, force: bo
   console.log(
     [
       `# Create a Railway service, attach a persistent volume at ${STORAGE_DIR} (keep 1 replica),`,
-      "# enable the /health check in service settings, set variables, then deploy:",
+      "# enable Serverless (App Sleeping) and the /health check in service settings, set variables, then deploy:",
       "railway init",
       `railway volume add --mount-path ${STORAGE_DIR}`,
       "railway variables --set FASTAGENT_API_KEY=<key> --set <MODEL_API_KEY>=<value>",

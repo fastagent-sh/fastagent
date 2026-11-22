@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/agentcore",
   "version": "0.33.0",
-  "description": "Run a FastAgent agent on Amazon Bedrock AgentCore: the runtime, Aurora DSQL, Secrets Manager, and EventBridge alarms.",
+  "description": "Run a FastAgent agent on Amazon Bedrock AgentCore: the runtime, Aurora DSQL, and Secrets Manager.",
   "keywords": [
     "agent",
     "ai-agent",
@@ -71,7 +71,6 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "@aws-sdk/client-scheduler": "^3.1171.0",
     "@aws-sdk/client-secrets-manager": "^3.1170.0",
     "@aws-sdk/dsql-signer": "^3.1170.0",
     "@effect/platform-node": "^4.0.7",

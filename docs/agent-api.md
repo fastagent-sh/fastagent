@@ -7,7 +7,7 @@ status: current
 # Agent API
 
 Every caller of an agent uses one API: an app that embeds it, a program elsewhere, a client that shows conversations,
-and FastAgent's own schedules and `fastagent invoke`. It is the same in process and over HTTP:
+and `fastagent invoke`. It is the same in process and over HTTP:
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -69,14 +69,6 @@ may write into one session, so the session's status says it is busy, not whether
 | `messages.send` | Send a message; answers once it is recorded, or with `wait` (seconds) once it has ended |
 | `messages.stream` | Send a message and receive it as it is written |
 | `messages.get` | A message by id or by its key, with `wait` too |
-
-Clock operations are separate from the core `Agent` interface (`ClockApi`, via `connectClock` / `connectAgentCoreClock`
-over HTTP, or `service.clock` in process):
-
-| Clock operation | Does |
-|---|---|
-| `schedules.run(name, { wait? })` | Fire a schedule now, as its clock would, in the schedule's own session: `{ status: "sent", message }`, or `{ status: "skipped", reason }` while its previous run still holds that session |
-| `schedules.list()` | Every schedule: `name`, `cron`, `tz`, when it fires `next`, and its `last` occurrence (`slot`, `firedAt`, `outcome`: `completed`, `failed`, `skipped` or `interrupted`, absent while it runs, and `ms`) |
 
 A `signal` lets go of a wait or a stream, never of the work: the message goes on. Only `cancel` stops the agent. A
 `wait` is an upper bound: the answer may come before the message ends, so check `status`.
@@ -186,8 +178,6 @@ the key opens the whole instance, so a browser calls your backend, which calls t
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`; `messages.stream` with `"stream": true` |
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
-| `GET /v1/schedules` | `schedules.list` |
-| `POST /v1/schedules/{name}/run?wait` | `schedules.run` |
 | `GET /v1/auth/providers` | `auth.providers` |
 | `POST /v1/auth/login` | `auth.startLogin` |
 | `GET /v1/auth/login/{flowId}?wait` | `auth.getLogin` |

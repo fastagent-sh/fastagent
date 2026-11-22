@@ -336,42 +336,6 @@ export const MessageKey = Schema.Union([
 ]);
 export type MessageKey = typeof MessageKey.Type;
 
-/**
- * A schedule fired on demand: the message its occurrence sent, or why the occurrence did not run (its previous run
- * still holds the schedule's session).
- */
-export const ScheduleRun = Schema.Union([
-  Schema.Struct({ status: Schema.Literal("sent"), message: Message }),
-  Schema.Struct({ status: Schema.Literal("skipped"), reason: Schema.String }),
-]);
-export type ScheduleRun = typeof ScheduleRun.Type;
-
-/**
- * A schedule of the agent's and its clock: when it fires next, and its last occurrence. An occurrence `skipped` ran into
- * the schedule's previous one still running; `interrupted` was claimed by a process that stopped before it sent its
- * message. An occurrence without an `outcome` is running, or its process stopped and the next start settles it.
- */
-export class ScheduleState extends Schema.Opaque<ScheduleState>()(
-  Schema.Struct({
-    name: Schema.String,
-    cron: Schema.String,
-    tz: Schema.optionalKey(Schema.String),
-    /** When it fires next (ISO 8601); absent when its cron never fires again. */
-    next: Schema.optionalKey(Schema.String),
-    last: Schema.optionalKey(
-      Schema.Struct({
-        /** The instant the occurrence was for (ISO 8601). */
-        slot: Schema.String,
-        /** When it was fired (ISO 8601). */
-        firedAt: Schema.String,
-        outcome: Schema.optionalKey(Schema.Literals(["completed", "failed", "skipped", "interrupted"])),
-        /** How long its turn took, when it was timed. */
-        ms: Schema.optionalKey(Schema.Number),
-      }),
-    ),
-  }),
-) {}
-
 export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;
 
@@ -489,20 +453,6 @@ export interface AuthApi {
   cancelLogin(flowId: string): Promise<void>;
   /** Remove the stored credential for `provider` from the instance's durable storage. */
   logout(provider: string): Promise<{ removed: boolean }>;
-}
-
-/** The agent's clock, operated by its Caller: declarative schedules. */
-export interface ClockApi {
-  schedules: {
-    /**
-     * Fire the schedule `name` now, as its clock would: one occurrence, in the schedule's own session. Answers once its
-     * message is recorded, or with `wait` once it has ended; `skipped` when the schedule's previous run still holds the
-     * session.
-     */
-    run(name: string, options?: WaitOptions): Promise<ScheduleRun>;
-    /** Every schedule the agent defines, with when it fires next and its last occurrence. */
-    list(): Promise<ScheduleState[]>;
-  };
 }
 
 export type ErrorCode =

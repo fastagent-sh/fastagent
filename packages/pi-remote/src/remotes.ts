@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { type Agent, type ClockApi, connectAgent, connectClock } from "@fastagent-sh/client";
+import { type Agent, connectAgent } from "@fastagent-sh/client";
 import {
   type AgentCoreRemoteConfig,
   type HttpRemoteConfig,
@@ -88,7 +88,7 @@ export async function connectRemote(
   name: string,
   remote: RemoteConfig,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<{ agent: Agent; clock: ClockApi; defaultSessionId?: string }> {
+): Promise<{ agent: Agent; defaultSessionId?: string }> {
   if (remote.type === "http") {
     const rawKey = remote.apiKey?.trim() || env.FASTAGENT_API_KEY?.split(",")[0]?.trim();
     if (!rawKey) {
@@ -97,7 +97,6 @@ export async function connectRemote(
     const apiKey = expandRemoteEnvRef(rawKey, `remotes.${name}.apiKey`, env);
     return {
       agent: connectAgent(remote.url, { apiKey }),
-      clock: connectClock(remote.url, { apiKey }),
       ...(remote.sessionId !== undefined ? { defaultSessionId: remote.sessionId } : {}),
     };
   }
@@ -117,6 +116,5 @@ export async function connectRemote(
   };
   return {
     agent: agentcore.connectAgentCore(connection),
-    clock: agentcore.connectAgentCoreClock(connection),
   };
 }

@@ -41,7 +41,7 @@ export interface CommandSpec {
   examples?: ExampleSpec[];
   /** Narrative help (behavior, precedence rules, caveats) appended after the generated sections. */
   notes?: string;
-  /** A group command (e.g. `schedule`) declares subcommands instead of `run`. */
+  /** A group command (e.g. `deploy`) declares subcommands instead of `run`. */
   subcommands?: CommandSpec[];
   /**
    * The implementation: positional args in declaration order (an optional arg without a default is `undefined`), then

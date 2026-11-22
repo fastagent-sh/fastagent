@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
-import { connectAgent, connectAuth, connectClock } from "../../../packages/client/src/http/client.ts";
+import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
 import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
@@ -60,8 +60,6 @@ describe("the Agent API over HTTP", () => {
       "/v1/auth/providers",
       "/v1/auth/providers/{provider}",
       "/v1/openapi.json",
-      "/v1/schedules",
-      "/v1/schedules/{name}/run",
       "/v1/sessions",
       "/v1/sessions/{sessionId}",
       "/v1/sessions/{sessionId}/attachments/{ref}",
@@ -74,12 +72,6 @@ describe("the Agent API over HTTP", () => {
       "/v1/sessions/{sessionId}/messages/{messageId}",
       "/v1/usage",
     ]);
-  });
-
-  it("answers clock endpoints with empty lists and not_found when served without a clock", async () => {
-    const clock = connectClock(server.url, { apiKey: KEY });
-    expect(await clock.schedules.list()).toEqual([]);
-    await expect(clock.schedules.run("daily")).rejects.toMatchObject({ code: "not_found" });
   });
 
   it("answers auth endpoints with empty providers and not_found when served without an auth manager", async () => {

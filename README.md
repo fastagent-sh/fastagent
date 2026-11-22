@@ -16,8 +16,8 @@
   <sub>— the agent harness &amp; multi-provider LLM API under the hood</sub>
 </p>
 
-FastAgent serves an agent directory (`SYSTEM.md`, `skills/`, TypeScript tools) as a live service: inside your app,
-over HTTP through its Agent API, or on a schedule, and no message is lost across a restart. You keep the files you have.
+FastAgent serves an agent directory (`SYSTEM.md`, `skills/`, TypeScript tools) as a live service: inside your app
+or over HTTP through its Agent API, and no message is lost across a restart. You keep the files you have.
 There is no new framework to learn.
 
 <p align="center">
@@ -70,7 +70,7 @@ Your app keeps its auth, database and routes. See [Embedding](https://fastagent.
 |---|---|
 | [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | The durable runtime, Agent API server, `openAgent` embedding, and the `fastagent` CLI |
 | [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | The Agent API client: `connectAgent` (HTTP, zero Node deps) and `@fastagent-sh/client/agentcore` |
-| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore runtime, Aurora DSQL, Secrets Manager, EventBridge alarms, and CDK construct |
+| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore runtime, Aurora DSQL, Secrets Manager, and CDK construct |
 | [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Experimental DeepSeek Harness (`@deepseek-ai/dsh`) adapter with OS sandboxing (`--harness dsh`) |
 
 ## Documentation
@@ -93,8 +93,7 @@ change. Changes are in the [releases](https://github.com/fastagent-sh/fastagent/
 Built on **[pi](https://github.com/earendil-works/pi)** (pi-durable's durable agent loop, pi-ai's model API), with
 [Effect](https://github.com/Effect-TS/effect), [undici](https://github.com/nodejs/undici),
 [chokidar](https://github.com/paulmillr/chokidar), [node-postgres](https://node-postgres.com),
-[@clack/prompts](https://github.com/bombshell-dev/clack), [ignore](https://github.com/kaelzhang/node-ignore) and
-[croner](https://github.com/Hexagon/croner). The scaffolded `writing-great-skills` skill is vendored from
+[@clack/prompts](https://github.com/bombshell-dev/clack) and [ignore](https://github.com/kaelzhang/node-ignore). The scaffolded `writing-great-skills` skill is vendored from
 [mattpocock/skills](https://github.com/mattpocock/skills), with its license.
 
 If FastAgent saves you from rewriting an agent into another framework, [give it a ⭐](https://github.com/fastagent-sh/fastagent).

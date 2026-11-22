@@ -124,7 +124,7 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
 }
 
 /** An instance in a database is opened by the name it is given: a command that opens one without a name exits 2. */
-export function refuseUnnamedDatabaseInstance(): void {
+function refuseUnnamedDatabaseInstance(): void {
   if (process.env[DATABASE_URL_ENV] && enteredInstanceName() === undefined) {
     failUsage(
       `${DATABASE_URL_ENV} keeps the sessions in a database that instances share by name: ` +

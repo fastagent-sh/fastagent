@@ -1,7 +1,7 @@
 # fastagent — Agent Guide
 
 FastAgent turns a file-defined agent (`SYSTEM.md`, `AGENTS.md`, `skills/`, code under `src/`) into a live service: in
-an app, over HTTP, or on a clock, all through one API of its own, the Agent API. Chat platforms reach an agent through
+an app or over HTTP, all through one API of its own, the Agent API. Chat platforms reach an agent through
 that API from outside the runtime: channels are not part of it.
 
 ## The code is the only source of truth
@@ -12,7 +12,7 @@ that API from outside the runtime: channels are not part of it.
   `packages/client/src/http/contract.ts` (the API over HTTP) and `packages/fastagent/src/cli/program.ts` (the CLI).
 - **The packages.** An npm workspace, one version for all: `@fastagent-sh/client` (the Agent API, `connectAgent`, and
   `connectAgentCore` under `/agentcore`; it imports no runtime), `@fastagent-sh/fastagent` (the runtime and the CLI),
-  `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager, EventBridge alarms,
+  `@fastagent-sh/agentcore` (Amazon Bedrock AgentCore: its runtime, Aurora DSQL, Secrets Manager,
   and its CDK construct), `@fastagent-sh/pi-remote` (the Pi extension connecting local Pi sessions to deployed
   FastAgent instances; host-provided `@earendil-works/pi-*` packages stay in optional `peerDependencies`), and
   `@fastagent-sh/harness-dsh` (optional second runtime harness backed by `@deepseek-ai/dsh` with native OS sandboxing;
@@ -47,8 +47,7 @@ that API from outside the runtime: channels are not part of it.
 - **The artifact carries the agent; the machine lends it an environment.** Prompt files, `AGENTS.md`, `src/` and
   `skills/` come from the bundle, never from the machine (no skill or prompt from `~/.pi/agent`). The box supplies
   only commands and variables, the way `bash` inherits `PATH`.
-- **A session id belongs to the Agent; a conversation id belongs to the Caller.** A Caller maps its conversations onto
-  sessions (`packages/fastagent/src/schedule/conversation-sessions.ts`). A tool that asks which session it runs in gets the id the Agent handed out
+- **A session id belongs to the Agent; a conversation id belongs to the Caller.** A tool that asks which session it runs in gets the id the Agent handed out
   (`sessionIdOf`).
 - **The CLI serves a person and a coding agent alike.** Nothing waits on a terminal. A choice not given exits 2 and
   names what to pass. A step only a person can take returns at once (`need_user_action`, a check command), and a

@@ -1,7 +1,6 @@
 /**
  * `fastagent info [--json]`: print what the directory builds into, WITHOUT opening or serving the agent: it
- * reads the directory and the environment, never the instance's storage, so it answers beside a running serve. What
- * the instance's clock did is `fastagent schedules list`'s.
+ * reads the directory and the environment, never the instance's storage, so it answers beside a running serve.
  */
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
@@ -16,7 +15,6 @@ import { describeInstanceStorage } from "../../harnesses/serving.ts";
 import { readCommands } from "../../harnesses/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
-import { nextRun } from "../../schedule/cron.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface InfoOptions {
@@ -74,12 +72,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const stateRoot = resolveStateRoot(agentDir);
   const entered = enteredInstanceName();
   const storagePlace = { stateRoot, env: process.env, ...(entered === undefined ? {} : { name: entered }) };
-  const schedules = (code?.schedules ?? []).map((s) => ({
-    name: s.name,
-    cron: s.cron,
-    tz: s.tz ?? null,
-    next: nextRun(s.cron, s.tz, new Date())?.toISOString() ?? null,
-  }));
   const codingTools = [...resolveCodingTools(config.codingTools)];
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const auth = models.auth;
@@ -106,7 +98,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
-          schedules: code === undefined ? null : schedules,
           commands,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
@@ -145,10 +136,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
   if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");
-  line(
-    "schedules",
-    code ? schedules.map((s) => `${s.name} (next ${s.next ?? "never"})`).join(", ") || "(none)" : unbuilt,
-  );
   line("commands", commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   line("secrets", declared.length > 0 ? describeSecrets(declared) : "(none declared)");
   if (unsetSecrets.length > 0) {

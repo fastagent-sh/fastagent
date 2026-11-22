@@ -1,12 +1,10 @@
 /**
- * What an agent's author writes: `defineAgent()` in `fastagent.config.ts`, `needs()` around the
- * code that reads a secret, and `defineSchedule()` in `src/schedules/`. Each returns what it was given, typed; the
- * assembly (open.ts) reads them back.
+ * What an agent's author writes: `defineAgent()` in `fastagent.config.ts` and `needs()` around the
+ * code that reads a secret. Each returns what it was given, typed; the assembly (open.ts) reads them back.
  */
 import type { ModelThinkingLevel, Provider } from "@earendil-works/pi-ai";
 import type { McpServerDeclaration } from "../mcp/config.ts";
 import type { Needs } from "../needs.ts";
-import type { ScheduleConfig } from "../schedule/schedule.ts";
 
 /** The built-in coding tools FastAgent ships. */
 export const CODING_TOOL_NAMES = ["read", "write", "edit", "bash"] as const;
@@ -43,14 +41,4 @@ export interface AgentConfig {
 /** @public */
 export function defineAgent(config: AgentConfig): AgentConfig {
   return config;
-}
-
-/** What `src/schedules/<name>.ts` default-exports. */
-export interface DefinedSchedule extends ScheduleConfig {
-  readonly kind: "fastagent.schedule";
-}
-
-/** @public */
-export function defineSchedule(config: ScheduleConfig): DefinedSchedule {
-  return { kind: "fastagent.schedule", ...config };
 }

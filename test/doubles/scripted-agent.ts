@@ -12,6 +12,7 @@
 import {
   type Agent,
   AgentError,
+  type AgentErrorData,
   type CreateSessionOptions,
   type Entry,
   type Json,
@@ -23,7 +24,7 @@ import {
   agentError,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
-import type { TurnEvent } from "./scripted-run.ts";
+type TurnEvent = { type: "rejected"; error: AgentErrorData } | MessageStreamEvent;
 
 export type Script = (request: SendRequest) => AsyncIterable<TurnEvent> | Iterable<TurnEvent>;
 
@@ -337,18 +338,4 @@ export function scriptedAgent(
     sent,
   };
   return agent;
-}
-
-/** What a message asks, read back as text and images: the shape a Caller builds its content from. */
-export interface Prompt {
-  text: string;
-  images?: { mimeType: string; data: string }[];
-}
-
-export function promptOf(request: Pick<SendRequest, "content">): Prompt {
-  const parts =
-    typeof request.content === "string" ? [{ type: "text" as const, text: request.content }] : request.content;
-  const text = parts.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-  const images = parts.flatMap((part) => (part.type === "image" ? [{ mimeType: part.mimeType, data: part.data }] : []));
-  return images.length > 0 ? { text, images } : { text };
 }

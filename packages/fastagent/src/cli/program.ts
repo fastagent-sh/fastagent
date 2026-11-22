@@ -65,7 +65,7 @@ const init: CommandSpec = {
 const dev: CommandSpec = {
   name: "dev",
   summary: "serve the agent locally, restarting on code edits",
-  description: "Open the agent and serve its schedules and Agent API; restarts worker on src/ or config edits.",
+  description: "Open the agent and serve its Agent API; restarts worker on src/ or config edits.",
   flags: [
     PORT,
     BIND,
@@ -93,7 +93,7 @@ const info: CommandSpec = {
   name: "info",
   summary: "print what the directory builds into, without serving",
   description:
-    "Inspect model, tools, extensions, schedules, commands and secrets read-only, from the directory: never the " +
+    "Inspect model, tools, extensions, commands and secrets read-only, from the directory: never the " +
     "instance's storage, so it answers beside a running serve.",
   flags: [JSON_FLAG, MODEL, ...HARNESS_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],
@@ -216,7 +216,7 @@ const deploy: CommandSpec = {
       examples: [
         { cmd: "fastagent deploy init docker", note: "Dockerfile + .dockerignore for any host" },
         { cmd: "fastagent deploy init compose", note: "Dockerfile + compose.yml" },
-        { cmd: "fastagent deploy init fly", note: "Dockerfile + fly.toml (single machine, /data, /health)" },
+        { cmd: "fastagent deploy init fly", note: "Dockerfile + fly.toml (scale-to-zero suspend, /data, /health)" },
         { cmd: "fastagent deploy init railway", note: "Dockerfile + Railway volume and deploy commands" },
         { cmd: "fastagent deploy init agentcore", note: "AWS AgentCore (requires @fastagent-sh/agentcore)" },
       ],
@@ -235,49 +235,6 @@ const deploy: CommandSpec = {
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent deploy check" }, { cmd: "fastagent deploy check --json", note: "for CI" }],
       run: async (_args, f) => (await import("./commands/deploy.ts")).runDeployCheck({ json: f.json === true }),
-    },
-  ],
-};
-
-const schedules: CommandSpec = {
-  name: "schedules",
-  summary: "list schedules or fire a schedule now",
-  subcommands: [
-    {
-      name: "list",
-      summary: "what fires next and how each schedule last ran, from the instance",
-      flags: [JSON_FLAG, ...HARNESS_FLAGS, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
-      examples: [
-        { cmd: "fastagent schedules list" },
-        { cmd: "fastagent schedules list --url https://agent.example.com --json", note: "a deployment" },
-      ],
-      run: async (_args, f) =>
-        (await import("./commands/schedules.ts")).runList(".", {
-          json: f.json === true,
-          ...harnessOptions(f),
-          ...urlOptions(f),
-          instance: instanceFlags(f),
-        }),
-    },
-    {
-      name: "run",
-      summary: "fire one schedule now, as its clock would, through the serve that owns the instance if one runs",
-      args: [{ name: "<name>", description: "schedule name" }],
-      flags: [JSON_FLAG, MODEL, ...HARNESS_FLAGS, NO_INPUT, ...URL_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
-      examples: [
-        { cmd: "fastagent schedules run daily-digest" },
-        { cmd: "fastagent schedules run daily-digest --json", note: "Message JSON on stdout" },
-        { cmd: "fastagent schedules run daily-digest --url https://agent.example.com", note: "a deployment" },
-      ],
-      run: async (args, f) =>
-        (await import("./commands/schedules.ts")).runScheduleNow(args[0] as string, ".", {
-          json: f.json === true,
-          model: f.model as string | undefined,
-          ...harnessOptions(f),
-          input: f.input !== false,
-          ...urlOptions(f),
-          instance: instanceFlags(f),
-        }),
     },
   ],
 };
@@ -351,7 +308,7 @@ const logout: CommandSpec = {
   },
 };
 
-const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, schedules, build, start, deploy];
+const specs: readonly CommandSpec[] = [init, login, logout, dev, invoke, info, models, build, start, deploy];
 
 /** The production program assembly (specs + the top-level examples/docs). */
 export function buildCliProgram(overrides: ProgramOptions = {}) {

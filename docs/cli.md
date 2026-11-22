@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-description: "The fastagent CLI reference: init, login, logout, dev, invoke, info, models, schedules, build, start and deploy, with their flags, and the commands an extension adds."
+description: "The fastagent CLI reference: init, login, logout, dev, invoke, info, models, build, start and deploy, with their flags, and the commands an extension adds."
 status: current
 ---
 
@@ -15,9 +15,9 @@ The agent depends on its own version of FastAgent, and a `fastagent` installed g
 Without a global install, the agent's scripts (`npm run dev`, `npm run build`, `npm start`) and
 `npx @fastagent-sh/fastagent <command>` run it too. Never `npx fastagent`: that name on npm is another package.
 
-**A running instance is operated through the process that runs it.** `invoke` and `schedules run`
-on an agent whose `dev` is running go through that `dev`, by its Agent API, so they see the same sessions and never
-contend for its storage. With no `dev` running they open the instance themselves; with `--url` they act on a
+**A running instance is operated through the process that runs it.** `invoke`
+on an agent whose `dev` is running goes through that `dev`, by its Agent API, so it sees the same sessions and never
+contends for its storage. With no `dev` running it opens the instance itself; with `--url` or `--remote` it acts on a
 deployment.
 
 Every command runs in the current directory; pass `-C <dir>` before the command (as in `git -C`) to run in another
@@ -35,7 +35,6 @@ subdirectory, a command names the agent's root and stops.
 | `invoke [message]` | send one message (positional, `-`, or piped `stdin`) and print the answer (`--url` for a deployment) |
 | `info` | show what the agent loads, without serving |
 | `models [search]` | list model specs |
-| `schedules list\|run` | each schedule's next and last run; fire a schedule now |
 | `build` | compile the agent into `dist/` |
 | `start` | serve the build |
 | `deploy init <target>` | write container and platform files (`docker`, `compose`, `fly`, `railway`, or an installed extension such as `agentcore`) ([Deploy](deploy.md)) |
@@ -56,12 +55,12 @@ Command flags come after the command: `fastagent info --json`. `-h`/`--help` wor
 |---|---|---|
 | `-C <dir>` | before any command | Run as if `fastagent` was started in `<dir>` (including version forwarding, extensions, `login`, `models`). |
 | `--bind <addr>` | `dev`, `start` | Bind address: an IP literal or `localhost`. See [Bind address](configuration.md#ports-and-bind-address). |
-| `--no-input` | `dev`, `start`, `invoke`, `schedules run`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
+| `--no-input` | `dev`, `start`, `invoke`, `login`, `logout` | Never prompt; missing input or interactive steps exit 2 naming the flag or terminal command to run. |
 | `--model <provider/modelId>` | assembly commands (not `deploy`) | Model for this run. `deploy` has none: the model is the configuration's. |
-| `--harness <pi-durable\|dsh>` | `dev`, `start`, `invoke`, `schedules`, `info` | Runtime harness override (`--harness` > `FASTAGENT_HARNESS` > config > `pi-durable`). `dsh` requires `@fastagent-sh/harness-dsh`. |
-| `--sandbox <workspace\|read-only\|off>` | `dev`, `start`, `invoke`, `schedules`, `info` | OS sandbox mode for `harness: "dsh"` (`--sandbox` > `FASTAGENT_SANDBOX` > config > `workspace`). |
-| `--json` | `info`, `models`, `invoke`, `login`, `schedules list`, `schedules run`, `build`, `deploy check` | Machine-readable output. |
-| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout`, `schedules list`, `schedules run` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
+| `--harness <pi-durable\|dsh>` | `dev`, `start`, `invoke`, `info` | Runtime harness override (`--harness` > `FASTAGENT_HARNESS` > config > `pi-durable`). `dsh` requires `@fastagent-sh/harness-dsh`. |
+| `--sandbox <workspace\|read-only\|off>` | `dev`, `start`, `invoke`, `info` | OS sandbox mode for `harness: "dsh"` (`--sandbox` > `FASTAGENT_SANDBOX` > config > `workspace`). |
+| `--json` | `info`, `models`, `invoke`, `login`, `build`, `deploy check` | Machine-readable output. |
+| `--url <base>`, `--remote <name>`, `--key <key>` | `invoke`, `login`, `logout` | Act on a served instance through its HTTP/AgentCore API instead of this directory's. Prefer `FASTAGENT_API_KEY` (or `--env-file`) over `--key` so keys stay out of command history. |
 
 ## Exit codes
 

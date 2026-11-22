@@ -16,7 +16,7 @@ import { buildDshSandboxPolicy, resolveConfinedPath } from "../../../packages/ha
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/pi-durable/open.ts";
-import { openAgent, withInstanceClock } from "../../../packages/fastagent/src/harnesses/serving.ts";
+import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { dshSubject } from "../../harnesses/dsh-subject.ts";
@@ -633,15 +633,10 @@ export default defineTool({
       expect((await piAgent2.sessions.get(piSession.id)).title).toBe("pi-session");
       await piAgent2.close();
 
-      // 4) Switch back to dsh on the same agent.sqlite: dsh-session is intact, and offline withInstanceClock reads dsh_kv.
+      // 4) Switch back to dsh on the same agent.sqlite: dsh-session is intact.
       const dshAgent2 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       expect((await dshAgent2.sessions.get(dshSession.id)).title).toBe("dsh-session");
       await dshAgent2.close();
-
-      await withInstanceClock({ stateRoot: join(root, ".state"), env: {}, harness: "dsh" }, async (clock) => {
-        await clock.sessions((current) => ({ next: { ...current, digest: dshSession.id }, result: undefined }));
-        expect(await clock.stored.sessions()).toEqual({ digest: dshSession.id });
-      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });

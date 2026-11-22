@@ -4,7 +4,7 @@
  */
 import type { Agent } from "../../packages/client/src/agent-api.ts";
 import { serveHandler } from "../../packages/fastagent/src/http/serve.ts";
-import { connectAgent, connectClock } from "../../packages/client/src/http/client.ts";
+import { connectAgent } from "../../packages/client/src/http/client.ts";
 import { type ApiHandler, type ApiOptions, apiHandler } from "../../packages/fastagent/src/http/server.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
@@ -49,16 +49,12 @@ export function httpSubject(inner: AgentApiSubject): AgentApiSubject {
     current = undefined;
   };
   const serve = async (agent: Agent) => {
-    current = await served(agent, { clock: inner.clockApi() });
+    current = await served(agent);
     return connectAgent(current.url, { apiKey: KEY });
   };
   return {
     ...inner,
     keysSends: true,
-    clockApi: () => {
-      if (current === undefined) throw new Error("the HTTP subject is not open");
-      return connectClock(current.url, { apiKey: KEY });
-    },
     async start(options) {
       await down();
       return serve(await inner.start(options));

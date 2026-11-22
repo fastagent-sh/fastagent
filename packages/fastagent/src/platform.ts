@@ -8,13 +8,10 @@ import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } fro
 import { type ContainerTarget, containerArtifacts } from "./deploy/container.ts";
 import { checkContainer } from "./deploy/preflight.ts";
 import { resolveAuthPath } from "./harnesses/models/credentials.ts";
-import { type AgentDefinition, assertDefinition, definitionSecrets } from "./definition/definition.ts";
+import { type AgentDefinition, definitionSecrets } from "./definition/definition.ts";
 import { loadProjectBuild } from "./definition/built.ts";
-import { buildDefinitionShape, loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
-import { listPostgresInstances } from "./harnesses/pi-durable/postgres/storage.ts";
-import type { PostgresDatabase } from "./postgres.ts";
+import { loadSourceDefinition } from "./harnesses/pi-durable/open.ts";
 import { instanceName } from "./instance-name.ts";
-import { nextRun } from "./schedule/cron.ts";
 
 export { DATABASE_URL_ENV } from "./paths.ts";
 export { Unavailable } from "./unavailable.ts";
@@ -27,13 +24,6 @@ export type { ContainerTarget } from "./deploy/container.ts";
 export type { DeclaredSecret } from "./declared-secrets.ts";
 export type { CreateIndex, PgExecutor, PostgresDatabase, PostgresLimits } from "./postgres.ts";
 
-/** One of the definition's schedules, as a platform inspects it without running it. */
-export interface ScheduleFact {
-  name: string;
-  cron: string;
-  tz?: string;
-}
-
 /** What a platform asks of the agent in `agentDir` before it runs it: its name, its model, the values its code reads. */
 export interface AgentFacts {
   /** The definition's name as one path segment: what a platform names the agent's resources after. */
@@ -42,35 +32,6 @@ export interface AgentFacts {
   model?: string;
   /** Every value the definition declares (`needs`, its MCP servers' `${VAR}`), with where. */
   secrets: DeclaredSecret[];
-  /** Every schedule in `src/schedules/`, validated as a build validates them. */
-  schedules: ScheduleFact[];
-}
-
-/** The schedules of `definition`, built with stand-ins for any secrets so inspecting them needs none. */
-export function definitionSchedules(definition: AgentDefinition): ScheduleFact[] {
-  return buildDefinitionShape(assertDefinition(definition), {}).schedules.map(({ name, cron, tz }) => ({
-    name,
-    cron,
-    ...(tz === undefined ? {} : { tz }),
-  }));
-}
-
-/** The earliest next run across `schedules` strictly after `from`, or `undefined` when none fires again. */
-export function earliestScheduleRun(
-  schedules: readonly Pick<ScheduleFact, "cron" | "tz">[],
-  from: Date = new Date(),
-): Date | undefined {
-  let earliest: number | undefined;
-  for (const s of schedules) {
-    const due = nextRun(s.cron, s.tz, from)?.getTime();
-    if (due !== undefined && (earliest === undefined || due < earliest)) earliest = due;
-  }
-  return earliest === undefined ? undefined : new Date(earliest);
-}
-
-/** Every instance `agentName` has opened in `database`, or none before the database's tables exist. */
-export function listDatabaseInstances(database: PostgresDatabase, agentName: string): Promise<string[]> {
-  return listPostgresInstances(database, agentName);
 }
 
 export async function agentFacts(agentDir: string): Promise<AgentFacts> {
@@ -80,7 +41,6 @@ export async function agentFacts(agentDir: string): Promise<AgentFacts> {
     name: instanceName(definition.name),
     ...(model === undefined ? {} : { model }),
     secrets: definitionSecrets(definition),
-    schedules: definitionSchedules(definition),
   };
 }
 

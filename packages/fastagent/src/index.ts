@@ -12,7 +12,6 @@ export type {
   AuthMethod,
   AuthPromptInfo,
   AuthProviderStatus,
-  ClockApi,
   CompactOptions,
   ContentPart,
   CreateSessionOptions,
@@ -28,8 +27,6 @@ export type {
   Metadata,
   ModelRef,
   Page,
-  ScheduleRun,
-  ScheduleState,
   SendRequest,
   Session,
   SessionChanges,
@@ -62,7 +59,6 @@ export { baseEnv } from "./child-env.ts";
 
 export {
   defineAgent,
-  defineSchedule,
   type AgentConfig,
   type CodingToolName,
   type CodingToolsConfig,
@@ -77,7 +73,6 @@ export {
   type ToolParameters,
 } from "./harnesses/pi-durable/tool.ts";
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
-export type { ScheduleConfig } from "./schedule/schedule.ts";
 // What `fastagent build` writes into a package's generated entry, never written by hand.
 export { defineDefinition, type AgentDefinition } from "./definition/definition.ts";
 // The session a tool runs in, as the Agent hands it out.

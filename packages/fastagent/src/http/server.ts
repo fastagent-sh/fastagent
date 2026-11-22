@@ -16,7 +16,6 @@ import {
   type Agent,
   AgentError,
   type AuthApi,
-  type ClockApi,
   LIMITS,
   type SessionEvent,
   agentError,
@@ -66,8 +65,6 @@ export interface ApiHandler {
 
 export interface ApiOptions {
   keys: readonly string[];
-  /** Optional clock operations mounted under `/v1/schedules`. */
-  clock?: ClockApi;
   /** Optional remote auth operations mounted under `/v1/auth`. */
   auth?: AuthApi;
   /** For tests: the longest a request waits, and how often a quiet stream says it is open. */
@@ -268,19 +265,6 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       ),
   );
 
-  const { clock } = options;
-  const clockHandlers = HttpApiBuilder.group(AgentHttpApi, "clock", (handle) =>
-    handle
-      .handle("runSchedule", ({ params, query }) =>
-        clock === undefined
-          ? Effect.fail(agentError("not_found", `no schedule "${params.name}"`))
-          : call("schedules.run", (signal) => clock.schedules.run(params.name, { wait: capped(query.wait), signal })),
-      )
-      .handle("listSchedules", () =>
-        clock === undefined ? Effect.succeed([]) : call("schedules.list", () => clock.schedules.list()),
-      ),
-  );
-
   const { auth } = options;
   const noAuth = () => Effect.fail(agentError("not_found", "This instance does not expose remote auth management"));
   const authHandlers = HttpApiBuilder.group(AgentHttpApi, "auth", (handle) =>
@@ -333,7 +317,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
 
   const { handler, dispose } = HttpRouter.toWebHandler(
     Layer.mergeAll(HttpApiBuilder.layer(AgentHttpApi), Edges).pipe(
-      Layer.provide([handlers, clockHandlers, authHandlers]),
+      Layer.provide([handlers, authHandlers]),
       Layer.provide([authorization, malformed]),
       Layer.provide(HttpServer.layerServices),
       Layer.provide(Layer.succeed(HttpIncomingMessage.MaxBodySize)(MAX_BODY)),

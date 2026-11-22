@@ -36,7 +36,6 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       "lib/batches.ts",
       "src/tools/plan-batches.ts",
       "test/batches.test.ts",
-      "src/schedules/daily-review.ts",
     ]) {
       const path = join(agentDir, file);
       await mkdir(dirname(path), { recursive: true });
@@ -67,7 +66,6 @@ it("the agent development guide's copied files typecheck, run, and reject a mist
       agentDir,
       tools: ["plan-batches"],
       commands: expect.arrayContaining([expect.objectContaining({ name: "skill:review-batches" })]),
-      schedules: [expect.objectContaining({ name: "daily-review", cron: "0 9 * * *" })],
     });
     expect(await readFile(join(agentDir, "fastagent.config.ts"), "utf8")).toBe(config);
 

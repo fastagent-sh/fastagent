@@ -50,7 +50,7 @@ const agent = await openAgent(myAgent, {
 
 - **Full Agent API**: passes the full `test/harnesses/agent-api-conformance.ts` suite (streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, context usage, crash recovery).
 - **Shared storage**: shares the instance's `agent.sqlite` (with kernel-enforced `EXCLUSIVE` locking) or PostgreSQL database (`dsh_*` tables + `dsh_leases` fencing) without colliding with `pi-durable`.
-- **Portable assets**: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), `mcpServers`, and `src/schedules/` work identically on both harnesses.
+- **Portable assets**: `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), and `mcpServers` work identically on both harnesses.
 - **`src/extensions/`**: `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
 
 ## Experimental status

@@ -1007,32 +1007,3 @@ export async function openPostgresStorage(
     });
   }
 }
-
-/**
- * Every instance `agent` has opened in `database` (`durable_metadata`), or none when the database has no tables yet:
- * how a deploy re-arms existing instances' alarms without waking them.
- */
-export async function listPostgresInstances(database: PostgresDatabase, agent: string): Promise<string[]> {
-  const { url, password } = database;
-  const shared = sharedHandleOf(database);
-  if (shared !== undefined) shared.assertOpen();
-  const db = shared !== undefined ? shared.borrowed : openPgDatabase(url, password === undefined ? {} : { password });
-  try {
-    const rows = await db
-      .query<{ instance: string }>("SELECT instance FROM durable_metadata WHERE agent = $1 ORDER BY instance", [agent])
-      .catch((error: { code?: string }) => {
-        if (error.code === "42P01") return [];
-        throw error;
-      });
-    return rows.map((row) => row.instance);
-  } catch (error) {
-    const failed = passes(error) ? Unavailable : Error;
-    throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, { cause: error });
-  } finally {
-    if (shared === undefined) {
-      await db
-        .close()
-        .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
-    }
-  }
-}

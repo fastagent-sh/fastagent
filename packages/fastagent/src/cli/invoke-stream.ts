@@ -25,7 +25,7 @@ function answerText(): (event: SessionEvent) => string {
 }
 
 /** A command that sends a message exits 0 only when it completed. */
-export const exitCodeOf = (message: Pick<Message, "status">): number => (message.status === "completed" ? 0 : 1);
+const exitCodeOf = (message: Pick<Message, "status">): number => (message.status === "completed" ? 0 : 1);
 
 function failure(message: Message): string | undefined {
   const { status, error } = message;

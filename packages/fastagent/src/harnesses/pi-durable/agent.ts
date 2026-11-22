@@ -118,7 +118,7 @@ export interface DurableAgentOptions {
 /**
  * What a process does with the messages an earlier one accepted and did not end (it was stopped, or killed). `"resume"`
  * (the default, a serve's): they run on in this one, as its own work. `"refuse"`: the open fails naming them, for a
- * process that runs one thing and would cut the rest off (`fastagent invoke`, `fastagent schedules run`).
+ * process that runs one thing and would cut the rest off (`fastagent invoke`).
  */
 export type Unfinished = "resume" | "refuse";
 

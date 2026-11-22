@@ -54,7 +54,6 @@ describe("an agent definition on pi-durable", () => {
     const before = readdirSync(dir, { recursive: true }).sort();
     const { registry } = await loadSourceDefinition(dir);
     expect(registry.tools.map(({ file }) => file)).toEqual(["src/tools/weather.ts"]);
-    expect(registry.schedules).toEqual([{ file: "src/schedules/daily.ts", name: "daily", value: expect.any(Object) }]);
     expect(readdirSync(dir, { recursive: true }).sort()).toEqual(before);
   });
 
@@ -66,7 +65,6 @@ describe("an agent definition on pi-durable", () => {
     const built = buildDefinition(definition, ENV);
     expect(built.tools.map((tool) => tool.name)).toEqual(["weather"]);
     expect(built.extensions.map((extension) => extension.name)).toEqual(["audit"]);
-    expect(built.schedules.map((schedule) => schedule.name)).toEqual(["daily"]);
   });
 
   describe("opened", () => {
@@ -283,7 +281,7 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         version: "0.0.0",
         dir: "/tmp/support",
         config: { codingTools: selected },
-        registry: { tools: [], extensions: [], schedules: [] },
+        registry: { tools: [], extensions: [] },
       });
       selected.push("bash");
       expect(def.config.codingTools).toEqual(["read"]);

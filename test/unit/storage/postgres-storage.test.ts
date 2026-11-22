@@ -9,7 +9,6 @@ import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/po
 import {
   InstanceHeld,
   PostgresStorage,
-  listPostgresInstances,
   openPostgresStorage,
 } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/storage.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
@@ -434,20 +433,14 @@ describe("openPostgresDatabase: shared connection pool across multiple instances
       expect(createIndexCalls).toBe(callsAfterFirst);
       expect((await aAgain.sessions.get(sessionA.id)).id).toBe(sessionA.id);
 
-      // listPostgresInstances reuses the shared pool without closing it.
-      const agentName = (await aAgain.info()).agent.name;
-      const listed = await listPostgresInstances(shared, agentName);
-      expect(listed).toEqual(["tenant-a", "tenant-b", "tenant-c"]);
-
       await aAgain.close();
       await b.close();
       await c.close();
 
-      // Closing the shared handle is idempotent and rejects later opens or listings.
+      // Closing the shared handle is idempotent and rejects later opens.
       await shared.close();
       await shared.close();
       await expect(openPostgresStorage(shared, "tenant-d")).rejects.toThrow(/is closed/);
-      await expect(listPostgresInstances(shared, agentName)).rejects.toThrow(/is closed/);
     } finally {
       await shared.close();
       await fresh.close();

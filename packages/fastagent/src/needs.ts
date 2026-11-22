@@ -1,6 +1,6 @@
 /**
  * `needs()`: code that reads secrets, declared next to the read and built once their values are known, so the
- * declaration cannot drift from the read. A tool, an extension, a schedule or a provider may be one; the
+ * declaration cannot drift from the read. A tool, an extension, or a provider may be one; the
  * assembly lists every declaration and refuses to open while a required one has no value.
  */
 

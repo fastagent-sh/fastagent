@@ -1,7 +1,7 @@
 /**
  * The Agent on `@fastagent-sh/harness-dsh` as a conformance subject (`agent-api-conformance.ts`):
  * mirrors `durable-subject.ts` with the exact same scripted `@earendil-works/pi-ai` model, tools,
- * failure injection, restartable storage, and external `ClockRunner`.
+ * failure injection, and restartable storage.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,9 +25,6 @@ import {
   openDshAgent,
   openSqliteDshStore,
 } from "@fastagent-sh/harness-dsh";
-import type { Change, ClockStore } from "../../packages/fastagent/src/schedule/clock.ts";
-import { type ClockRunner, createClockRunner } from "../../packages/fastagent/src/schedule/runner.ts";
-import type { Fire } from "../../packages/fastagent/src/schedule/state.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -116,36 +113,6 @@ function subjectModels(signedOut: boolean) {
     }),
   );
   return { models, model: { provider: PROVIDER, modelId: fast.getModel().id } };
-}
-
-function memoryClockStore(): ClockStore {
-  const firesMap = new Map<string, readonly Fire[]>();
-  let sessionsState: Readonly<Record<string, string>> = {};
-  let armedState: Readonly<Record<string, string>> = {};
-
-  return {
-    async fires<T>(name: string, change: Change<readonly Fire[], T>): Promise<T> {
-      const current = firesMap.get(name) ?? [];
-      const { next, result } = change(structuredClone(current));
-      if (next !== undefined) firesMap.set(name, structuredClone(next));
-      return result;
-    },
-    async sessions<T>(change: Change<Readonly<Record<string, string>>, T>): Promise<T> {
-      const { next, result } = change(structuredClone(sessionsState));
-      if (next !== undefined) sessionsState = structuredClone(next);
-      return result;
-    },
-    async armed<T>(change: Change<Readonly<Record<string, string>>, T>): Promise<T> {
-      const { next, result } = change(structuredClone(armedState));
-      if (next !== undefined) armedState = structuredClone(next);
-      return result;
-    },
-    stored: {
-      fires: async (name) => structuredClone(firesMap.get(name) ?? []),
-      sessions: async () => structuredClone(sessionsState),
-      armed: async () => structuredClone(armedState),
-    },
-  };
 }
 
 function failableBackend(inner: DshEventStoreBackend): { backend: DshEventStoreBackend; fail(): void } {
@@ -241,8 +208,6 @@ const sqliteIn: DshSubjectStore = async (directory) => openSqliteDshStore(join(d
 export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubject {
   let directory = "";
   let current: DshAgent | undefined;
-  let currentClock: ClockRunner | undefined;
-  let currentStore: ClockStore | undefined;
   let currentBackend: (DshEventStoreBackend & { close(): Promise<void> }) | undefined;
   let fail: () => void = () => {};
   let held: (() => void)[] = [];
@@ -345,7 +310,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
   const open = async (without: readonly string[] = []): Promise<DshAgent> => {
     const { models, model } = subjectModels(signedOut);
     currentBackend = await openStore(directory);
-    if (currentStore === undefined) currentStore = memoryClockStore();
     const wrapped = failableBackend(currentBackend);
     fail = wrapped.fail;
     current = await openDshAgent({
@@ -361,14 +325,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       sandbox: "off",
       storage: wrapped.backend,
     });
-    currentClock = createClockRunner({
-      agent: current,
-      store: currentStore,
-      schedules: [
-        { name: "digest", cron: "0 9 * * *", prompt: "the digest" },
-        { name: "long", cron: "0 9 * * *", prompt: "hold" },
-      ],
-    });
     return current;
   };
 
@@ -379,7 +335,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       currentBackend = undefined;
       if (directory) rmSync(directory, { recursive: true, force: true });
       directory = mkdtempSync(join(tmpdir(), "fastagent-dsh-"));
-      currentStore = memoryClockStore();
       held = [];
       effects = 0;
       signalled = 0;
@@ -404,14 +359,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
     signalled: () => signalled,
     effects: () => effects,
     failStorage: () => fail(),
-    clock: () => {
-      if (currentStore === undefined) throw new Error("the subject is not open");
-      return currentStore;
-    },
-    clockApi: () => {
-      if (currentClock === undefined) throw new Error("the subject is not open");
-      return currentClock.api;
-    },
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);
@@ -419,8 +366,6 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       if (directory) rmSync(directory, { recursive: true, force: true });
       directory = "";
       current = undefined;
-      currentClock = undefined;
-      currentStore = undefined;
       currentBackend = undefined;
     },
   };

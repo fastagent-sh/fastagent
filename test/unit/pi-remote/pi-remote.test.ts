@@ -724,32 +724,6 @@ describe("RemoteController", () => {
       { type: "image", mimeType: "image/png", data: "abc" },
     ]);
   });
-
-  it("delegates clock operations to the connected ClockApi and refuses them when no clock is attached", async () => {
-    const stream = createEventStream();
-    const { agent } = makeFakeAgent({ onEvents: () => stream.iterable });
-    const controller = new RemoteController({}, { sleep: async () => {} });
-
-    await controller.connect("ops", agent);
-    await expect(controller.listSchedules()).rejects.toThrow(/does not expose a clock API/);
-    controller.disconnect();
-
-    const clock = {
-      schedules: {
-        list: async () => [{ name: "daily", cron: "0 9 * * *" }],
-        run: async (name: string) => ({
-          status: "sent" as const,
-          message: { id: `sched-${name}`, sessionId: "sess-sched", status: "queued" as const },
-        }),
-      },
-    };
-    const stream2 = createEventStream();
-    const { agent: agent2 } = makeFakeAgent({ onEvents: () => stream2.iterable });
-    await controller.connect("ops", agent2, { clock });
-    expect(await controller.listSchedules()).toEqual([{ name: "daily", cron: "0 9 * * *" }]);
-    expect(await controller.runSchedule("daily")).toMatchObject({ status: "sent", message: { id: "sched-daily" } });
-    controller.disconnect();
-  });
 });
 
 describe("TerminalStatusReporter", () => {
