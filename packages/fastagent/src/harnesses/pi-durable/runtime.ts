@@ -9,7 +9,7 @@ import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent, ServingStorage } from "../serving.ts";
-import { type PostgresDatabase, messageBytesFor } from "../../postgres.ts";
+import type { PostgresDatabase } from "../../postgres.ts";
 import type { DurableAgent } from "./agent.ts";
 import { mcpTools } from "../mcp.ts";
 import { assembleAgent } from "./open.ts";
@@ -64,13 +64,13 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     chosen,
     place,
     database,
+    maxMessageBytes,
     storageDescription,
     processEnv,
     code,
     models,
     traces,
   } = ctx;
-  const maxMessageBytes = messageBytesFor(database?.limits);
 
   let stopRuns: ((error: Error) => void) | undefined;
   const storage = await openStorage(place, database, chosen, (error) => stopRuns?.(error));

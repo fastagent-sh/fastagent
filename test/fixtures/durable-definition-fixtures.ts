@@ -8,7 +8,7 @@ const ROOT = import.meta.dirname;
 export const made: string[] = [];
 
 const NEEDS = "../../../../../packages/fastagent/src/needs.ts";
-const IDS = "../../../../../packages/fastagent/src/harnesses/pi-durable/ids.ts";
+const TOOL = "../../../../../packages/fastagent/src/harnesses/tool.ts";
 
 /** An agent package with `files`, its directory under test/fixtures. */
 export function agentPackage(files: Record<string, string>): string {
@@ -74,7 +74,7 @@ export const WITH_SESSION_TOOL: Record<string, string> = {
   ...FILES,
   "src/tools/whoami.ts": `import { obj } from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-durable";
-import { sessionIdOf } from "${IDS}";
+import { sessionIdOf } from "${TOOL}";
 export default defineTool({
   name: "whoami",
   description: "Say where the call runs",

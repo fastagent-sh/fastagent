@@ -191,12 +191,11 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     expect([...piToDsh, ...dshToPi]).toEqual([]);
   });
 
-  it("no module outside harnesses/pi-durable/ imports pi-durable internals (except serving.ts runtime entry and index.ts sessionIdOf)", () => {
+  it("no module outside harnesses/pi-durable/ imports pi-durable internals (except serving.ts runtime entry)", () => {
     const fastagentSrc = srcOf("fastagent");
     const piDir = resolve(fastagentSrc, "harnesses/pi-durable");
     const allowed = new Set([
       `${relative(repo, resolve(fastagentSrc, "harnesses/serving.ts"))} → ${relative(repo, resolve(piDir, "runtime.ts"))}`,
-      `${relative(repo, resolve(fastagentSrc, "index.ts"))} → ${relative(repo, resolve(piDir, "ids.ts"))}`,
     ]);
     const offenders = filesUnder(fastagentSrc)
       .filter((file) => !file.startsWith(`${piDir}/`))

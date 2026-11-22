@@ -19,13 +19,16 @@ import {
   createWriteTool,
 } from "@earendil-works/pi-durable/tools";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { AgentDefinition } from "../../definition/definition.ts";
 import { instanceName } from "../../instance-name.ts";
-import { log } from "../../log.ts";
-import { modelRefOf } from "../../model-ref.ts";
 import type { RunsAs } from "../../serving-command.ts";
-import { type BuiltDefinition, DEFINITION_EXTENSION, type Unfinished } from "../assembly.ts";
+import {
+  type BuiltDefinition,
+  DEFINITION_EXTENSION,
+  type Unfinished,
+  assertNoMcpToolConflicts,
+  resolveDefaultModel,
+} from "../assembly.ts";
 import { agentPresentation, resolveCodingTools } from "../config.ts";
 import { CODING_TOOL_NAMES, type CodingToolName } from "../define.ts";
 import { definitionSections, readCommands } from "../text.ts";
@@ -46,20 +49,6 @@ export interface AssembleAgentOptions {
   processEnv: Readonly<Record<string, string>>;
   telemetry?: TelemetryContext;
   maxMessageBytes?: number;
-}
-
-function resolveDefaultModel(
-  spec: string | undefined,
-  chosen: boolean,
-  models: Models,
-): { model?: ModelRef; unusableDefault?: NonNullable<AgentInfo["unusableDefault"]> } {
-  if (spec === undefined) return {};
-  const model = modelRefOf(spec, "the default model");
-  if (models.getModel(model.provider, model.modelId) !== undefined) return { model };
-  const reason = `no provider "${model.provider}" offers "${model.modelId}"`;
-  if (chosen) throw new Error(`unknown model "${spec}": ${reason}`);
-  log.warn(`[fastagent] the default model "${spec}" is unusable: ${reason}`);
-  return { unusableDefault: { spec, reason } };
 }
 
 const CODING_TOOL_FACTORIES: Record<CodingToolName, () => ToolRegistration> = {
@@ -85,12 +74,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const { code, models } = options;
   const spec = options.model ?? config.model;
   const { model, unusableDefault } = resolveDefaultModel(spec, options.model !== undefined, models);
-  const authoredNames = new Set(
-    [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].map((tool) => tool.name),
-  );
-  for (const tool of options.mcpTools ?? []) {
-    if (authoredNames.has(tool.name)) throw new Error(`MCP tool ${tool.name} conflicts with an authored tool`);
-  }
+  assertNoMcpToolConflicts(code, options.mcpTools ?? []);
   const selectedCodingTools = resolveCodingTools(config.codingTools);
   const builtinCoding = codingToolsExtension(selectedCodingTools);
   const registry = createRegistry();

@@ -37,7 +37,7 @@ import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
 import { openPiDurableRuntime } from "./pi-durable/runtime.ts";
 import { type AgentDefinition, assertDefinition } from "../definition/definition.ts";
-import { type PostgresDatabase, describeDatabase } from "../postgres.ts";
+import { type PostgresDatabase, describeDatabase, messageBytesFor } from "../postgres.ts";
 import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
 
 export interface OpenServingOptions {
@@ -160,6 +160,7 @@ export interface HarnessOpenContext {
   readonly chosen: ServingStorage;
   readonly place: InstancePlace;
   readonly database: PostgresDatabase | undefined;
+  readonly maxMessageBytes: number | undefined;
   readonly storageDescription: string;
   readonly secrets: Readonly<Record<string, string>>;
   readonly env: Readonly<Record<string, string | undefined>>;
@@ -271,6 +272,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     chosen,
     place,
     database,
+    maxMessageBytes: messageBytesFor(database?.limits),
     storageDescription,
     secrets,
     env,

@@ -71,7 +71,8 @@ import { log } from "../../log.ts";
 import { type Defaults, type Unanswerable, admitSettings } from "./defaults.ts";
 import { USER_ENTRY, type UserEntryData, imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
-import { type Ids, storageIds } from "./ids.ts";
+import { registerPiSessionIdResolver } from "../tool.ts";
+import { type Ids, sessionIdOf as piSessionIdOf, storageIds } from "./ids.ts";
 import {
   type InputRecord,
   MetadataDoc,
@@ -128,6 +129,12 @@ const OWNERLESS = { ownership: { kind: "ownerless" } } as const;
 const COMMAND = /^\/([^\s]+)(?:\s+([\s\S]*))?$/;
 
 export async function openDurableAgent(options: DurableAgentOptions): Promise<DurableAgent> {
+  registerPiSessionIdResolver((api, ctx) =>
+    piSessionIdOf(
+      api as Parameters<typeof piSessionIdOf>[0],
+      ctx as Parameters<typeof piSessionIdOf>[1],
+    ),
+  );
   const context = BACKGROUND_CONTEXT;
   const harness = await Harness.open(
     options.storage,
