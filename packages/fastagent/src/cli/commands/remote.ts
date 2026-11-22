@@ -31,10 +31,12 @@ function saveRemotesFile(path: string, config: RemotesFile): void {
   writeFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`, 0o600);
 }
 
+const ENV_REF = /^\$[A-Za-z_][A-Za-z0-9_]*$/;
+
 /** Never print raw API keys to stdout: preserve `$ENV_VAR` references, redact literal secrets. */
 function redactRemote(remote: RemoteConfig): Record<string, unknown> {
   if (!isHttpRemote(remote)) return { ...remote };
-  const apiKey = remote.apiKey === undefined ? undefined : remote.apiKey.startsWith("$") ? remote.apiKey : "***";
+  const apiKey = remote.apiKey === undefined ? undefined : ENV_REF.test(remote.apiKey) ? remote.apiKey : "***";
   return {
     type: "http",
     url: remote.url,
@@ -71,11 +73,7 @@ export function runRemoteList(opts: { json?: boolean } = {}): void {
     const star = config.default === name ? "*" : " ";
     if (isHttpRemote(entry)) {
       const keyLabel =
-        entry.apiKey === undefined
-          ? "env FASTAGENT_API_KEY"
-          : entry.apiKey.startsWith("$")
-            ? entry.apiKey
-            : "saved key";
+        entry.apiKey === undefined ? "env FASTAGENT_API_KEY" : ENV_REF.test(entry.apiKey) ? entry.apiKey : "saved key";
       console.log(` ${star} ${name}  ${entry.url}  (${keyLabel})`);
     } else {
       console.log(` ${star} ${name}  [${entry.type}]`);

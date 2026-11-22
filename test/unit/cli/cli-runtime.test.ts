@@ -307,7 +307,7 @@ describe("cli: remote", () => {
     expect(JSON.parse(empty.stdout)).toEqual({ path: remotesPath, remotes: {} });
 
     const added1 = await runInProcess(
-      ["remote", "add", "prod", "https://prod.example.com", "--key", "raw-secret-123"],
+      ["remote", "add", "prod", "https://prod.example.com", "--key", "$raw-secret-123"],
       dir,
       env,
     );
@@ -322,7 +322,7 @@ describe("cli: remote", () => {
 
     const listedJson = await runInProcess(["remote", "list", "--json"], dir, env);
     expect(listedJson.code, listedJson.stderr).toBe(0);
-    expect(listedJson.stdout).not.toContain("raw-secret-123");
+    expect(listedJson.stdout).not.toContain("$raw-secret-123");
     expect(JSON.parse(listedJson.stdout)).toEqual({
       path: remotesPath,
       default: "staging",
@@ -334,7 +334,7 @@ describe("cli: remote", () => {
 
     const listedText = await runInProcess(["remote", "list"], dir, env);
     expect(listedText.code, listedText.stderr).toBe(0);
-    expect(listedText.stdout).not.toContain("raw-secret-123");
+    expect(listedText.stdout).not.toContain("$raw-secret-123");
     expect(listedText.stdout).toContain("* staging");
 
     const setDef = await runInProcess(["remote", "default", "prod"], dir, env);

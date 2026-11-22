@@ -1022,7 +1022,12 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       case "provider-auth-hint": {
         const verb = rest[0] === "logout" ? "logout" : "login";
         const remoteName = controller.getState().remoteName;
-        const target = remoteName ? `--remote ${remoteName}` : "--url <url>";
+        const target =
+          remoteName === undefined
+            ? "--url <url>"
+            : isHttpUrl(remoteName)
+              ? `--url ${remoteName}`
+              : `--remote ${remoteName}`;
         ctx.ui.notify(
           `To ${verb} a model provider on the remote FastAgent server, run: fastagent ${verb} ${target}. ` +
             "To update or clear the FastAgent server API key in remotes.json, run: /fa key [--clear].",
