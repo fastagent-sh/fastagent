@@ -230,15 +230,35 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   };
   const database = chosen === "instance" ? databaseOf(place) : undefined;
   const storageDescription = describeInstanceStorage(place);
-  let durableCreds: ManagedDurableCredentialStore | undefined;
-  const models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
-    environment: secrets,
-    ...(chosen === "instance"
-      ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
-      : {}),
-  });
-  // Fail fast on invalid OTLP settings before opening either harness or its storage.
+  // Fail fast on invalid OTLP settings before opening credentials or harness storage.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
+  let durableCreds: ManagedDurableCredentialStore | undefined;
+  let models: ModelEnvironment;
+  try {
+    if (chosen === "instance") {
+      if (database !== undefined && place.name === undefined) {
+        throw new Error(
+          "an instance in a database is opened by its name, and none was given: " +
+            `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
+        );
+      }
+      durableCreds =
+        database !== undefined
+          ? postgresDurableCredentialStore(database, place.name as string)
+          : sqliteDurableCredentialStore(join(stateRoot, "credentials.sqlite"));
+    }
+    models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
+      environment: secrets,
+      ...(durableCreds !== undefined
+        ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
+        : {}),
+    });
+  } catch (error) {
+    await durableCreds?.close().catch(() => undefined);
+    await traces?.close();
+    throw error;
+  }
+
   let auth: AuthManager | undefined;
   const ctx: HarnessOpenContext = {
     definition,
@@ -266,17 +286,14 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   try {
     runtimeAgent = dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
   } catch (error) {
+    await durableCreds?.close().catch(() => undefined);
     await traces?.close();
     throw error;
   }
 
   let conversations: ConversationStore;
   try {
-    if (chosen === "instance") {
-      durableCreds =
-        database !== undefined
-          ? postgresDurableCredentialStore(database, place.name ?? name)
-          : sqliteDurableCredentialStore(join(stateRoot, "credentials.sqlite"));
+    if (durableCreds !== undefined) {
       auth = createAuthManager({
         models,
         durableStore: durableCreds,
@@ -290,7 +307,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         : chosen !== "instance"
           ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
           : database !== undefined
-            ? postgresConversationStore(database, place.name ?? name)
+            ? postgresConversationStore(database, place.name as string)
             : sqliteConversationStore(join(stateRoot, "conversations.sqlite"));
   } catch (error) {
     auth?.close();

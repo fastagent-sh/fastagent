@@ -8,7 +8,8 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Credential, CredentialInfo } from "@earendil-works/pi-ai";
-import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
+import { agentError } from "@fastagent-sh/client/agent-api";
+import { type PostgresDatabase, acquirePgDatabase, isTransientPgError } from "../../postgres.ts";
 import type { DurableCredentialStore } from "./credentials.ts";
 
 export interface ManagedDurableCredentialStore extends DurableCredentialStore {
@@ -18,6 +19,12 @@ export interface ManagedDurableCredentialStore extends DurableCredentialStore {
 const CRED_PREFIX = "cred:";
 const DEVICE_KEY = "device_id";
 const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
+
+function mapPgError(error: unknown): unknown {
+  if (!isTransientPgError(error)) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return agentError("unavailable", `credential store temporarily unavailable: ${message}`);
+}
 
 const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS fastagent_credentials (
@@ -144,7 +151,8 @@ export function memoryDurableCredentialStore(): ManagedDurableCredentialStore {
 export function sqliteDurableCredentialStore(filePath: string): ManagedDurableCredentialStore {
   mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(filePath);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
+  // DELETE journal avoids persistent -wal/-shm sidecar files holding plaintext tokens on disk.
+  db.exec("PRAGMA journal_mode = DELETE; PRAGMA busy_timeout = 5000;");
   db.exec(SQLITE_SCHEMA);
   try {
     chmodSync(filePath, 0o600);
@@ -198,7 +206,7 @@ export function postgresDurableCredentialStore(
       .catch((error: { code?: string }) => {
         if (PG_CONCURRENT_DDL.has(error.code ?? "")) return;
         migrated = undefined;
-        throw error;
+        throw mapPgError(error);
       });
     return migrated;
   };
@@ -206,32 +214,48 @@ export function postgresDurableCredentialStore(
   return credentialStoreOver({
     async get(key) {
       await ensureSchema();
-      const rows = await db.query<{ value_json: string }>(
-        "SELECT value_json FROM fastagent_credentials WHERE instance = $1 AND key = $2",
-        [instance, key],
-      );
-      return rows[0]?.value_json;
+      try {
+        const rows = await db.query<{ value_json: string }>(
+          "SELECT value_json FROM fastagent_credentials WHERE instance = $1 AND key = $2",
+          [instance, key],
+        );
+        return rows[0]?.value_json;
+      } catch (error) {
+        throw mapPgError(error);
+      }
     },
     async put(key, valueJson) {
       await ensureSchema();
-      await db.query(
-        `INSERT INTO fastagent_credentials (instance, key, value_json, updated_at)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (instance, key) DO UPDATE SET value_json = EXCLUDED.value_json, updated_at = EXCLUDED.updated_at`,
-        [instance, key, valueJson, Date.now()],
-      );
+      try {
+        await db.query(
+          `INSERT INTO fastagent_credentials (instance, key, value_json, updated_at)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (instance, key) DO UPDATE SET value_json = EXCLUDED.value_json, updated_at = EXCLUDED.updated_at`,
+          [instance, key, valueJson, Date.now()],
+        );
+      } catch (error) {
+        throw mapPgError(error);
+      }
     },
     async del(key) {
       await ensureSchema();
-      await db.query("DELETE FROM fastagent_credentials WHERE instance = $1 AND key = $2", [instance, key]);
+      try {
+        await db.query("DELETE FROM fastagent_credentials WHERE instance = $1 AND key = $2", [instance, key]);
+      } catch (error) {
+        throw mapPgError(error);
+      }
     },
     async listPrefix(prefix) {
       await ensureSchema();
-      const rows = await db.query<{ key: string; value_json: string }>(
-        "SELECT key, value_json FROM fastagent_credentials WHERE instance = $1 AND key LIKE $2 ORDER BY key ASC",
-        [instance, `${prefix}%`],
-      );
-      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
+      try {
+        const rows = await db.query<{ key: string; value_json: string }>(
+          "SELECT key, value_json FROM fastagent_credentials WHERE instance = $1 AND key LIKE $2 ORDER BY key ASC",
+          [instance, `${prefix}%`],
+        );
+        return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
+      } catch (error) {
+        throw mapPgError(error);
+      }
     },
     async close() {
       if (closed) return;

@@ -302,6 +302,14 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         "fastagent.config.ts": 'export default { codingTools: "none" };\n',
       });
       await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
+
+      // An authored extension cannot shadow pi-durable's built-in "coding-tools" extension.
+      const shadowCoding = agentPackage({
+        ...FILES,
+        "src/extensions/shadow.ts": 'export default { name: "coding-tools" };\n',
+      });
+      const shadowDef = await loadSourceDefinition(shadowCoding);
+      expect(() => buildDefinition(shadowDef, ENV)).toThrow(/both define the extension "coding-tools"/);
     });
   });
 });

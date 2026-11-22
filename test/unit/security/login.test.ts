@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import { createAuthManager } from "../../../packages/fastagent/src/harnesses/mod
 import { overlayCredentialStore } from "../../../packages/fastagent/src/harnesses/models/credentials.ts";
 import {
   memoryDurableCredentialStore,
+  postgresDurableCredentialStore,
   sqliteDurableCredentialStore,
 } from "../../../packages/fastagent/src/harnesses/models/durable-credentials.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
@@ -301,6 +303,12 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
       expect(await overlay.read("anthropic")).toEqual({ type: "api_key", key: "fallback-key" });
       await overlay.delete("openai-codex");
       expect(await store2.read("openai-codex")).toBeUndefined();
+      // DELETE journal mode leaves no persistent -wal sidecar file holding plaintext tokens.
+      expect(existsSync(`${dbPath}-wal`)).toBe(false);
+
+      const brokenPg = postgresDurableCredentialStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
+      await expect(brokenPg.read("openai-codex")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      await brokenPg.close();
     } finally {
       await store2.close();
     }

@@ -18,7 +18,7 @@ import type { AgentConfig } from "./define.ts";
 
 /** Reserved internal extension names that authored extensions may not shadow. */
 export const DEFINITION_EXTENSION = "fastagent.definition";
-const CODING_TOOLS_EXTENSION = "pi.coding-tools";
+const CODING_TOOLS_EXTENSION = "coding-tools";
 
 /** What a process does with messages an earlier process accepted and did not finish. */
 export type Unfinished = "resume" | "refuse";
