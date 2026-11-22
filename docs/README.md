@@ -14,6 +14,7 @@ Take your agent from prototype to durable service. FastAgent is the durable runt
 | --- | --- |
 | Understand what FastAgent is, what it solves, and where it fits | [Overview](overview.md) |
 | Build and run your first agent in five minutes | [Quickstart](quickstart.md) |
+| Run minimal working examples (`basic-agent`, `embed-hono`, `client-invoke`) | [Examples](../examples/README.md) |
 | Follow the full authoring workflow (for humans and coding agents) | [Agent development guide](ai-start.md) |
 
 ## Architecture & contract

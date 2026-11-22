@@ -1,0 +1,17 @@
+{
+  "name": "fastagent-example-support",
+  "description": "Minimal support agent with a refund policy skill and a typed order-lookup tool.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "fastagent dev",
+    "build": "fastagent build",
+    "start": "fastagent build && fastagent start"
+  },
+  "dependencies": {
+    "@fastagent-sh/fastagent": "^0.34.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

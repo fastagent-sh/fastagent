@@ -1,0 +1,12 @@
+{
+  "name": "fastagent-example-client-invoke",
+  "description": "Call any HTTP FastAgent service using @fastagent-sh/client with zero Node dependencies.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node invoke.ts"
+  },
+  "dependencies": {
+    "@fastagent-sh/client": "^0.34.0"
+  }
+}

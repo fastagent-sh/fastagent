@@ -20,6 +20,7 @@
 <p align="center">
   <a href="https://fastagent.sh">Website</a> ·
   <a href="https://fastagent.sh/docs/quickstart/">Quickstart</a> ·
+  <a href="https://github.com/fastagent-sh/fastagent/tree/main/examples">Examples</a> ·
   <a href="https://fastagent.sh/docs/architecture/">Architecture</a> ·
   <a href="https://fastagent.sh/docs/agent-api/">Agent API</a> ·
   <a href="https://fastagent.sh/docs/">Docs</a> ·
@@ -60,7 +61,7 @@ fastagent invoke "hello"      # send a message through the Agent API
 
 Inside an agent directory, the global `fastagent` delegates automatically to that agent's installed version. Without a global install, use `npm run dev` / `build` / `start` or `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is a different package).
 
-Follow the 5-minute [Quickstart](https://fastagent.sh/docs/quickstart/) to add a typed TypeScript tool (`defineTool`) and build for production.
+Follow the 5-minute [Quickstart](https://fastagent.sh/docs/quickstart/) to add a typed TypeScript tool (`defineTool`) and build for production, or browse runnable [examples](https://github.com/fastagent-sh/fastagent/tree/main/examples) (`basic-agent`, `embed-hono`, `client-invoke`).
 
 ## Use it your way
 
