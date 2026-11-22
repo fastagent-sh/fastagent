@@ -29,14 +29,23 @@ export function openSqliteStore(
     ...(options.mode === undefined ? {} : { mode: 0o700 }),
   });
   const db = new DatabaseSync(filePath);
-  db.exec(`PRAGMA journal_mode = ${options.journalMode}; PRAGMA busy_timeout = 5000;`);
-  db.exec(schema);
-  if (options.mode !== undefined) {
-    try {
-      chmodSync(filePath, options.mode);
-    } catch {
-      // Non-POSIX filesystems may reject chmod; best-effort owner-only permissions.
+  try {
+    db.exec(`PRAGMA journal_mode = ${options.journalMode}; PRAGMA busy_timeout = 5000;`);
+    db.exec(schema);
+    if (options.mode !== undefined) {
+      try {
+        chmodSync(filePath, options.mode);
+      } catch {
+        // Non-POSIX filesystems may reject chmod; best-effort owner-only permissions.
+      }
     }
+  } catch (error) {
+    try {
+      db.close();
+    } catch {
+      // Preserve the original open/schema failure.
+    }
+    throw error;
   }
   let closed = false;
   return {

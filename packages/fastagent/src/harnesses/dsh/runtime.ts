@@ -220,16 +220,25 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     throw failures.length === 1 ? error : new AggregateError(failures, "DSH agent open and cleanup failed");
   }
 
+  let markClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
+
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
       const failures: unknown[] = [];
-      ctx.closeAuth();
-      await dshAgent.close().catch((error: unknown) => failures.push(error));
-      await mcp?.close().catch((error: unknown) => failures.push(error));
-      await store.close?.().catch((error: unknown) => failures.push(error));
-      await ownedPgClose?.().catch((error: unknown) => failures.push(error));
-      await traces?.close();
+      try {
+        ctx.closeAuth();
+        await dshAgent.close().catch((error: unknown) => failures.push(error));
+        await mcp?.close().catch((error: unknown) => failures.push(error));
+        await store.close?.().catch((error: unknown) => failures.push(error));
+        await ownedPgClose?.().catch((error: unknown) => failures.push(error));
+        await traces?.close();
+      } finally {
+        markClosed();
+      }
       if (failures.length > 0) throw new AggregateError(failures, "DSH agent close failed");
     })());
 
@@ -243,6 +252,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     usage: dshAgent.usage,
     sessions: dshAgent.sessions,
     messages: dshAgent.messages,
+    closed,
     busy: () => dshAgent.busy(),
     close,
   };

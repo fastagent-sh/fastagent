@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineTool } from "@fastagent-sh/fastagent";
 import {
   DshInstanceHeldError,
@@ -580,6 +580,36 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       expect(Buffer.from(attachment.data).toString("base64")).toBe("iVBORw0KGgo=");
       await agent2.close();
       await store2.close();
+
+      // Verify openAgent({ harness: "dsh", database }) resolves `agent.closed` on Postgres lease loss.
+      const leaseInstance = freshInstance();
+      const dshDir = mkdtempSync(join(tmpdir(), "fa-dsh-pg-close-"));
+      try {
+        writeFileSync(join(dshDir, "package.json"), JSON.stringify({ name: "dsh-pg-close", type: "module" }));
+        writeFileSync(join(dshDir, "fastagent.config.ts"), "export default {};\n");
+        const def = await loadSourceDefinition(dshDir);
+        const openedPg = await openAgent(def, {
+          root: dshDir,
+          name: leaseInstance,
+          harness: "dsh",
+          sandbox: "off",
+          database: { url: postgres.url },
+        });
+        let closedResolved = false;
+        void openedPg.closed?.then(() => {
+          closedResolved = true;
+        });
+        await db.query("UPDATE dsh_leases SET lease_until = 1 WHERE instance = $1", [leaseInstance]);
+        const thief = await openPostgresDshStore(db, leaseInstance, { leaseMs: 5_000, waitMs: 0, owner: "thief" });
+        await expect(openedPg.sessions.create()).rejects.toThrow(/lease.*lost/);
+        await thief.close();
+        await vi.waitFor(() => {
+          expect(closedResolved).toBe(true);
+        });
+        await openedPg.close();
+      } finally {
+        rmSync(dshDir, { recursive: true, force: true });
+      }
     } finally {
       await db.close();
     }
@@ -695,12 +725,13 @@ export default defineTool({
       expect(dshConv2.sessionId).toBe(dshConv1.sessionId);
       await dshAgent2.close();
 
-      // 5) Enforce maxMessageBytes and unusableDefault on openDshAgent parity.
+      // 5) Enforce maxMessageBytes (including expanded commands) and unusableDefault on openDshAgent parity.
       const limited = await openDshAgent({
         name: "limited",
         workdir: dir,
         unusableDefault: { spec: "sw/retired", reason: 'no provider "sw" offers "retired"' },
-        maxMessageBytes: 32,
+        commands: () => [{ name: "big", description: "Expands large", expand: () => "x".repeat(64) }],
+        maxMessageBytes: 48,
         sandbox: "off",
       });
       try {
@@ -710,6 +741,10 @@ export default defineTool({
         });
         const ls = await limited.sessions.create();
         await expect(limited.messages.send({ sessionId: ls.id, content: "x".repeat(64) })).rejects.toMatchObject({
+          code: "invalid_request",
+          details: { reason: "too_large" },
+        });
+        await expect(limited.messages.send({ sessionId: ls.id, content: "/big" })).rejects.toMatchObject({
           code: "invalid_request",
           details: { reason: "too_large" },
         });

@@ -115,7 +115,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       instance = undefined;
       agent.close().catch((error: unknown) => console.error(`[fastagent] closing "${name}" failed: ${String(error)}`));
     };
-    agent.harness?.closed.then(reopen, reopen);
+    (agent.closed ?? agent.harness?.closed)?.then(reopen, reopen);
     return opened;
   };
 

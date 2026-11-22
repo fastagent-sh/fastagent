@@ -92,7 +92,10 @@ export async function admitMessage(
   const { rawParts, expandedParts } = normalizeSendContent(request.content, commands);
   const maxMessageBytes = state.options.maxMessageBytes;
   if (maxMessageBytes !== undefined) {
-    const bytes = Buffer.byteLength(JSON.stringify(rawParts));
+    const bytes = Math.max(
+      Buffer.byteLength(JSON.stringify(rawParts)),
+      Buffer.byteLength(JSON.stringify(expandedParts)),
+    );
     if (bytes > maxMessageBytes) {
       throw agentError(
         "invalid_request",

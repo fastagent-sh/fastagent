@@ -213,7 +213,22 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
   });
 }
 
-export type SessionIdResolver = (api: unknown, context: unknown) => Promise<string | undefined>;
+interface SessionToolApi {
+  readonly output?: unknown;
+  readonly commit?: unknown;
+  readonly conversationId?: number;
+  readonly abortSignal?: never;
+  readonly sessionId?: never;
+}
+
+interface SessionToolContext {
+  readonly abortSignal?: AbortSignal;
+  readonly sessionId?: string;
+  readonly output?: never;
+  readonly commit?: never;
+}
+
+export type SessionIdResolver = (api: SessionToolApi, context: SessionToolContext) => Promise<string | undefined>;
 
 let piSessionIdResolver: SessionIdResolver | undefined;
 
@@ -227,11 +242,9 @@ export function registerPiSessionIdResolver(resolver: SessionIdResolver): void {
  * is not a session (a subagent's). Works on both `pi-durable` and `dsh`.
  * @public
  */
-export async function sessionIdOf(api: unknown, context: unknown): Promise<string | undefined> {
-  const ctx = context as { sessionId?: unknown } | null | undefined;
-  if (typeof ctx?.sessionId === "string") return ctx.sessionId;
-  const candidate = api as { commit?: unknown; conversationId?: unknown } | null | undefined;
-  if (typeof candidate?.commit === "function" && typeof candidate?.conversationId === "number") {
+export async function sessionIdOf(api: SessionToolApi, context: SessionToolContext): Promise<string | undefined> {
+  if (typeof context?.sessionId === "string") return context.sessionId;
+  if (typeof api?.commit === "function" && typeof api?.conversationId === "number") {
     if (piSessionIdResolver === undefined) {
       throw new Error("pi-durable sessionIdOf resolver is not initialized");
     }

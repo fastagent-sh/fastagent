@@ -126,8 +126,9 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
 
   const closeAgent = agent.close.bind(agent);
   let closing: Promise<void> | undefined;
-  const managedAgent: DurableAgent = {
+  const managedAgent: ServingAgent = {
     ...agent,
+    closed: agent.harness.closed.then(() => undefined),
     close: () =>
       (closing ??= (async () => {
         const failures: unknown[] = [];

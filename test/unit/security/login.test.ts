@@ -309,6 +309,10 @@ describe("durable instance credentials and remote Auth HTTP API", () => {
       const brokenPg = postgresDurableCredentialStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
       await expect(brokenPg.read("openai-codex")).rejects.toMatchObject({ code: "unavailable", retryable: true });
       await brokenPg.close();
+
+      const badDb = join(dir, "not-sqlite.sqlite");
+      await writeFile(badDb, "not a sqlite file\n");
+      expect(() => sqliteDurableCredentialStore(badDb)).toThrow(/not a database/);
     } finally {
       await store2.close();
     }
