@@ -251,7 +251,9 @@ export default { model: "remote-prov/m1", providers: [provider] };
         status: "need_user_action",
         provider: "remote-prov",
         method: "api-key",
-        command: `fastagent login remote-prov --method api-key --url ${url}`,
+        remote: url,
+        terminal_command: `fastagent login remote-prov --method api-key --url ${url}`,
+        check_command: `fastagent login remote-prov --check --url ${url} --json`,
       });
 
       // --check refuses unknown modelId with exit 2 and reports unknown provider as not_ready (exit 1)
@@ -286,7 +288,9 @@ export default { model: "remote-prov/m1", providers: [provider] };
       expect(JSON.parse(after.stdout)).toMatchObject({
         status: "ready",
         provider: "remote-prov",
+        authType: "api_key",
         stored: "api_key",
+        remote: url,
       });
 
       // logout --url removes the stored durable credential

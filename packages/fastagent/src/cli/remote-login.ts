@@ -170,20 +170,27 @@ export async function runRemoteLogin(
 
   if (!interactive) {
     const flag = targetFlag(opts);
-    const command = `fastagent login ${choice.provider} --method ${methodWord(choice.method)} ${flag}`;
-    const check = `fastagent login ${choice.provider} --check ${flag} --json`;
+    const terminalCommand = `fastagent login ${choice.provider} --method ${methodWord(choice.method)} ${flag}`;
+    const checkCommand = `fastagent login ${choice.provider} --check ${flag} --json`;
     printReport(
       opts.json,
       {
         status: "need_user_action",
         provider: choice.provider,
         method: methodWord(choice.method),
-        target: label,
-        command,
-        check,
-        message: `run in a terminal to sign in to ${choice.name} on ${label}`,
+        remote: label,
+        terminal_command: terminalCommand,
+        check_command: checkCommand,
+        agent_next_steps:
+          `Ask the user to run terminal_command in a terminal of their own to sign in to ${choice.name} on ${label}, ` +
+          "then run check_command.",
       },
-      [`Sign in to ${choice.name} on ${label} from a terminal:`, `  ${command}`, "Verify with:", `  ${check}`],
+      [
+        `Sign in to ${choice.name} on ${label} from a terminal:`,
+        `  ${terminalCommand}`,
+        "Verify with:",
+        `  ${checkCommand}`,
+      ],
     );
     process.exit(2);
   }
@@ -356,16 +363,19 @@ export async function runRemoteLoginCheck(
     process.exit(2);
   }
   if (found.authenticated) {
+    const source = found.source ?? "configured";
+    const authType = found.stored ?? (source === "OAuth" ? "oauth" : "api_key");
     printReport(
       opts.json,
       {
         status: "ready",
         provider: found.provider,
-        source: found.source ?? null,
-        stored: found.stored ?? null,
+        authType,
+        source,
+        ...(found.stored === undefined ? {} : { stored: found.stored }),
         remote: label,
       },
-      [`ready: ${found.name} on ${label} (${found.source ?? "configured"})`],
+      [`ready: ${found.name} on ${label} (${source})`],
     );
     return;
   }
