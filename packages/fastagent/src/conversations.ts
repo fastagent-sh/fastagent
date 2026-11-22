@@ -4,9 +4,6 @@
  * `node:sqlite`, shared PostgreSQL / Aurora DSQL, or in-memory), delegating execution purely through the standard
  * `Agent` API.
  */
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import * as Schema from "effect/Schema";
 import {
   type Agent,
@@ -20,8 +17,9 @@ import {
   type WaitOptions,
   agentError,
 } from "@fastagent-sh/client/agent-api";
+import { openPostgresStore, openSqliteStore } from "./instance-store.ts";
 import { log } from "./log.ts";
-import { type PostgresDatabase, acquirePgDatabase, isTransientPgError } from "./postgres.ts";
+import type { PostgresDatabase } from "./postgres.ts";
 
 interface ConversationSetOptions {
   /** Ephemeral idempotency bindings expire after a bounded TTL; caller-named conversations are retained durably. */
@@ -45,14 +43,6 @@ interface ConversationStoreOptions {
 const DEFAULT_EPHEMERAL_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_EPHEMERAL = 10_000;
 const PG_PRUNE_INTERVAL_MS = 60_000;
-
-const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
-
-function mapPgError(error: unknown): unknown {
-  if (!isTransientPgError(error)) return error;
-  const message = error instanceof Error ? error.message : String(error);
-  return agentError("unavailable", `conversation store temporarily unavailable: ${message}`);
-}
 
 const SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS fastagent_conversations (
@@ -122,12 +112,11 @@ export function memoryConversationStore(options: ConversationStoreOptions = {}):
 export function sqliteConversationStore(filePath: string, options: ConversationStoreOptions = {}): ConversationStore {
   const ttlMs = options.ephemeralTtlMs ?? DEFAULT_EPHEMERAL_TTL_MS;
   const now = options.now ?? Date.now;
-  mkdirSync(dirname(filePath), { recursive: true });
-  const db = new DatabaseSync(filePath);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
-  db.exec(SQLITE_SCHEMA);
-  const selectStmt = db.prepare("SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE name = ?");
-  const upsertStmt = db.prepare(
+  const store = openSqliteStore(filePath, SQLITE_SCHEMA, { journalMode: "WAL" });
+  const selectStmt = store.db.prepare(
+    "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE name = ?",
+  );
+  const upsertStmt = store.db.prepare(
     `INSERT INTO fastagent_conversations (name, session_id, ephemeral, updated_at)
      VALUES (?, ?, ?, ?)
      ON CONFLICT(name) DO UPDATE SET
@@ -135,8 +124,7 @@ export function sqliteConversationStore(filePath: string, options: ConversationS
        ephemeral = excluded.ephemeral,
        updated_at = excluded.updated_at`,
   );
-  const pruneStmt = db.prepare("DELETE FROM fastagent_conversations WHERE ephemeral = 1 AND updated_at <= ?");
-  let closed = false;
+  const pruneStmt = store.db.prepare("DELETE FROM fastagent_conversations WHERE ephemeral = 1 AND updated_at <= ?");
   return {
     async get(key) {
       const row = selectStmt.get(key) as { session_id?: string; ephemeral?: number; updated_at?: number } | undefined;
@@ -156,11 +144,7 @@ export function sqliteConversationStore(filePath: string, options: ConversationS
         }
       }
     },
-    async close() {
-      if (closed) return;
-      closed = true;
-      db.close();
-    },
+    close: () => store.close(),
   };
 }
 
@@ -171,73 +155,45 @@ export function postgresConversationStore(
 ): ConversationStore {
   const ttlMs = options.ephemeralTtlMs ?? DEFAULT_EPHEMERAL_TTL_MS;
   const now = options.now ?? Date.now;
-  const { db, owned } = acquirePgDatabase(database);
-  let migrated: Promise<void> | undefined;
+  const store = openPostgresStore(database, PG_SCHEMA, "conversation store");
   let lastPrunedAt = 0;
-  let closed = false;
-
-  const ensureSchema = (): Promise<void> => {
-    migrated ??= db
-      .query(PG_SCHEMA)
-      .then(() => undefined)
-      .catch((error: { code?: string }) => {
-        if (PG_CONCURRENT_DDL.has(error.code ?? "")) return;
-        migrated = undefined;
-        throw mapPgError(error);
-      });
-    return migrated;
-  };
 
   return {
     async get(key) {
-      await ensureSchema();
-      try {
-        const rows = await db.query<{ session_id: string; ephemeral: boolean; updated_at: number }>(
-          "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE instance = $1 AND name = $2",
-          [instance, key],
-        );
-        const row = rows[0];
-        if (row === undefined) return undefined;
-        if (row.ephemeral && Number(row.updated_at) <= now() - ttlMs) return undefined;
-        return row.session_id;
-      } catch (error) {
-        throw mapPgError(error);
-      }
+      const rows = await store.query<{ session_id: string; ephemeral: boolean; updated_at: number }>(
+        "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE instance = $1 AND name = $2",
+        [instance, key],
+      );
+      const row = rows[0];
+      if (row === undefined) return undefined;
+      if (row.ephemeral && Number(row.updated_at) <= now() - ttlMs) return undefined;
+      return row.session_id;
     },
     async set(key, sessionId, setOptions) {
-      await ensureSchema();
       const current = now();
       const isEphemeral = setOptions?.ephemeral === true;
-      try {
-        await db.query(
-          `INSERT INTO fastagent_conversations (instance, name, session_id, ephemeral, updated_at)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (instance, name) DO UPDATE SET
-             session_id = EXCLUDED.session_id,
-             ephemeral = EXCLUDED.ephemeral,
-             updated_at = EXCLUDED.updated_at`,
-          [instance, key, sessionId, isEphemeral, current],
-        );
-        if (isEphemeral && current - lastPrunedAt >= PG_PRUNE_INTERVAL_MS) {
-          lastPrunedAt = current;
-          await db
-            .query(
-              "DELETE FROM fastagent_conversations WHERE instance = $1 AND ephemeral = TRUE AND updated_at <= $2",
-              [instance, current - ttlMs],
-            )
-            .catch((pruneError: unknown) =>
-              log.warn(`[fastagent] pruning expired ephemeral conversations failed: ${String(pruneError)}`),
-            );
-        }
-      } catch (error) {
-        throw mapPgError(error);
+      await store.query(
+        `INSERT INTO fastagent_conversations (instance, name, session_id, ephemeral, updated_at)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (instance, name) DO UPDATE SET
+           session_id = EXCLUDED.session_id,
+           ephemeral = EXCLUDED.ephemeral,
+           updated_at = EXCLUDED.updated_at`,
+        [instance, key, sessionId, isEphemeral, current],
+      );
+      if (isEphemeral && current - lastPrunedAt >= PG_PRUNE_INTERVAL_MS) {
+        lastPrunedAt = current;
+        await store
+          .query("DELETE FROM fastagent_conversations WHERE instance = $1 AND ephemeral = TRUE AND updated_at <= $2", [
+            instance,
+            current - ttlMs,
+          ])
+          .catch((pruneError: unknown) =>
+            log.warn(`[fastagent] pruning expired ephemeral conversations failed: ${String(pruneError)}`),
+          );
       }
     },
-    async close() {
-      if (closed) return;
-      closed = true;
-      if (owned) await db.close();
-    },
+    close: () => store.close(),
   };
 }
 

@@ -27,10 +27,7 @@ that API from outside the runtime: channels are not part of it.
   or sees updates its guide in the same PR. A CLI command's flags are its `--help`, generated from `packages/fastagent/src/cli/program.ts`.
 - Do not commit design notes, plans, measurements or progress logs. They go in the PR description. Anything that
   stays true goes into the code: a name, a header, a test.
-- There is no specification document: one implementation and the client it ships need none. The Agent API is
-  `packages/client/src/agent-api.ts` and `packages/client/src/http/contract.ts`; what it promises is `docs/agent-api.md`, and
-  `test/harnesses/agent-api-conformance.ts` and `test/unit/agent-api/http-api.test.ts` test those promises. Changing them is an explicit
-  decision. A second implementation is when a specification would earn its place.
+- The Agent API is `packages/client/src/agent-api.ts` and `packages/client/src/http/contract.ts`; what it promises is `docs/agent-api.md`, and `test/harnesses/agent-api-conformance.ts` and `test/unit/agent-api/http-api.test.ts` enforce those promises across both `pi-durable` and `dsh` harnesses. Changing them is an explicit decision.
 
 ## Decisions the code cannot show
 
@@ -119,7 +116,7 @@ without being rewritten. When the following conflict, the earlier one wins; name
 3. Clarity: show the right complexity where the user meets it, with plain names and APIs.
 4. Re-evaluate assumptions as models, clouds and harnesses change. Do not stack complex abstractions on complex
    systems.
-5. Option value: clear API boundaries and modular seams. Do not design for a second implementation before one exists.
+5. Option value: clear API boundaries and modular seams across `@fastagent-sh/client`, `pi-durable`, and `dsh`. Keep extensions and transport seams minimal without breaking the shared contract.
 
 ## Workflow
 

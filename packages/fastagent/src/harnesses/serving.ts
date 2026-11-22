@@ -37,7 +37,14 @@ import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
 import { openPiDurableRuntime } from "./pi-durable/runtime.ts";
 import { type AgentDefinition, assertDefinition } from "../definition/definition.ts";
-import { type PostgresDatabase, describeDatabase, messageBytesFor } from "../postgres.ts";
+import {
+  type PostgresDatabase,
+  type SharedPostgresDatabase,
+  describeDatabase,
+  messageBytesFor,
+  openPostgresDatabase,
+  sharedHandleOf,
+} from "../postgres.ts";
 import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
 
 export interface OpenServingOptions {
@@ -232,7 +239,12 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     ...(options.name === undefined ? {} : { name }),
     ...(options.database === undefined ? {} : { database: options.database }),
   };
-  const database = chosen === "instance" ? databaseOf(place) : undefined;
+  const rawDatabase = chosen === "instance" ? databaseOf(place) : undefined;
+  const ownedSharedPg: SharedPostgresDatabase | undefined =
+    rawDatabase !== undefined && sharedHandleOf(rawDatabase) === undefined
+      ? openPostgresDatabase(rawDatabase)
+      : undefined;
+  const database: PostgresDatabase | undefined = ownedSharedPg ?? rawDatabase;
   const storageDescription = describeInstanceStorage(place);
   // Fail fast on invalid OTLP settings before opening credentials or harness storage.
   const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
@@ -259,6 +271,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     });
   } catch (error) {
     await durableCreds?.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     await traces?.close();
     throw error;
   }
@@ -294,6 +307,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     runtimeAgent = dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
   } catch (error) {
     await durableCreds?.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     await traces?.close();
     throw error;
   }
@@ -321,6 +335,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     auth?.close();
     await durableCreds?.close().catch(() => undefined);
     await runtimeAgent.close().catch(() => undefined);
+    await ownedSharedPg?.close().catch(() => undefined);
     throw error;
   }
 
@@ -334,6 +349,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         await runtimeAgent.close().catch((error: unknown) => failures.push(error));
         await durableCreds?.close().catch((error: unknown) => failures.push(error));
         await conversations.close().catch((error: unknown) => failures.push(error));
+        await ownedSharedPg?.close().catch((error: unknown) => failures.push(error));
         if (failures.length > 0) {
           throw failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed");
         }
