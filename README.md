@@ -169,7 +169,7 @@ FastAgent is pre-1.0. The [Agent API](https://fastagent.sh/docs/agent-api/) is t
 <p align="center">
   <sub>Powered by</sub>
   <a href="https://pi.dev"><img src="https://pi.dev/logo-auto.svg" alt="pi" height="18" /></a>
-  <sub>(<code>pi-durable</code> &amp; <code>pi-ai</code>), with <a href="https://github.com/Effect-TS/effect">Effect</a>, <a href="https://github.com/nodejs/undici">undici</a>, <a href="https://node-postgres.com">node-postgres</a>, and optional OS sandboxing via <a href="https://github.com/deepseek-ai/deepseek-harness">@deepseek-ai/dsh</a>.</sub>
+  <sub>(<code>pi-durable</code> &amp; <code>pi-ai</code>), with <a href="https://github.com/Effect-TS/effect">Effect</a>, <a href="https://github.com/nodejs/undici">undici</a>, <a href="https://node-postgres.com">node-postgres</a>, and optional OS sandboxing via <a href="https://github.com/deepseek-ai/deepseek-harness">@deepseek-ai/dsh</a>. Scaffolded <code>writing-great-skills</code> vendored from <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>.</sub>
 </p>
 
 <p align="center">
