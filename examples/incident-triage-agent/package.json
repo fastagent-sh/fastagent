@@ -1,0 +1,18 @@
+{
+  "name": "fastagent-incident-triage",
+  "description": "Scale-to-zero AI SRE agent for on-call alert triage, health probing, recent commit correlation, and MCP observability.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "fastagent dev",
+    "build": "fastagent build",
+    "start": "fastagent build && fastagent start"
+  },
+  "dependencies": {
+    "@fastagent-sh/client": "^0.34.0",
+    "@fastagent-sh/fastagent": "^0.34.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

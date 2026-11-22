@@ -1,0 +1,19 @@
+{
+  "name": "fastagent-agentcore-per-user",
+  "description": "Per-user microVM-isolated FastAgent deployed on Amazon Bedrock AgentCore + Aurora DSQL with @fastagent-sh/client-agentcore.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "fastagent dev",
+    "build": "fastagent build",
+    "start": "fastagent build && fastagent start"
+  },
+  "dependencies": {
+    "@fastagent-sh/agentcore": "^0.34.0",
+    "@fastagent-sh/client-agentcore": "^0.34.0",
+    "@fastagent-sh/fastagent": "^0.34.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}
