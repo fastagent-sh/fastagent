@@ -30,15 +30,17 @@ define scope → init → prompt, skill, tool → typecheck & unit test → live
 
 **选择正确的隔离姿态：** 在默认的 `pi-durable` Harness 上，内置编码工具（`read`、`write`、`edit`、`bash`）以当前操作系统进程权限运行——提示词或强类型工具本身不是安全沙箱。需要强隔离时，可在 `fastagent.config.ts` 中设置 `codingTools: false`（或 `["read"]`）、使用 `harness: "dsh"` 启用内核级 OS 沙箱（`workspace` 或 `read-only`），或将 Agent 隔离在容器 / AgentCore MicroVM 中。
 
-## 2. 创建 Agent 项目
+## 2. 创建或初始化 Agent 项目
 
 ```bash
 npm install -g @fastagent-sh/fastagent
-fastagent init my-agent
+fastagent init my-agent          # 创建全新 Agent 目录
 cd my-agent
 ```
 
-Agent 应放在独立目录中（与它所操作的业务项目并列）。`init` 会安装依赖并创建首个 Git 提交。后续步骤保持在 `my-agent/` 目录内执行：在 Agent 目录中，全局 `fastagent` 会自动委托给项目本地安装的版本。若未全局安装，请使用 `npx @fastagent-sh/fastagent <command>`（切勿使用 `npx fastagent`，那是另一个无关包）。
+若目录中已有 `SYSTEM.md`、`skills/` 或 `src/tools/`，可直接在该目录运行 `fastagent init` 就地补齐配置与依赖（保留原有文件；可先运行 `fastagent info --json` 确认已有技能已被识别）。若要在现有应用仓库中接入 Agent，请使用独立子目录（例如 `fastagent init agents/support`），避免修改宿主应用配置。若 `npm install` 中途失败，直接重跑同一 `fastagent init` 命令即可安全续跑；在已就绪的项目中重复运行不会产生任何修改。
+
+后续步骤保持在 Agent 目录内执行：在 Agent 目录中，全局 `fastagent` 会自动委托给项目本地安装的版本。若未全局安装，请使用 `npx @fastagent-sh/fastagent <command>`（切勿使用 `npx fastagent`，那是另一个无关包）。
 
 ## 3. 配置 TypeScript
 
