@@ -641,7 +641,9 @@ const stream = (...args) => {
     core.appendResponses([
       text === "use-ping"
         ? fauxAssistantMessage([fauxToolCall("ping", { msg: "hi" })], { stopReason: "toolUse" })
-        : text === "check-live"
+        : text === "use-park"
+          ? fauxAssistantMessage([fauxToolCall("park", {})], { stopReason: "toolUse" })
+          : text === "check-live"
           ? fauxAssistantMessage("sys:" + (sys.includes("Updated live prompt.") ? "updated" : "stale"))
           : fauxAssistantMessage("reply:" + text),
     ]);
@@ -676,6 +678,17 @@ export default defineTool({
 });
 `,
       );
+      writeFileSync(
+        join(dir, "src", "tools", "park.ts"),
+        `import { defineTool } from "@earendil-works/pi-durable";
+export default defineTool({
+  name: "park",
+  description: "Returns a pi-durable-only park result",
+  parameters: { type: "object", properties: {} },
+  execute: async () => ({ sleep: { until: Date.now() + 1000 } }),
+});
+`,
+      );
       // A pi-durable-only extension: runs on pi-durable, warns and is skipped on dsh without blocking startup.
       writeFileSync(
         join(dir, "src", "extensions", "legacy.ts"),
@@ -695,10 +708,15 @@ export default defineTool({
       // 2) Switch to dsh on the EXACT SAME <root>/.state/agent.sqlite — skips legacy-ext, runs defineTool, serves HTTP.
       const dshAgent1 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       const dshInfo = await dshAgent1.info();
-      expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "ping"]);
+      expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "park", "ping"]);
       const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
       const dshMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-ping" }, { wait: 15 });
       expect(dshMsg.answer?.text).toBe(`tool-ok:pong:hi:${dshSession.id}`);
+      // A pi-durable-only park return fails only that tool call cleanly; the harness and other tools stay unaffected.
+      const dshParkMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-park" }, { wait: 15 });
+      expect(dshParkMsg.answer?.text).toMatch(
+        /returned a park response \(sleep\/wait\), which requires harness: "pi-durable"/,
+      );
       const dshConv1 = await dshAgent1.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
       expect(dshConv1.answer?.text).toBe(`tool-ok:pong:hi:${dshConv1.sessionId}`);
       // Live SYSTEM.md updates take effect on the next DSH message without restarting.

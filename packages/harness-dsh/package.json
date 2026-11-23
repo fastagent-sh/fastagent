@@ -62,7 +62,7 @@
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.5",
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
     "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
-    "@earendil-works/pi-ai": "^1.5.2",
+    "@earendil-works/pi-ai": "^1.6.0",
     "@fastagent-sh/client": "0.34.0"
   }
 }
