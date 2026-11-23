@@ -173,11 +173,6 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
           }>
         )(input, api, { abortSignal: exec.signal, ...(sessionId !== undefined ? { sessionId } : {}) });
 
-        if (result !== null && typeof result === "object" && ("sleep" in result || "wait" in result)) {
-          throw new Error(
-            `tool "${tool.name}" returned a park response (sleep/wait), which requires harness: "pi-durable"`,
-          );
-        }
         if (result?.control?.terminate === true) exec.concludeTurn();
         const explicitText = extractResultText(result);
         const text = explicitText.length > 0 ? explicitText : streamedOutput.trimEnd();

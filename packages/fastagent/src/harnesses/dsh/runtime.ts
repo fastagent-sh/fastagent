@@ -7,6 +7,7 @@
 import { join } from "node:path";
 import type { Agent, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Models } from "@earendil-works/pi-ai";
+import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { createCloseSignal } from "../../close-signal.ts";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
@@ -19,6 +20,22 @@ import { readCommands, renderDefinitionPrompt } from "../text.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent } from "../serving.ts";
 
 const DSH_PACKAGE_NAME = ["@fastagent-sh", "harness-dsh"].join("/");
+
+/** Adapt pi-durable ToolRegistration for DSH: fail visibly if a tool returns a pi-durable-only park (sleep/wait). */
+function adaptToolForDsh(tool: ToolRegistration): ToolRegistration {
+  return {
+    ...tool,
+    execute: async (args, api, context) => {
+      const result = await tool.execute(args, api, context);
+      if (result !== null && typeof result === "object" && ("sleep" in result || "wait" in result)) {
+        throw new Error(
+          `tool "${tool.name}" returned a park response (sleep/wait), which requires harness: "pi-durable"`,
+        );
+      }
+      return result;
+    },
+  };
+}
 
 interface DshStorageBackend {
   close?(): Promise<void>;
@@ -201,7 +218,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
       ...(modelRef === undefined ? {} : { model: modelRef }),
       ...(unusableDefault === undefined ? {} : { unusableDefault }),
       ...(config.thinkingLevel === undefined ? {} : { thinkingLevel: config.thinkingLevel }),
-      tools: [...code.tools, ...bridgedMcpTools],
+      tools: [...code.tools, ...bridgedMcpTools].map(adaptToolForDsh),
       codingTools,
       protectedPaths: [stateRoot],
       env: processEnv,

@@ -156,16 +156,12 @@ export interface FastAgentToolLike {
     args: never,
     api: never,
     context: never,
-  ): Promise<
-    | {
-        readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-        readonly details?: unknown;
-        readonly isError?: boolean;
-        readonly control?: { readonly terminate?: boolean };
-      }
-    | { readonly sleep: unknown }
-    | { readonly wait: unknown }
-  >;
+  ): Promise<{
+    readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+    readonly details?: unknown;
+    readonly isError?: boolean;
+    readonly control?: { readonly terminate?: boolean };
+  }>;
 }
 
 /** Slash command advertised by `info().commands` and expanded before reaching the model. */
