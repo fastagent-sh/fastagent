@@ -13,7 +13,7 @@ import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
 import { readPackageJson } from "../runtime.ts";
 import { HARNESS_PACKAGES } from "../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
-import { loadSourceDefinition } from "./assembly.ts";
+import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
@@ -38,6 +38,7 @@ export interface BuildResult {
 export async function buildProject(directory: string, options: BuildOptions = {}): Promise<BuildResult> {
   // The same refusals `dev` makes, before anything is written: a build of a definition that does not open is no build.
   const definition = await loadSourceDefinition(directory);
+  validateDefinitionStatic(definition);
   const { dir } = definition;
   await requireModulePackage(dir);
   const dist = join(dir, DIST_DIR);

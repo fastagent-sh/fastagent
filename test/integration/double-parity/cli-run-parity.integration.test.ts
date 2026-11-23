@@ -20,13 +20,21 @@ it("runInProcess answers what a spawned CLI answers: exit code, stdout and stder
   }
 });
 
-it("runInProcess puts back what it borrowed: cwd, environment, exit, and output", async () => {
-  const before = { cwd: process.cwd(), env: { ...process.env }, exit: process.exit, write: process.stdout.write };
+it("runInProcess puts back what it borrowed: cwd, environment, exit, output, and TTY flags", async () => {
+  const before = {
+    cwd: process.cwd(),
+    env: { ...process.env },
+    exit: process.exit,
+    write: process.stdout.write,
+    tty: [process.stdin.isTTY, process.stdout.isTTY, process.stderr.isTTY],
+  };
   const agent = await agentWorkspace("fa-parity-restore-");
   await runInProcess(["login"], agent, { PATH: process.env.PATH, ONLY_THIS: "1" });
+  await runInProcess(["--version"], agent, { PATH: process.env.PATH }, { tty: true });
   expect(process.cwd()).toBe(before.cwd);
   expect(process.env).toEqual(before.env);
   expect(process.exit).toBe(before.exit);
   expect(process.stdout.write).toBe(before.write);
+  expect([process.stdin.isTTY, process.stdout.isTTY, process.stderr.isTTY]).toEqual(before.tty);
   expect(process.exitCode).toBeUndefined();
 });

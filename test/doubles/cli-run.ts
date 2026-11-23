@@ -121,7 +121,8 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  * What it stands in for, and puts back afterwards: the working directory, the whole environment, `process.exit`
  * (the FIRST code wins, as in a process that has exited; a command's own `catch` may call it again on the way
  * out), `process.exitCode`, stdout/stderr, and the signal/exit listeners the command added. Runs are serialized,
- * since they share all of that. It is stdin-less and TTY-less, as `run` is.
+ * since they share all of that. It is stdin-less and defaults to TTY-less, as `run` is (pass `{ tty: true }` to
+ * simulate an interactive terminal).
  *
  * NOT for a test that is about the process itself: stdout/stderr discipline across a real pipe, a signal, a crash.
  * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
@@ -130,13 +131,14 @@ export function runInProcess(
   args: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  options?: { tty?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const turn = inProcessQueue.then(() => runOnce(args, cwd, onCleanMachine(env ?? process.env)));
+  const turn = inProcessQueue.then(() => runOnce(args, cwd, onCleanMachine(env ?? process.env), options));
   inProcessQueue = turn.catch(() => undefined);
   return turn;
 }
 
-async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.ProcessEnv) {
+async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.ProcessEnv, options?: { tty?: boolean }) {
   const { runCli } = await import("../../packages/fastagent/src/cli/program.ts");
   // A real command is a process of its own, so what one chose of the value file (`--env-file`, no default file for a
   // deployment) is not left for the next: reset what a process starts with.
@@ -175,8 +177,9 @@ async function runOnce(args: string[], cwd: string | undefined, env: NodeJS.Proc
     Object.assign(process.env, given);
     process.chdir(cwd ?? saved.cwd);
     process.exitCode = undefined;
+    const isTTY = options?.tty === true;
     for (const stream of [process.stdin, process.stdout, process.stderr]) {
-      Object.defineProperty(stream, "isTTY", { value: false, configurable: true });
+      Object.defineProperty(stream, "isTTY", { value: isTTY, configurable: true });
     }
     process.stdout.write = ((chunk: unknown) => {
       stdout += text(chunk);

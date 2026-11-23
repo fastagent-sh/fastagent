@@ -17,7 +17,9 @@ vi.mock(
 
 /** The session id an invoke printed on stderr; a run that printed none says how it ended. */
 function sessionOf(run: { code: number | null; stdout: string; stderr: string }): string {
-  const id = /\[fastagent\] session (\S+) \(continue it with --session \1\)/.exec(run.stderr)?.[1];
+  const id = /\[fastagent\] session (\S+) \(continue it with (?:--(?:url|remote) \S+ )?--session \1\)/.exec(
+    run.stderr,
+  )?.[1];
   if (id === undefined) {
     throw new Error(
       `no session id: exit ${run.code}, stdout ${JSON.stringify(run.stdout)}, stderr ${JSON.stringify(run.stderr)}`,
@@ -86,6 +88,26 @@ describe("cli: invoke", () => {
       expect([first.stdout.trim(), fresh.stdout.trim()]).toEqual(["seen 1", "seen 1"]);
       expect(sessionOf(fresh)).not.toBe(sessionOf(first));
     });
+  });
+
+  it("with --json in a TTY and no configured model, exits 2 without opening the interactive picker", async () => {
+    const dir = await agentWorkspace("fa-invoke-json-tty-");
+    const env = { ...process.env };
+    delete env.FASTAGENT_MODEL;
+    const refused = await runInProcess(["-C", dir, "invoke", "hello", "--json"], undefined, env, { tty: true });
+    expect([refused.code, refused.stdout]).toEqual([2, ""]);
+    expect(refused.stderr).toMatch(/missing model/);
+    expect(refused.stderr).not.toContain("Choose a model");
+
+    const configured = await agent("fa-invoke-json-tty-ok-");
+    const ok = await runInProcess(["-C", configured, "invoke", "hello", "--json"], undefined, env, { tty: true });
+    expect(ok.code, ok.stderr).toBe(0);
+    const events = ok.stdout
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(events.map((e) => e.type)).toContain("message");
+    expect(events.at(-1)?.type).toBe("done");
   });
 });
 
@@ -283,6 +305,67 @@ registerHooks({
         2,
         expect.stringContaining("either --session or --conversation"),
       ]);
+    });
+  });
+
+  it("works from a host directory, agent root, or agent subdirectory and includes the remote target in the follow-up hint without printing the key", async () => {
+    await withServedAgent(async (dir, url) => {
+      const outside = mkdtempSync(join(tmpdir(), "fa-remote-host-"));
+      const subdir = join(dir, "skills");
+      await mkdir(subdir, { recursive: true });
+      const envFile = join(outside, "remote.env");
+      await writeFile(envFile, "FASTAGENT_API_KEY=the-next-key\n");
+
+      const envWithKey = { ...process.env, FASTAGENT_API_KEY: "the-key" };
+      const envWithoutKey = { ...process.env };
+      delete envWithoutKey.FASTAGENT_API_KEY;
+
+      for (const cwd of [outside, dir, subdir]) {
+        const viaEnv = await runInProcess(["invoke", "--url", url, "hello"], cwd, envWithKey);
+        expect([viaEnv.code, viaEnv.stdout.trim()], `${cwd}: ${viaEnv.stderr}`).toEqual([0, "seen 1"]);
+
+        const viaFlag = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello"], cwd, envWithoutKey);
+        expect([viaFlag.code, viaFlag.stdout.trim()], `${cwd}: ${viaFlag.stderr}`).toEqual([0, "seen 1"]);
+
+        const viaFile = await runInProcess(
+          ["invoke", "--url", url, "--env-file", envFile, "hello"],
+          cwd,
+          envWithoutKey,
+        );
+        expect([viaFile.code, viaFile.stdout.trim()], `${cwd}: ${viaFile.stderr}`).toEqual([0, "seen 1"]);
+      }
+
+      const override = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello"], subdir, {
+        ...envWithoutKey,
+        FASTAGENT_API_KEY: "wrong-env-key",
+      });
+      expect([override.code, override.stdout.trim()], override.stderr).toEqual([0, "seen 1"]);
+
+      const missingKey = await runInProcess(["invoke", "--url", url, "hello"], outside, envWithoutKey);
+      expect([missingKey.code, missingKey.stdout]).toEqual([2, ""]);
+      expect(missingKey.stderr).toContain("no key to call");
+
+      // Follow-up hint includes --url and --session, never prints the key, and continues the same remote session.
+      const first = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello"], subdir, envWithoutKey);
+      expect(first.code, first.stderr).toBe(0);
+      const sid = sessionOf(first);
+      expect(first.stderr).toContain(`(continue it with --url ${url} --session ${sid})`);
+      expect(first.stderr).not.toContain("--key");
+      expect(first.stderr).not.toContain("the-key");
+
+      const followUp = await runInProcess(["invoke", "--url", url, "--session", sid, "again"], outside, envWithKey);
+      expect([followUp.code, followUp.stdout.trim()], followUp.stderr).toEqual([0, "seen 2"]);
+      expect(followUp.stderr).toContain(`(continue it with --url ${url} --session ${sid})`);
+
+      // Named --remote works from an agent subdirectory and hints --remote <name> --session <id> without printing the key.
+      const remotesPath = join(outside, "remotes.json");
+      await writeFile(remotesPath, JSON.stringify({ remotes: { prod: { url, apiKey: "$PROD_AGENT_KEY" } } }));
+      const remoteEnv = { ...envWithoutKey, FASTAGENT_REMOTES_PATH: remotesPath, PROD_AGENT_KEY: "the-key" };
+      const viaRemote = await runInProcess(["invoke", "--remote", "prod", "hello"], subdir, remoteEnv);
+      expect([viaRemote.code, viaRemote.stdout.trim()], viaRemote.stderr).toEqual([0, "seen 1"]);
+      const remoteSid = sessionOf(viaRemote);
+      expect(viaRemote.stderr).toContain(`(continue it with --remote prod --session ${remoteSid})`);
+      expect(viaRemote.stderr).not.toContain("the-key");
     });
   });
 

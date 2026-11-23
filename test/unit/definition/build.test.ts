@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildProject } from "../../../packages/fastagent/src/harnesses/build.ts";
@@ -46,6 +46,59 @@ describe("fastagent build", () => {
     const dir = project({ "src/tools/bad.ts": "throw new Error('boom at import');\n" });
     await expect(buildProject(dir)).rejects.toThrow("src/tools/bad.ts: boom at import");
     expect(readdirSync(dir)).not.toContain("dist");
+  });
+
+  it("refuses an invalid static tool export and leaves the previous valid dist/ intact", async () => {
+    const dir = project(FILES);
+    const { dist } = await buildProject(dir);
+    const previousEntry = readFileSync(join(dist, "index.js"), "utf8");
+    const previousRecord = readFileSync(join(dist, "build.json"), "utf8");
+
+    writeFileSync(join(dir, "src", "tools", "billing-note.ts"), "export default 42;\n");
+    await expect(buildProject(dir)).rejects.toThrow(/src\/tools\/billing-note\.ts:.*must default-export a tool/);
+    expect(readFileSync(join(dist, "index.js"), "utf8")).toBe(previousEntry);
+    expect(readFileSync(join(dist, "build.json"), "utf8")).toBe(previousRecord);
+    expect(listing(dist)).not.toContain("src/tools/billing-note.js");
+  });
+
+  it("builds a needs(...) tool factory without executing it or requiring its runtime secret", async () => {
+    const dir = project({
+      ...FILES,
+      "src/tools/secret-tool.ts": `import { obj, str } from "@earendil-works/pi-schema";
+import { defineTool, needs } from "@fastagent-sh/fastagent";
+export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
+  if (!BILLING_API_KEY.startsWith("sk_")) {
+    throw new Error("malformed BILLING_API_KEY");
+  }
+  return defineTool({
+    name: "secret_tool",
+    description: "Uses a secret.",
+    parameters: obj({ query: str() }),
+    execute: async () => ({ output: [{ type: "text", text: "ok" }] }),
+  });
+});
+`,
+    });
+    const prevKey = process.env.BILLING_API_KEY;
+    delete process.env.BILLING_API_KEY;
+    try {
+      const { dist } = await buildProject(dir);
+      expect(listing(dist)).toContain("src/tools/secret-tool.js");
+    } finally {
+      if (prevKey !== undefined) process.env.BILLING_API_KEY = prevKey;
+    }
+  });
+
+  it("refuses invalid static extension and provider exports before writing dist/", async () => {
+    const badExt = project({ "src/extensions/broken.ts": "export default 42;\n" });
+    await expect(buildProject(badExt)).rejects.toThrow(/src\/extensions\/broken\.ts:.*must be an extension/);
+    expect(readdirSync(badExt)).not.toContain("dist");
+
+    const badProvider = project({ "fastagent.config.ts": "export default { providers: [42] };\n" });
+    await expect(buildProject(badProvider)).rejects.toThrow(
+      /fastagent\.config\.ts providers\[0\]:.*must be a pi-ai provider/,
+    );
+    expect(readdirSync(badProvider)).not.toContain("dist");
   });
 
   it("`fastagent build --json` compiles through the CLI entry and emits dist/", async () => {

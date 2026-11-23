@@ -16,11 +16,11 @@ import {
   parseRemotesJson,
   resolveRemotesPath,
 } from "@fastagent-sh/client/remotes";
-import { applyEnvValues, enterAgentEnv } from "../env.ts";
+import { applyEnvValues } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { loadEnvValues, valueFileOf } from "../value-file.ts";
-import { failUsage, optionalAgentDirOrExit } from "./fail.ts";
+import { failUsage } from "./fail.ts";
 import { type InstanceFlags, enterEnvFile } from "./instance.ts";
 
 export interface RemoteTargetFlags {
@@ -57,18 +57,13 @@ function deploymentKey(where: string): string {
 }
 
 /**
- * Enter this machine's environment and the proxy it declares, as every command that sends a request does.
+ * Enter the explicit `--env-file` (when given) and the proxy it or the ambient environment declares.
+ * Remote targets never depend on a local agent directory.
  */
 function enterRemoteEnvironment(dirArg: string): void {
-  const target = resolve(dirArg);
-  const agentDir = optionalAgentDirOrExit(target);
-  if (agentDir === undefined) {
-    const file = valueFileOf(target);
-    if (file !== undefined) applyEnvValues(loadEnvValues(file));
-    installProxyFetch();
-    return;
-  }
-  enterAgentEnv(agentDir);
+  const file = valueFileOf(resolve(dirArg));
+  if (file !== undefined) applyEnvValues(loadEnvValues(file));
+  installProxyFetch();
 }
 
 /**
