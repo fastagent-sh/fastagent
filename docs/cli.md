@@ -17,7 +17,7 @@ fastagent <command> --help     # authoritative flags and examples generated from
 
 | Command | What it does |
 | --- | --- |
-| `init <dir>` | Scaffold a new agent, install dependencies (`--no-install` skips), and initialize git |
+| `init [dir]` | Create a new agent, adopt an existing agent directory (default `.`), or safely resume dependency install (`--no-install` skips) |
 | `dev` | Serve the agent locally with live reload (`--no-watch` disables file watching) |
 | `build` | Type-check and compile the agent into `dist/` (`--no-check`, `--json`) |
 | `start` | Serve the compiled `dist/` build in production posture; refuses missing or stale builds |

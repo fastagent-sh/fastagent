@@ -30,15 +30,17 @@ Let the agent decide its own steps; keep rigid multi-step pipelines in your app 
 
 **Choose the right isolation posture:** on the default `pi-durable` harness, built-in coding tools (`read`, `write`, `edit`, `bash`) run with the OS process's permissions—a prompt or typed tool is not a sandbox. When you need confinement, either set `codingTools: false` (or `["read"]`) in `fastagent.config.ts`, run on `harness: "dsh"` with kernel-enforced OS sandboxing (`workspace` or `read-only`), or isolate the agent in a container / AgentCore microVM.
 
-## 2. Create the agent
+## 2. Create or initialize the agent
 
 ```bash
 npm install -g @fastagent-sh/fastagent
-fastagent init my-agent
+fastagent init my-agent          # new agent directory
 cd my-agent
 ```
 
-An agent lives in its own directory, beside any project it operates on. `init` installs dependencies and creates the first git commit. Stay in `my-agent/` for the remaining steps: inside an agent directory, the global `fastagent` binary automatically runs the agent's installed version. Without a global install, use `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is an unrelated npm package).
+If the directory already holds `SYSTEM.md`, `skills/`, or `src/tools/`, run `fastagent init` in place (preserves your files and installs missing setup; run `fastagent info --json` first to verify your skills are listed). To add an agent inside an existing application without touching the host package, use a child directory such as `fastagent init agents/support`. Re-running `fastagent init` after a failed `npm install` resumes safely, and re-running it on a ready project is a no-op.
+
+Stay in the agent directory for the remaining steps: inside an agent directory, the global `fastagent` binary automatically runs the agent's installed version. Without a global install, use `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is an unrelated npm package).
 
 ## 3. Set up TypeScript
 

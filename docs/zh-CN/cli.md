@@ -17,7 +17,7 @@ fastagent <command> --help     # 由源码生成的权威参数与示例
 
 | 命令 | 说明 |
 | --- | --- |
-| `init <dir>` | 初始化新 Agent 目录、安装依赖（`--no-install` 跳过）并创建 Git 仓库 |
+| `init [dir]` | 创建新 Agent、就地初始化已有 Agent 目录（默认 `.`）或安全重试依赖安装（`--no-install` 跳过） |
 | `dev` | 本地热重载服务（`--no-watch` 关闭文件监听） |
 | `build` | 执行类型检查并将 Agent 编译打包至 `dist/`（`--no-check`、`--json`） |
 | `start` | 以生产姿态运行编译后的 `dist/`；拒绝缺失或陈旧构建 |

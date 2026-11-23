@@ -53,13 +53,20 @@ const GLOBAL_AUTH: FlagSpec = {
 
 const init: CommandSpec = {
   name: "init",
-  summary: "create an agent in a directory of its own and install its dependencies",
-  description: "Scaffold SYSTEM.md, writing-great-skills, fastagent.config.ts, package.json, and .gitignore.",
-  args: [{ name: "<dir>", description: "the new agent directory (created if missing)" }],
+  summary: "create or initialize an agent directory and install its dependencies",
+  description:
+    "Scaffold a new agent directory, adopt an existing directory holding SYSTEM.md/skills/tools, or safely resume a previous init.",
+  args: [{ name: "[dir]", description: "agent directory to create or initialize (default: .)" }],
   flags: [{ flags: "--no-install", description: "scaffold everything but skip npm install" }],
-  examples: [{ cmd: "fastagent init my-agent" }],
+  examples: [
+    { cmd: "fastagent init my-agent", note: "new agent directory" },
+    { cmd: "fastagent init", note: "initialize or resume in the current directory" },
+    { cmd: "fastagent init agents/support", note: "child directory inside an existing application" },
+  ],
   run: async (args, f) =>
-    (await import("./commands/init.ts")).runInit(args[0] as string, { install: f.install !== false }),
+    (await import("./commands/init.ts")).runInit((args[0] as string | undefined) ?? ".", {
+      install: f.install !== false,
+    }),
 };
 
 const dev: CommandSpec = {

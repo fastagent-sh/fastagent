@@ -16,14 +16,21 @@ npm i -g @fastagent-sh/fastagent
 
 > 在 Agent 目录内，全局 `fastagent` 命令会自动委托给该项目安装的本地版本。不想全局安装？可以使用 `npx @fastagent-sh/fastagent <command>`（切勿使用 `npx fastagent`，那是另一个无关的包）或项目里的 `npm run dev` / `build` / `start` 脚本。
 
-## 1. 创建你的 Agent
+## 1. 创建或初始化你的 Agent
 
 ```bash
-fastagent init my-agent
+fastagent init my-agent          # 创建全新 Agent 目录
 cd my-agent
 ```
 
-这会初始化一个独立 Git 仓库，包含初始提示词（`SYSTEM.md`）、示例技能（`skills/writing-great-skills/`）、配置文件（`fastagent.config.ts`）、`package.json` 以及 `.gitignore`（确保 `.secrets/` 和 `.fastagent/` 不会进入版本控制）。
+如果当前目录已有 `SYSTEM.md` 或 `skills/`，或在现有应用仓库里新增一个 Agent：
+
+```bash
+fastagent init                   # 初始化或断点续跑当前目录（保留已有文件）
+fastagent init agents/support    # 在现有应用的子目录中创建 Agent
+```
+
+对于全新目录，`init` 会初始化独立 Git 仓库并生成初始提示词（`SYSTEM.md`）、示例技能（`skills/writing-great-skills/`）、配置文件（`fastagent.config.ts`）、`package.json` 以及 `.gitignore`（确保 `.secrets/` 和 `.fastagent/` 不会进入版本控制）。对于已有 Agent 目录，它会保留你的原有文件、仅补齐缺失配置并检查依赖——可先运行 `fastagent info --json` 确认已有技能已被识别。
 
 ## 2. 发送第一条消息
 

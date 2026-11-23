@@ -80,7 +80,7 @@ export function resolveAgentDir(dir: string): string {
   if (agentDir === undefined) {
     throw new Error(
       `${resolve(dir)} is not a fastagent agent — it holds no ${AGENT_CONFIG_FILE}; pass the agent's directory, ` +
-        "or create one with `fastagent init <dir>`",
+        "or initialize one with `fastagent init` (or `fastagent init <dir>`)",
     );
   }
   return agentDir;

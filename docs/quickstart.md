@@ -16,14 +16,21 @@ npm i -g @fastagent-sh/fastagent
 
 > Inside an agent directory, the global `fastagent` binary automatically runs that agent's installed version. Prefer not to install globally? Use `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`, which is an unrelated package) or the project's `npm run dev` / `build` / `start` scripts.
 
-## 1. Create your agent
+## 1. Create or initialize your agent
 
 ```bash
-fastagent init my-agent
+fastagent init my-agent          # new agent directory
 cd my-agent
 ```
 
-This creates a git repository with a starter prompt (`SYSTEM.md`), an example skill (`skills/writing-great-skills/`), configuration (`fastagent.config.ts`), `package.json`, and `.gitignore` (keeping `.secrets/` and `.fastagent/` out of version control).
+Already have `SYSTEM.md` or `skills/` in the current directory, or adding an agent inside an existing application?
+
+```bash
+fastagent init                   # initialize or resume in the current directory (preserves existing files)
+fastagent init agents/support    # add an agent in a child directory of an existing app
+```
+
+For a fresh directory, `init` creates a git repository with a starter prompt (`SYSTEM.md`), an example skill (`skills/writing-great-skills/`), configuration (`fastagent.config.ts`), `package.json`, and `.gitignore` (keeping `.secrets/` and `.fastagent/` out of version control). For an existing agent directory, it preserves your files, adds missing setup, and verifies dependencies—run `fastagent info --json` to confirm your skills are detected.
 
 ## 2. Send your first message
 
