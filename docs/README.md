@@ -1,12 +1,12 @@
 ---
 title: Documentation
-description: "FastAgent documentation: product overview, technical architecture, authoring, configuration, remote operations, embedding, deployment, and API reference."
+description: "FastAgent documentation: product overview, technical architecture, packaging and CI/CD, configuration, remote operations, embedding, deployment, and API reference."
 status: current
 ---
 
 # Documentation
 
-FastAgent is the open-source TypeScript & Node.js runtime for production AI agents. Author with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and AWS AgentCore.
+FastAgent is the open-source TypeScript & Node.js runtime for production AI agents. Write agents in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — package as versioned npm artifacts, embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and AWS AgentCore.
 
 ## Start here
 
@@ -15,7 +15,8 @@ FastAgent is the open-source TypeScript & Node.js runtime for production AI agen
 | Understand what FastAgent is, what it solves, and where it fits | [Overview](overview.md) |
 | Build and run your first agent in five minutes | [Quickstart](quickstart.md) |
 | Explore production examples (`pr-review-agent`, `incident-triage-agent`, `saas-copilot`, `agentcore-per-user`, `deep-research-agent`) | [Examples](../examples/README.md) |
-| Follow the full authoring workflow (for humans and coding agents) | [Agent development guide](ai-start.md) |
+| Package an agent as a versioned npm artifact & gate releases in CI | [Packaging, Distribution & CI/CD](packaging-and-ci.md) |
+| Follow the end-to-end build workflow (for humans and coding agents) | [Agent development guide](ai-start.md) |
 
 ## Architecture & contract
 

@@ -37,7 +37,7 @@
   <text x="430" y="29" text-anchor="middle" class="title"><tspan class="mark" font-size="16">F</tspan> ~/incident-agent</text>
   <line x1="1" y1="46" x2="859" y2="46" stroke="#1e2522" stroke-width="1"/>
 
-  <text class="l a1" x="20" y="80"><tspan class="cm"># 1. author in Markdown &amp; TypeScript (checked into Git)</tspan></text>
+  <text class="l a1" x="20" y="80"><tspan class="cm"># 1. write in Markdown &amp; TypeScript (checked into Git)</tspan></text>
   <text class="l a2" x="20" y="106"><tspan class="tp">❯ </tspan><tspan class="txt">claude </tspan><tspan class="am">"read fastagent.sh/start.md, build an incident triage agent"</tspan></text>
   <text class="l a3" x="20" y="132"><tspan class="ok">✓ </tspan><tspan class="txt">wrote SYSTEM.md · </tspan><tspan class="dir">skills/</tspan><tspan class="txt"> · </tspan><tspan class="dir">src/tools/</tspan><tspan class="txt"> · </tspan><tspan class="acc">fastagent.config.ts</tspan></text>
 

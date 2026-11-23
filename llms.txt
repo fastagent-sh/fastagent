@@ -1,6 +1,6 @@
 # FastAgent
 
-> The TypeScript runtime for production AI agents. Author agents with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — embed in Next.js, Hono, Express, or Fastify keeping your own auth and database, self-host with Docker, or deploy to Fly.io, Railway, and Amazon Bedrock AgentCore with durable sessions (SQLite / PostgreSQL / Aurora DSQL), idempotent webhooks (`POST /v1/invoke`), OS sandboxing (`--harness dsh`), remote OAuth auth, and OpenTelemetry traces.
+> The TypeScript runtime for production AI agents. Write agents in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP (built for humans and coding agents), compile them into versioned npm packages (`fastagent build`), and embed in Next.js, Hono, Express, or Fastify keeping your own auth and database, self-host with Docker, or deploy sleep-when-idle on Fly.io, Railway, and Amazon Bedrock AgentCore with durable sessions (SQLite / PostgreSQL / Aurora DSQL), idempotent webhooks (`POST /v1/invoke`), OS sandboxing (`--harness dsh`), remote OAuth auth, and OpenTelemetry traces.
 
 Key facts:
 
@@ -21,6 +21,7 @@ Key facts:
 - [Overview](https://fastagent.sh/docs/overview/): product goals, positioning, core concepts, and boundaries.
 - [Technical architecture](https://fastagent.sh/docs/architecture/): system layers, package boundaries, dual harnesses, storage & fencing, security, and OTLP observability.
 - [Quickstart](https://fastagent.sh/docs/quickstart/): scaffold, invoke, add a portable tool, build, and run.
+- [Packaging, Distribution & CI/CD](https://fastagent.sh/docs/packaging-and-ci/): compile into versioned ESM npm packages (`dist/`), `peerDependencies` sharing, `npm publish`, and `--json` CI gates.
 - [Agent development guide](https://fastagent.sh/docs/ai-start/): step-by-step build, test, and deploy workflow for humans and coding agents.
 - [Configuration](https://fastagent.sh/docs/configuration/): `fastagent.config.ts`, harnesses & OS sandboxing, models & custom providers, secrets (`needs`), PostgreSQL, coding tools, and OTLP traces.
 - [MCP servers](https://fastagent.sh/docs/mcp/): local stdio and remote Streamable HTTP MCP tool servers.

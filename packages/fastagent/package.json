@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
   "version": "0.34.0",
-  "description": "The TypeScript runtime for production AI agents: author with Markdown, skills, typed tools & MCP — embed in Node.js, self-host with Docker, or deploy to Fly.io, Railway & AWS.",
+  "description": "The TypeScript runtime for production AI agents: write in Markdown & TypeScript, package as an npm artifact, embed in Node.js, self-host with Docker, or deploy to Fly.io, Railway & AWS.",
   "keywords": [
     "ai-agent",
     "ai-agent-runtime",

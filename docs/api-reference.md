@@ -12,7 +12,7 @@ FastAgent publishes six version-locked npm packages so you install only what you
 
 | Package | When to install | Key exports |
 | --- | --- | --- |
-| **`@fastagent-sh/fastagent`** | Authoring an agent, running the CLI, or embedding an agent in Node | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, `defineDefinition`, plus all Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, `AuthApi`, …) |
+| **`@fastagent-sh/fastagent`** | Writing an agent, packaging it, running the CLI, or embedding in Node | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, `defineDefinition`, plus all Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, `AuthApi`, …) |
 | **`@fastagent-sh/harness-dsh`** | Opting into kernel-enforced OS sandboxing (`--harness dsh`, experimental) | `openDshAgent`, `MemoryDshEventStore`, `openSqliteDshStore`, `openPostgresDshStore`, `DshInstanceHeldError`, and DSH harness types |
 
 ## Calling or operating a deployed agent
