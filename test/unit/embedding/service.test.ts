@@ -268,7 +268,9 @@ describe("standalone serveService lifecycle", () => {
     const dir = await agentDir();
     const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
     faux.setResponses([
-      () => fauxAssistantMessage("upstream failed", { stopReason: "error", errorMessage: "temporary 503" }),
+      () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 the model is overloaded" }),
+      () => fauxAssistantMessage("recovered"),
+      () => fauxAssistantMessage("", { stopReason: "error", errorMessage: "The model refused the request" }),
     ]);
     const definition = defineDefinition({
       format: DEFINITION_FORMAT,
@@ -314,10 +316,14 @@ describe("standalone serveService lifecycle", () => {
     const base = `http://127.0.0.1:${port}`;
     const client = connectAgent(base, { apiKey: "k" });
 
-    // 1) Transient model error
+    // 1) Transient 503 model error (retries and recovers) + permanent model error (fails without crashing runtime)
     const s1 = await client.sessions.create();
-    const m1 = await client.messages.send({ sessionId: s1.id, content: "fail once" }, { wait: 15 });
-    expect(m1.status).toBe("failed");
+    const mTransient = await client.messages.send({ sessionId: s1.id, content: "flaky" }, { wait: 15 });
+    expect(mTransient.status).toBe("completed");
+    expect(mTransient.answer?.text).toBe("recovered");
+
+    const mRefused = await client.messages.send({ sessionId: s1.id, content: "fail" }, { wait: 15 });
+    expect(mRefused.status).toBe("failed");
 
     // 2) Missing model credentials (auth_required)
     const s2 = await client.sessions.create({ model: { provider: "openai", modelId: "gpt-5.4" } });
