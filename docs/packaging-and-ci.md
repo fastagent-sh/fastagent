@@ -42,7 +42,7 @@ Every build enforces strict artifact boundaries before anything is written to `d
 - **No out-of-tree imports:** Refuses source imports from outside the agent directory that `dist/` cannot carry.
 - **No machine state or secrets:** Never copies `.secrets/`, `.env*`, `.state/`, `node_modules/`, `.git/`, or anything from `~/.pi/agent`.
 - **MCP command & credential checks:** Verifies relative stdio MCP commands exist inside `dist/` and emits warnings if `mcpServers` contains literal credentials instead of `${VAR}` references.
-- **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent` and installed harness packages into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
+- **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent` and the built-in `pi-*` packages (`@earendil-works/pi-durable`, `@earendil-works/pi-ai`, `@earendil-works/pi-schema`) into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
 
 ## 2. Distribute & version as an npm package
 
@@ -77,7 +77,20 @@ Upgrading an agent — or rolling back a prompt or tool regression — is a sing
 
 ### Option B: Consume directly in a monorepo workspace
 
-Keep the agent in `packages/saas-copilot/`, build it in your workspace pipeline (`fastagent build`), and import its compiled package from your Next.js, Hono, Express, or Fastify app without publishing externally.
+Keep the agent in `packages/saas-copilot/`, build it in your workspace pipeline (`fastagent build`), and either add an `exports` entry to `packages/saas-copilot/package.json` pointing at the compiled output:
+
+```json
+{
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  }
+}
+```
+
+or import `./dist/index.js` directly from your host app (as in [`examples/saas-copilot/server.ts`](../examples/saas-copilot/server.ts)).
 
 ## 3. Gate releases in CI/CD
 
@@ -101,9 +114,10 @@ jobs:
         with:
           node-version: "24"
       - run: npm ci
-      - run: fastagent info --json
-      - run: fastagent build --json
-      - run: fastagent deploy check --json
+      - run: npm exec -- fastagent info --json
+      - run: npm exec -- fastagent build --json
+      # Run when the repository also ships container deployment files (`fastagent deploy init`):
+      - run: npm exec -- fastagent deploy check --json
 ```
 
 - `fastagent info --json` validates the agent definition and reports models, tools, MCP servers, and declared `needs()` secrets read-only.
