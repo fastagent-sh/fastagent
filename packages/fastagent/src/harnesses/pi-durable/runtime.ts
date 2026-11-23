@@ -106,7 +106,11 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
   }
 
   const closeSignal = createCloseSignal();
-  agent.harness.subscribeClose(closeSignal.mark);
+  try {
+    agent.harness.subscribeClose(closeSignal.mark);
+  } catch {
+    closeSignal.mark();
+  }
 
   stopRuns = (error) => {
     log.error(`[fastagent] ${error.message}: stopping its runs`);

@@ -140,6 +140,11 @@ function serve(
   };
   unsubSigint = registerSignal("SIGINT", () => stop(0));
   unsubSigterm = registerSignal("SIGTERM", () => stop(0));
+  if (!service.ready()) {
+    log.error("[fastagent] agent runtime stopped unexpectedly; shutting down");
+    stop(1);
+    return;
+  }
   unsubRuntime = service.onRuntimeClose(() => {
     if (stopping) return;
     // Defer out of pi-durable's synchronous subscribeClose callback (must not block or call Session APIs inside it).
@@ -154,6 +159,7 @@ function serve(
       if (!stopping) onListening?.(boundPort);
     },
     (error: NodeJS.ErrnoException) => {
+      if (stopping) return;
       cleanupListeners();
       if (error.code === "EADDRINUSE") {
         // With a bind address the port is only taken ON THAT interface, so moving the bind is as valid a fix as

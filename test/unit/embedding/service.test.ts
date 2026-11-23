@@ -350,4 +350,54 @@ describe("standalone serveService lifecycle", () => {
     await expect(fetch(`${base}/health`)).rejects.toThrow(/fetch failed|ECONNREFUSED/);
     await served.agent.close();
   });
+
+  it("exits 1 without listening when runtime is already stopped, and exits 0 when SIGTERM arrives mid-listen", async () => {
+    const dir = await agentDir();
+    const stopped = await openServing(await loadSourceDefinition(dir), {
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+      storage: "memory",
+    });
+    const stoppedService = await serveAgent(stopped, { apiKeys: ["k"] });
+    await stopped.agent.harness?.close(BACKGROUND_CONTEXT);
+
+    let listened = false;
+    const stoppedExit = new Promise<number>((resolve) => {
+      serveService(stoppedService, { port: 0, host: "127.0.0.1" }, undefined, {
+        exit: resolve,
+        registerSignal: () => () => {},
+        onListening: () => {
+          listened = true;
+        },
+      });
+    });
+    expect(await stoppedExit).toBe(1);
+    expect(listened).toBe(false);
+    await stopped.agent.close();
+
+    // SIGTERM arriving before listen settles must still exit 0 even though listen rejects on close.
+    const racing = await openServing(await loadSourceDefinition(dir), {
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+      storage: "memory",
+    });
+    const racingService = await serveAgent(racing, { apiKeys: ["k"] });
+    const signals = new Map<NodeJS.Signals, () => void>();
+    const racingExit = new Promise<number>((resolve) => {
+      serveService(racingService, { port: 0, host: "127.0.0.1" }, undefined, {
+        exit: resolve,
+        registerSignal: (signal, handler) => {
+          signals.set(signal, handler);
+          return () => signals.delete(signal);
+        },
+      });
+    });
+    signals.get("SIGTERM")?.();
+    expect(await racingExit).toBe(0);
+    await racing.agent.close();
+  });
 });
