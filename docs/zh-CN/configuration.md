@@ -180,7 +180,7 @@ port   dev:   --port > 8787              start: --port > PORT > 8787
 bind   dev:   --bind > 127.0.0.1         start: --bind > 0.0.0.0 (all interfaces)
 ```
 
-`--bind` 接受 IP 字面量或 `localhost`。每个运行中的服务都会响应 `GET /health`（`200 {"status": "ok"}`）。
+`--bind` 接受 IP 字面量或 `localhost`。每个运行中的服务都会响应 `GET /health`（就绪时返回 `200 {"status": "ok"}`，运行时关闭后返回 `503 {"status": "unavailable"}`）。
 
 设置 `FASTAGENT_API_KEY`（本地放在 `.secrets/.env`，生产通过宿主机密钥注入）即可在 `/v1` 下开启 [Agent API](agent-api.md#http-绑定)（`Authorization: Bearer <key>`）。使用逗号分隔多密钥（`FASTAGENT_API_KEY=new,old`）可零停机轮换。
 

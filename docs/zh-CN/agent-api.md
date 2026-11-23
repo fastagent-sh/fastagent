@@ -188,7 +188,7 @@ HTTP 与 AgentCore 实例均暴露 Auth API（`@fastagent-sh/client` 的 `connec
 
 | HTTP 方法与路径 | 对应操作 |
 | --- | --- |
-| `GET /health` | 公开健康探针（`200 { "status": "ok" }`，无需认证） |
+| `GET /health` | 公开就绪探针（就绪时 `200 { "status": "ok" }`，运行时关闭后 `503 { "status": "unavailable" }`；无需认证） |
 | `GET /v1/agent`、`GET /v1/usage`、`GET /v1/openapi.json` | `info`、`usage`、OpenAPI 3.1 文档 |
 | `POST /v1/sessions`、`GET /v1/sessions?limit&after` | `sessions.create`（`201`）、`sessions.list` |
 | `GET`、`PATCH`、`DELETE /v1/sessions/{sessionId}` | `sessions.get`、`sessions.update`、`sessions.delete`（`204`） |

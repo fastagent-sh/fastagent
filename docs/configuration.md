@@ -180,7 +180,7 @@ port   dev:   --port > 8787              start: --port > PORT > 8787
 bind   dev:   --bind > 127.0.0.1         start: --bind > 0.0.0.0 (all interfaces)
 ```
 
-`--bind` accepts an IP literal or `localhost`. Every running server answers `GET /health` (`200 {"status": "ok"}`).
+`--bind` accepts an IP literal or `localhost`. Every running server answers `GET /health` (`200 {"status": "ok"}` while ready, `503 {"status": "unavailable"}` once shutting down).
 
 Set `FASTAGENT_API_KEY` (in `.secrets/.env` locally or as a host secret in production) to enable the [Agent API](agent-api.md#http-binding) under `/v1` (`Authorization: Bearer <key>`). Pass comma-separated keys (`FASTAGENT_API_KEY=new,old`) to rotate keys with zero downtime.
 

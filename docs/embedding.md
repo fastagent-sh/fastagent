@@ -97,8 +97,9 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 ```
 
 Lifecycle helpers on `LocalAgent`:
+- **`agent.ready()` / `service.ready()`:** Returns `true` while the runtime can accept work, and flips to `false` synchronously as soon as shutdown starts (before async cleanup finishes). `GET /health` reflects this state (`200` / `503`) without exiting the host process.
 - **`agent.busy()`:** Returns `true` while any message turn or remote auth flow is active (useful for graceful drain or scale-to-zero probes).
-- **`agent.closed`:** Optional promise that resolves when the instance stops serving—after `close()` or if a PostgreSQL single-writer lease is lost.
+- **`agent.closed`:** Optional promise that resolves once cleanup completes after `close()` or a PostgreSQL single-writer lease loss.
 - **`agent.close()`:** Closes any served HTTP endpoints and releases storage. Running turns are interrupted cleanly and resume on next open (call `agent.sessions.cancel(sessionId)` first to stop work permanently).
 
 ### Streaming to your own end users

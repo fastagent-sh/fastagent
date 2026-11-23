@@ -5,6 +5,7 @@
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
+import { createCloseSignal } from "../../close-signal.ts";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
@@ -104,6 +105,13 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
   }
 
+  const closeSignal = createCloseSignal();
+  try {
+    agent.harness.subscribeClose(closeSignal.mark);
+  } catch {
+    closeSignal.mark();
+  }
+
   stopRuns = (error) => {
     log.error(`[fastagent] ${error.message}: stopping its runs`);
     agent.harness
@@ -129,13 +137,18 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
   const managedAgent: ServingAgent = {
     ...agent,
     closed: agent.harness.closed.then(() => undefined),
-    close: () =>
-      (closing ??= (async () => {
+    ready: () => !closeSignal.isClosing(),
+    subscribeClose: closeSignal.subscribe,
+    close: () => {
+      closeSignal.mark();
+      closing ??= (async () => {
         const failures: unknown[] = [];
         await closeAgent().catch((error: unknown) => failures.push(error));
         await closeResources().catch((error: unknown) => failures.push(error));
         if (failures.length) throw new AggregateError(failures, "Agent close failed");
-      })()),
+      })();
+      return closing;
+    },
   };
 
   return managedAgent;

@@ -709,9 +709,14 @@ export default defineTool({
       );
       expect(liveSystemReply.answer?.text).toBe("sys:updated");
       const service = await dshAgent1.serve({ apiKeys: ["k"] });
+      expect(dshAgent1.ready()).toBe(true);
+      expect(service.ready()).toBe(true);
       const health = await service.fetch(new Request("http://local/health"));
       expect(health.status).toBe(200);
       await dshAgent1.close();
+      expect(dshAgent1.ready()).toBe(false);
+      expect(service.ready()).toBe(false);
+      expect((await service.fetch(new Request("http://local/health"))).status).toBe(503);
 
       // 3) Switch back to pi-durable on the same agent.sqlite: pi-session is intact.
       const piAgent2 = await openAgent(definition, { root });

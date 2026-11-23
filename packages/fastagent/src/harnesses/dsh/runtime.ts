@@ -7,6 +7,7 @@
 import { join } from "node:path";
 import type { Agent, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Models } from "@earendil-works/pi-ai";
+import { createCloseSignal } from "../../close-signal.ts";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
@@ -220,14 +221,16 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     throw failures.length === 1 ? error : new AggregateError(failures, "DSH agent open and cleanup failed");
   }
 
+  const closeSignal = createCloseSignal();
   let markClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     markClosed = resolve;
   });
 
   let closing: Promise<void> | undefined;
-  const close = () =>
-    (closing ??= (async () => {
+  const close = () => {
+    closeSignal.mark();
+    closing ??= (async () => {
       const failures: unknown[] = [];
       try {
         ctx.closeAuth();
@@ -240,7 +243,9 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
         markClosed();
       }
       if (failures.length > 0) throw new AggregateError(failures, "DSH agent close failed");
-    })());
+    })();
+    return closing;
+  };
 
   stopRuns = (error) => {
     log.error(`[fastagent] ${error.message}: stopping its runs`);
@@ -253,6 +258,8 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     sessions: dshAgent.sessions,
     messages: dshAgent.messages,
     closed,
+    ready: () => !closeSignal.isClosing(),
+    subscribeClose: closeSignal.subscribe,
     busy: () => dshAgent.busy(),
     close,
   };

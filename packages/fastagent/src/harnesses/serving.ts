@@ -8,6 +8,7 @@ import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
+import { createCloseSignal } from "../close-signal.ts";
 import {
   type ConversationStore,
   createInvoker,
@@ -115,6 +116,10 @@ export interface ServingAgent extends Agent {
   readonly harness?: Harness;
   /** Resolves once the runtime has stopped (explicit close or single-writer lease loss). */
   readonly closed?: Promise<void>;
+  /** Synchronously reports whether the runtime has not started closing. */
+  ready?(): boolean;
+  /** Subscribe to shutdown start (synchronously, before async cleanup settles). */
+  subscribeClose?(listener: () => void): () => void;
   busy?(): boolean;
   close(): Promise<void>;
 }
@@ -342,6 +347,9 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     throw error;
   }
 
+  const closeSignal = createCloseSignal();
+  runtimeAgent.subscribeClose?.(closeSignal.mark);
+
   let markClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     markClosed = resolve;
@@ -351,8 +359,11 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const wrappedAgent: ServingAgent = {
     ...runtimeAgent,
     closed,
-    close: () =>
-      (closingAgent ??= (async () => {
+    ready: () => !closeSignal.isClosing(),
+    subscribeClose: closeSignal.subscribe,
+    close: () => {
+      closeSignal.mark();
+      closingAgent ??= (async () => {
         const failures: unknown[] = [];
         try {
           auth?.close();
@@ -366,7 +377,9 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
         if (failures.length > 0) {
           throw failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed");
         }
-      })()),
+      })();
+      return closingAgent;
+    },
   };
   void runtimeAgent.closed?.then(
     () =>
@@ -410,6 +423,8 @@ export interface LocalAgent extends Agent, InvokeApi {
   readonly harness?: Harness;
   /** Resolves once the instance stops serving (explicit `close()` or single-writer lease loss). */
   readonly closed?: Promise<void>;
+  /** Whether the runtime is ready to accept work (false as soon as shutdown starts, before cleanup settles). */
+  ready(): boolean;
   /**
    * Whether the process has work in flight (a message not yet ended or an active login flow).
    * For a platform that reclaims an idle machine (AgentCore's `HealthyBusy`).
@@ -496,6 +511,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     invokeStream: invoker.invokeStream,
     ...(piHarness === undefined ? {} : { harness: piHarness }),
     ...(agent.closed === undefined ? {} : { closed: agent.closed }),
+    ready: () => closing === undefined && (agent.ready?.() ?? true),
     busy: () => opened.busy(),
     serve(serveOptions = {}) {
       if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
