@@ -16,11 +16,14 @@ import {
   type CreateSessionOptions,
   type Entry,
   type Json,
+  IdempotencyKey,
   type Message,
+  MessageId,
   type MessageStreamEvent,
   type SendRequest,
   type Session,
   type SessionEvent,
+  SessionId,
   agentError,
   hasEnded,
 } from "../../packages/client/src/agent-api.ts";
@@ -50,7 +53,11 @@ interface Kept {
   endings: Map<string, PromiseWithResolvers<Message>>;
 }
 
-const sessionOf = (id: string): Session => ({ id, status: "idle", usage: { models: {}, tools: {} } });
+const sessionOf = (id: string): Session => ({
+  id: SessionId.make(id),
+  status: "idle",
+  usage: { models: {}, tools: {} },
+});
 
 /** A session's events from now on: a snapshot first when `snapshot`, then each as it is published. */
 function reader(kept: Kept, snapshot: Session | undefined): AsyncIterator<SessionEvent> {
@@ -219,9 +226,9 @@ export function scriptedAgent(
           })();
     const message: Message = {
       ...(recorded ?? { status: "queued" as const }),
-      id: recorded?.id ?? `message-${++messages}`,
-      sessionId: request.sessionId,
-      ...(request.idempotencyKey === undefined ? {} : { idempotencyKey: request.idempotencyKey }),
+      id: recorded?.id ?? MessageId.make(`message-${++messages}`),
+      sessionId: SessionId.make(request.sessionId),
+      ...(request.idempotencyKey === undefined ? {} : { idempotencyKey: IdempotencyKey.make(request.idempotencyKey) }),
     };
     setStatus(kept, message);
     void Promise.resolve().then(() => run(kept, request, message, rest));

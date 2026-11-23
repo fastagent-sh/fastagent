@@ -8,11 +8,15 @@ import * as Schema from "effect/Schema";
 import {
   type Agent,
   AgentError,
+  type ConversationId,
+  type DecodedInvokeRequest,
+  type IdempotencyKey,
   type InvokeApi,
   InvokeRequest,
   type Message,
   type MessageStreamEvent,
   type SendRequest,
+  SessionId,
   type SessionSettings,
   type WaitOptions,
   agentError,
@@ -26,9 +30,21 @@ interface ConversationSetOptions {
   readonly ephemeral?: boolean;
 }
 
+/** Internal storage key for a caller conversation or ephemeral idempotency binding; distinct from `SessionId`. */
+export const ConversationKey = Schema.String.pipe(Schema.brand("ConversationKey"));
+export type ConversationKey = typeof ConversationKey.Type;
+
+/** Derive a durable conversation storage key from a caller-owned `ConversationId`. */
+export const conversationStorageKey = (prefix: string, conversation: ConversationId): ConversationKey =>
+  ConversationKey.make(`${prefix}c:${conversation}`);
+
+/** Derive an ephemeral storage key from a caller-owned `IdempotencyKey`. */
+export const idempotencyStorageKey = (prefix: string, key: IdempotencyKey): ConversationKey =>
+  ConversationKey.make(`${prefix}i:${key}`);
+
 export interface ConversationStore {
-  get(key: string): Promise<string | undefined>;
-  set(key: string, sessionId: string, options?: ConversationSetOptions): Promise<void>;
+  get(key: ConversationKey): Promise<SessionId | undefined>;
+  set(key: ConversationKey, sessionId: SessionId, options?: ConversationSetOptions): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -68,8 +84,8 @@ export function memoryConversationStore(options: ConversationStoreOptions = {}):
   const ttlMs = options.ephemeralTtlMs ?? DEFAULT_EPHEMERAL_TTL_MS;
   const maxEphemeral = options.maxEphemeral ?? DEFAULT_MAX_EPHEMERAL;
   const now = options.now ?? Date.now;
-  const named = new Map<string, string>();
-  const ephemeral = new Map<string, { sessionId: string; expiresAt: number }>();
+  const named = new Map<ConversationKey, SessionId>();
+  const ephemeral = new Map<ConversationKey, { sessionId: SessionId; expiresAt: number }>();
 
   const pruneEphemeral = (current: number): void => {
     for (const [k, entry] of ephemeral) {
@@ -130,7 +146,7 @@ export function sqliteConversationStore(filePath: string, options: ConversationS
       const row = selectStmt.get(key) as { session_id?: string; ephemeral?: number; updated_at?: number } | undefined;
       if (row?.session_id === undefined) return undefined;
       if (row.ephemeral === 1 && (row.updated_at ?? 0) <= now() - ttlMs) return undefined;
-      return row.session_id;
+      return SessionId.make(row.session_id);
     },
     async set(key, sessionId, setOptions) {
       const current = now();
@@ -167,7 +183,7 @@ export function postgresConversationStore(
       const row = rows[0];
       if (row === undefined) return undefined;
       if (row.ephemeral && Number(row.updated_at) <= now() - ttlMs) return undefined;
-      return row.session_id;
+      return SessionId.make(row.session_id);
     },
     async set(key, sessionId, setOptions) {
       const current = now();
@@ -199,8 +215,8 @@ export function postgresConversationStore(
 
 const decodeInvokeRequest = Schema.decodeUnknownSync(InvokeRequest);
 
-function validateInvokeRequest(raw: InvokeRequest): InvokeRequest {
-  let request: InvokeRequest;
+function validateInvokeRequest(raw: InvokeRequest): DecodedInvokeRequest {
+  let request: DecodedInvokeRequest;
   try {
     request = decodeInvokeRequest(raw);
   } catch (error) {
@@ -215,7 +231,7 @@ function validateInvokeRequest(raw: InvokeRequest): InvokeRequest {
   return request;
 }
 
-function sendPayload(sessionId: string, request: InvokeRequest): SendRequest {
+function sendPayload(sessionId: SessionId, request: DecodedInvokeRequest): SendRequest {
   return {
     sessionId,
     content: request.content,
@@ -231,8 +247,8 @@ export function createInvoker(
   options: { readonly keyPrefix?: string } = {},
 ): InvokeApi {
   const prefix = options.keyPrefix ?? "";
-  const locks = new Map<string, Promise<unknown>>();
-  const serialized = <T>(key: string, work: () => Promise<T>): Promise<T> => {
+  const locks = new Map<ConversationKey, Promise<unknown>>();
+  const serialized = <T>(key: ConversationKey, work: () => Promise<T>): Promise<T> => {
     const prev = locks.get(key) ?? Promise.resolve();
     const next = prev.catch(() => undefined).then(work);
     const tracked = next.finally(() => {
@@ -247,12 +263,12 @@ export function createInvoker(
   };
 
   const createAndRecord = async (
-    key: string,
+    key: ConversationKey,
     title: string | undefined,
     settings: SessionSettings | undefined,
     ephemeral: boolean,
     signal: AbortSignal | undefined,
-  ): Promise<string> => {
+  ): Promise<SessionId> => {
     checkSignal(signal);
     const created = await agent.sessions.create({
       ...(title === undefined ? {} : { title }),
@@ -263,12 +279,12 @@ export function createInvoker(
   };
 
   const resolveKeyed = (
-    key: string,
+    key: ConversationKey,
     title: string | undefined,
     settings: SessionSettings | undefined,
     ephemeral: boolean,
     signal: AbortSignal | undefined,
-  ): Promise<string> =>
+  ): Promise<SessionId> =>
     serialized(key, async () => {
       checkSignal(signal);
       const existing = await store.get(key);
@@ -285,7 +301,10 @@ export function createInvoker(
       return createAndRecord(key, title, settings, ephemeral, signal);
     });
 
-  const resolveSessionId = async (request: InvokeRequest, signal: AbortSignal | undefined): Promise<string> => {
+  const resolveSessionId = async (
+    request: DecodedInvokeRequest,
+    signal: AbortSignal | undefined,
+  ): Promise<SessionId> => {
     checkSignal(signal);
     if (request.sessionId !== undefined) {
       if (request.session !== undefined) {
@@ -294,10 +313,22 @@ export function createInvoker(
       return request.sessionId;
     }
     if (request.conversation !== undefined) {
-      return resolveKeyed(`${prefix}c:${request.conversation}`, request.conversation, request.session, false, signal);
+      return resolveKeyed(
+        conversationStorageKey(prefix, request.conversation),
+        request.conversation,
+        request.session,
+        false,
+        signal,
+      );
     }
     if (request.idempotencyKey !== undefined) {
-      return resolveKeyed(`${prefix}i:${request.idempotencyKey}`, undefined, request.session, true, signal);
+      return resolveKeyed(
+        idempotencyStorageKey(prefix, request.idempotencyKey),
+        undefined,
+        request.session,
+        true,
+        signal,
+      );
     }
     return (await agent.sessions.create(request.session)).id;
   };

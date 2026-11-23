@@ -2,6 +2,7 @@
  * Cold-boot session/message restoration and SIGKILL crash recovery for `@fastagent-sh/harness-dsh`.
  */
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { MessageId } from "@fastagent-sh/client/agent-api";
 import { ensureDshAgent } from "./event-bridge.ts";
 import { type DshRuntimeState, createLiveSession } from "./session-state.ts";
 import type { DshStoredMessage } from "./types.ts";
@@ -49,7 +50,7 @@ export async function restoreAndRecoverSessions(state: DshRuntimeState): Promise
 
     const dshAgent = await ensureDshAgent(state, live);
     for (const q of queuedMsgs) {
-      live.queuedMessages.push({ id: q.id, mode: q.whenBusy === "steer" ? "steer" : "queue" });
+      live.queuedMessages.push({ id: MessageId.make(q.id), mode: q.whenBusy === "steer" ? "steer" : "queue" });
     }
 
     const pendingInDsh = new Set<string>();

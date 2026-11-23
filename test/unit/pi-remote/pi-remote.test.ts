@@ -14,6 +14,7 @@ import {
   type Session,
   type SessionEvent,
 } from "@fastagent-sh/client";
+import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
 import { RemoteController, buildSendContent } from "@fastagent-sh/pi-remote/controller";
 import { parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/editor";
 import { REMOTE_ENTRY_TYPE, registerFastAgentRemoteExtension } from "@fastagent-sh/pi-remote/extension";
@@ -90,7 +91,7 @@ function createEventStream(): { iterable: AsyncIterable<SessionEvent>; control: 
 
 function makeSession(id: string, status: "idle" | "running" = "idle"): Session {
   return {
-    id,
+    id: SessionId.make(id),
     status,
     usage: { models: {}, tools: {} },
   };
@@ -171,11 +172,15 @@ function makeFakeAgent(options?: {
     messages: {
       async send(req) {
         sent.push(req);
-        return { id: `msg-${sent.length}`, sessionId: req.sessionId, status: "queued" };
+        return {
+          id: MessageId.make(`msg-${sent.length}`),
+          sessionId: SessionId.make(req.sessionId),
+          status: "queued",
+        };
       },
       async *stream() {},
       async get() {
-        return { id: "msg-1", sessionId: "sess-1", status: "completed" };
+        return { id: MessageId.make("msg-1"), sessionId: SessionId.make("sess-1"), status: "completed" };
       },
     },
   };
@@ -342,8 +347,8 @@ describe("RemoteController", () => {
     stream.control.push({
       type: "done",
       message: {
-        id: "msg-1",
-        sessionId: "sess-1",
+        id: MessageId.make("msg-1"),
+        sessionId: SessionId.make("sess-1"),
         status: "completed",
         answer: { entryId: "e-1", text: "Hello world" },
       },
@@ -485,7 +490,7 @@ describe("RemoteController", () => {
       onEvents: () => stream.iterable,
     });
     agent.sessions.get = async (id) => ({
-      id,
+      id: SessionId.make(id),
       status: "idle",
       usage: { models: { "openai/gpt-6-luna": { inputTokens: 120, outputTokens: 45, cost: 0.012 } }, tools: {} },
     });
@@ -494,7 +499,7 @@ describe("RemoteController", () => {
     await controller.connect("ops", agent);
     stream.control.push({
       type: "done",
-      message: { id: "m-1", sessionId: "sess-1", status: "completed" },
+      message: { id: MessageId.make("m-1"), sessionId: SessionId.make("sess-1"), status: "completed" },
     });
     await flushMicrotasks(10);
 
@@ -521,7 +526,7 @@ describe("RemoteController", () => {
     await controller.connect("ops", agent);
     stream.control.push({
       type: "done",
-      message: { id: "m-1", sessionId: "sess-1", status: "completed" },
+      message: { id: MessageId.make("m-1"), sessionId: SessionId.make("sess-1"), status: "completed" },
     });
     await flushMicrotasks();
 
@@ -531,7 +536,7 @@ describe("RemoteController", () => {
     expect(controller.getState().session?.status).toBe("running");
 
     resolveRefresh({
-      id: "sess-1",
+      id: SessionId.make("sess-1"),
       status: "idle",
       usage: { models: { "openai/gpt-6-luna": { inputTokens: 50, outputTokens: 20, cost: 0.005 } }, tools: {} },
     });
@@ -582,7 +587,7 @@ describe("RemoteController", () => {
         ...makeSession("sess-1", "running"),
         title: "Investigate prod",
         activeTools: [{ toolCallId: "tc-9", name: "bash", status: "running", progress: "running tests" }],
-        queuedMessages: [{ id: "m-2", mode: "queue" }],
+        queuedMessages: [{ id: MessageId.make("m-2"), mode: "queue" }],
         compacting: true,
       },
     });
@@ -776,7 +781,7 @@ describe("rendering and native builtin interception", () => {
           },
         },
         activeTools: [],
-        queuedMessages: [{ id: "m-2", mode: "queue" }],
+        queuedMessages: [{ id: MessageId.make("m-2"), mode: "queue" }],
         queuedPreviews: {},
         sending: false,
         canceling: false,

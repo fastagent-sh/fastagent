@@ -18,10 +18,12 @@ import {
   StartAuthLoginRequest,
   CreateSessionOptions,
   EntriesOptions,
+  IdempotencyKey,
   InvokeRequest,
   LIMITS,
   ListOptions,
   type Message,
+  type MessageId,
   MessageKey,
   type MessageStreamEvent,
   type Page,
@@ -29,6 +31,7 @@ import {
   SendRequest,
   type SessionEvent,
   SessionChanges,
+  SessionId,
   Wait,
   type WaitOptions,
   agentError,
@@ -119,9 +122,9 @@ function readFailure(baseUrl: string, error: unknown): AgentError {
 
 /** How far a send got: its key once it is made, and its message's id once that is known. */
 interface SendStage {
-  sessionId?: string;
-  key: string;
-  messageId?: string;
+  sessionId?: SessionId;
+  key: IdempotencyKey;
+  messageId?: MessageId;
 }
 
 /**
@@ -281,7 +284,7 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
   /** A send carries a key, the Caller's or one of its own, so that one whose answer was lost can be found. */
   const keyed = (sendRequest: SendRequest, what: string) => {
     const { sessionId, idempotencyKey, ...body } = checked(SendRequest, sendRequest, what);
-    return { stage: { sessionId, key: idempotencyKey ?? crypto.randomUUID() }, body };
+    return { stage: { sessionId, key: idempotencyKey ?? IdempotencyKey.make(crypto.randomUUID()) }, body };
   };
 
   const keyedInvoke = (invokeRequest: InvokeRequest, what: string) => {
@@ -295,7 +298,7 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
     return {
       stage: {
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),
-        key: idempotencyKey ?? crypto.randomUUID(),
+        key: idempotencyKey ?? IdempotencyKey.make(crypto.randomUUID()),
       },
       body,
     };
@@ -309,42 +312,45 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
         request(
           client.createSession({ payload: checked(CreateSessionOptions, createOptions ?? {}, "sessions.create") }),
         ),
-      get: (sessionId) => request(client.getSession({ params: { sessionId } })),
+      get: (sessionId) => request(client.getSession({ params: { sessionId: SessionId.make(sessionId) } })),
       list: async (listOptions) =>
         (await request(
           client.listSessions({ query: checked(ListOptions, listOptions ?? {}, "sessions.list") }),
         )) as Page<Awaited<ReturnType<Agent["sessions"]["get"]>>>,
       update: async (sessionId, changes) =>
         request(
-          client.updateSession({ params: { sessionId }, payload: checked(SessionChanges, changes, "sessions.update") }),
+          client.updateSession({
+            params: { sessionId: SessionId.make(sessionId) },
+            payload: checked(SessionChanges, changes, "sessions.update"),
+          }),
         ),
       delete: async (sessionId) => {
-        await request(client.deleteSession({ params: { sessionId } }));
+        await request(client.deleteSession({ params: { sessionId: SessionId.make(sessionId) } }));
       },
       entries: async (sessionId, entriesOptions) =>
         (await request(
           client.entries({
-            params: { sessionId },
+            params: { sessionId: SessionId.make(sessionId) },
             query: checked(EntriesOptions, entriesOptions ?? {}, "sessions.entries"),
           }),
         )) as Awaited<ReturnType<Agent["sessions"]["entries"]>>,
       events: (sessionId, eventsOptions) =>
         watched<SessionEvent>(
           client.events({
-            params: { sessionId },
+            params: { sessionId: SessionId.make(sessionId) },
             query: { after: eventsOptions?.after },
             headers: { "last-event-id": undefined },
           }),
           { known: SESSION_EVENT_TYPES, isLast: () => false, refused: read, signal: eventsOptions?.signal },
         ),
       cancel: async (sessionId) => {
-        const { stopped } = await request(client.cancel({ params: { sessionId } }));
+        const { stopped } = await request(client.cancel({ params: { sessionId: SessionId.make(sessionId) } }));
         return { stopped: [...stopped] };
       },
       compact: async (sessionId, compactOptions) => {
         await request(
           client.compact({
-            params: { sessionId },
+            params: { sessionId: SessionId.make(sessionId) },
             payload: checked(CompactOptions, compactOptions ?? {}, "sessions.compact"),
           }),
         );
@@ -352,7 +358,10 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
       attachment: (sessionId, ref) =>
         request(
           Effect.gen(function* () {
-            const response = yield* client.attachment({ params: { sessionId, ref }, responseMode: "response-only" });
+            const response = yield* client.attachment({
+              params: { sessionId: SessionId.make(sessionId), ref },
+              responseMode: "response-only",
+            });
             if (response.status !== 200) {
               // A refusal fails here, decoded; a body this endpoint never answers a refusal with is said as such.
               yield* decodeAttachmentRefusal(response);

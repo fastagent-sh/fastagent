@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
 import { type Harness, type ToolExecutionApi, defineDoc } from "@earendil-works/pi-durable";
+import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
 import { isSession } from "./sessions.ts";
 
 const StorageDoc = defineDoc<{ incarnation: string }>({
@@ -19,6 +20,8 @@ const StorageDoc = defineDoc<{ incarnation: string }>({
 
 export interface Ids {
   encode(id: number): string;
+  encodeSession(id: number): SessionId;
+  encodeMessage(id: number): MessageId;
   /** The pi-durable id `text` names in this storage, or undefined for any other text. */
   decode(text: string): number | undefined;
   /** A position among this storage's ids as a cursor, which no id reads as. */
@@ -42,12 +45,12 @@ export async function storageIds(harness: Harness, context: Context): Promise<Id
 export async function sessionIdOf(
   api: Pick<ToolExecutionApi, "conversationId" | "snapshot" | "commit">,
   context: Context,
-): Promise<string | undefined> {
+): Promise<SessionId | undefined> {
   const record = await api.commit((tx) => tx.conversation(api.conversationId), context);
   if (record === undefined || !isSession(record)) return undefined;
   const incarnation = (await api.snapshot(StorageDoc, context))?.incarnation;
   if (!incarnation) throw new Error("this storage has no incarnation: the Agent did not open it");
-  return idsOf(incarnation).encode(api.conversationId);
+  return idsOf(incarnation).encodeSession(api.conversationId);
 }
 
 function idsOf(incarnation: string): Ids {
@@ -55,6 +58,8 @@ function idsOf(incarnation: string): Ids {
   const cursorPrefix = `${incarnation}~`;
   return {
     encode: (id) => `${prefix}${id}`,
+    encodeSession: (id) => SessionId.make(`${prefix}${id}`),
+    encodeMessage: (id) => MessageId.make(`${prefix}${id}`),
     decode: (text) => numberAfter(prefix, text),
     encodeCursor: (position) => `${cursorPrefix}${position}`,
     decodeCursor: (text) => numberAfter(cursorPrefix, text),

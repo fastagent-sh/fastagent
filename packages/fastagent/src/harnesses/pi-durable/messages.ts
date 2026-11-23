@@ -17,10 +17,12 @@ import {
   type ActiveTool,
   type AgentErrorData,
   type ContextUsage,
+  IdempotencyKey,
   type Message,
   type Metadata,
   type QueuedMessage,
   type Session,
+  type SessionId,
   type Tokens,
   type Usage,
   agentError,
@@ -78,8 +80,8 @@ export function requestIdFor(idempotencyKey: string | undefined): string {
   return idempotencyKey === undefined ? `id:${randomUUID()}` : `${KEY}${idempotencyKey}`;
 }
 
-function idempotencyKeyOf(requestId: string | undefined): string | undefined {
-  return requestId?.startsWith(KEY) ? requestId.slice(KEY.length) : undefined;
+function idempotencyKeyOf(requestId: string | undefined): IdempotencyKey | undefined {
+  return requestId?.startsWith(KEY) ? IdempotencyKey.make(requestId.slice(KEY.length)) : undefined;
 }
 
 export function isInput(record: SubmissionRecord | undefined): record is InputRecord {
@@ -116,8 +118,8 @@ export function queuedInputs(inbox: InboxView | undefined): number[] {
 export function messageOf(record: InputRecord, ids: Ids, metadata?: Metadata, answer?: EntryRecord): Message {
   const key = idempotencyKeyOf(record.requestId);
   const identity = {
-    id: ids.encode(record.id),
-    sessionId: ids.encode(record.conversationId),
+    id: ids.encodeMessage(record.id),
+    sessionId: ids.encodeSession(record.conversationId),
     ...(key === undefined ? {} : { idempotencyKey: key }),
     ...(metadata === undefined ? {} : { metadata }),
   };
@@ -210,15 +212,15 @@ function queuedMessagesOf(inbox: InboxView | undefined, ids: Ids | undefined): Q
   const steers: QueuedMessage[] = [];
   const queued: QueuedMessage[] = [];
   for (const item of inbox.items) {
-    if (item.mode === "steer") steers.push({ id: ids.encode(item.id), mode: "steer" });
-    else if (item.mode === "followUp") queued.push({ id: ids.encode(item.id), mode: "queue" });
+    if (item.mode === "steer") steers.push({ id: ids.encodeMessage(item.id), mode: "steer" });
+    else if (item.mode === "followUp") queued.push({ id: ids.encodeMessage(item.id), mode: "queue" });
   }
   return [...steers, ...queued];
 }
 
 /** The session as it is now, from its documents as one commit or one event snapshot holds them. */
 export function sessionOf(
-  id: string,
+  id: SessionId,
   live: LiveView | undefined,
   usage: UsageView | undefined,
   agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools"> | undefined,

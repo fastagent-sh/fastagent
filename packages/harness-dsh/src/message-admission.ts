@@ -7,6 +7,7 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import {
   type ContentPart,
   type Message,
+  MessageId,
   SendRequest,
   agentError,
   decodeRequest,
@@ -208,7 +209,7 @@ export async function admitMessage(
     await persistMessage(state, stored);
 
     if (busy) {
-      live.queuedMessages.push({ id: messageId, mode: whenBusy === "steer" ? "steer" : "queue" });
+      live.queuedMessages.push({ id: MessageId.make(messageId), mode: whenBusy === "steer" ? "steer" : "queue" });
     } else {
       live.activeTurnMessageIds.push(messageId);
     }

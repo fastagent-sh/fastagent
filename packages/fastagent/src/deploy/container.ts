@@ -4,8 +4,8 @@ import { INSTANCE_NAME_ENV } from "../instance-name.ts";
 import { NODE_FLOOR } from "../runtime.ts";
 
 export interface Artifact {
-  path: string;
-  content: string;
+  readonly path: string;
+  readonly content: string;
 }
 
 /** Where a generated image keeps its storage (`FASTAGENT_ROOT`): the container mounts its volume here. */
@@ -54,19 +54,19 @@ export const DOCKER_TARGET: ContainerTarget = {
 };
 
 export interface ContainerInput {
-  target: ContainerTarget;
+  readonly target: ContainerTarget;
   /** The agent the image runs, set as `FASTAGENT_NAME` on a volume: the agent its storage belongs to. */
-  name: string;
+  readonly name: string;
   /** Whether `package-lock.json` exists: the image installs from it with `npm ci`. */
-  hasLockfile: boolean;
+  readonly hasLockfile: boolean;
   /** Debian packages the image installs (`git` for a shipped `.git`). */
-  apt?: string[];
+  readonly apt?: readonly string[];
   /** Agent-dir-relative machinery paths the NAME-based excludes below would miss. */
-  machineryPaths?: string[];
+  readonly machineryPaths?: readonly string[];
 }
 
 /** The apt layer (cached right after FROM). */
-function aptLayer(packages?: string[]): string {
+function aptLayer(packages?: readonly string[]): string {
   return packages && packages.length > 0
     ? `RUN apt-get update \\
  && apt-get install -y --no-install-recommends ${packages.join(" ")} \\
@@ -151,7 +151,7 @@ const DOCKERIGNORE_BASE = `**/node_modules
 `;
 
 /** The Dockerfile and its ignore file. */
-export function containerArtifacts(input: ContainerInput): Artifact[] {
+export function containerArtifacts(input: Readonly<ContainerInput>): readonly Artifact[] {
   return [
     { path: "Dockerfile", content: dockerfile(input) },
     { path: ".dockerignore", content: dockerignore(input) },

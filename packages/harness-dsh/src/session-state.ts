@@ -12,6 +12,7 @@ import {
   type QueuedMessage,
   type Session,
   type SessionEvent,
+  SessionId,
   agentError,
 } from "@fastagent-sh/client/agent-api";
 import { deriveContextUsage } from "./projection.ts";
@@ -281,7 +282,7 @@ export function buildSessionSnapshotFromEvents(
   const activeTools = live.activeTools.size > 0 ? [...live.activeTools.values()] : undefined;
   const queuedMessages = live.queuedMessages.length > 0 ? [...live.queuedMessages] : undefined;
   return {
-    id: live.meta.id,
+    id: SessionId.make(live.meta.id),
     status: isRunning ? "running" : "idle",
     ...(live.meta.title !== undefined ? { title: live.meta.title } : {}),
     createdAt: live.meta.createdAt,
