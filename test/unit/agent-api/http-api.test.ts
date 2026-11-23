@@ -2,9 +2,23 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, AgentErrorData, ErrorCode } from "../../../packages/client/src/agent-api.ts";
 import {
+  type Agent,
+  type AgentErrorData,
+  ConversationId,
+  type DecodedMessageKey,
+  type ErrorCode,
+  IdempotencyKey,
+  MessageId,
+  MessageKey,
+  SessionId,
+  decodeRequest,
+} from "../../../packages/client/src/agent-api.ts";
+import {
+  type ConversationKey,
+  conversationStorageKey,
   createInvoker,
+  idempotencyStorageKey,
   memoryConversationStore,
   postgresConversationStore,
   sqliteConversationStore,
@@ -194,20 +208,24 @@ describe("the Agent API over HTTP", () => {
     });
 
     it("expires and bounds ephemeral idempotency bindings without evicting named conversations, honors AbortSignal, and maps transient PG failures to unavailable", async () => {
+      const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
+      const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
+      const sid = (id: string) => SessionId.make(id);
+
       let clock = 1_000;
       const mem = memoryConversationStore({ ephemeralTtlMs: 100, maxEphemeral: 2, now: () => clock });
-      await mem.set("c:ops", "s-ops", { ephemeral: false });
-      await mem.set("i:1", "s-1", { ephemeral: true });
-      await mem.set("i:2", "s-2", { ephemeral: true });
-      await mem.set("i:3", "s-3", { ephemeral: true });
-      expect(await mem.get("i:1")).toBeUndefined();
-      expect(await mem.get("i:2")).toBe("s-2");
-      expect(await mem.get("i:3")).toBe("s-3");
-      expect(await mem.get("c:ops")).toBe("s-ops");
+      await mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+      await mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
+      await mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
+      await mem.set(idemKey("3"), sid("s-3"), { ephemeral: true });
+      expect(await mem.get(idemKey("1"))).toBeUndefined();
+      expect(await mem.get(idemKey("2"))).toBe("s-2");
+      expect(await mem.get(idemKey("3"))).toBe("s-3");
+      expect(await mem.get(convKey("ops"))).toBe("s-ops");
       clock += 200;
-      expect(await mem.get("i:2")).toBeUndefined();
-      expect(await mem.get("i:3")).toBeUndefined();
-      expect(await mem.get("c:ops")).toBe("s-ops");
+      expect(await mem.get(idemKey("2"))).toBeUndefined();
+      expect(await mem.get(idemKey("3"))).toBeUndefined();
+      expect(await mem.get(convKey("ops"))).toBe("s-ops");
 
       const dir = mkdtempSync(join(tmpdir(), "fa-conv-ttl-"));
       try {
@@ -215,13 +233,13 @@ describe("the Agent API over HTTP", () => {
           ephemeralTtlMs: 100,
           now: () => clock,
         });
-        await sql.set("c:ops", "s-ops", { ephemeral: false });
-        await sql.set("i:old", "s-old", { ephemeral: true });
+        await sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+        await sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
         clock += 200;
-        await sql.set("i:new", "s-new", { ephemeral: true });
-        expect(await sql.get("i:old")).toBeUndefined();
-        expect(await sql.get("i:new")).toBe("s-new");
-        expect(await sql.get("c:ops")).toBe("s-ops");
+        await sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
+        expect(await sql.get(idemKey("old"))).toBeUndefined();
+        expect(await sql.get(idemKey("new"))).toBe("s-new");
+        expect(await sql.get(convKey("ops"))).toBe("s-ops");
         await sql.close();
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -241,8 +259,54 @@ describe("the Agent API over HTTP", () => {
       expect((await agent.sessions.list()).data.length).toBe(beforeCount);
 
       const brokenPg = postgresConversationStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
-      await expect(brokenPg.get("c:ops")).rejects.toMatchObject({ code: "unavailable", retryable: true });
+      await expect(brokenPg.get(convKey("ops"))).rejects.toMatchObject({ code: "unavailable", retryable: true });
       await brokenPg.close();
+    });
+
+    it("keeps SessionId, ConversationId, ConversationKey, MessageId, and IdempotencyKey nominally distinct", () => {
+      const sessionId = SessionId.make("sess_1");
+      const conversationId = ConversationId.make("slack:C123");
+      const conversationKey = conversationStorageKey("", conversationId);
+      const messageId = MessageId.make("msg_1");
+      const idempotencyKey = IdempotencyKey.make("idem_1");
+
+      const decodedById: DecodedMessageKey = decodeRequest(MessageKey, { sessionId, messageId }, "test");
+      const decodedByKey: DecodedMessageKey = decodeRequest(MessageKey, { sessionId, idempotencyKey }, "test");
+      expect(decodedById).toEqual({ sessionId: "sess_1", messageId: "msg_1" });
+      expect(decodedByKey).toEqual({ sessionId: "sess_1", idempotencyKey: "idem_1" });
+
+      const acceptSession = (id: SessionId) => id;
+      const acceptConversation = (id: ConversationId) => id;
+      const acceptStoreKey = (key: ConversationKey) => key;
+      const acceptMessage = (id: MessageId) => id;
+
+      expect(acceptSession(sessionId)).toBe("sess_1");
+      expect(acceptConversation(conversationId)).toBe("slack:C123");
+      expect(acceptStoreKey(conversationKey)).toBe("c:slack:C123");
+      expect(acceptMessage(messageId)).toBe("msg_1");
+
+      // Compile-time nominal separation checks: mixing domain IDs must fail typecheck.
+      // @ts-expect-error ConversationId cannot be passed where SessionId is expected
+      void (() => acceptSession(conversationId));
+      // @ts-expect-error SessionId cannot be passed where ConversationId is expected
+      void (() => acceptConversation(sessionId));
+      // @ts-expect-error SessionId cannot be used as a ConversationStore key
+      void (() => acceptStoreKey(sessionId));
+      // @ts-expect-error SessionId cannot be passed where MessageId is expected
+      void (() => acceptMessage(sessionId));
+      // @ts-expect-error MessageId cannot be passed where SessionId is expected
+      void (() => acceptSession(messageId));
+    });
+
+    it("refuses non-string sessionId with AgentError invalid_request and defers stream refusal to first read", async () => {
+      const client = connectAgent(server.url, { apiKey: KEY });
+      await expect(client.sessions.get(null as unknown as string)).rejects.toMatchObject({
+        code: "invalid_request",
+      });
+      const stream = client.sessions.events(123 as unknown as string);
+      await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
+        code: "invalid_request",
+      });
     });
   });
 });

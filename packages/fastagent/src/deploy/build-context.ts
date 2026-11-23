@@ -17,7 +17,7 @@ import {
   resolveStateRoot,
 } from "../paths.ts";
 import { isGeneratedDockerignore } from "./container.ts";
-import type { DeployReport } from "./preflight.ts";
+import type { DeployMessage, DeployReport } from "./preflight.ts";
 
 /**
  * "Would docker's packer drop this path?" — built from a `.dockerignore`'s text via the `ignore` matcher (the same
@@ -55,15 +55,15 @@ async function entriesIfExists(path: string): Promise<Dirent[]> {
 /** Agent-dir-relative paths the build context may hold and the image must not. */
 export interface BuildContextPaths {
   /** The resolved machinery dirs the generated ignore excludes by path (ContainerInput.machineryPaths). */
-  machineryPaths: string[];
+  readonly machineryPaths: readonly string[];
   /** Credential files that exist right now — a kept ignore file that lets one through bakes it. */
-  leakCandidates: string[];
+  readonly leakCandidates: readonly string[];
   /** A state root of the agent's own choosing inside the context, when it exists. */
-  stateShips?: string;
+  readonly stateShips?: string;
   /** `.fastagent/`, when it exists: the local instances' state and clones, and a build's staging. */
-  instancesShip?: string;
+  readonly instancesShip?: string;
   /** The agent's node_modules, when it exists. */
-  depDirs: string[];
+  readonly depDirs: readonly string[];
 }
 
 export async function buildContextPaths(agentDir: string, authPath: string): Promise<BuildContextPaths> {
@@ -75,18 +75,17 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   const secretsRel = inContext(resolveSecretsDir(agentDir));
   const authRel = inContext(authPath);
   const authElsewhere = authRel !== undefined && (secretsRel === undefined || !authRel.startsWith(`${secretsRel}/`));
-  const secretsDirs = [SECRETS_DIRNAME];
-  if (secretsRel && secretsRel !== SECRETS_DIRNAME && !secretsRel.startsWith(`${SECRETS_DIRNAME}/`)) {
-    secretsDirs.push(secretsRel);
-  }
+  const secretsDirs = [
+    SECRETS_DIRNAME,
+    ...(secretsRel && secretsRel !== SECRETS_DIRNAME && !secretsRel.startsWith(`${SECRETS_DIRNAME}/`)
+      ? [secretsRel]
+      : []),
+  ];
   const secretPaths = [...secretsDirs, ...(authElsewhere ? [authRel] : [])];
   // ONE rule for every checked path: a file that is not there cannot be baked, so gating on it would be a refusal
   // about a spelling rather than about what would ship (an agent that has never run `login` has no auth.json).
-  const present = async (rels: string[]): Promise<string[]> => {
-    const found: string[] = [];
-    for (const rel of rels) if (await exists(join(agentDir, rel))) found.push(rel);
-    return found;
-  };
+  const present = async (rels: readonly string[]): Promise<string[]> =>
+    (await Promise.all(rels.map(async (rel) => ((await exists(join(agentDir, rel))) ? [rel] : [])))).flat();
   // State gets the same treatment (an in-tree FASTAGENT_ROOT is not covered by the name-based rules), at warn level.
   const stateRel = inContext(resolveStateRoot(agentDir));
   const inInstances =
@@ -105,13 +104,16 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   // carry no values; the generated ignore re-includes them by name).
   const secretDirFiles = async (dirRel: string): Promise<string[]> => {
     const entries = await entriesIfExists(join(agentDir, dirRel));
-    const files: string[] = [];
-    for (const entry of entries) {
-      if (entry.name === ".gitignore" || entry.name === ".env.example") continue;
-      if (entry.isDirectory()) files.push(...(await secretDirFiles(`${dirRel}/${entry.name}`)));
-      else files.push(`${dirRel}/${entry.name}`);
-    }
-    return files;
+    const nested = await Promise.all(
+      entries
+        .filter((entry) => entry.name !== ".gitignore" && entry.name !== ".env.example")
+        .map((entry) =>
+          entry.isDirectory()
+            ? secretDirFiles(`${dirRel}/${entry.name}`)
+            : Promise.resolve([`${dirRel}/${entry.name}`]),
+        ),
+    );
+    return nested.flat();
   };
   const leakCandidates = [
     ...(await Promise.all(secretsDirs.map(secretDirFiles))).flat(),
@@ -133,11 +135,8 @@ const IGNORE_FILES = [".dockerignore", "Dockerfile.dockerignore"];
  * context reads (AgentCore's CDK packs a context for CodeBuild by it), while `Dockerfile.dockerignore` only keeps a
  * path out of the image Docker builds, not out of the upload.
  */
-export async function shippedWithoutIgnoreFile(
-  agentDir: string,
-  paths: BuildContextPaths,
-): Promise<string | undefined> {
-  if (await exists(join(agentDir, ".dockerignore"))) return undefined;
+/** Pure leak message for a build context missing `.dockerignore`. */
+function formatShippedWithoutIgnore(paths: Readonly<BuildContextPaths>): string | undefined {
   const shipped = [
     ...paths.leakCandidates,
     ...(paths.stateShips === undefined ? [] : [paths.stateShips]),
@@ -150,63 +149,102 @@ export async function shippedWithoutIgnoreFile(
   );
 }
 
+export async function shippedWithoutIgnoreFile(
+  agentDir: string,
+  paths: Readonly<BuildContextPaths>,
+): Promise<string | undefined> {
+  if (await exists(join(agentDir, ".dockerignore"))) return undefined;
+  return formatShippedWithoutIgnore(paths);
+}
+
+/** Pure evaluation of one kept ignore file against the build context's sensitive paths. */
+function evaluateKeptIgnore(rel: string, kept: string, paths: Readonly<BuildContextPaths>): readonly DeployMessage[] {
+  const { leakCandidates, stateShips, instancesShip, depDirs } = paths;
+  const keptIsOurs = isGeneratedDockerignore(kept);
+  const remedy = (lines: readonly string[]): string =>
+    keptIsOurs
+      ? `Re-run with --force to regenerate it.`
+      : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before building (the same lines the generated ${rel} writes).`;
+  const excluded = dockerignoreMatcher(kept);
+  const leaks = leakCandidates.filter((p) => !excluded(p));
+  const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));
+  return [
+    // The marker of an agent: without it the deployed box has no agent to open.
+    ...(excluded(AGENT_CONFIG_FILE)
+      ? [
+          {
+            level: "warn" as const,
+            text:
+              `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
+              `config (the container has no agent to open and crash-loops). Remove that rule before building.`,
+          },
+        ]
+      : []),
+    // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
+    ...(leaks.length > 0
+      ? [
+          {
+            level: "leak" as const,
+            text:
+              `your ${rel} (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
+              `context would BAKE SECRETS INTO THE IMAGE. ${remedy(leaks.map((p) => `/${p}`))}`,
+          },
+        ]
+      : []),
+    ...(stateShips && !excluded(`${stateShips}/sessions`)
+      ? [
+          {
+            level: "leak" as const,
+            text: `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${stateShips}`])}`,
+          },
+        ]
+      : []),
+    ...(instancesShip && !excluded(`${instancesShip}/dev/.state/x`)
+      ? [
+          {
+            level: "leak" as const,
+            text: `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${instancesShip}`])}`,
+          },
+        ]
+      : []),
+    ...(unexcludedDeps.length > 0
+      ? [
+          {
+            level: "warn" as const,
+            text:
+              `your ${rel} does not exclude ${unexcludedDeps.map((p) => `\`${p}\``).join(" or ")} — the ` +
+              `build machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
+              `freshly-installed ones. ${remedy(unexcludedDeps.map((p) => `/${p}`))}`,
+          },
+        ]
+      : []),
+    ...(excluded(".git/HEAD")
+      ? [
+          {
+            level: "note" as const,
+            text:
+              `your ${rel} excludes .git — the baked definition ships WITHOUT its history (remove the .git line ` +
+              `to ship it).`,
+          },
+        ]
+      : []),
+  ];
+}
+
 /** Interrogate the ignore files Docker reads, when the author kept them. */
 export async function checkKeptIgnoreFiles(
-  ctx: { agentDir: string; force: boolean; paths: BuildContextPaths },
+  ctx: { readonly agentDir: string; readonly force: boolean; readonly paths: Readonly<BuildContextPaths> },
   report: DeployReport,
 ): Promise<void> {
-  const { agentDir, force } = ctx;
-  const { leakCandidates, stateShips, instancesShip, depDirs } = ctx.paths;
+  const { agentDir, force, paths } = ctx;
   for (const rel of IGNORE_FILES) {
     const kept = await readTextIfExists(join(agentDir, rel));
     if (kept === undefined) continue;
     // One WE generated is regenerated by this very run under --force, so checking the stale content on disk would
     // gate a deploy on a file about to be replaced.
-    const keptIsOurs = isGeneratedDockerignore(kept);
-    if (force && keptIsOurs) continue;
-    const remedy = (lines: string[]): string =>
-      keptIsOurs
-        ? `Re-run with --force to regenerate it.`
-        : `Add ${lines.map((p) => `\`${p}\``).join(" and ")} before building (the same lines the generated ${rel} writes).`;
-    const excluded = dockerignoreMatcher(kept);
-    // The marker of an agent: without it the deployed box has no agent to open.
-    if (excluded(AGENT_CONFIG_FILE)) {
-      const text =
-        `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
-        `config (the container has no agent to open and crash-loops). Remove that rule before building.`;
-      report.warn(text);
-    }
-    // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
-    const leaks = leakCandidates.filter((p) => !excluded(p));
-    if (leaks.length > 0) {
-      const text =
-        `your ${rel} (kept) does not exclude ${leaks.map((p) => `\`${p}\``).join(", ")} — the build ` +
-        `context would BAKE SECRETS INTO THE IMAGE. ${remedy(leaks.map((p) => `/${p}`))}`;
-      report.leak(text);
-    }
-    if (stateShips && !excluded(`${stateShips}/sessions`)) {
-      report.leak(
-        `your ${rel} (kept) does not exclude \`${stateShips}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${stateShips}`])}`,
-      );
-    }
-    if (instancesShip && !excluded(`${instancesShip}/dev/.state/x`)) {
-      report.leak(
-        `your ${rel} (kept) does not exclude \`${instancesShip}\` — the build machine's sessions and state would ship in the image. ${remedy([`/${instancesShip}`])}`,
-      );
-    }
-    const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));
-    if (unexcludedDeps.length > 0) {
-      report.warn(
-        `your ${rel} does not exclude ${unexcludedDeps.map((p) => `\`${p}\``).join(" or ")} — the ` +
-          `build machine's deps (native binaries for YOUR OS) would be uploaded and clobber the image's ` +
-          `freshly-installed ones. ${remedy(unexcludedDeps.map((p) => `/${p}`))}`,
-      );
-    }
-    if (excluded(".git/HEAD")) {
-      report.note(
-        `your ${rel} excludes .git — the baked definition ships WITHOUT its history (remove the .git line ` +
-          `to ship it).`,
-      );
+    if (force && isGeneratedDockerignore(kept)) continue;
+    for (const message of evaluateKeptIgnore(rel, kept, paths)) {
+      report[message.level](message.text);
     }
   }
 }

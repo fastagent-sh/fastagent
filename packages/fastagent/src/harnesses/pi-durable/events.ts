@@ -164,7 +164,7 @@ export function sessionEvents(
       const present = Stream.succeed<SessionEvent>({
         type: "state",
         session: sessionOf(
-          ids.encode(conversation.id),
+          ids.encodeSession(conversation.id),
           docOf(snapshot, LiveDoc),
           docOf(snapshot, UsageDoc),
           initialAgent,
@@ -291,7 +291,7 @@ function liveTranslator(
     return {
       type: "state",
       session: sessionOf(
-        ids.encode(conversation.id),
+        ids.encodeSession(conversation.id),
         docOf(currentView, LiveDoc),
         docOf(currentView, UsageDoc),
         agentDoc,

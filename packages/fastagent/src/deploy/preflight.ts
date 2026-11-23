@@ -17,9 +17,9 @@ import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } fro
 import { type ContainerInput, type ContainerTarget, DOCKER_TARGET, isGeneratedDockerfile } from "./container.ts";
 
 /** A finding reported by preflight: `leak` fails `deploy check`; `warn` and `note` are advisory. */
-interface DeployMessage {
-  level: "leak" | "warn" | "note";
-  text: string;
+export interface DeployMessage {
+  readonly level: "leak" | "warn" | "note";
+  readonly text: string;
 }
 
 /** Where a check says what it found. */
@@ -84,12 +84,11 @@ export async function checkDeploy(
   }
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
   const missingIgnore = await shippedWithoutIgnoreFile(agentDir, paths);
-  const leaks = [
-    ...(missingIgnore === undefined ? [] : [missingIgnore]),
-    ...checked.messages.filter((m) => m.level === "leak").map((m) => m.text),
-  ];
-  const warnings = checked.messages.filter((m) => m.level === "warn").map((m) => m.text);
-  const notes = checked.messages.filter((m) => m.level === "note").map((m) => m.text);
+  const byLevel = Map.groupBy(checked.messages, (message) => message.level);
+  const textsOf = (level: DeployMessage["level"]): string[] => (byLevel.get(level) ?? []).map((m) => m.text);
+  const leaks = [...(missingIgnore === undefined ? [] : [missingIgnore]), ...textsOf("leak")];
+  const warnings = textsOf("warn");
+  const notes = textsOf("note");
   return { ok: leaks.length === 0, leaks, warnings, notes };
 }
 
@@ -150,7 +149,9 @@ async function gatherFacts(
   // A shipped .git needs git in the image.
   const needsGit = await exists(join(agentDir, ".git"));
   const name = instanceName(definition.name);
-  if (kept !== undefined) checkKeptDockerfile(kept, name, target, report);
+  if (kept !== undefined) {
+    for (const message of evaluateKeptDockerfile(kept, name, target)) report[message.level](message.text);
+  }
   const container: ContainerInput = {
     target,
     name,
@@ -192,35 +193,50 @@ async function keptDockerfile(agentDir: string): Promise<string | undefined> {
  * What a KEPT hand-written Dockerfile drops: the build `start` opens and, on a volume, the marker that makes the box a
  * deployed one and the name its storage belongs to.
  */
-function checkKeptDockerfile(
+function evaluateKeptDockerfile(
   dockerfileText: string,
   name: string,
   target: ContainerTarget,
-  report: DeployReport,
-): void {
+): readonly DeployMessage[] {
   // Without the marker `start` takes no storage (no mount check, no lease, no owner), so a box that lost it runs as a
   // local instance on a disk that is gone at the next restart. Anywhere in an `ENV` instruction, not just first.
-  if (
+  const missingDeployed =
+    target.storage === "volume" && !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText);
+  const missingName =
+    !missingDeployed &&
     target.storage === "volume" &&
-    !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${DEPLOYED_ENV}[=\\s]`, "m").test(dockerfileText)
-  ) {
-    report.warn(
-      `your Dockerfile does not set ${DEPLOYED_ENV}, and without it the container starts as a local instance: no ` +
-        `mount check, no lease, no storage owner. Add \`ENV ${DEPLOYED_ENV}=1\` (see a generated Dockerfile).`,
-    );
-  } else if (
-    target.storage === "volume" &&
-    !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText)
-  ) {
-    report.warn(
-      `your Dockerfile does not set ${INSTANCE_NAME_ENV}, and a deployed container refuses to start without it. Add ` +
-        `\`ENV ${INSTANCE_NAME_ENV}=${name}\`, or set it on the container.`,
-    );
-  }
-  if (!/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText)) {
-    report.warn(
-      `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which a build context that follows ` +
-        `.gitignore leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
-    );
-  }
+    !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText);
+  const missingBuild = !/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText);
+  return [
+    ...(missingDeployed
+      ? [
+          {
+            level: "warn" as const,
+            text:
+              `your Dockerfile does not set ${DEPLOYED_ENV}, and without it the container starts as a local instance: no ` +
+              `mount check, no lease, no storage owner. Add \`ENV ${DEPLOYED_ENV}=1\` (see a generated Dockerfile).`,
+          },
+        ]
+      : []),
+    ...(missingName
+      ? [
+          {
+            level: "warn" as const,
+            text:
+              `your Dockerfile does not set ${INSTANCE_NAME_ENV}, and a deployed container refuses to start without it. Add ` +
+              `\`ENV ${INSTANCE_NAME_ENV}=${name}\`, or set it on the container.`,
+          },
+        ]
+      : []),
+    ...(missingBuild
+      ? [
+          {
+            level: "warn" as const,
+            text:
+              `your Dockerfile does not run \`fastagent build\`: \`start\` opens dist/, which a build context that follows ` +
+              `.gitignore leaves out. Add \`RUN ./node_modules/.bin/fastagent build\` after copying the agent.`,
+          },
+        ]
+      : []),
+  ];
 }

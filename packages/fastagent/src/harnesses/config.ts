@@ -28,6 +28,7 @@ const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
 const KEYS = ["model", "thinkingLevel", "harness", "sandbox", "codingTools", "starters", "providers", "mcpServers"];
+const KEY_SET = new Set<string>(KEYS);
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
 const HARNESS_SET = new Set<string>(HARNESS_NAMES);
 const SANDBOX_SET = new Set<string>(SANDBOX_MODES);
@@ -80,17 +81,15 @@ function checkCodingTools(value: unknown, file: string): void {
   if (!Array.isArray(value)) {
     throw new Error(`${file}: "codingTools" must be a boolean or an array of (${CODING_TOOL_NAMES.join(", ")})`);
   }
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== "string" || !CODING_TOOL_SET.has(item)) {
-      throw new Error(
-        `${file}: unknown coding tool ${JSON.stringify(item)} (allowed: ${CODING_TOOL_NAMES.join(", ")})`,
-      );
-    }
-    if (seen.has(item)) {
-      throw new Error(`${file}: duplicate coding tool "${item}"`);
-    }
-    seen.add(item);
+  const invalidIndex = value.findIndex((item) => typeof item !== "string" || !CODING_TOOL_SET.has(item));
+  if (invalidIndex !== -1) {
+    throw new Error(
+      `${file}: unknown coding tool ${JSON.stringify(value[invalidIndex])} (allowed: ${CODING_TOOL_NAMES.join(", ")})`,
+    );
+  }
+  const duplicate = (value as readonly string[]).find((item, index, list) => list.indexOf(item) !== index);
+  if (duplicate !== undefined) {
+    throw new Error(`${file}: duplicate coding tool "${duplicate}"`);
   }
 }
 
@@ -112,15 +111,15 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (typeof config !== "object" || config === null || Array.isArray(config)) {
     throw new Error(`${file} must default-export defineAgent({ ... })`);
   }
-  for (const key of Object.keys(config)) {
-    if (KEYS.includes(key)) continue;
+  const unknownKey = Object.keys(config).find((key) => !KEY_SET.has(key));
+  if (unknownKey !== undefined) {
     const hint =
-      key === "defaults"
+      unknownKey === "defaults"
         ? ": its keys are top-level now (model, thinkingLevel, starters)"
-        : key === "extensions"
+        : unknownKey === "extensions"
           ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
           : "";
-    throw new Error(`${file}: unknown key "${key}"${hint} (keys: ${KEYS.join(", ")})`);
+    throw new Error(`${file}: unknown key "${unknownKey}"${hint} (keys: ${KEYS.join(", ")})`);
   }
   const { model, thinkingLevel, harness, sandbox, codingTools, starters, providers, mcpServers } =
     config as AgentConfig;

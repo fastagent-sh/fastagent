@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { runInvokeStream } from "../../../packages/fastagent/src/cli/invoke-stream.ts";
-import type { AgentErrorData, MessageStreamEvent } from "../../../packages/client/src/agent-api.ts";
+import {
+  type AgentErrorData,
+  MessageId,
+  type MessageStreamEvent,
+  SessionId,
+} from "../../../packages/client/src/agent-api.ts";
 
 type InvokeEvent = MessageStreamEvent;
 type Ending = { status: "completed" | "incomplete" | "canceled" } | { status: "failed"; error: AgentErrorData };
-const id = "m1";
-const message = { id, sessionId: "s", status: "queued" } as const;
+const id = MessageId.make("m1");
+const sessionId = SessionId.make("s");
+const message = { id, sessionId, status: "queued" } as const;
 const delta = (text: string): InvokeEvent => ({ type: "delta", channel: "text", text });
 const ended = (ending: Ending = { status: "completed" }): InvokeEvent => ({
   type: "done",
-  message: { id, sessionId: "s", ...ending },
+  message: { id, sessionId, ...ending },
 });
 
 /** A message recorded, then `events` as its session writes them. */

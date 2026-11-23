@@ -33,9 +33,11 @@ import {
   InvokeRequest,
   ListOptions,
   Message,
+  MessageId,
   MessageStreamEvent,
   SendRequest,
   Session,
+  SessionId,
   SessionChanges,
   SessionEvent,
   Usage,
@@ -155,7 +157,7 @@ function serverSent<S extends Schema.Codec<{ readonly type: string }, unknown>>(
 export const SessionEventFrame = serverSent(SessionEvent, SESSION_EVENT_TYPES);
 export const MessageStreamEventFrame = serverSent(MessageStreamEvent, MESSAGE_STREAM_EVENT_TYPES);
 
-const sessionPath = { sessionId: Schema.String };
+const sessionPath = { sessionId: SessionId };
 const Page = <S extends Schema.Top>(item: S) =>
   Schema.Struct({
     data: Schema.Array(item),
@@ -261,7 +263,7 @@ const AgentGroup = HttpApiGroup.make("agent")
       error: Refused,
     }),
     HttpApiEndpoint.get("getMessage", "/sessions/:sessionId/messages/:messageId", {
-      params: { ...sessionPath, messageId: Schema.String },
+      params: { ...sessionPath, messageId: MessageId },
       query: WaitQuery,
       success: Message,
       error: Refused,

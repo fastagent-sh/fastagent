@@ -11,10 +11,13 @@ import {
   type ContextUsage,
   EntriesOptions,
   type Entry,
+  IdempotencyKey,
   type Json,
   LIMITS,
   type Message,
+  MessageId,
   type Page,
+  SessionId,
   type Tokens,
   type Usage,
   agentError,
@@ -354,9 +357,9 @@ export function paginateEntries(entries: readonly Entry[], rawOptions: EntriesOp
 /** Convert a durable ledger message into the public Agent API `Message`. */
 export function toPublicMessage(stored: DshStoredMessage): Message {
   return {
-    id: stored.id,
-    sessionId: stored.sessionId,
-    ...(stored.idempotencyKey !== undefined ? { idempotencyKey: stored.idempotencyKey } : {}),
+    id: MessageId.make(stored.id),
+    sessionId: SessionId.make(stored.sessionId),
+    ...(stored.idempotencyKey !== undefined ? { idempotencyKey: IdempotencyKey.make(stored.idempotencyKey) } : {}),
     ...(stored.metadata !== undefined ? { metadata: stored.metadata } : {}),
     status: stored.status,
     ...(stored.entryId !== undefined ? { entryId: stored.entryId } : {}),

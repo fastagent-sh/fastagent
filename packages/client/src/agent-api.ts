@@ -7,6 +7,26 @@ import * as Schema from "effect/Schema";
 
 export type Json = Schema.Json;
 
+/** Agent-owned identifier for a durable session. */
+export const SessionId = Schema.String.pipe(Schema.brand("SessionId"));
+export type SessionId = typeof SessionId.Type;
+
+/** Agent-owned identifier for a recorded message. */
+export const MessageId = Schema.String.pipe(Schema.brand("MessageId"));
+export type MessageId = typeof MessageId.Type;
+
+/** Caller-owned name for a persistent conversation resolved by `POST /v1/invoke`. */
+export const ConversationId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)).pipe(
+  Schema.brand("ConversationId"),
+);
+export type ConversationId = typeof ConversationId.Type;
+
+/** Caller-owned key deduplicating retries within a session or ephemeral invoke. */
+export const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)).pipe(
+  Schema.brand("IdempotencyKey"),
+);
+export type IdempotencyKey = typeof IdempotencyKey.Type;
+
 export const ModelRef = Schema.Struct({ provider: Schema.String, modelId: Schema.String });
 export type ModelRef = typeof ModelRef.Type;
 
@@ -139,7 +159,7 @@ export type ActiveTool = typeof ActiveTool.Type;
 
 /** A message waiting in the session's inbox for the current turn or run to take it. */
 export const QueuedMessage = Schema.Struct({
-  id: Schema.String,
+  id: MessageId,
   mode: Schema.Literals(["steer", "queue"]),
 });
 export type QueuedMessage = typeof QueuedMessage.Type;
@@ -153,7 +173,7 @@ export type ContextUsage = typeof ContextUsage.Type;
 
 export class Session extends Schema.Opaque<Session>()(
   Schema.Struct({
-    id: Schema.String,
+    id: SessionId,
     status: open(SessionStatus),
     title: Schema.optionalKey(Schema.String),
     createdAt: Schema.optionalKey(Schema.Number),
@@ -194,9 +214,9 @@ export type MessageStatus = typeof MessageStatus.Type;
 
 export class Message extends Schema.Opaque<Message>()(
   Schema.Struct({
-    id: Schema.String,
-    sessionId: Schema.String,
-    idempotencyKey: Schema.optionalKey(Schema.String),
+    id: MessageId,
+    sessionId: SessionId,
+    idempotencyKey: Schema.optionalKey(IdempotencyKey),
     metadata: Schema.optionalKey(Metadata),
     status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
@@ -282,9 +302,9 @@ export type SessionSettings = typeof SessionSettings.Type;
 export const CreateSessionOptions = Schema.Struct({
   title: Schema.optional(SessionTitle),
   ...settingsFields(Schema.optional),
-  forkFrom: Schema.optional(Schema.Struct({ sessionId: Schema.String, entryId: Schema.optional(Schema.String) })),
+  forkFrom: Schema.optional(Schema.Struct({ sessionId: SessionId, entryId: Schema.optional(Schema.String) })),
 });
-export type CreateSessionOptions = typeof CreateSessionOptions.Type;
+export type CreateSessionOptions = typeof CreateSessionOptions.Encoded;
 
 /** `null` clears a field back to the deployment's. */
 export const SessionChanges = Schema.Struct({
@@ -309,12 +329,8 @@ export const EntriesOptions = Schema.Struct({
 });
 export type EntriesOptions = typeof EntriesOptions.Type;
 
-export const IdempotencyKey = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256));
-
-const ConversationName = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
-
 export const SendRequest = Schema.Struct({
-  sessionId: Schema.String,
+  sessionId: SessionId,
   /** A string is one text part. */
   content: Schema.Union([
     Schema.String,
@@ -326,17 +342,18 @@ export const SendRequest = Schema.Struct({
   /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
 });
-export type SendRequest = typeof SendRequest.Type;
+export type SendRequest = typeof SendRequest.Encoded;
 
 /** In seconds: how long a call waits for a message to end before it answers with the message as it is then. */
 export const Wait = Seconds;
 
 /** A message, by its id or by the key it was sent with. */
 export const MessageKey = Schema.Union([
-  Schema.Struct({ sessionId: Schema.String, messageId: Schema.String }),
-  Schema.Struct({ sessionId: Schema.String, idempotencyKey: IdempotencyKey }),
+  Schema.Struct({ sessionId: SessionId, messageId: MessageId }),
+  Schema.Struct({ sessionId: SessionId, idempotencyKey: IdempotencyKey }),
 ]);
-export type MessageKey = typeof MessageKey.Type;
+export type MessageKey = typeof MessageKey.Encoded;
+export type DecodedMessageKey = typeof MessageKey.Type;
 
 export const InvokeRequest = Schema.Struct({
   /** Text or content parts; supports `/<command>` templates from `prompts/` and `skills/`. */
@@ -345,9 +362,9 @@ export const InvokeRequest = Schema.Struct({
    * Caller-chosen conversation name (e.g. `"daily-digest"`, `"slack:C123:456"`). Reuses its mapped session, or
    * creates one titled with this name if absent or previously deleted. Mutually exclusive with `sessionId`.
    */
-  conversation: Schema.optional(ConversationName),
+  conversation: Schema.optional(ConversationId),
   /** Existing session id to send into (strict: refuses `not_found` if absent). Mutually exclusive with `conversation`. */
-  sessionId: Schema.optional(Schema.String),
+  sessionId: Schema.optional(SessionId),
   /** Settings applied when creating a session, or updating an existing session when explicitly given. */
   session: Schema.optional(SessionSettings),
   /** Caller key preventing duplicate sessions (when ephemeral) and duplicate messages on retry. */
@@ -356,7 +373,8 @@ export const InvokeRequest = Schema.Struct({
   /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
 });
-export type InvokeRequest = typeof InvokeRequest.Type;
+export type InvokeRequest = typeof InvokeRequest.Encoded;
+export type DecodedInvokeRequest = typeof InvokeRequest.Type;
 
 export const CompactOptions = Schema.Struct({ instructions: Schema.optional(Schema.String) });
 export type CompactOptions = typeof CompactOptions.Type;

@@ -13,6 +13,7 @@ import {
   defineTool as defineDurableTool,
 } from "@earendil-works/pi-durable";
 import type { Static } from "@earendil-works/pi-schema";
+import { SessionId } from "@fastagent-sh/client/agent-api";
 
 interface StandardIssue {
   readonly message: string;
@@ -228,7 +229,7 @@ interface SessionToolContext {
   readonly commit?: never;
 }
 
-export type SessionIdResolver = (api: SessionToolApi, context: SessionToolContext) => Promise<string | undefined>;
+export type SessionIdResolver = (api: SessionToolApi, context: SessionToolContext) => Promise<SessionId | undefined>;
 
 let piSessionIdResolver: SessionIdResolver | undefined;
 
@@ -242,8 +243,8 @@ export function registerPiSessionIdResolver(resolver: SessionIdResolver): void {
  * is not a session (a subagent's). Works on both `pi-durable` and `dsh`.
  * @public
  */
-export async function sessionIdOf(api: SessionToolApi, context: SessionToolContext): Promise<string | undefined> {
-  if (typeof context?.sessionId === "string") return context.sessionId;
+export async function sessionIdOf(api: SessionToolApi, context: SessionToolContext): Promise<SessionId | undefined> {
+  if (typeof context?.sessionId === "string") return SessionId.make(context.sessionId);
   if (typeof api?.commit === "function" && typeof api?.conversationId === "number") {
     if (piSessionIdResolver === undefined) {
       throw new Error("pi-durable sessionIdOf resolver is not initialized");

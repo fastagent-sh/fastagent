@@ -149,7 +149,7 @@ export function durableReads(
           const agentDoc = await tx.doc(AgentDoc, id);
           read.push(
             sessionOf(
-              ids.encode(id),
+              ids.encodeSession(id),
               await tx.doc(LiveDoc, id),
               await tx.doc(UsageDoc, id),
               agentDoc,
