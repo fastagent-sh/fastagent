@@ -6,6 +6,8 @@ status: current
 
 # Documentation
 
+**English** · [简体中文](zh-CN/README.md)
+
 FastAgent is the open-source TypeScript & Node.js runtime for production AI agents. Write agents in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — package as versioned npm artifacts, embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and AWS AgentCore.
 
 ## Start here

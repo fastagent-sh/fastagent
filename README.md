@@ -5,6 +5,10 @@
 <h3 align="center">The TypeScript runtime for production AI agents.</h3>
 
 <p align="center">
+  <strong>English</strong> · <a href="https://github.com/fastagent-sh/fastagent/blob/main/README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
   Write agents in <strong>Markdown (<code>SYSTEM.md</code>, <code>AGENTS.md</code>, <code>skills/</code>), typed TypeScript tools, and MCP</strong> — built for both engineers and coding agents.<br>
   Package as a versioned <strong>npm artifact</strong>, <strong>embed</strong> in Next.js, Hono, Express, or Fastify (keeping your auth &amp; database), <strong>self-host</strong> with Docker, or <strong>deploy</strong> to Fly.io, Railway, and AWS AgentCore.
 </p>

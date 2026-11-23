@@ -3,7 +3,7 @@ import { dirname, extname, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const docsDir = resolve(repoRoot, "docs");
-const roots = ["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "llms.txt", "docs", ".github"].map(
+const roots = ["README.md", "README.zh-CN.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "llms.txt", "docs", ".github"].map(
   (entry) => resolve(repoRoot, entry),
 );
 
@@ -74,11 +74,20 @@ const errors = [];
 for (const file of files) {
   const markdown = await readFile(file, "utf8");
   const prose = withoutCode(markdown);
-  for (const match of prose.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g)) {
-    const target = match[1].trim().split(/\s+/)[0].replace(/^<|>$/g, "");
+  const targets = [
+    ...Array.from(prose.matchAll(/!?\[[^\]]*\]\(([^)]+)\)/g), (match) => ({
+      index: match.index,
+      target: match[1].trim().split(/\s+/)[0].replace(/^<|>$/g, ""),
+    })),
+    ...Array.from(prose.matchAll(/<a\b[^>]*\bhref=(?:"([^"]+)"|'([^']+)')/gi), (match) => ({
+      index: match.index,
+      target: (match[1] ?? match[2]).trim(),
+    })),
+  ];
+  for (const { index, target } of targets) {
     const resolved = resolveTarget(file, target);
     if (!resolved) continue;
-    const line = markdown.slice(0, match.index).split("\n").length;
+    const line = markdown.slice(0, index).split("\n").length;
     if (resolved.invalid) {
       errors.push(`${file}:${line}: missing ${target}`);
       continue;
