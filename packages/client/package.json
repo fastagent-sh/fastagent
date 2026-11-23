@@ -68,6 +68,6 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "effect": "^4.0.7"
+    "effect": "^4.1.5"
   }
 }

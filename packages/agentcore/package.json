@@ -71,11 +71,11 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.1170.0",
-    "@aws-sdk/dsql-signer": "^3.1170.0",
-    "@effect/platform-node": "^4.0.7",
+    "@aws-sdk/client-secrets-manager": "^3.1173.0",
+    "@aws-sdk/dsql-signer": "^3.1173.0",
+    "@effect/platform-node": "^4.1.5",
     "@fastagent-sh/client": "0.34.0",
-    "effect": "^4.0.7"
+    "effect": "^4.1.5"
   },
   "peerDependencies": {
     "@fastagent-sh/client-agentcore": "0.34.0",
