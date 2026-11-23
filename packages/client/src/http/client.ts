@@ -312,7 +312,8 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
         request(
           client.createSession({ payload: checked(CreateSessionOptions, createOptions ?? {}, "sessions.create") }),
         ),
-      get: (sessionId) => request(client.getSession({ params: { sessionId: SessionId.make(sessionId) } })),
+      get: async (sessionId) =>
+        request(client.getSession({ params: { sessionId: checked(SessionId, sessionId, "sessions.get") } })),
       list: async (listOptions) =>
         (await request(
           client.listSessions({ query: checked(ListOptions, listOptions ?? {}, "sessions.list") }),
@@ -320,46 +321,55 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
       update: async (sessionId, changes) =>
         request(
           client.updateSession({
-            params: { sessionId: SessionId.make(sessionId) },
+            params: { sessionId: checked(SessionId, sessionId, "sessions.update") },
             payload: checked(SessionChanges, changes, "sessions.update"),
           }),
         ),
       delete: async (sessionId) => {
-        await request(client.deleteSession({ params: { sessionId: SessionId.make(sessionId) } }));
+        await request(
+          client.deleteSession({ params: { sessionId: checked(SessionId, sessionId, "sessions.delete") } }),
+        );
       },
       entries: async (sessionId, entriesOptions) =>
         (await request(
           client.entries({
-            params: { sessionId: SessionId.make(sessionId) },
+            params: { sessionId: checked(SessionId, sessionId, "sessions.entries") },
             query: checked(EntriesOptions, entriesOptions ?? {}, "sessions.entries"),
           }),
         )) as Awaited<ReturnType<Agent["sessions"]["entries"]>>,
       events: (sessionId, eventsOptions) =>
         watched<SessionEvent>(
-          client.events({
-            params: { sessionId: SessionId.make(sessionId) },
-            query: { after: eventsOptions?.after },
-            headers: { "last-event-id": undefined },
-          }),
+          Effect.try({ try: () => checked(SessionId, sessionId, "sessions.events"), catch: read }).pipe(
+            Effect.flatMap((id) =>
+              client.events({
+                params: { sessionId: id },
+                query: { after: eventsOptions?.after },
+                headers: { "last-event-id": undefined },
+              }),
+            ),
+          ),
           { known: SESSION_EVENT_TYPES, isLast: () => false, refused: read, signal: eventsOptions?.signal },
         ),
       cancel: async (sessionId) => {
-        const { stopped } = await request(client.cancel({ params: { sessionId: SessionId.make(sessionId) } }));
+        const { stopped } = await request(
+          client.cancel({ params: { sessionId: checked(SessionId, sessionId, "sessions.cancel") } }),
+        );
         return { stopped: [...stopped] };
       },
       compact: async (sessionId, compactOptions) => {
         await request(
           client.compact({
-            params: { sessionId: SessionId.make(sessionId) },
+            params: { sessionId: checked(SessionId, sessionId, "sessions.compact") },
             payload: checked(CompactOptions, compactOptions ?? {}, "sessions.compact"),
           }),
         );
       },
-      attachment: (sessionId, ref) =>
-        request(
+      attachment: async (sessionId, ref) => {
+        const id = checked(SessionId, sessionId, "sessions.attachment");
+        return request(
           Effect.gen(function* () {
             const response = yield* client.attachment({
-              params: { sessionId: SessionId.make(sessionId), ref },
+              params: { sessionId: id, ref },
               responseMode: "response-only",
             });
             if (response.status !== 200) {
@@ -370,7 +380,8 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
             const data = new Uint8Array(yield* response.arrayBuffer);
             return { mimeType: response.headers["content-type"] ?? "application/octet-stream", data };
           }),
-        ),
+        );
+      },
     },
     messages: {
       send: async (sendRequest, sendOptions) => {

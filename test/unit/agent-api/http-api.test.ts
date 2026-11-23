@@ -297,6 +297,17 @@ describe("the Agent API over HTTP", () => {
       // @ts-expect-error MessageId cannot be passed where SessionId is expected
       void (() => acceptSession(messageId));
     });
+
+    it("refuses non-string sessionId with AgentError invalid_request and defers stream refusal to first read", async () => {
+      const client = connectAgent(server.url, { apiKey: KEY });
+      await expect(client.sessions.get(null as unknown as string)).rejects.toMatchObject({
+        code: "invalid_request",
+      });
+      const stream = client.sessions.events(123 as unknown as string);
+      await expect(stream[Symbol.asyncIterator]().next()).rejects.toMatchObject({
+        code: "invalid_request",
+      });
+    });
   });
 });
 
