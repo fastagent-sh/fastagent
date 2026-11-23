@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: "The TypeScript runtime for production AI agents: author with Markdown, skills, typed tools, and MCP — embed in your Node.js app, self-host with Docker, or deploy to any cloud."
+description: "The TypeScript runtime for production AI agents: write with Markdown, skills, typed tools, and MCP — package as an npm artifact, embed in Node.js, self-host with Docker, or deploy to any cloud."
 status: current
 ---
 
@@ -8,7 +8,7 @@ status: current
 
 **The TypeScript runtime for production AI agents.**
 
-FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents. Author your agent with Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools (`defineTool`), and MCP servers — then embed it directly in Next.js, Hono, Express, or Fastify (keeping your own auth and database), self-host it with Docker, or deploy to Fly.io, Railway, and AWS AgentCore behind one Agent API.
+FastAgent is an open-source TypeScript & Node.js runtime for embedded, background, and self-hosted AI agents. Write your agent in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools (`defineTool`), and MCP servers — built for both engineers and coding agents. Compile it into a versioned npm package (`fastagent build`), then embed it directly in Next.js, Hono, Express, or Fastify (keeping your own auth and database), self-host it with Docker, or deploy to Fly.io, Railway, and AWS AgentCore behind one Agent API.
 
 ## The production problems FastAgent solves
 
@@ -79,5 +79,6 @@ my-agent/
 
 - Browse production [Examples](../examples/README.md) (PR review, AI SRE triage, multi-tenant SaaS copilot, AWS AgentCore, deep research).
 - Follow the [Quickstart](quickstart.md) to build and run an agent in five minutes.
+- Read [Packaging, Distribution & CI/CD](packaging-and-ci.md) to compile versioned npm packages and gate releases in CI.
 - Read [Technical architecture](architecture.md) to see how packages, harnesses, storage, and security boundaries fit together.
 - Give the [Agent development guide](ai-start.md) to a coding agent—or follow it yourself—for an end-to-end build and deploy workflow.

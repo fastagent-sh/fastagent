@@ -106,7 +106,7 @@ FastAgent ships as six version-locked npm packages so you install only what your
 
 | Package | Install when you want to… | Dependency footprint |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](api-reference.md) | Author, run (`dev`/`start`/`invoke`), build, or embed an agent in Node | Core runtime (`pi-durable`), CLI, HTTP server; zero `@deepseek-ai/*` or cloud SDKs |
+| [`@fastagent-sh/fastagent`](api-reference.md) | Write, run (`dev`/`start`/`invoke`), package (`build`), or embed an agent in Node | Core runtime (`pi-durable`), CLI, HTTP server; zero `@deepseek-ai/*` or cloud SDKs |
 | [`@fastagent-sh/client`](api-reference.md) | Call any HTTP FastAgent instance from Node, Bun, Deno, or edge workers | Depends only on `effect`; zero Node APIs, zero runtime or cloud deps |
 | [`@fastagent-sh/client-agentcore`](api-reference.md) | Call an AgentCore-deployed FastAgent from your backend, CLI `--remote`, or Pi | `@fastagent-sh/client` + `@aws-sdk/client-bedrock-agentcore`; zero server, DB, or CDK deps |
 | [`@fastagent-sh/agentcore`](api-reference.md) | Deploy & run an agent on Amazon Bedrock AgentCore + Aurora DSQL | Server runtime, DSQL adapter, Secrets Manager, CLI extension, optional CDK construct |

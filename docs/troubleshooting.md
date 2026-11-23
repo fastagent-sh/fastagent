@@ -8,7 +8,7 @@ status: current
 
 Look up the error message or symptom below. When filing an issue, include the output of `fastagent info --json`.
 
-## Setup & authoring
+## Setup & development
 
 ### `missing model`
 

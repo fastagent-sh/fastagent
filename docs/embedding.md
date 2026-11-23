@@ -12,7 +12,7 @@ Embed a compiled FastAgent directly in your Node backend or desktop application 
 npm i @fastagent-sh/fastagent       # Node ≥ 24.15
 ```
 
-Compile your agent with `fastagent build`, then import the generated package from your application.
+Compile your agent into a standalone npm package with `fastagent build` ([Packaging, Distribution & CI/CD](packaging-and-ci.md)), then import it from your application.
 
 ## Choose your embedding pattern
 
