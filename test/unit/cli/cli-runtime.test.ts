@@ -335,6 +335,16 @@ registerHooks({
         expect([viaFile.code, viaFile.stdout.trim()], `${cwd}: ${viaFile.stderr}`).toEqual([0, "seen 1"]);
       }
 
+      const override = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello"], subdir, {
+        ...envWithoutKey,
+        FASTAGENT_API_KEY: "wrong-env-key",
+      });
+      expect([override.code, override.stdout.trim()], override.stderr).toEqual([0, "seen 1"]);
+
+      const missingKey = await runInProcess(["invoke", "--url", url, "hello"], outside, envWithoutKey);
+      expect([missingKey.code, missingKey.stdout]).toEqual([2, ""]);
+      expect(missingKey.stderr).toContain("no key to call");
+
       // Follow-up hint includes --url and --session, never prints the key, and continues the same remote session.
       const first = await runInProcess(["invoke", "--url", url, "--key", "the-key", "hello"], subdir, envWithoutKey);
       expect(first.code, first.stderr).toBe(0);

@@ -121,7 +121,8 @@ let inProcessQueue: Promise<unknown> = Promise.resolve();
  * What it stands in for, and puts back afterwards: the working directory, the whole environment, `process.exit`
  * (the FIRST code wins, as in a process that has exited; a command's own `catch` may call it again on the way
  * out), `process.exitCode`, stdout/stderr, and the signal/exit listeners the command added. Runs are serialized,
- * since they share all of that. It is stdin-less and TTY-less, as `run` is.
+ * since they share all of that. It is stdin-less and defaults to TTY-less, as `run` is (pass `{ tty: true }` to
+ * simulate an interactive terminal).
  *
  * NOT for a test that is about the process itself: stdout/stderr discipline across a real pipe, a signal, a crash.
  * Those stay on {@link run}; `cli-run-parity.integration.test.ts` pins that the two agree.
