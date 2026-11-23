@@ -47,6 +47,7 @@ export function needs<const S extends readonly SecretSpec[], T>(
   secrets: S,
   build: (values: SecretValues<S>) => T,
 ): Needs<T> {
+  if (typeof build !== "function") throw new Error("needs: factory must be a function");
   const declared = secrets.map((spec) =>
     typeof spec === "string"
       ? { name: spec, optional: false }

@@ -92,6 +92,12 @@ function hasInvokeStream(agent: Agent): agent is RemoteAgent {
   return typeof (agent as Partial<InvokeApi>).invokeStream === "function";
 }
 
+function remoteContinueFlags(opts: InvokeOptions): (sessionId: string) => string {
+  const target =
+    opts.remote !== undefined ? `--remote ${opts.remote}` : opts.url !== undefined ? `--url ${opts.url}` : undefined;
+  return (sessionId) => (target === undefined ? `--session ${sessionId}` : `${target} --session ${sessionId}`);
+}
+
 /** `--url` / `--remote`: send through a served agent's Agent API; nothing opens locally. */
 async function runRemoteInvoke(
   message: string,
@@ -108,7 +114,15 @@ async function runRemoteInvoke(
     opts.session === undefined && opts.conversation === undefined && target.defaultSessionId !== undefined
       ? { ...opts, session: target.defaultSessionId }
       : opts;
-  await invokeThrough(target.agent, target.label, message, effectiveOpts, settings, DEPLOYED_AUTH_HINT);
+  await invokeThrough(
+    target.agent,
+    target.label,
+    message,
+    effectiveOpts,
+    settings,
+    DEPLOYED_AUTH_HINT,
+    remoteContinueFlags(opts),
+  );
 }
 
 /** Options for sending one message over an Agent API client (`invoke --url`, `agentcore invoke`, local serve). */
@@ -160,6 +174,7 @@ async function invokeThrough(
   opts: InvokeOptions,
   settings: SessionSettings | undefined,
   authHint: string,
+  continueFlags?: (sessionId: string) => string,
 ): Promise<never> {
   const exitCode = await invokeOverApi(agent, where, message, {
     session: opts.session,
@@ -167,6 +182,7 @@ async function invokeThrough(
     settings,
     json: opts.json,
     authHint,
+    ...(continueFlags === undefined ? {} : { continueFlags }),
   }).catch(failStartup);
   process.exit(exitCode);
 }
@@ -242,27 +258,31 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
       import("../../harnesses/config.ts"),
       import("../shared.ts"),
     ]);
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, async (target) => {
-    // A running serve of this instance owns its storage and answers with its own model: the message goes through it
-    // (owner.ts), before any model is asked for here.
-    const owner = await reachOwner(resolveStateRoot(target)).catch(failStartup);
-    if (owner === undefined) return;
-    let settings: SessionSettings | undefined;
-    try {
-      settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
-    } catch (error) {
-      failUsage(error instanceof Error ? error.message : String(error));
-    }
-    const agent = connectAgent(owner.url, { apiKey: owner.key });
-    await invokeThrough(
-      agent,
-      `${target}, through its serve at ${owner.url}`,
-      message,
-      opts,
-      settings,
-      LOCAL_AUTH_HINT,
-    );
-  });
+  const { agentDir, modelSpec } = await enterAgentCommand(
+    dirArg,
+    { ...opts, input: opts.input !== false && opts.json !== true },
+    async (target) => {
+      // A running serve of this instance owns its storage and answers with its own model: the message goes through it
+      // (owner.ts), before any model is asked for here.
+      const owner = await reachOwner(resolveStateRoot(target)).catch(failStartup);
+      if (owner === undefined) return;
+      let settings: SessionSettings | undefined;
+      try {
+        settings = opts.model === undefined ? undefined : { model: modelRefOf(opts.model, "--model") };
+      } catch (error) {
+        failUsage(error instanceof Error ? error.message : String(error));
+      }
+      const agent = connectAgent(owner.url, { apiKey: owner.key });
+      await invokeThrough(
+        agent,
+        `${target}, through its serve at ${owner.url}`,
+        message,
+        opts,
+        settings,
+        LOCAL_AUTH_HINT,
+      );
+    },
+  );
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const selection = (() => {
     try {

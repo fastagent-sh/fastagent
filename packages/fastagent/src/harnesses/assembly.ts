@@ -119,6 +119,46 @@ export interface BuiltDefinition {
   providers: Provider[];
 }
 
+function checkStatic<T>(source: string, value: unknown, accept: (v: unknown) => string | undefined): T | undefined {
+  if (isNeeds(value)) {
+    if (typeof value.build !== "function") {
+      throw new Error(`${source}: needs(...) factory must be a function`);
+    }
+    return undefined;
+  }
+  const problem = accept(value);
+  if (problem !== undefined) throw new Error(`${source}: ${problem}`);
+  return value as T;
+}
+
+/**
+ * Validate statically knowable module exports without invoking `needs(...)` factories or requiring credentials.
+ * Reuses the same shape and duplicate-name rules as {@link buildDefinition}.
+ */
+export function validateDefinitionStatic(definition: AgentDefinition): void {
+  const { registry, config } = definition;
+  const tools: { source: string; name: string }[] = [];
+  for (const { file, value } of registry.tools) {
+    const resolved = checkStatic<ToolRegistration>(file, value, toolProblem);
+    if (resolved !== undefined) tools.push({ source: file, name: resolved.name });
+  }
+  const extensions: { source: string; name: string }[] = [];
+  for (const { file, value } of registry.extensions) {
+    const resolved = checkStatic<Extension>(file, value, extensionProblem);
+    if (resolved !== undefined) extensions.push({ source: file, name: resolved.name });
+  }
+  refuseTwins("tool", tools);
+  const codingTools = resolveCodingTools(config.codingTools);
+  refuseTwins("extension", [
+    ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CODING_TOOLS_EXTENSION }] : []),
+    { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
+    ...extensions,
+  ]);
+  for (const [i, value] of (config.providers ?? []).entries()) {
+    checkStatic<Provider>(`${CONFIG_FILE} providers[${i}]`, value, providerProblem);
+  }
+}
+
 /**
  * Refuse to run while a required secret has no value, naming where it is declared; otherwise build every module with
  * the values it declared, and refuse one that is not what its directory holds.
