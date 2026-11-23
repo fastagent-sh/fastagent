@@ -4,6 +4,7 @@ import type { ServedAgent, ServeOptions } from "../service.ts";
 import { API_PREFIX } from "@fastagent-sh/client/http/contract";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
 import { log } from "../log.ts";
+import { decodeRuntimeCliEnv } from "../process-env.ts";
 import { failStartup, failUsage } from "./fail.ts";
 import { announceOwner } from "./owner.ts";
 
@@ -32,7 +33,7 @@ export function parseBind(value: string | undefined): string | undefined {
 
 /** What the CLI adds to the assembly: the API's keys. */
 export function cliMountOptions(): ServeOptions {
-  return { apiKeys: apiKeysFrom(process.env[API_KEY_VARIABLE]) };
+  return { apiKeys: apiKeysFrom(decodeRuntimeCliEnv().apiKey) };
 }
 
 interface ServeHooks {
@@ -71,7 +72,7 @@ export function serveService(
 function reportServing(service: ServedAgent, host: string | undefined, boundPort: number, owned: boolean): void {
   process.send?.({ type: "ready" });
   log.info(bindLine(host, boundPort));
-  const keyed = apiKeysFrom(process.env[API_KEY_VARIABLE]).length > 0;
+  const keyed = apiKeysFrom(decodeRuntimeCliEnv().apiKey).length > 0;
   log.info(
     keyed
       ? `[fastagent] Agent API: ${API_PREFIX} (keys from ${API_KEY_VARIABLE})`

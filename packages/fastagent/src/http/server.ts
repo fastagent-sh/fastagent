@@ -24,6 +24,7 @@ import {
 } from "@fastagent-sh/client/agent-api";
 import { parseApiKeys } from "@fastagent-sh/client/remotes";
 import { createInvoker, memoryConversationStore } from "../conversations.ts";
+import { type SecretInput, redactSecret, revealSecret } from "../declared-secrets.ts";
 import type { Handler } from "./serve.ts";
 import { secretEquals } from "./secret.ts";
 import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
@@ -40,7 +41,9 @@ import {
 /** The instance's keys: several, separated by commas, so a key is replaced without a gap. */
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
-export const apiKeysFrom = parseApiKeys;
+export function apiKeysFrom(raw: SecretInput | undefined): readonly Redacted.Redacted<string>[] {
+  return parseApiKeys(raw === undefined ? undefined : revealSecret(raw)).map((key) => Redacted.make(key));
+}
 
 const MAX_BODY = ByteSize.mebibytes(32);
 /** Proxies close a connection that says nothing for a minute or so; a comment keeps an event stream open. */
@@ -62,7 +65,7 @@ export interface ApiHandler {
 }
 
 export interface ApiOptions {
-  keys: readonly string[];
+  keys: readonly SecretInput[];
   /** Single-call invoker mounted under `POST /v1/invoke`; defaults to an in-memory conversation store. */
   invoker?: InvokeApi;
   /** Optional remote auth operations mounted under `/v1/auth`. */
@@ -135,11 +138,11 @@ const Edges = HttpRouter.middleware(
 );
 
 export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
+  const keys = options.keys.map(redactSecret);
   // An empty key matches nothing (secretEquals), so serving with one would refuse every Caller without a word.
-  if (options.keys.length === 0 || options.keys.some((key) => key.trim() === "")) {
+  if (keys.length === 0 || keys.some((key) => Redacted.value(key).trim() === "")) {
     throw new Error("the Agent API needs at least one key, and no key may be empty");
   }
-  const keys = [...options.keys];
   const invoker = options.invoker ?? createInvoker(agent, memoryConversationStore());
   const waitCap = options.waitCapSeconds ?? LIMITS.httpWaitSeconds;
   const invokeWaitCap = options.waitCapSeconds ?? LIMITS.invokeWaitSeconds;
@@ -310,7 +313,7 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
   const authorization = Layer.succeed(Authorization)({
     bearer: (effect, { credential }) => {
       const given = Redacted.value(credential);
-      return keys.some((key) => secretEquals(given, key))
+      return keys.some((key) => secretEquals(given, Redacted.value(key)))
         ? effect
         : Effect.fail(agentError("unauthorized", "the request has no key this instance holds"));
     },

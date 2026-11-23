@@ -22,7 +22,7 @@ import { isDeployedWorkspace } from "../paths.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
-import { type InstanceFlags, enterInstance } from "./instance.ts";
+import { type EnteredInstance, type InstanceFlags, enterInstance } from "./instance.ts";
 import { isInteractive, loginFlow, terminalLoginIO } from "./login-ui.ts";
 import { buildModelPickerOptions } from "./models-view.ts";
 
@@ -31,20 +31,21 @@ type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;
 
 interface EnteredAgent {
   agentDir: string;
+  instance: EnteredInstance;
   modelSpec?: string;
 }
 
 async function enterAgentDirectory(
   dirArg: string,
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
-  before?: (agentDir: string) => Promise<void>,
+  before?: (agentDir: string, instance: EnteredInstance) => Promise<void>,
   load?: LoadDefinition,
 ): Promise<EnteredAgent> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterInstance(agentDir, opts.instance);
-  await before?.(agentDir);
-  const modelSpec = await resolveFirstRunModel(agentDir, opts, load);
-  return { agentDir, ...(modelSpec ? { modelSpec } : {}) };
+  const instance = enterInstance(agentDir, opts.instance);
+  await before?.(agentDir, instance);
+  const modelSpec = await resolveFirstRunModel(agentDir, instance.env, opts, load);
+  return { agentDir, instance, ...(modelSpec ? { modelSpec } : {}) };
 }
 
 /**
@@ -54,7 +55,7 @@ async function enterAgentDirectory(
 export async function enterAgentCommand(
   dirArg: string,
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
-  before?: (agentDir: string) => Promise<void>,
+  before?: (agentDir: string, instance: EnteredInstance) => Promise<void>,
   load?: LoadDefinition,
 ): Promise<Required<EnteredAgent>> {
   const entered = await enterAgentDirectory(dirArg, opts, before, load);
@@ -109,23 +110,23 @@ export async function reportAuth(models: ModelEnvironment, modelSpec: string, ag
  */
 async function resolveFirstRunModel(
   agentDir: string,
+  env: Readonly<Record<string, string | undefined>>,
   options: { model?: string; input?: boolean } = {},
   load?: LoadDefinition,
 ): Promise<string | undefined> {
   const loaded = (load ?? loadSourceDefinition)(agentDir);
   const definition = await (load === undefined ? loaded.catch(failStartup) : loaded);
-  const spec = modelSpecFor(definition.config, options.model);
+  const spec = modelSpecFor(definition.config, options.model, env);
   if (spec) return spec;
   if (options.input === false) return undefined;
   if (!isInteractive()) return undefined;
   const providers =
     load === undefined
-      ? await definitionProviders(agentDir, process.env).catch(failStartup)
-      : buildDefinitionShape(definition, process.env).providers;
-  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
+      ? await definitionProviders(agentDir, env).catch(failStartup)
+      : buildDefinitionShape(definition, env).providers;
+  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(env) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return undefined;
-  process.env.FASTAGENT_MODEL = chosen;
   console.error(
     `[fastagent] picked ${chosen} — set \`model: ${JSON.stringify(chosen)}\` in fastagent.config.ts to keep it`,
   );

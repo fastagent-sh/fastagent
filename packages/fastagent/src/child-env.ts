@@ -3,7 +3,7 @@
  * skill scripts. Assembled from inputs, never the host process's whole `process.env`, so a stray variable of the host
  * (an API key, a cloud credential) cannot reach a command, and a declared one reaches every command.
  */
-import { definedValues } from "./declared-secrets.ts";
+import { type SecretValuesInput, definedValues } from "./declared-secrets.ts";
 
 const BASE_NAMES: ReadonlySet<string> = new Set([
   "PATH",
@@ -29,7 +29,7 @@ export interface ProcessEnvironmentInputs {
   /** The base environment (`baseEnv`). */
   base: Readonly<Record<string, string>>;
   /** The instance's secrets: only the declared names among them are passed on. */
-  secrets: Readonly<Record<string, string | undefined>>;
+  secrets: SecretValuesInput;
   /** The names the definition declares (`needs()`). */
   declared: readonly string[];
   /** The agent's working directory. */

@@ -5,8 +5,9 @@
  */
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import { baseEnv } from "../child-env.ts";
-import { definedValues } from "../declared-secrets.ts";
+import { redactValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
+import { decodeRuntimeCliEnv, readProcessEnv } from "../process-env.ts";
 import type { OpenServingOptions } from "../harnesses/serving.ts";
 import {
   DATABASE_URL_ENV,
@@ -88,35 +89,55 @@ export function enterEnvFile(
  * Enter the agent's directory as a command runs it: the value file, whose values become this process's environment
  * and so the instance's secrets, then where the instance is.
  */
-export function enterInstance(agentDir: string, flags: InstanceFlags = {}): void {
+/** Resolved instance placement and environment snapshot (without mutating `process.env`). */
+export interface EnteredInstance {
+  readonly root?: string;
+  readonly name?: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+export function enterInstance(agentDir: string, flags: InstanceFlags = {}): EnteredInstance {
   enterEnvFile(flags.envFile, { defaultFile: true });
   enterAgentEnv(agentDir);
-  enterInstanceLocation(flags);
+  return resolveInstanceLocation(flags, readProcessEnv());
 }
 
 /**
  * Settle the instance's location: a flag beats its environment variable, a relative path is resolved against the
  * directory the command was started in (here, once), and the directories named are made. Refuses a flag with no path.
  */
-function enterInstanceLocation(flags: InstanceFlags = {}): void {
+function resolveInstanceLocation(
+  flags: InstanceFlags,
+  base: Readonly<Record<string, string | undefined>>,
+): EnteredInstance {
   if (flags.root !== undefined && flags.root.trim() === "") failUsage("--root needs a path");
-  const root = resolveOverridePath(flags.root ?? process.env[INSTANCE_ROOT_ENV]);
+  const cliEnv = decodeRuntimeCliEnv(base);
+  const root = resolveOverridePath(flags.root ?? cliEnv.instanceRoot);
   if (root !== undefined) {
-    process.env[INSTANCE_ROOT_ENV] = root;
     makeDirectory(root, flags.root === undefined ? INSTANCE_ROOT_ENV : "--root");
   }
-  const name = flags.name ?? enteredInstanceName();
-  if (name === undefined) return;
-  try {
-    checkInstanceName(name);
-  } catch (error) {
-    failUsage(`${flags.name === undefined ? INSTANCE_NAME_ENV : "--name"}: ${(error as Error).message}`);
+  const name = flags.name ?? enteredInstanceName(base);
+  if (name !== undefined) {
+    try {
+      checkInstanceName(name);
+    } catch (error) {
+      failUsage(`${flags.name === undefined ? INSTANCE_NAME_ENV : "--name"}: ${(error as Error).message}`);
+    }
   }
-  process.env[INSTANCE_NAME_ENV] = name;
+  const env: Readonly<Record<string, string | undefined>> = {
+    ...base,
+    ...(root === undefined ? {} : { [INSTANCE_ROOT_ENV]: root }),
+    ...(name === undefined ? {} : { [INSTANCE_NAME_ENV]: name }),
+  };
+  return {
+    ...(root === undefined ? {} : { root }),
+    ...(name === undefined ? {} : { name }),
+    env,
+  };
 }
 
 /** Who runs this process's instance, as its own variables say: the one place the CLI reads them for an open. */
-function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
+function runsAsIn(env: Readonly<Record<string, string | undefined>>): RunsAs {
   return {
     dev: servedByDev(env),
     deployed: isDeployedWorkspace(env),
@@ -124,8 +145,8 @@ function runsAsIn(env: NodeJS.ProcessEnv): RunsAs {
 }
 
 /** An instance in a database is opened by the name it is given: a command that opens one without a name exits 2. */
-function refuseUnnamedDatabaseInstance(): void {
-  if (process.env[DATABASE_URL_ENV] && enteredInstanceName() === undefined) {
+function refuseUnnamedDatabaseInstance(env: Readonly<Record<string, string | undefined>>): void {
+  if (decodeRuntimeCliEnv(env).databaseUrl && enteredInstanceName(env) === undefined) {
     failUsage(
       `${DATABASE_URL_ENV} keeps the sessions in a database that instances share by name: ` +
         `name this one with --name <name> or ${INSTANCE_NAME_ENV}`,
@@ -139,21 +160,23 @@ function refuseUnnamedDatabaseInstance(): void {
  */
 export function instanceInputs(
   agentDir: string,
-  options: { mode?: InstanceMode } = {},
+  options: { mode?: InstanceMode; instance?: EnteredInstance } = {},
 ): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
-  refuseUnnamedDatabaseInstance();
+  const resolvedEnv = options.instance?.env ?? readProcessEnv();
+  refuseUnnamedDatabaseInstance(resolvedEnv);
   const mode = options.mode ?? "dev";
-  const workdir = resolveWorkdir(agentDir, process.env, mode);
+  const workdir = resolveWorkdir(agentDir, resolvedEnv, mode);
+  const name = options.instance?.name ?? enteredInstanceName(resolvedEnv);
   // A default one is the project's own `.fastagent/<mode>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
   return {
     projectDir: agentDir,
-    ...(enteredInstanceName() === undefined ? {} : { name: enteredInstanceName() as string }),
+    ...(name === undefined ? {} : { name }),
     workdir,
-    stateRoot: resolveStateRoot(agentDir, process.env, mode),
-    secrets: definedValues(process.env),
-    env: baseEnv(process.env),
-    ownEnv: process.env,
-    runsAs: runsAsIn(process.env),
+    stateRoot: resolveStateRoot(agentDir, resolvedEnv, mode),
+    secrets: redactValues(resolvedEnv),
+    env: baseEnv(resolvedEnv),
+    ownEnv: resolvedEnv,
+    runsAs: runsAsIn(resolvedEnv),
   };
 }

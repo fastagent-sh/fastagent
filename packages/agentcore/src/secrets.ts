@@ -6,13 +6,14 @@
  * no permission) is not.
  */
 import { GetSecretValueCommand, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import * as Redacted from "effect/Redacted";
 import { Unavailable } from "@fastagent-sh/fastagent/platform";
 
 export async function secretValues(
   secretName: string,
   environment: Readonly<Record<string, string | undefined>>,
   client: Pick<SecretsManagerClient, "send"> = new SecretsManagerClient({}),
-): Promise<Record<string, string>> {
+): Promise<Record<string, Redacted.Redacted<string>>> {
   const { SecretString } = await client.send(new GetSecretValueCommand({ SecretId: secretName })).catch((error) => {
     const { name, $fault } = error as { name?: string; $fault?: string };
     const passing = $fault === "server" || name === "ThrottlingException" || name === "TimeoutError";
@@ -27,14 +28,15 @@ export async function secretValues(
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`the secret ${secretName} is not a JSON object of names to values`);
   }
-  const values: Record<string, string> = {};
-  for (const [name, value] of Object.entries(parsed)) {
-    if (typeof value !== "string")
-      throw new Error(`the secret ${secretName} has ${name} as a ${typeof value}, not a string`);
-    if (environment[name] !== undefined) {
-      throw new Error(`${name} is both in the secret ${secretName} and in the runtime's environment: keep it in one`);
-    }
-    values[name] = value;
-  }
-  return values;
+  return Object.fromEntries(
+    Object.entries(parsed).map(([name, value]) => {
+      if (typeof value !== "string") {
+        throw new Error(`the secret ${secretName} has ${name} as a ${typeof value}, not a string`);
+      }
+      if (environment[name] !== undefined) {
+        throw new Error(`${name} is both in the secret ${secretName} and in the runtime's environment: keep it in one`);
+      }
+      return [name, Redacted.make(value)] as const;
+    }),
+  );
 }

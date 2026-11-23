@@ -9,6 +9,7 @@ import type { Entry } from "@fastagent-sh/client";
 import { createCommandDispatcher, getFaArgumentCompletions } from "./commands.ts";
 import { RemoteController, type RemoteViewState, buildSendContent } from "./controller.ts";
 import { RemoteEditor, wrapAutocompleteWithRemoteCommands } from "./editor.ts";
+import { hostEnv } from "./host-env.ts";
 import { type HttpRemoteConfig, type RemoteConfig, connectRemote, isHttpUrl } from "./remotes.ts";
 import { addRemoteFlow, errorText, loadConfigSafe } from "./remotes-ui.ts";
 import {
@@ -328,7 +329,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
 
   const connectDirectUrl = async (ctx: ExtensionContext, url: string, explicitKey?: string): Promise<void> => {
     let apiKey = explicitKey?.trim() || undefined;
-    if (!apiKey && !process.env.FASTAGENT_API_KEY?.trim() && ctx.hasUI) {
+    if (!apiKey && !hostEnv().FASTAGENT_API_KEY?.trim() && ctx.hasUI) {
       const entered = await ctx.ui.input(
         "API key for remote FastAgent",
         "$FASTAGENT_API_KEY or raw key (leave empty if set in env)",

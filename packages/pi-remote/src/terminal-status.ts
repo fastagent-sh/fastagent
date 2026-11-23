@@ -4,6 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { type ProgramStatus, formatProgramStatus } from "@earendil-works/pi-tui";
+import { hostEnv } from "./host-env.ts";
 
 export interface TerminalStatusOptions {
   write?: (sequence: string) => void;
@@ -42,7 +43,7 @@ export class TerminalStatusReporter {
   private lastKey?: string;
 
   constructor(options: TerminalStatusOptions = {}) {
-    const env = options.env ?? process.env;
+    const env = options.env ?? hostEnv();
     this.write = options.write ?? defaultWrite;
     this.cmuxEnabled = options.notifyCmux !== undefined || isCmuxEnv(env);
     this.notifyCmux = options.notifyCmux ?? defaultCmuxNotify;

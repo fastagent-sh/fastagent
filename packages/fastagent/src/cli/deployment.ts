@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import * as Redacted from "effect/Redacted";
 import type { AuthApi, RemoteAgent } from "@fastagent-sh/client/agent-api";
 import { connectAgent, connectAuth } from "@fastagent-sh/client";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@fastagent-sh/client/remotes";
 import { applyEnvValues } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
+import { decodeRuntimeCliEnv, readProcessEnv } from "../process-env.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { loadEnvValues, valueFileOf } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
@@ -29,7 +31,7 @@ export interface RemoteTargetFlags {
   remote?: string;
 }
 
-export function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
+export function defaultRemotesPath(env: NodeJS.ProcessEnv = readProcessEnv()): string {
   return resolveRemotesPath(env, homedir());
 }
 
@@ -45,8 +47,8 @@ function rejectPlacedInstance(instance: InstanceFlags | undefined, flagName: str
  * The key `--url` calls with: `--key`, or the first of `FASTAGENT_API_KEY` in this command's environment (the file
  * `--env-file` names laid under it). A deployment has no default file.
  */
-function deploymentKey(where: string): string {
-  const [key] = apiKeysFrom(process.env[API_KEY_VARIABLE]);
+function deploymentKey(where: string): Redacted.Redacted<string> {
+  const [key] = apiKeysFrom(decodeRuntimeCliEnv().apiKey);
   if (key === undefined) {
     failUsage(
       `no key to call ${where} with: pass --key, or set ${API_KEY_VARIABLE} in the environment of this command ` +
@@ -89,7 +91,7 @@ export async function resolveRemoteTarget(
   enterRemoteEnvironment(dirArg);
 
   if (target.url !== undefined) {
-    const apiKey = target.key ?? deploymentKey(target.url);
+    const apiKey = target.key ?? Redacted.value(deploymentKey(target.url));
     return {
       agent: connectAgent(target.url, { apiKey }),
       auth: connectAuth(target.url, { apiKey }),
@@ -122,12 +124,12 @@ export async function resolveRemoteTarget(
       apiKey = target.key;
     } else if (entry.apiKey?.trim()) {
       try {
-        apiKey = expandRemoteEnvRef(entry.apiKey.trim(), `remotes.${remoteName}.apiKey`, process.env);
+        apiKey = expandRemoteEnvRef(entry.apiKey.trim(), `remotes.${remoteName}.apiKey`, readProcessEnv());
       } catch (error) {
         failUsage(error instanceof Error ? error.message : String(error));
       }
     } else {
-      apiKey = deploymentKey(entry.url);
+      apiKey = Redacted.value(deploymentKey(entry.url));
     }
     return {
       agent: connectAgent(entry.url, { apiKey }),
@@ -151,7 +153,7 @@ export async function resolveRemoteTarget(
   try {
     return await connectExtensionRemote(remoteName, entry, {
       ...(target.key === undefined ? {} : { key: target.key }),
-      env: process.env,
+      env: readProcessEnv(),
       loadModule,
     });
   } catch (error) {

@@ -3,6 +3,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
+import { readProcessEnv } from "../process-env.ts";
 import {
   CODING_TOOL_NAMES,
   HARNESS_NAMES,
@@ -49,7 +50,7 @@ export interface HarnessSelection {
 export function resolveHarnessSelection(
   config: Pick<AgentConfig, "harness" | "sandbox">,
   overrides: { readonly harness?: string; readonly sandbox?: string } = {},
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env: Readonly<Record<string, string | undefined>> = readProcessEnv(),
 ): HarnessSelection {
   const rawHarness = overrides.harness ?? (env[HARNESS_ENV] || config.harness) ?? "pi-durable";
   if (!HARNESS_SET.has(rawHarness)) {

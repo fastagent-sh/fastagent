@@ -4,6 +4,7 @@
  * variables and provider-side grants are left unchanged.
  */
 import { enterAgentEnv } from "../../env.ts";
+import { readProcessEnv } from "../../process-env.ts";
 import { GLOBAL_AUTH_PATH, fastagentCredentialStore, resolveAuthPath } from "../../harnesses/models/credentials.ts";
 import { loginProviders } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/assembly.ts";
@@ -29,7 +30,9 @@ export async function runLogout(
   enterAgentEnv(agentDir ?? globalHome());
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(agentDir ?? globalHome());
   const store = fastagentCredentialStore(authPath);
-  const known = loginProviders(agentDir ? await definitionProviders(agentDir, process.env).catch(failStartup) : []);
+  const known = loginProviders(
+    agentDir ? await definitionProviders(agentDir, readProcessEnv()).catch(failStartup) : [],
+  );
   const stored = (await store.list())
     .map(({ providerId, type }) => ({
       id: providerId,

@@ -8,6 +8,7 @@ import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { listModels, providerOf } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/assembly.ts";
 import { enterAgentEnv } from "../../env.ts";
+import { readProcessEnv } from "../../process-env.ts";
 import { installProxyFetch } from "../../proxy.ts";
 import { formatModelsCommand } from "../models-view.ts";
 import { failStartup, optionalAgentDirOrExit } from "../fail.ts";
@@ -20,12 +21,12 @@ export async function runModels(
   let providers: Provider[] = [];
   if (agentDir) {
     enterAgentEnv(agentDir);
-    providers = await definitionProviders(agentDir, process.env).catch(failStartup);
+    providers = await definitionProviders(agentDir, readProcessEnv()).catch(failStartup);
   } else {
     installProxyFetch();
   }
   const environment = await modelEnvironment(agentDir, agentDir ? {} : { authPath: null }, providers, {
-    environment: definedValues(process.env),
+    environment: definedValues(readProcessEnv()),
   });
   const { lines, error } = formatModelsCommand(listModels(environment.models), search);
   if (opts.json) {

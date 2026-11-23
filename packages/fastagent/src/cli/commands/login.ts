@@ -7,6 +7,7 @@
 import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
+import { readProcessEnv } from "../../process-env.ts";
 import { dotEnvPath } from "../../value-file.ts";
 import {
   type FastagentCredentialStore,
@@ -69,7 +70,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   // providers).
   // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
   // environment the shell hands down, not one agent's value file.
-  const shellEnv = { ...process.env };
+  const shellEnv = readProcessEnv();
   enterAgentEnv(loginDir);
   // `-g` names the global file outright. Otherwise the agent's own file — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
@@ -79,7 +80,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   const ownAgent = opts.global ? undefined : agentDir;
   // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
   // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
-  const providersOf = () => (ownAgent ? definitionProviders(ownAgent, process.env) : Promise.resolve([]));
+  const providersOf = () => (ownAgent ? definitionProviders(ownAgent, readProcessEnv()) : Promise.resolve([]));
   const providers = await providersOf().catch(failStartup);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
@@ -93,7 +94,7 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
   }
   // What the agent reads, its file over the global one, is what authenticates each provider for it now.
   const statusFrom = ownAgent
-    ? ((await modelEnvironment(ownAgent, {}, providers, { environment: definedValues(process.env) }))
+    ? ((await modelEnvironment(ownAgent, {}, providers, { environment: definedValues(readProcessEnv()) }))
         .credentials as FastagentCredentialStore)
     : authPath;
   if (opts.input === false || opts.json === true || !isInteractive()) {

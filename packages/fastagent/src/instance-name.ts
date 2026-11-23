@@ -4,6 +4,8 @@
  * default is the definition's name made into one (`@scope/pkg` is not one), so two instances of one definition on one
  * machine take distinct names only by being given them.
  */
+import { readProcessEnv } from "./process-env.ts";
+
 /** Index-based edge trim (avoids quadratic regex backtracking on long runs). */
 function stripEdges(text: string, isEdge: (char: string) => boolean): string {
   let start = 0;
@@ -28,7 +30,9 @@ export function checkInstanceName(name: string): string {
 }
 
 /** The name `FASTAGENT_NAME` gives: unset and empty are the same, as for the path variables. */
-export function enteredInstanceName(env: NodeJS.ProcessEnv = process.env): string | undefined {
+export function enteredInstanceName(
+  env: Readonly<Record<string, string | undefined>> = readProcessEnv(),
+): string | undefined {
   return env[INSTANCE_NAME_ENV] || undefined;
 }
 

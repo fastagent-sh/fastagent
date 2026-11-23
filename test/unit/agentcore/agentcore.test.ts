@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { inspect } from "node:util";
+import * as Redacted from "effect/Redacted";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { DSQL_LIMITS, createIndexAsync, dsqlDatabase } from "@fastagent-sh/agentcore";
 import { AgentError as RootAgentError } from "@fastagent-sh/client";
@@ -351,7 +353,12 @@ describe("the agent's values from its secret", () => {
 
   it("reads the secret's names and values, and refuses one the runtime's environment also sets", async () => {
     const secret = holding(JSON.stringify({ ANTHROPIC_API_KEY: "sk-1", ZENDESK_TOKEN: "zd" }));
-    expect(await secretValues("support", {}, secret as never)).toEqual({
+    const resolved = await secretValues("support", {}, secret as never);
+    expect(Redacted.isRedacted(resolved.ANTHROPIC_API_KEY)).toBe(true);
+    expect(Redacted.isRedacted(resolved.ZENDESK_TOKEN)).toBe(true);
+    expect(JSON.stringify(resolved)).not.toContain("sk-1");
+    expect(inspect(resolved)).not.toContain("sk-1");
+    expect(Object.fromEntries(Object.entries(resolved).map(([k, v]) => [k, Redacted.value(v)]))).toEqual({
       ANTHROPIC_API_KEY: "sk-1",
       ZENDESK_TOKEN: "zd",
     });
