@@ -137,6 +137,7 @@ without being rewritten. When the following conflict, the earlier one wins; name
 
 ## Communication
 
-Everything in or on the repository is English: code, comments, docs, commits, PRs, reviews, issues, release notes. The
-reader is a senior engineer with full context. Lead with the conclusion, use tables for comparisons, do not restate,
-and cut what loses no information.
+Code, comments, commits, PRs, reviews, issues, release notes, and primary documentation are in English. User-facing
+documentation also maintains a Simplified Chinese mirror (`README.zh-CN.md` and `docs/zh-CN/`), kept in sync with
+the code and English originals. The reader is a senior engineer with full context. Lead with the conclusion, use tables
+for comparisons, do not restate, and cut what loses no information.
