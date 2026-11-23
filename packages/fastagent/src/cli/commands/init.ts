@@ -5,7 +5,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { INSTANCES_DIRNAME, displayPath, exists } from "../../paths.ts";
-import { initRepository, scaffoldAgent } from "../../scaffold/init.ts";
+import { assertSafeWriteTarget, initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import { expectedManifestDeps } from "../../scaffold/templates.ts";
 import { fastagentBuild } from "../../version.ts";
 import { failStartup } from "../fail.ts";
@@ -40,15 +40,20 @@ export async function runInit(dirArg = ".", opts: InitOptions = { install: true 
   const pendingPath = join(dir, PENDING_MARKER);
   const hadPending = await exists(pendingPath);
 
+  // Initialize git for fresh standalone scaffolds before npm install so a failed install still preserves the initial commit on retry.
+  const repository = result.mode === "fresh" ? await initRepository(dir, { mode: "fresh" }) : undefined;
+
   let installState: "installed" | "skipped" | "satisfied" = "skipped";
   if (opts.install) {
     const needInstall =
       hadPending || result.dependenciesChanged || !(await areDependenciesInstalled(dir, requiredPackages));
     if (needInstall) {
+      await assertSafeWriteTarget(dir, PENDING_MARKER, hadPending ? "update" : "create").catch(failStartup);
       writeFileAtomic(pendingPath, "pending\n");
       console.error("[fastagent] installing dependencies (npm install)…");
       const code = await npmInstall(dir);
       if (code !== 0) {
+        if (repository !== undefined) console.error(`[fastagent] git: ${repository}`);
         reportTrackedSecrets(result.trackedSecrets);
         console.error(
           `[fastagent] Error: npm install failed (exit ${code}) — scaffold kept in ${dir}; fix the issue and re-run \`${retryCommand(dirArg)}\``,
@@ -61,8 +66,6 @@ export async function runInit(dirArg = ".", opts: InitOptions = { install: true 
       installState = "satisfied";
     }
   }
-
-  const repository = result.mode === "fresh" ? await initRepository(dir, { mode: "fresh" }) : undefined;
 
   if (result.created.length === 0 && result.updated.length === 0 && installState === "satisfied") {
     console.error(`[fastagent] ${dir} is already ready (no changes)`);

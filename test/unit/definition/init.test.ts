@@ -218,6 +218,28 @@ describe("init: scaffoldAgent", () => {
     await expect(scaffoldAgent(tooOld)).rejects.toThrow(/incompatible version "\^0\.1\.0"/);
     expect(await exists(join(tooOld, "fastagent.config.ts"))).toBe(false);
 
+    const unbounded = await freshDir();
+    await writeFile(join(unbounded, "SYSTEM.md"), "Prompt.\n");
+    await writeFile(
+      join(unbounded, "package.json"),
+      JSON.stringify({ name: "host", type: "module", dependencies: { "@earendil-works/pi-durable": ">=1.6.0" } }),
+    );
+    await expect(scaffoldAgent(unbounded)).rejects.toThrow(/unrecognized version spec ">=1\.6\.0"/);
+    expect(await exists(join(unbounded, "fastagent.config.ts"))).toBe(false);
+
+    const prerelease = await freshDir();
+    await writeFile(join(prerelease, "SYSTEM.md"), "Prompt.\n");
+    await writeFile(
+      join(prerelease, "package.json"),
+      JSON.stringify({
+        name: "host",
+        type: "module",
+        dependencies: { "@earendil-works/pi-durable": "1.6.0-alpha.1" },
+      }),
+    );
+    await expect(scaffoldAgent(prerelease)).rejects.toThrow(/incompatible prerelease version "1\.6\.0-alpha\.1"/);
+    expect(await exists(join(prerelease, "fastagent.config.ts"))).toBe(false);
+
     // 5) Unrelated dist/ (even with a dummy build.json) is refused; a FastAgent dist/ is accepted untouched.
     const hostDist = await freshDir();
     await writeFile(join(hostDist, "SYSTEM.md"), "Prompt.\n");

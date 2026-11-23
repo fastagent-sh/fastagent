@@ -53,7 +53,7 @@ const ROOT_IGNORE_RULES: readonly { probe: string; rule: string }[] = [
   { probe: ".env.local", rule: ".env.*" },
 ];
 
-const SEMVER_SPEC = /^(\^|~|>=)?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/;
+const SEMVER_SPEC = /^(\^|~)?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?$/;
 
 async function lstatOrMissing(path: string) {
   return lstat(path).catch((e: NodeJS.ErrnoException) => {
@@ -67,7 +67,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** Reject symlinks or type mismatches anywhere along `rel` inside `dir` before writing. */
-async function assertSafeWriteTarget(dir: string, rel: string, mode: "create" | "update"): Promise<void> {
+export async function assertSafeWriteTarget(dir: string, rel: string, mode: "create" | "update"): Promise<void> {
   const parts = rel.split(/[\\/]/).filter(Boolean);
   let cursor = dir;
   for (let i = 0; i < parts.length; i++) {
@@ -169,10 +169,11 @@ async function assertCompatibleDist(dir: string, shown: string): Promise<void> {
 }
 
 interface ParsedSemver {
-  prefix: "" | "^" | "~" | ">=";
+  prefix: "" | "^" | "~";
   major: number;
   minor: number;
   patch: number;
+  prerelease: string | undefined;
 }
 
 function parseSemverSpec(spec: string): ParsedSemver | undefined {
@@ -183,6 +184,7 @@ function parseSemverSpec(spec: string): ParsedSemver | undefined {
     major: Number(match[2]),
     minor: Number(match[3]),
     patch: Number(match[4]),
+    prerelease: match[5],
   };
 }
 
@@ -202,6 +204,12 @@ function assertCompatibleDepSpec(pkgName: string, existing: unknown, required: s
   if (parsedExisting === undefined || parsedRequired === undefined) {
     throw new Error(
       `package.json: unrecognized version spec ${JSON.stringify(existing)} for "${pkgName}" ` +
+        `(expected ${JSON.stringify(required)}); update it manually or use \`${CHILD_HINT}\``,
+    );
+  }
+  if (parsedExisting.prerelease !== undefined || parsedRequired.prerelease !== undefined) {
+    throw new Error(
+      `package.json: incompatible prerelease version ${JSON.stringify(existing)} for "${pkgName}" ` +
         `(expected ${JSON.stringify(required)}); update it manually or use \`${CHILD_HINT}\``,
     );
   }
@@ -565,10 +573,14 @@ export async function scaffoldAgent(dir: string): Promise<ScaffoldResult> {
       const abs = join(dir, plan.rel);
       const parentRel = dirname(plan.rel);
       if (parentRel !== "." && parentRel !== "") {
-        const parentAbs = join(dir, parentRel);
-        if ((await lstatOrMissing(parentAbs)) === undefined) {
-          await mkdir(parentAbs, { recursive: true });
-          for (let p = parentRel; p !== "." && p !== ""; p = dirname(p)) {
+        const missingDirs: string[] = [];
+        for (let p = parentRel; p !== "." && p !== ""; p = dirname(p)) {
+          if ((await lstatOrMissing(join(dir, p))) === undefined) missingDirs.push(p);
+          else break;
+        }
+        if (missingDirs.length > 0) {
+          await mkdir(join(dir, parentRel), { recursive: true });
+          for (const p of missingDirs) {
             if (!createdDirs.includes(p)) createdDirs.push(p);
           }
         }

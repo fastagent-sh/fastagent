@@ -209,20 +209,27 @@ describe("init: scaffoldAgent", () => {
       expect(await exists(join(retryDir, ".fastagent", "install-pending"))).toBe(true);
       expect(await countRuns()).toBe(0);
 
-      // 2) Fix the cause and retry the exact same command: exits 0 and clears the pending marker.
+      // Fresh standalone scaffold already got its initial git commit even though npm install failed.
+      const retryGit = (args: string[]) =>
+        execFileSync("git", args, { cwd: retryDir, env: withIdentity, encoding: "utf8" }).trim();
+      expect(retryGit(["rev-list", "--count", "HEAD"])).toBe("1");
+
+      // 2) Fix the cause and retry the exact same command: exits 0, clears pending marker, and adds no extra commit.
       await rm(failFlag, { force: true });
       const second = await runInProcess(["init", "retry-agent"], base, npmEnv);
       expect(second.code, second.stderr).toBe(0);
       expect(await exists(join(retryDir, ".fastagent", "install-pending"))).toBe(false);
       expect(await countRuns()).toBe(1);
+      expect(retryGit(["rev-list", "--count", "HEAD"])).toBe("1");
 
-      // 3) Third run is a complete no-op: no file edits, no reinstall.
+      // 3) Third run is a complete no-op: no file edits, no reinstall, no extra commit.
       const beforePkg = await readFile(join(retryDir, "package.json"), "utf8");
       const beforePrompt = await readFile(join(retryDir, "SYSTEM.md"), "utf8");
       const third = await runInProcess(["init", "retry-agent"], base, npmEnv);
       expect(third.code, third.stderr).toBe(0);
       expect(third.stderr).toContain("already ready (no changes)");
       expect(await countRuns()).toBe(1);
+      expect(retryGit(["rev-list", "--count", "HEAD"])).toBe("1");
       expect(await readFile(join(retryDir, "package.json"), "utf8")).toBe(beforePkg);
       expect(await readFile(join(retryDir, "SYSTEM.md"), "utf8")).toBe(beforePrompt);
 
