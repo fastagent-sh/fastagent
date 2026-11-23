@@ -5,7 +5,7 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "paths": {},
-    "lib": ["ES2022", "ES2024.Promise", "DOM"],
+    "lib": ["ES2025", "DOM", "DOM.AsyncIterable"],
     "outDir": "dist",
     "rootDir": "src"
   },

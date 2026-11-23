@@ -19,7 +19,13 @@
   },
   "linter": {
     "enabled": true,
-    "rules": { "preset": "recommended" }
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noParameterAssign": "error",
+        "useConst": "error"
+      }
+    }
   },
   "assist": {
     "actions": {
