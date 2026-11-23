@@ -33,6 +33,7 @@ interface EnteredAgent {
   agentDir: string;
   instance: EnteredInstance;
   modelSpec?: string;
+  pickedModel?: string;
 }
 
 async function enterAgentDirectory(
@@ -44,8 +45,13 @@ async function enterAgentDirectory(
   const agentDir = agentDirOrExit(resolve(dirArg));
   const instance = enterInstance(agentDir, opts.instance);
   await before?.(agentDir, instance);
-  const modelSpec = await resolveFirstRunModel(agentDir, instance.env, opts, load);
-  return { agentDir, instance, ...(modelSpec ? { modelSpec } : {}) };
+  const { modelSpec, pickedModel } = await resolveFirstRunModel(agentDir, instance.env, opts, load);
+  return {
+    agentDir,
+    instance,
+    ...(modelSpec === undefined ? {} : { modelSpec }),
+    ...(pickedModel === undefined ? {} : { pickedModel }),
+  };
 }
 
 /**
@@ -57,7 +63,7 @@ export async function enterAgentCommand(
   opts: { model?: string; input?: boolean; instance?: InstanceFlags },
   before?: (agentDir: string, instance: EnteredInstance) => Promise<void>,
   load?: LoadDefinition,
-): Promise<Required<EnteredAgent>> {
+): Promise<Omit<EnteredAgent, "modelSpec"> & { modelSpec: string }> {
   const entered = await enterAgentDirectory(dirArg, opts, before, load);
   const { modelSpec } = entered;
   if (!modelSpec) {
@@ -113,24 +119,24 @@ async function resolveFirstRunModel(
   env: Readonly<Record<string, string | undefined>>,
   options: { model?: string; input?: boolean } = {},
   load?: LoadDefinition,
-): Promise<string | undefined> {
+): Promise<{ modelSpec?: string; pickedModel?: string }> {
   const loaded = (load ?? loadSourceDefinition)(agentDir);
   const definition = await (load === undefined ? loaded.catch(failStartup) : loaded);
   const spec = modelSpecFor(definition.config, options.model, env);
-  if (spec) return spec;
-  if (options.input === false) return undefined;
-  if (!isInteractive()) return undefined;
+  if (spec) return { modelSpec: spec };
+  if (options.input === false) return {};
+  if (!isInteractive()) return {};
   const providers =
     load === undefined
       ? await definitionProviders(agentDir, env).catch(failStartup)
       : buildDefinitionShape(definition, env).providers;
   const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(env) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
-  if (chosen === undefined) return undefined;
+  if (chosen === undefined) return {};
   console.error(
     `[fastagent] picked ${chosen} — set \`model: ${JSON.stringify(chosen)}\` in fastagent.config.ts to keep it`,
   );
-  return chosen;
+  return { modelSpec: chosen, pickedModel: chosen };
 }
 
 /** The credential-aware pick: full catalog annotated per provider, then the post-pick auth policy. */

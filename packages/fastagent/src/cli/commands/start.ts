@@ -57,7 +57,8 @@ async function prepareStartWorkspace(): Promise<string | undefined> {
 /** Take the storage on a deployed box, then open the built definition in `dirArg` and serve it. */
 async function openStartService(dirArg: string, opts: StartOptions): Promise<ServedAgent> {
   const deployedRoot = await prepareStartWorkspace();
-  const instanceFlags = deployedRoot === undefined ? opts.instance : { ...opts.instance, root: deployedRoot };
+  const instanceFlags =
+    deployedRoot === undefined ? opts.instance : { ...opts.instance, root: opts.instance?.root ?? deployedRoot };
   // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<AgentDefinition> | undefined;
   const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));

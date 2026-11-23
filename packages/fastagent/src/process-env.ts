@@ -25,12 +25,12 @@ function decodeEnvConfig<A>(
   return Effect.runSync(config.parse(provider));
 }
 
-/** Read one optional environment variable via Effect `Config`. */
+/** Read one optional environment variable at the boundary without per-call ConfigProvider allocation. */
 export function readOptionalEnv(
   name: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string | undefined {
-  return Option.getOrUndefined(decodeEnvConfig(Config.option(Config.String(name)), env));
+  return env[name];
 }
 
 const RuntimeCliEnvConfig = Config.all({

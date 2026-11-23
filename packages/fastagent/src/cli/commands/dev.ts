@@ -51,7 +51,7 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
       }),
     );
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
-  const { agentDir, modelSpec, instance } = await enterAgentCommand(dirArg, {
+  const { agentDir, modelSpec, pickedModel, instance } = await enterAgentCommand(dirArg, {
     ...opts,
     input: isWorker ? false : opts.input,
   });
@@ -80,9 +80,9 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
     }
   }
   await runDevSupervisor(agentDir, {
-    FASTAGENT_MODEL: modelSpec,
-    ...(instance.root === undefined ? {} : { [INSTANCE_ROOT_ENV]: instance.root }),
-    ...(instance.name === undefined ? {} : { [INSTANCE_NAME_ENV]: instance.name }),
+    ...(pickedModel === undefined ? {} : { FASTAGENT_MODEL: pickedModel }),
+    ...(opts.instance?.root === undefined || instance.root === undefined ? {} : { [INSTANCE_ROOT_ENV]: instance.root }),
+    ...(opts.instance?.name === undefined || instance.name === undefined ? {} : { [INSTANCE_NAME_ENV]: instance.name }),
     ...(opts.harness === undefined ? {} : { [HARNESS_ENV]: opts.harness }),
     ...(opts.sandbox === undefined ? {} : { [SANDBOX_ENV]: opts.sandbox }),
   });
