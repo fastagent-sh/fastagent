@@ -112,3 +112,10 @@ FastAgent ships as six version-locked npm packages so you install only what your
 | [`@fastagent-sh/agentcore`](api-reference.md) | Deploy & run an agent on Amazon Bedrock AgentCore + Aurora DSQL | Server runtime, DSQL adapter, Secrets Manager, CLI extension, optional CDK construct |
 | [`@fastagent-sh/harness-dsh`](api-reference.md) | Run an agent with kernel-enforced OS sandboxing (`--harness dsh`) | `@deepseek-ai/dsh` adapter; lazily loaded by `@fastagent-sh/fastagent` |
 | [`@fastagent-sh/pi-remote`](api-reference.md) | Connect interactively to deployed HTTP or AgentCore agents from Pi TUI (`/fa`) | `@fastagent-sh/client`; host Pi packages stay optional peer deps |
+
+### Runtime compatibility
+
+| Package tier | Packages | Build target | Runtime baseline | Notes |
+| --- | --- | --- | --- | --- |
+| **Client SDKs** | `@fastagent-sh/client`, `@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
+| **Server runtime & CLI** | `@fastagent-sh/fastagent`, `@fastagent-sh/agentcore`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/pi-remote` | ES2025 ESM | Node ≥ 24.15.0 (Node 26 Active LTS recommended) | `24.15.0` is the floor where built-in `node:sqlite` drops `ExperimentalWarning` on `stderr` without requiring native C++ builds. |

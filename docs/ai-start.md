@@ -59,7 +59,7 @@ mkdir -p lib test skills/review-batches src/tools
 ```json
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2025",
     "module": "NodeNext",
     "strict": true,
     "noEmit": true,

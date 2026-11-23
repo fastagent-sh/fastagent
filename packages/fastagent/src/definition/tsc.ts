@@ -69,7 +69,7 @@ function tscArguments(dir: string, outDir: string, roots: readonly string[], mor
     "--pretty",
     "false",
     "--target",
-    "es2022",
+    "es2025",
     "--module",
     "nodenext",
     "--moduleResolution",

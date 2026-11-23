@@ -8,7 +8,14 @@
       "project": ["test/**/*.ts", "scripts/*.mjs"],
       // The tests exercise the packages through these, the packages' own dependencies and optional peers, installed at
       // the root.
-      "ignoreDependencies": ["@aws-sdk/client-bedrock-agentcore", "@earendil-works/.+", "effect", "ignore"]
+      "ignoreDependencies": [
+        "@aws-sdk/client-bedrock-agentcore",
+        "@earendil-works/.+",
+        // Plugin name in tsconfig.json, provided by @effect/tsgo.
+        "@effect/language-service",
+        "effect",
+        "ignore"
+      ]
     },
     "packages/client": {
       "project": ["src/**/*.ts"],

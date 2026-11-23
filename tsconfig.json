@@ -1,13 +1,31 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2025",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022", "ES2024.Promise"],
+    "lib": ["ES2025"],
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "includeSuggestionsInTsc": false,
+        "allowedUnstableApis": [
+          "@effect/platform-node/NodeHttpServer",
+          "effect/ByteSize",
+          "effect/encoding/Sse",
+          "effect/http",
+          "effect/http-api",
+          "effect/net/NetAddress"
+        ],
+        "diagnosticSeverity": {
+          "floatingEffect": "error"
+        }
+      }
+    ],
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,

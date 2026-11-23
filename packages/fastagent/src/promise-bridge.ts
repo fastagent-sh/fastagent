@@ -45,9 +45,9 @@ export function fromPromise<A>(run: () => Promise<A>): Effect.Effect<A, PromiseF
 /** A promise with no abort hook: interruption joins the issued work before releasing. */
 export function joinPromise<A>(run: () => Promise<A>): Effect.Effect<A, PromiseFailure> {
   return Effect.acquireUseRelease(
-    Effect.try({ try: run, catch: (cause) => new PromiseFailure(cause) }),
-    wait,
-    (pending, exit) => (Exit.hasInterrupts(exit) ? Effect.exit(wait(pending)) : Effect.void),
+    Effect.try({ try: () => ({ promise: run() }), catch: (cause) => new PromiseFailure(cause) }),
+    ({ promise }) => wait(promise),
+    ({ promise }, exit) => (Exit.hasInterrupts(exit) ? Effect.exit(wait(promise)) : Effect.void),
   );
 }
 
@@ -62,13 +62,13 @@ export function abortThenJoin<A>(
   abort: () => void | Promise<void>,
 ): Effect.Effect<A, PromiseFailure> {
   return Effect.acquireUseRelease(
-    Effect.try({ try: run, catch: (cause) => new PromiseFailure(cause) }),
-    wait,
-    (pending, exit) =>
+    Effect.try({ try: () => ({ promise: run() }), catch: (cause) => new PromiseFailure(cause) }),
+    ({ promise }) => wait(promise),
+    ({ promise }, exit) =>
       Exit.hasInterrupts(exit)
         ? cleanupQuietly(`${label} abort`, abort).pipe(
             // Cancellation silences the promise's result, but its work must settle before release.
-            Effect.andThen(Effect.exit(wait(pending))),
+            Effect.andThen(Effect.exit(wait(promise))),
           )
         : Effect.void,
   );

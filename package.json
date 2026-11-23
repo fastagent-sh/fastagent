@@ -21,7 +21,7 @@
     "test": "vitest --run --project unit",
     "test:guards": "vitest --run --project unit test/guards",
     "test:integration": "vitest --run --project integration",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "effect-tsgo tsc --noEmit",
     "lint": "biome check packages test && node scripts/check-doc-links.mjs && knip",
     "format": "biome check --write packages test",
     "release:patch": "node scripts/release.mjs patch",
@@ -32,6 +32,7 @@
   "devDependencies": {
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
     "@biomejs/biome": "^2.6.4",
+    "@effect/tsgo": "^0.73.4",
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
     "@electric-sql/pglite": "^0.5.16",
