@@ -5,7 +5,9 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "paths": {},
-    "lib": ["ES2025", "DOM", "DOM.AsyncIterable"],
+    // Node 22 (V8 12.4) supports ES2024 plus Set methods and Iterator helpers, not full ES2025 (e.g. RegExp.escape).
+    "target": "ES2024",
+    "lib": ["ES2024", "ES2025.Collection", "ES2025.Iterator", "DOM", "DOM.AsyncIterable"],
     "outDir": "dist",
     "rootDir": "src"
   },

@@ -386,10 +386,7 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
         let stage: SendStage | undefined;
         let messageId: string | undefined;
         return watched<MessageStreamEvent>(
-          Effect.try({
-            try: () => keyed(sendRequest, "messages.stream"),
-            catch: (error) => (error instanceof AgentError ? error : agentError("invalid_request", said(error))),
-          }).pipe(
+          Effect.try({ try: () => keyed(sendRequest, "messages.stream"), catch: read }).pipe(
             Effect.flatMap((keying) => {
               stage = keying.stage;
               return client.send({
@@ -445,10 +442,7 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
       let stage: SendStage | undefined;
       let messageId: string | undefined;
       return watched<MessageStreamEvent>(
-        Effect.try({
-          try: () => keyedInvoke(invokeRequest, "invokeStream"),
-          catch: (error) => (error instanceof AgentError ? error : agentError("invalid_request", said(error))),
-        }).pipe(
+        Effect.try({ try: () => keyedInvoke(invokeRequest, "invokeStream"), catch: read }).pipe(
           Effect.flatMap((keying) => {
             stage = keying.stage;
             return client.invoke({

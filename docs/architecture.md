@@ -115,9 +115,7 @@ FastAgent ships as six version-locked npm packages so you install only what your
 
 ### Runtime compatibility
 
-All packages compile to **ES2025** ESM:
-
-| Package tier | Packages | Runtime baseline | Notes |
-| --- | --- | --- | --- |
-| **Client SDKs** | `@fastagent-sh/client`, `@fastagent-sh/client-agentcore` | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
-| **Server runtime & CLI** | `@fastagent-sh/fastagent`, `@fastagent-sh/agentcore`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/pi-remote` | Node ≥ 24.15.0 (Node 26 Active LTS recommended) | `24.15.0` is the floor where built-in `node:sqlite` drops `ExperimentalWarning` on `stderr` without requiring native C++ builds. |
+| Package tier | Packages | Build target | Runtime baseline | Notes |
+| --- | --- | --- | --- | --- |
+| **Client SDKs** | `@fastagent-sh/client`, `@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
+| **Server runtime & CLI** | `@fastagent-sh/fastagent`, `@fastagent-sh/agentcore`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/pi-remote` | ES2025 ESM | Node ≥ 24.15.0 (Node 26 Active LTS recommended) | `24.15.0` is the floor where built-in `node:sqlite` drops `ExperimentalWarning` on `stderr` without requiring native C++ builds. |

@@ -115,9 +115,7 @@ FastAgent 以 6 个版本号锁定的 npm 包发布，按角色按需安装：
 
 ### 运行时兼容矩阵
 
-所有包均编译为 **ES2025** ESM：
-
-| 包分层 | 包含包 | 运行时基线 | 说明 |
-| --- | --- | --- | --- |
-| **客户端 SDK** | `@fastagent-sh/client`、`@fastagent-sh/client-agentcore` | Node 22+、Web Baseline 浏览器、Cloudflare Workers、Vercel Edge、Bun | 不锁定 `engines`，零 Node API 依赖；公开入口返回标准 `Promise` / `AsyncIterable`。 |
-| **服务端运行时与 CLI** | `@fastagent-sh/fastagent`、`@fastagent-sh/agentcore`、`@fastagent-sh/harness-dsh`、`@fastagent-sh/pi-remote` | Node ≥ 24.15.0（推荐 Node 26 Active LTS） | `24.15.0` 起内置 `node:sqlite` 不再向 `stderr` 输出 `ExperimentalWarning`，无需编译原生 C++ 插件。 |
+| 包分层 | 包含包 | 编译目标 | 运行时基线 | 说明 |
+| --- | --- | --- | --- | --- |
+| **客户端 SDK** | `@fastagent-sh/client`、`@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+、Web Baseline 浏览器、Cloudflare Workers、Vercel Edge、Bun | 不锁定 `engines`，零 Node API 依赖；公开入口返回标准 `Promise` / `AsyncIterable`。 |
+| **服务端运行时与 CLI** | `@fastagent-sh/fastagent`、`@fastagent-sh/agentcore`、`@fastagent-sh/harness-dsh`、`@fastagent-sh/pi-remote` | ES2025 ESM | Node ≥ 24.15.0（推荐 Node 26 Active LTS） | `24.15.0` 起内置 `node:sqlite` 不再向 `stderr` 输出 `ExperimentalWarning`，无需编译原生 C++ 插件。 |
