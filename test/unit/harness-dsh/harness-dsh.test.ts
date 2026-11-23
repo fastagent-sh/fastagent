@@ -81,6 +81,20 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     expect(bridged.output.render?.({} as never, out as never)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
 
     await expect(bridged.execute({ name: 123 }, execCtx)).rejects.toThrow(/Invalid arguments/);
+
+    const parkedTool = {
+      name: "parked",
+      description: "Returns a pi-durable park result",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ sleep: { until: Date.now() + 1000 } }),
+    };
+    const bridgedParked = bridgeDshRuntimeTool(parkedTool, {
+      toolsByName: new Map([[parkedTool.name, parkedTool]]),
+      onProgress: () => {},
+    });
+    await expect(bridgedParked.execute({}, execCtx)).rejects.toThrow(
+      /returned a park response \(sleep\/wait\), which requires harness: "pi-durable"/,
+    );
   });
 
   it("buildDshSandboxPolicy produces fail-closed policies for workspace, read-only, and off modes", () => {

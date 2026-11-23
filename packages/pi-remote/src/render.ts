@@ -345,7 +345,7 @@ export function createLiveWidgetComponent(getState: () => RemoteViewState, theme
     invalidate() {
       msgComp?.invalidate();
     },
-    render(width: number): string[] {
+    render(width: number): readonly string[] {
       const state = getState();
       if (!hasLiveContent(state)) {
         msgComp = undefined;

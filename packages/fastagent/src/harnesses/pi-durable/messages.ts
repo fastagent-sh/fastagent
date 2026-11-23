@@ -198,7 +198,7 @@ function activeToolsOf(live: LiveView | undefined): ActiveTool[] {
     active.push({
       toolCallId: slot.callId,
       name: slot.name,
-      status: slot.status,
+      status: slot.status === "pending" ? "pending" : "running",
       ...(progress === undefined ? {} : { progress }),
     });
   }

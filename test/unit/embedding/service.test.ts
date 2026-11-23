@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
+import { registerSessionResourceCleanup } from "@earendil-works/pi-ai/session-resources";
 import { obj } from "@earendil-works/pi-schema";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveService } from "../../../packages/fastagent/src/cli/serve.ts";
@@ -210,6 +211,96 @@ describe("openAgent: an agent directory opened in an app", () => {
     } finally {
       releaseCleanup();
       await agent.close();
+    }
+  });
+
+  it("releases only the closed agent's provider session resources without affecting another live agent, and preserves provider identity across reopen", async () => {
+    const dir = await agentDir();
+    const rootA = await mkdtemp(join(tmpdir(), "fa-prov-res-a-"));
+    const rootB = await mkdtemp(join(tmpdir(), "fa-prov-res-b-"));
+    const liveResources = new Set<string>();
+    const cleanupCalls: Array<string | undefined> = [];
+    const unregister = registerSessionResourceCleanup((sessionId) => {
+      cleanupCalls.push(sessionId);
+      if (sessionId === undefined) liveResources.clear();
+      else liveResources.delete(sessionId);
+    });
+
+    const seenSessions: string[] = [];
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses(
+      Array.from({ length: 10 }, () => (_context, options) => {
+        const providerSessionId = options?.sessionId;
+        if (providerSessionId !== undefined) {
+          seenSessions.push(providerSessionId);
+          liveResources.add(providerSessionId);
+        }
+        return fauxAssistantMessage("ok");
+      }),
+    );
+    const definition = defineDefinition({
+      format: DEFINITION_FORMAT,
+      builtWith: "0.0.0",
+      name: "provider-res-test",
+      version: "0.0.0",
+      dir,
+      config: { model: "gw/m1", providers: [faux.provider] },
+      registry: { tools: [], extensions: [] },
+    });
+
+    let agentA: Awaited<ReturnType<typeof openAgent>> | undefined;
+    let agentB: Awaited<ReturnType<typeof openAgent>> | undefined;
+    let reopenedA: Awaited<ReturnType<typeof openAgent>> | undefined;
+    try {
+      agentA = await openAgent(definition, { root: rootA });
+      agentB = await openAgent(definition, { root: rootB });
+
+      const sA = await agentA.sessions.create();
+      const sB = await agentB.sessions.create();
+      expect((await agentA.messages.send({ sessionId: sA.id, content: "hi A" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+      expect((await agentB.messages.send({ sessionId: sB.id, content: "hi B" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+
+      const [providerIdA, providerIdB] = seenSessions;
+      expect(providerIdA).toBeTypeOf("string");
+      expect(providerIdB).toBeTypeOf("string");
+      expect(providerIdA).not.toBe(providerIdB);
+      expect(liveResources.has(providerIdA as string)).toBe(true);
+      expect(liveResources.has(providerIdB as string)).toBe(true);
+
+      // Closing agentA releases only agentA's provider session resource, never via global cleanup.
+      await agentA.close();
+      agentA = undefined;
+      expect(cleanupCalls).not.toContain(undefined);
+      expect(liveResources.has(providerIdA as string)).toBe(false);
+      expect(liveResources.has(providerIdB as string)).toBe(true);
+
+      // agentB remains live and functional.
+      expect((await agentB.messages.send({ sessionId: sB.id, content: "still alive" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+      await agentB.close();
+      agentB = undefined;
+      expect(liveResources.size).toBe(0);
+
+      // Reopening agentA keeps its durable provider session ID and releases it again on close.
+      reopenedA = await openAgent(definition, { root: rootA });
+      expect((await reopenedA.messages.send({ sessionId: sA.id, content: "after reopen" }, { wait: 15 })).status).toBe(
+        "completed",
+      );
+      expect(seenSessions.at(-1)).toBe(providerIdA);
+      expect(liveResources.has(providerIdA as string)).toBe(true);
+      await reopenedA.close();
+      reopenedA = undefined;
+      expect(liveResources.size).toBe(0);
+    } finally {
+      await agentA?.close().catch(() => undefined);
+      await agentB?.close().catch(() => undefined);
+      await reopenedA?.close().catch(() => undefined);
+      unregister();
     }
   });
 });
