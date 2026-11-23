@@ -184,7 +184,7 @@ All API routes live under `/v1` and require `Authorization: Bearer <key>` (confi
 
 | Method & path | Operation |
 | --- | --- |
-| `GET /health` | Public health probe (`200 { "status": "ok" }`, no auth) |
+| `GET /health` | Public readiness probe (`200 { "status": "ok" }` while ready, `503 { "status": "unavailable" }` once shutting down; no auth) |
 | `GET /v1/agent`, `GET /v1/usage`, `GET /v1/openapi.json` | `info`, `usage`, OpenAPI 3.1 schema |
 | `POST /v1/sessions`, `GET /v1/sessions?limit&after` | `sessions.create` (`201`), `sessions.list` |
 | `GET`, `PATCH`, `DELETE /v1/sessions/{sessionId}` | `sessions.get`, `sessions.update`, `sessions.delete` (`204`) |

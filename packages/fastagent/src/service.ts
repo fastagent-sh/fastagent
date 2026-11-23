@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import type { Agent, AuthApi, InvokeApi } from "@fastagent-sh/client/agent-api";
+import { createCloseSignal } from "./close-signal.ts";
 import { type Handler, serveHandler, totalFetch } from "./http/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -39,6 +40,8 @@ export interface Service {
   listen(port: number, host?: string): Promise<number>;
   /** The instance's remote authentication API, when opened on durable storage. */
   readonly auth?: AuthApi;
+  /** Whether the service and underlying agent runtime are ready to accept work. */
+  ready(): boolean;
   /**
    * Stop the server, giving requests in flight a moment before ending them. It does NOT drain
    * the agent's messages: accepted messages are durable and resume after a restart.
@@ -50,6 +53,8 @@ export interface Service {
 export interface ServedAgent extends Service {
   /** Whether the Agent API is served, under `/v1`: only with a key. */
   api: boolean;
+  /** Subscribe to the underlying agent runtime starting shutdown (fires synchronously on close start). */
+  onRuntimeClose(listener: () => void): () => void;
 }
 
 /**
@@ -60,12 +65,14 @@ export function serviceOver(
   handler: Handler,
   shutdown: () => Promise<void>,
   endStreams: () => Promise<void> = async () => {},
+  isReady: () => boolean = () => true,
 ): Service {
   let listener: ReturnType<typeof serveHandler> | undefined;
   let closing: Promise<void> | undefined;
   const fetch = totalFetch(handler);
   return {
     fetch,
+    ready: () => closing === undefined && isReady(),
     listen(port, host) {
       if (closing !== undefined) return Promise.reject(new Error("the service is closed"));
       if (listener !== undefined) return Promise.reject(new Error("the service is already listening"));
@@ -107,20 +114,26 @@ export interface ServeOptions {
 
 /** What the assembly serves: the opened agent, its invoker, and its optional auth manager. */
 interface ServableAgent {
-  agent: Agent;
+  agent: Agent & {
+    ready?(): boolean;
+    subscribeClose?(listener: () => void): () => void;
+  };
   invoker?: InvokeApi;
   auth?: AuthApi;
 }
 
-/** `GET /health` (and its HEAD) answers once the service is up; anything else outside the Agent API is not here. */
-function surface(api: ReturnType<typeof apiHandler> | undefined): Handler {
+/** `GET /health` (and its HEAD) reflects agent readiness (200 ok, 503 unavailable once closing); nothing else outside the Agent API is here. */
+function surface(api: ReturnType<typeof apiHandler> | undefined, isReady: () => boolean): Handler {
   return (req) => {
     const path = new URL(req.url).pathname;
     if (api !== undefined && isApiPath(path)) return api.fetch(req);
     if (path !== "/health") return text("not found\n", 404);
-    if (req.method === "HEAD")
-      return new Response(null, { status: 200, headers: { "content-type": "application/json" } });
-    return req.method === "GET" ? Response.json({ status: "ok" }) : text("method not allowed\n", 405);
+    if (req.method !== "GET" && req.method !== "HEAD") return text("method not allowed\n", 405);
+    const ok = isReady();
+    if (req.method === "HEAD") {
+      return new Response(null, { status: ok ? 200 : 503, headers: { "content-type": "application/json" } });
+    }
+    return Response.json(ok ? { status: "ok" } : { status: "unavailable" }, { status: ok ? 200 : 503 });
   };
 }
 
@@ -134,6 +147,9 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ...(auth === undefined ? {} : { auth }),
       })
     : undefined;
+  const runtimeClose = createCloseSignal();
+  if (agent.ready?.() === false) runtimeClose.mark();
+  const unsubscribeClose = agent.subscribeClose?.(runtimeClose.mark);
   return Effect.runPromise(
     Effect.gen(function* () {
       const lifetime = yield* Scope.make();
@@ -148,15 +164,30 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
         ),
       );
       return yield* Effect.gen(function* () {
+        if (unsubscribeClose !== undefined) {
+          yield* Effect.addFinalizer(() => Effect.sync(unsubscribeClose));
+        }
         if (api !== undefined) yield* Effect.addFinalizer(() => cleanupQuietly("closing the Agent API", api.dispose));
+        let serviceClosing = false;
+        const isReady = () => !serviceClosing && !runtimeClose.isClosing();
+        const base = serviceOver(
+          surface(api, isReady),
+          () => Effect.runPromise(shutdown),
+          async () => {
+            serviceClosing = true;
+            await api?.endStreams();
+          },
+          isReady,
+        );
         return {
-          ...serviceOver(
-            surface(api),
-            () => Effect.runPromise(shutdown),
-            async () => api?.endStreams(),
-          ),
+          ...base,
+          close: () => {
+            serviceClosing = true;
+            return base.close();
+          },
           ...(auth === undefined ? {} : { auth }),
           api: api !== undefined,
+          onRuntimeClose: runtimeClose.subscribe,
         };
       }).pipe(
         Scope.provide(lifetime),

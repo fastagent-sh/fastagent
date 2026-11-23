@@ -97,8 +97,9 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 ```
 
 `LocalAgent` 上的生命周期辅助方法：
+- **`agent.ready()` / `service.ready()`：** 运行时可接收工作时返回 `true`，关闭一旦开始（在异步清理完成前）即同步切换为 `false`；`GET /health` 会同步返回 `503`，但嵌入式模式绝不退出宿主进程。
 - **`agent.busy()`：** 当有任意消息轮次或远程认证流程活跃时返回 `true`（适合优雅下线或空闲休眠探活）。
-- **`agent.closed`：** 可选 Promise，在实例停止服务（调用 `close()` 或 PostgreSQL 单写者租约丢失）时 resolve。
+- **`agent.closed`：** 可选 Promise，在 `close()` 或 PostgreSQL 单写者租约丢失后的清理完成后 resolve。
 - **`agent.close()`：** 关闭已启动的 HTTP 服务并释放存储。运行中的轮次会被安全中断并在下次打开时自动恢复（若需永久终止，请先调用 `agent.sessions.cancel(sessionId)`）。
 
 ### 向终端用户推送流式输出
