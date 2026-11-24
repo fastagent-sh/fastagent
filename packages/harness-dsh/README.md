@@ -1,6 +1,6 @@
 # @fastagent-sh/harness-dsh (Experimental)
 
-Run any [FastAgent](https://fastagent.sh) with kernel-enforced OS sandboxing (`sandbox-exec` on macOS, `bwrap` / `Landlock` on Linux, restricted tokens on Windows) powered by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness)—with zero changes to your prompt, skills, portable tools, or callers.
+Run any [FastAgent](https://github.com/fastagent-sh/fastagent) with kernel-enforced OS sandboxing (`sandbox-exec` on macOS, `bwrap` / `Landlock` on Linux, restricted tokens on Windows) powered by [DeepSeek Harness (`@deepseek-ai/dsh`)](https://github.com/deepseek-ai/deepseek-harness)—with zero changes to your prompt, skills, portable tools, or callers.
 
 ## Install
 
@@ -58,4 +58,4 @@ const agent = await openAgent(myAgent, {
 
 Pins `@deepseek-ai/dsh@0.2.2-rc.5` while upstream matures toward a stable release.
 
-See [Configuration](https://fastagent.sh/docs/configuration/#harness-and-sandbox-selection) and [Technical architecture](https://fastagent.sh/docs/architecture/).
+See [Configuration](https://github.com/fastagent-sh/fastagent/blob/main/docs/configuration.md#harness-and-sandbox-selection) and [Technical architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md).

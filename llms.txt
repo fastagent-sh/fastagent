@@ -6,35 +6,35 @@ Key facts:
 
 - Install: `npm i -g @fastagent-sh/fastagent` (CLI) or `npm i @fastagent-sh/fastagent` (library). Requires Node >= 24.15. Inside an agent directory, global `fastagent` delegates to the agent's installed version; otherwise use `npx @fastagent-sh/fastagent <command>` (never `npx fastagent`).
 - Agent directory: marked by `fastagent.config.ts` (`defineAgent`): `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, portable tools in `src/tools/` (`defineTool` from `@fastagent-sh/fastagent` supporting Zod v4 / Standard JSON Schema v1, plain JSON Schema `as const`, or `pi-schema`), and `pi-durable` extensions in `src/extensions/`. `fastagent build` compiles into `dist/`.
-- Contract: the [Agent API](https://fastagent.sh/docs/agent-api/) in process (`openAgent`) and over HTTP (`connectAgent` / `connectAuth` from `@fastagent-sh/client`, zero Node deps): sessions (create, get, list, update, delete, fork, cancel, compact, entries, events, attachments), durable messages (`send`, `stream`, `get`), single-call `POST /v1/invoke` with caller-named `conversation` (scale-to-zero friendly, `wait` up to 600s), and remote provider auth (`/v1/auth/*`, persisted in durable instance storage). Served under `/v1` when `FASTAGENT_API_KEY` is set; `GET /health` is public.
+- Contract: the [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) in process (`openAgent`) and over HTTP (`connectAgent` / `connectAuth` from `@fastagent-sh/client`, zero Node deps): sessions (create, get, list, update, delete, fork, cancel, compact, entries, events, attachments), durable messages (`send`, `stream`, `get`), single-call `POST /v1/invoke` with caller-named `conversation` (scale-to-zero friendly, `wait` up to 600s), and remote provider auth (`/v1/auth/*`, persisted in durable instance storage). Served under `/v1` when `FASTAGENT_API_KEY` is set; `GET /health` is public.
 - Packages (6, single version): `@fastagent-sh/fastagent`, `@fastagent-sh/client`, `@fastagent-sh/client-agentcore`, `@fastagent-sh/agentcore`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/pi-remote`.
 - Core CLI: `fastagent [-C <dir>] init | login | logout | dev | invoke | info | models | build | start | deploy | remote` (`deploy init docker|compose|fly|railway|agentcore`, `deploy check [--json]`, `remote list|add|remove|default`). Coding agents verify with `fastagent info --json`, `fastagent login <provider/model-id> --check`, `fastagent invoke [--json] [--session <id>] [--conversation <name>] [--remote <name>]`, and `fastagent deploy check --json`.
 
 ## Start here
 
-- [Website](https://fastagent.sh/): project overview, install, and product paths.
-- [AI-guided start](https://fastagent.sh/start.md): executable instructions for a coding agent.
-- [Documentation index](https://fastagent.sh/docs/): full documentation map.
+- [Repository](https://github.com/fastagent-sh/fastagent): project overview, install, and product paths.
+- [AI-guided start](https://raw.githubusercontent.com/fastagent-sh/fastagent/main/docs/ai-start.md): executable instructions for a coding agent.
+- [Documentation index](https://github.com/fastagent-sh/fastagent/blob/main/docs/README.md): full documentation map.
 
 ## Guides
 
-- [Overview](https://fastagent.sh/docs/overview/): product goals, positioning, core concepts, and boundaries.
-- [Technical architecture](https://fastagent.sh/docs/architecture/): system layers, package boundaries, dual harnesses, storage & fencing, security, and OTLP observability.
-- [Quickstart](https://fastagent.sh/docs/quickstart/): scaffold, invoke, add a portable tool, build, and run.
-- [Packaging, Distribution & CI/CD](https://fastagent.sh/docs/packaging-and-ci/): compile into versioned ESM npm packages (`dist/`), `peerDependencies` sharing, `npm publish`, and `--json` CI gates.
-- [Agent development guide](https://fastagent.sh/docs/ai-start/): step-by-step build, test, and deploy workflow for humans and coding agents.
-- [Configuration](https://fastagent.sh/docs/configuration/): `fastagent.config.ts`, harnesses & OS sandboxing, models & custom providers, secrets (`needs`), PostgreSQL, coding tools, and OTLP traces.
-- [MCP servers](https://fastagent.sh/docs/mcp/): local stdio and remote Streamable HTTP MCP tool servers.
-- [Remotes & clients](https://fastagent.sh/docs/remotes/): `fastagent remote`, `remotes.json`, remote `login`/`logout`, `@fastagent-sh/client`, pluggable cloud transports, and `@fastagent-sh/pi-remote`.
-- [CLI reference](https://fastagent.sh/docs/cli/): every command, flag, exit code, and automation rule.
-- [Embedding](https://fastagent.sh/docs/embedding/): `openAgent`, `openPostgresDatabase`, `service.fetch`, and framework mounts.
-- [Deploy](https://fastagent.sh/docs/deploy/): Docker, Docker Compose, Fly.io, Railway, scale-to-zero `POST /v1/invoke`, and `deploy check`.
-- [AgentCore](https://fastagent.sh/docs/agentcore/): per-user microVM deployment on Amazon Bedrock AgentCore with Aurora DSQL and Secrets Manager.
-- [Troubleshooting](https://fastagent.sh/docs/troubleshooting/): common setup, harness, remote, auth, and deployment issues.
+- [Overview](https://github.com/fastagent-sh/fastagent/blob/main/docs/overview.md): product goals, positioning, core concepts, and boundaries.
+- [Technical architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md): system layers, package boundaries, dual harnesses, storage & fencing, security, and OTLP observability.
+- [Quickstart](https://github.com/fastagent-sh/fastagent/blob/main/docs/quickstart.md): scaffold, invoke, add a portable tool, build, and run.
+- [Packaging, Distribution & CI/CD](https://github.com/fastagent-sh/fastagent/blob/main/docs/packaging-and-ci.md): compile into versioned ESM npm packages (`dist/`), `peerDependencies` sharing, `npm publish`, and `--json` CI gates.
+- [Agent development guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md): step-by-step build, test, and deploy workflow for humans and coding agents.
+- [Configuration](https://github.com/fastagent-sh/fastagent/blob/main/docs/configuration.md): `fastagent.config.ts`, harnesses & OS sandboxing, models & custom providers, secrets (`needs`), PostgreSQL, coding tools, and OTLP traces.
+- [MCP servers](https://github.com/fastagent-sh/fastagent/blob/main/docs/mcp.md): local stdio and remote Streamable HTTP MCP tool servers.
+- [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md): `fastagent remote`, `remotes.json`, remote `login`/`logout`, `@fastagent-sh/client`, pluggable cloud transports, and `@fastagent-sh/pi-remote`.
+- [CLI reference](https://github.com/fastagent-sh/fastagent/blob/main/docs/cli.md): every command, flag, exit code, and automation rule.
+- [Embedding](https://github.com/fastagent-sh/fastagent/blob/main/docs/embedding.md): `openAgent`, `openPostgresDatabase`, `service.fetch`, and framework mounts.
+- [Deploy](https://github.com/fastagent-sh/fastagent/blob/main/docs/deploy.md): Docker, Docker Compose, Fly.io, Railway, scale-to-zero `POST /v1/invoke`, and `deploy check`.
+- [AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md): per-user microVM deployment on Amazon Bedrock AgentCore with Aurora DSQL and Secrets Manager.
+- [Troubleshooting](https://github.com/fastagent-sh/fastagent/blob/main/docs/troubleshooting.md): common setup, harness, remote, auth, and deployment issues.
 
 ## Reference
 
-- [Agent API](https://fastagent.sh/docs/agent-api/): sessions, messages, `POST /v1/invoke`, streaming, remote auth, errors, and HTTP routes.
-- [API reference](https://fastagent.sh/docs/api-reference/): all six packages and public TypeScript entry points.
+- [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md): sessions, messages, `POST /v1/invoke`, streaming, remote auth, errors, and HTTP routes.
+- [API reference](https://github.com/fastagent-sh/fastagent/blob/main/docs/api-reference.md): all six packages and public TypeScript entry points.
 - [Contributing](https://github.com/fastagent-sh/fastagent/blob/main/CONTRIBUTING.md): branch model, PR loop, and review policy.
 - [Security policy](https://github.com/fastagent-sh/fastagent/security/policy): vulnerability reporting and credential/isolation model.

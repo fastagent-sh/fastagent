@@ -1,6 +1,6 @@
 # @fastagent-sh/agentcore
 
-Deploy your [FastAgent](https://fastagent.sh) on Amazon Bedrock AgentCore with per-user microVM isolation, Amazon Aurora DSQL persistence, and AWS Secrets Manager values.
+Deploy your [FastAgent](https://github.com/fastagent-sh/fastagent) on Amazon Bedrock AgentCore with per-user microVM isolation, Amazon Aurora DSQL persistence, and AWS Secrets Manager values.
 
 ```bash
 npm i @fastagent-sh/agentcore        # adds `fastagent deploy init agentcore` and `fastagent agentcore`
@@ -23,4 +23,4 @@ const agent = connectAgentCore({ runtimeArn, sessionId: sessionOf(user) });
 const message = await agent.invoke({ conversation: "main", content: "hi" }, { wait: 120 });
 ```
 
-See [Amazon Bedrock AgentCore](https://fastagent.sh/docs/agentcore/) and [Technical architecture](https://fastagent.sh/docs/architecture/).
+See [Amazon Bedrock AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md) and [Technical architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md).

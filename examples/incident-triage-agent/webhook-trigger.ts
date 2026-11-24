@@ -17,7 +17,7 @@ const incidentId = process.env.INCIDENT_ID ?? "inc-2026-0415";
 const alertEventId = process.env.ALERT_EVENT_ID ?? `${incidentId}-evt-1`;
 const alertSummary =
   process.env.ALERT_SUMMARY ??
-  "5xx error rate spiked on https://fastagent.sh — probe the endpoint and inspect recent commits in fastagent-sh/fastagent.";
+  "5xx error rate spiked on https://api.example.com/health — probe the endpoint and inspect recent commits in fastagent-sh/fastagent.";
 
 const agent = connectAgent(baseUrl, { apiKey });
 
