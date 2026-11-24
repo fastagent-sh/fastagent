@@ -59,7 +59,17 @@ my-agent/
 | **Local development** | `fastagent dev`, `fastagent invoke` | Local SQLite under `.fastagent/dev/.state/` |
 | **Embedded in your app** | `openAgent(definition, { root, secrets, env })` | Local SQLite or PostgreSQL (dedicated or shared pool via `openPostgresDatabase`) |
 | **Self-hosted container** | `fastagent deploy init docker\|compose\|fly\|railway` | Mounted volume at `/data` or `FASTAGENT_DATABASE_URL` (PostgreSQL) |
-| **Amazon Bedrock AgentCore** | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | MicroVM per AgentCore session backed by Aurora DSQL + Secrets Manager |
+| **Amazon Bedrock AgentCore** | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | MicroVM per AgentCore session backed by 1 shared Aurora DSQL cluster (or `FASTAGENT_DATABASE_URL`) + Secrets Manager |
+
+### Pick your topology
+
+| Product scenario | Recommended topology | Why it fits |
+| --- | --- | --- |
+| **B2B SaaS sidebar copilot** (no user `bash`) | Embedded `openAgent()` + shared `openPostgresDatabase()` (`codingTools: false`) | Reuses your auth and Postgres pool with batched lease heartbeats and cooperative idle handoff across replicas |
+| **Per-user cloud workspace** (users run `bash` / code) | AWS AgentCore MicroVMs + 1 shared Aurora DSQL cluster | Strict per-user VM isolation with zero idle compute; swap to fixed-price Postgres via `FASTAGENT_DATABASE_URL` if sustained throughput grows |
+| **Low-frequency background agents** (PR review, AI SRE, daily brief) | Fly.io / Railway sleep-when-idle container + `POST /v1/invoke` + optional `dsh` sandbox | Sleeps to zero between webhooks/crons, deduplicates retries, and confines shell access |
+| **Local-first desktop app** (Electron / local tools) | Embedded `openAgent()` + built-in `node:sqlite` + optional `dsh` OS sandbox | Zero cloud relay, zero external DB setup, offline durable sessions, and dynamic model pickers |
+| **Org-wide multi-team agent platform** | Teams publish versioned npm packages (`fastagent build`); platform hosts them in one Node app | Shared runtime via `peerDependencies`, unified auth/tracing, and standard SemVer rollbacks |
 
 ## What FastAgent intentionally leaves to you
 
@@ -72,7 +82,7 @@ my-agent/
 
 ## Current boundaries
 
-- **Single-writer per instance:** One process owns an instance's storage at a time (enforced via SQLite `EXCLUSIVE` locks or PostgreSQL/DSQL leases). Scale horizontally across instances (for example, one instance per user or tenant), not by attaching multiple writers to one instance.
+- **Single-writer per instance:** One process owns an instance's storage at a time (enforced via SQLite `EXCLUSIVE` locks or PostgreSQL/DSQL leases). Scale horizontally across instances (for example, one instance per user or tenant), not by attaching multiple writers to one instance. On PostgreSQL/DSQL, idle instances cooperatively hand off their leases to waiting replicas during rolling deploys or traffic shifts without interrupting active turns.
 - **Experimental DSH harness:** `@fastagent-sh/harness-dsh` provides full Agent API parity and kernel-enforced OS sandboxing, while pinning a pre-1.0 upstream `@deepseek-ai/dsh` release.
 
 ## Next steps

@@ -116,7 +116,7 @@ npm exec -- fastagent deploy check --json   # blocks builds if .secrets/, .env*,
 npm publish ./dist --access restricted
 ```
 
-Upgrading or rolling back an agent is a standard SemVer version change (`npm i @acme/saas-copilot@1.4.2`). See [Packaging, Distribution & CI/CD](https://github.com/fastagent-sh/fastagent/blob/main/docs/packaging-and-ci.md).
+Upgrading or rolling back an agent is a standard SemVer version change (`npm i @acme/saas-copilot@1.4.2`), and platform teams can host multiple teams' compiled npm agent packages inside one Node.js host with unified auth and observability. See [Packaging, Distribution & CI/CD](https://github.com/fastagent-sh/fastagent/blob/main/docs/packaging-and-ci.md).
 
 ## Embed, self-host, or call over HTTP
 
@@ -188,8 +188,9 @@ Pick the hosting topology that matches your workload and budget without changing
 | Scale & workload | Typical bottleneck | FastAgent pattern | Quantified architecture impact |
 | --- | --- | --- | --- |
 | **1–20 background agents**<br>(PR review, AI SRE, daily briefs) | Always-on containers sit idle 95%+ of the day | **Sleep when idle** on Fly.io (`suspend`) or Railway (App Sleeping) woken via `POST /v1/invoke` | **~98% less idle compute** vs 24/7 containers (20 runs/day × 1 min ≈ 10 active hrs/mo vs 720 always-on hrs/mo) |
-| **100–1,000+ SaaS tenants**<br>(embedded product copilot) | Per-tenant services or 1,000 DB pools exhaust Postgres connections | **Embed in your backend** via `openAgent()` + shared `openPostgresDatabase({ url }, { max: 20 })` (`codingTools: false`) | **0 extra services**; **1 fixed 20-connection Postgres pool** serves 1,000 name-partitioned tenants with 1 schema migration |
-| **100–10,000+ isolated users**<br>(per-user sandboxed assistants) | Operating hundreds of always-on VMs and idle costs | **Per-user AWS MicroVMs** on Bedrock AgentCore + serverless Aurora DSQL | **0 always-on servers**; on-demand microVMs recycle when idle and resume cleanly from DSQL |
+| **100–1,000+ SaaS tenants**<br>(embedded product copilot) | Per-tenant services, 1,000 DB pools, or lease heartbeats overload Postgres | **Embed in your backend** via `openAgent()` + shared `openPostgresDatabase({ url }, { max: 20 })` (`codingTools: false`) | **0 extra services**; **1 fixed 20-connection pool** with **1 batched lease query per tick** and cooperative idle handoff across replicas |
+| **100–10,000+ isolated users**<br>(per-user coding & shell assistants) | Operating hundreds of always-on VMs and idle costs | **Per-user AWS MicroVMs** on Bedrock AgentCore + **1 shared serverless Aurora DSQL cluster** (`pi-durable` or `dsh`) | **0 always-on servers**; microVMs recycle when idle and resume from 1 shared DSQL cluster (or swap to fixed-price Postgres via `FASTAGENT_DATABASE_URL`) |
+| **Local-first desktop apps**<br>(Electron, local workspace tools) | Shipping Python runtimes or forcing cloud relays for local files | **Embed locally** via `openAgent()` + built-in `node:sqlite` + optional `dsh` OS sandbox | **0 cloud services** and **0 native DB builds**; offline durable state with dynamic model pickers (`agent.info().models`) |
 
 <sub>Single-writer fencing guarantees one active owner per instance (default limits: `inFlightPerProcess: 100`, `queuedPerSession: 20`). Scale horizontally across instances or automatically per user on AgentCore.</sub>
 
