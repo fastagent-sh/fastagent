@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { spawnSync } from "node:child_process";
 
@@ -51,7 +52,29 @@ function readPackage(dir) {
 	return JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
 }
 
-/** Give every package `version`, and every dependency of one package on another exactly that version. */
+/** Find every `package.json` under `examples/` (excluding `node_modules` and `dist`). */
+function exampleManifests(dir = "examples") {
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+		throw error;
+	}
+	const found = [];
+	for (const entry of entries) {
+		if (entry.name === "node_modules" || entry.name === "dist") continue;
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) found.push(...exampleManifests(full));
+		else if (entry.isFile() && entry.name === "package.json") found.push(full);
+	}
+	return found.sort();
+}
+
+/**
+ * Give every workspace package `version`, pin intra-workspace references to `version`, and bump every example's
+ * `@fastagent-sh/*` dependency range to `^${version}`. Returns the updated example manifest paths.
+ */
 function setVersion(version) {
 	const names = new Set(WORKSPACES.map((dir) => readPackage(dir).name));
 	for (const dir of WORKSPACES) {
@@ -62,7 +85,25 @@ function setVersion(version) {
 		}
 		writeFileSync(`${dir}/package.json`, `${JSON.stringify(pkg, null, 2)}\n`);
 	}
+	const updatedExamples = [];
+	for (const manifest of exampleManifests()) {
+		const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+		let changed = false;
+		for (const field of ["dependencies", "devDependencies", "peerDependencies"]) {
+			for (const name of Object.keys(pkg[field] ?? {})) {
+				if (names.has(name) && pkg[field][name] !== `^${version}`) {
+					pkg[field][name] = `^${version}`;
+					changed = true;
+				}
+			}
+		}
+		if (changed) {
+			writeFileSync(manifest, `${JSON.stringify(pkg, null, 2)}\n`);
+			updatedExamples.push(manifest);
+		}
+	}
 	run("npm", ["install", "--package-lock-only", "--no-audit", "--no-fund"]);
+	return updatedExamples;
 }
 
 function compareVersions(a, b) {
@@ -161,7 +202,7 @@ async function main() {
 	}
 
 	run("git", ["checkout", "-b", branch]);
-	setVersion(version);
+	const updatedExamples = setVersion(version);
 	run("npm", ["run", "lint"]);
 	run("npm", ["run", "typecheck"]);
 	run("npm", ["audit", "--audit-level=high"]);
@@ -169,7 +210,7 @@ async function main() {
 	run("npm", ["run", "test:integration"]);
 	run("npm", ["pack", "--dry-run", "--json", "--workspaces"]);
 
-	run("git", ["add", ...WORKSPACES.map((dir) => `${dir}/package.json`), "package-lock.json"]);
+	run("git", ["add", ...WORKSPACES.map((dir) => `${dir}/package.json`), ...updatedExamples, "package-lock.json"]);
 	run("git", ["commit", "-m", `chore: release ${version}`]);
 	run("git", ["push", "-u", "origin", branch]);
 	const body = `## Release v${version}\n\nBump every package (${WORKSPACES.join(", ")}) from ${pkg.version} to ${version}.\n\n### Verification\n\n- \`npm run lint\`\n- \`npm run typecheck\`\n- \`npm audit --audit-level=high\`\n- \`npm test\`\n- \`npm run test:integration\`\n- \`npm pack --dry-run --json --workspaces\`\n\n### After merge\n\nCreate and publish the GitHub Release \`${tag}\`. The protected publish workflow will verify and publish the packages to npm via Trusted Publishing.`;
