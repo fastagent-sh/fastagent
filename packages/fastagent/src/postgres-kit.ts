@@ -226,6 +226,7 @@ async function renewLeaseBatch(
 class PgLeasePool {
   private readonly buckets = new Map<string, LeaseBucket>();
   private readonly db: PgDatabase;
+  private disposed = false;
 
   constructor(handle: SharedPostgresHandle) {
     this.db = handle.borrowed;
@@ -233,6 +234,7 @@ class PgLeasePool {
   }
 
   register(table: string, entry: LeaseRenewalEntry): () => void {
+    if (this.disposed) return () => {};
     const key = `${table}:${entry.leaseMs}`;
     let bucket = this.buckets.get(key);
     if (bucket === undefined) {
@@ -266,6 +268,7 @@ class PgLeasePool {
   }
 
   private dispose(): void {
+    this.disposed = true;
     for (const bucket of this.buckets.values()) {
       clearInterval(bucket.timer);
       bucket.entries.clear();

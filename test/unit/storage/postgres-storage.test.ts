@@ -656,14 +656,16 @@ describe("postgres-kit shared storage primitives", () => {
   it("hands off an idle pi-durable openAgent instance cooperatively to a successor process", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const shared = openPostgresDatabase({ url: postgres.url }, { max: 4 });
-    const dir = await fauxAgent("fa-pg-handoff-");
-    const name = freshInstance();
-    let firstClosed = false;
-    const first = await openSource(dir, { name, database: shared });
-    void first.closed?.then(() => {
-      firstClosed = true;
-    });
+    let first: Awaited<ReturnType<typeof openSource>> | undefined;
+    let second: Awaited<ReturnType<typeof openSource>> | undefined;
     try {
+      const dir = await fauxAgent("fa-pg-handoff-");
+      const name = freshInstance();
+      let firstClosed = false;
+      first = await openSource(dir, { name, database: shared });
+      void first.closed?.then(() => {
+        firstClosed = true;
+      });
       const openingSecond = openSource(dir, {
         name,
         secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url },
@@ -684,15 +686,15 @@ describe("postgres-kit shared storage primitives", () => {
         { timeout: 5_000 },
       );
       await vi.advanceTimersByTimeAsync(8_000);
-      const second = await openingSecond;
+      second = await openingSecond;
       await vi.waitFor(() => expect(firstClosed).toBe(true), { timeout: 5_000 });
       const session = await second.sessions.create();
       expect(
         (await second.messages.send({ sessionId: session.id, content: "after handoff" }, { wait: 15 })).status,
       ).toBe("completed");
-      await second.close();
-      await first.close();
     } finally {
+      await second?.close();
+      await first?.close();
       await shared.close();
       vi.useRealTimers();
     }

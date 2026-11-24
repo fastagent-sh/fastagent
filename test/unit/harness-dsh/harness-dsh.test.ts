@@ -838,19 +838,21 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
 
         // Cooperative idle handoff on DSH: a second openAgent takes over an idle holder on its next renewal tick.
         vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-        const coopInstance = freshInstance();
-        let coopFirstClosed = false;
-        const coopFirst = await openAgent(def, {
-          root: dir,
-          name: coopInstance,
-          harness: "dsh",
-          sandbox: "off",
-          database: shared,
-        });
-        void coopFirst.closed?.then(() => {
-          coopFirstClosed = true;
-        });
+        let coopFirst: Awaited<ReturnType<typeof openAgent>> | undefined;
+        let coopSecond: Awaited<ReturnType<typeof openAgent>> | undefined;
         try {
+          const coopInstance = freshInstance();
+          let coopFirstClosed = false;
+          coopFirst = await openAgent(def, {
+            root: dir,
+            name: coopInstance,
+            harness: "dsh",
+            sandbox: "off",
+            database: shared,
+          });
+          void coopFirst.closed?.then(() => {
+            coopFirstClosed = true;
+          });
           const openingSecond = openAgent(def, {
             root: dir,
             name: coopInstance,
@@ -869,13 +871,13 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
             { timeout: 5_000 },
           );
           await vi.advanceTimersByTimeAsync(8_000);
-          const coopSecond = await openingSecond;
+          coopSecond = await openingSecond;
           await vi.waitFor(() => expect(coopFirstClosed).toBe(true), { timeout: 5_000 });
           const created = await coopSecond.sessions.create({ title: "After DSH Handoff" });
           expect((await coopSecond.sessions.get(created.id)).title).toBe("After DSH Handoff");
-          await coopSecond.close();
-          await coopFirst.close();
         } finally {
+          await coopSecond?.close();
+          await coopFirst?.close();
           vi.useRealTimers();
         }
       } finally {
