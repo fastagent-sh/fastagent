@@ -39,6 +39,12 @@ for (const key of [
   delete process.env[key];
 }
 
+// Strip host/CI npm config (e.g. actions/setup-node's NPM_CONFIG_USERCONFIG scoped @fastagent-sh:registry in
+// publish.yml) so offline tests using a loopback mock registry never escape to registry.npmjs.org.
+for (const key of Object.keys(process.env)) {
+  if (/^npm_config_/i.test(key)) delete process.env[key];
+}
+
 // vi.waitFor gives up after 1 s unless told otherwise: a bound on how long something took, which load decides as much as
 // the code does. A wait that is met returns as soon as it is, so a longer budget costs only a failing test's time.
 const WAIT_FOR_MS = 10_000;
