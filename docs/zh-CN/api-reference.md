@@ -13,7 +13,7 @@ FastAgent 发布 6 个版本号同步锁定的 npm 包，你可以按角色只�
 | 包名 | 何时安装 | 核心导出 |
 | --- | --- | --- |
 | **`@fastagent-sh/fastagent`** | 编写 Agent、打包制品、运行 CLI 或在 Node 中嵌入 | `defineAgent`、`defineTool`、`needs`、`sessionIdOf`、`openAgent`、`openPostgresDatabase`、`baseEnv`、`AgentError`、`LIMITS`、`hasEnded`、`McpError`、`defineDefinition`，以及全部 Agent API 类型（`Agent`、`LocalAgent`、`RemoteAgent`、`Session`、`Message`、`Entry`、`InvokeRequest`、`AuthApi` 等） |
-| **`@fastagent-sh/harness-dsh`** | 启用内核级 OS 沙箱（`--harness dsh`，实验性） | `openDshAgent`、`MemoryDshEventStore`、`openSqliteDshStore`、`openPostgresDshStore`、`DshInstanceHeldError` 及 DSH Harness 类型 |
+| **`@fastagent-sh/harness-dsh`** | 启用内核级 OS 沙箱（`--harness dsh`，实验性；由 `@fastagent-sh/fastagent` 懒加载） | `openDshAgent`、`MemoryDshEventStore`、`openSqliteDshStore`、`openPostgresDshStore`、`DshInstanceHeldError` |
 
 ## 调用或运维已部署的 Agent
 
@@ -27,7 +27,7 @@ FastAgent 发布 6 个版本号同步锁定的 npm 包，你可以按角色只�
 
 | 包名 / 子入口 | 何时安装 | 核心导出 |
 | --- | --- | --- |
-| **`@fastagent-sh/agentcore`** | 运行 AgentCore 容器服务与 Aurora DSQL 适配器 | `serveAgentCore`、`AgentCoreOptions`、`dsqlDatabase`、`DsqlOptions`、`DSQL_LIMITS`、`createIndexAsync` |
+| **`@fastagent-sh/agentcore`** | 运行 AgentCore 容器服务与 Aurora DSQL 适配器 | `serveAgentCore`、`AgentCoreOptions`、`dsqlDatabase`、`DsqlOptions` |
 | **`@fastagent-sh/agentcore/cdk`** | 在 AWS CDK 栈中配置 Aurora DSQL 与 Secrets Manager 权限 | `FastAgentResources`、`FastAgentResourcesProps`、`AgentRuntime` |
 | **`@fastagent-sh/agentcore/cli`** | 由 `fastagent agentcore ...` 自动调用 | `run`（`init`、`start`、`invoke`） |
 

@@ -200,7 +200,7 @@ export interface DshTelemetryContext {
 }
 
 /** Retry policy for transient model call failures. */
-export interface DshRetryOptions {
+interface DshRetryOptions {
   readonly maxRetries?: number;
   readonly baseDelayMs?: number;
 }

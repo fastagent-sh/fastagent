@@ -13,7 +13,7 @@ FastAgent publishes six version-locked npm packages so you install only what you
 | Package | When to install | Key exports |
 | --- | --- | --- |
 | **`@fastagent-sh/fastagent`** | Writing an agent, packaging it, running the CLI, or embedding in Node | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, `defineDefinition`, plus all Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, `AuthApi`, …) |
-| **`@fastagent-sh/harness-dsh`** | Opting into kernel-enforced OS sandboxing (`--harness dsh`, experimental) | `openDshAgent`, `MemoryDshEventStore`, `openSqliteDshStore`, `openPostgresDshStore`, `DshInstanceHeldError`, and DSH harness types |
+| **`@fastagent-sh/harness-dsh`** | Opting into kernel-enforced OS sandboxing (`--harness dsh`, experimental; loaded lazily by `@fastagent-sh/fastagent`) | `openDshAgent`, `MemoryDshEventStore`, `openSqliteDshStore`, `openPostgresDshStore`, `DshInstanceHeldError` |
 
 ## Calling or operating a deployed agent
 
@@ -27,7 +27,7 @@ FastAgent publishes six version-locked npm packages so you install only what you
 
 | Package / entry | When to install | Key exports |
 | --- | --- | --- |
-| **`@fastagent-sh/agentcore`** | Running the AgentCore container server & Aurora DSQL adapter | `serveAgentCore`, `AgentCoreOptions`, `dsqlDatabase`, `DsqlOptions`, `DSQL_LIMITS`, `createIndexAsync` |
+| **`@fastagent-sh/agentcore`** | Running the AgentCore container server & Aurora DSQL adapter | `serveAgentCore`, `AgentCoreOptions`, `dsqlDatabase`, `DsqlOptions` |
 | **`@fastagent-sh/agentcore/cdk`** | Adding Aurora DSQL & Secrets Manager grants in an AWS CDK stack | `FastAgentResources`, `FastAgentResourcesProps`, `AgentRuntime` |
 | **`@fastagent-sh/agentcore/cli`** | Invoked automatically by `fastagent agentcore ...` | `run` (`init`, `start`, `invoke`) |
 

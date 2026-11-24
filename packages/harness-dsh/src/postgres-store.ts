@@ -17,7 +17,7 @@ import type {
 } from "./types.ts";
 
 /** Minimal query executor matching `PgExecutor` in `@fastagent-sh/fastagent/platform`. */
-export interface DshPgExecutor {
+interface DshPgExecutor {
   query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
 }
 
@@ -28,23 +28,23 @@ export interface DshPgDatabase extends DshPgExecutor {
 }
 
 /** Index builder matching `CreateIndex` in `@fastagent-sh/fastagent/platform` (e.g. Aurora DSQL `ASYNC` indexes). */
-export type DshPgCreateIndex = (db: DshPgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
+type DshPgCreateIndex = (db: DshPgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
 
 /** Per-transaction and per-value caps imposed by managed PostgreSQL databases such as Aurora DSQL. */
-export interface DshPgLimits {
+interface DshPgLimits {
   readonly rowsPerTransaction?: number;
   readonly bytesPerTransaction?: number;
   readonly bytesPerValue?: number;
 }
 
 /** Cooperative idle handoff hooks for single-writer PostgreSQL leases. */
-export interface DshPgLeaseHandoff {
+interface DshPgLeaseHandoff {
   readonly canYield: () => boolean;
   readonly onHandoff: () => void;
 }
 
 /** Single-writer instance lease handle injected by `@fastagent-sh/fastagent` or created by the built-in fallback. */
-export interface DshPgLease {
+interface DshPgLease {
   readonly owner: string;
   readonly lost: Error | undefined;
   lose(why?: Error, notify?: boolean): Error;
@@ -52,7 +52,7 @@ export interface DshPgLease {
 }
 
 /** Optional shared PostgreSQL/DSQL primitives injected by `@fastagent-sh/fastagent` (`postgres-kit.ts`). */
-export interface DshPgStoreKit {
+interface DshPgStoreKit {
   readonly migrate?: (
     db: DshPgDatabase,
     statements: readonly string[],
