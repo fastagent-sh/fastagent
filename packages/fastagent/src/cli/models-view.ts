@@ -6,9 +6,9 @@ import { type InteractiveLoginKind, type ProviderAuthStatus, providerOf } from "
 
 /** One first-run picker entry (@clack/prompts option shape). */
 export interface ModelPickerOption {
-  value: string;
-  label: string;
-  hint: string;
+  readonly value: string;
+  readonly label: string;
+  readonly hint: string;
 }
 
 /** The remedy hint for a non-ready provider, by what picking it actually does. */
@@ -17,47 +17,41 @@ function remedy(login: InteractiveLoginKind): string {
   return login === "api_key" ? "API key required" : "API key required — set the provider's env var";
 }
 
-/** The first-run picker menu: the FULL model catalog, each spec annotated with its provider's auth status. */
-export function buildModelPickerOptions(
-  specs: string[],
-  statuses: Map<string, ProviderAuthStatus>,
-): ModelPickerOption[] {
-  const ready: ModelPickerOption[] = [];
-  const rest: ModelPickerOption[] = [];
-  for (const spec of specs) {
-    const status = statuses.get(providerOf(spec));
-    if (status?.state === "ready") {
-      ready.push({ value: spec, label: spec, hint: status.source ? `ready — ${status.source}` : "ready" });
-    } else if (status?.state === "broken") {
-      // A broken stored credential OWNS the provider (env is consulted only when nothing is stored), so with no login
-      // flow the remedy is fixing the store.
-      rest.push({
-        value: spec,
-        label: spec,
-        hint:
-          status.login === "none"
-            ? `stored auth unusable: ${status.message} — fix or remove the stored credential`
-            : `${remedy(status.login)} — stored auth unusable: ${status.message}`,
-      });
-    } else if (status) {
-      rest.push({ value: spec, label: spec, hint: remedy(status.login) });
-    } else {
-      // Unreachable when `specs` and `statuses` come from the same Models (every listed provider is probed); if a
-      // caller ever mixes sources, promise nothing.
-      rest.push({ value: spec, label: spec, hint: "auth required" });
-    }
+function hintFor(status: ProviderAuthStatus | undefined): string {
+  if (status === undefined) return "auth required";
+  if (status.state === "ready") return status.source ? `ready — ${status.source}` : "ready";
+  if (status.state === "broken") {
+    // A broken stored credential OWNS the provider (env is consulted only when nothing is stored), so with no login
+    // flow the remedy is fixing the store.
+    return status.login === "none"
+      ? `stored auth unusable: ${status.message} — fix or remove the stored credential`
+      : `${remedy(status.login)} — stored auth unusable: ${status.message}`;
   }
-  return [...ready, ...rest];
+  return remedy(status.login);
 }
 
-export function formatModelsCommand(specs: string[], search?: string): { lines: string[]; error?: string } {
-  if (!search) return { lines: specs };
+/** The first-run picker menu: the FULL model catalog, each spec annotated with its provider's auth status. */
+export function buildModelPickerOptions(
+  specs: readonly string[],
+  statuses: ReadonlyMap<string, ProviderAuthStatus>,
+): ModelPickerOption[] {
+  const grouped = Map.groupBy(specs, (spec) => statuses.get(providerOf(spec))?.state === "ready");
+  const toOption = (spec: string): ModelPickerOption => ({
+    value: spec,
+    label: spec,
+    hint: hintFor(statuses.get(providerOf(spec))),
+  });
+  return [...(grouped.get(true) ?? []), ...(grouped.get(false) ?? [])].map(toOption);
+}
+
+export function formatModelsCommand(specs: readonly string[], search?: string): { lines: string[]; error?: string } {
+  if (!search) return { lines: [...specs] };
   const q = search.toLowerCase();
   const matches = specs.filter((spec) => spec.toLowerCase().includes(q));
   if (matches.length === 0) return { lines: matches, error: `no model matches "${search}"` };
   // Rank a PROVIDER-name match (query in the part before "/") above an incidental model-id match, so `models
   // anthropic` leads with anthropic/* rather than burying it under amazon-bedrock/anthropic.* and
   // google-vertex/…-anthropic-… (which only match in the model id).
-  const providerMatch = (spec: string) => providerOf(spec).toLowerCase().includes(q);
-  return { lines: [...matches.filter(providerMatch), ...matches.filter((s) => !providerMatch(s))] };
+  const grouped = Map.groupBy(matches, (spec) => providerOf(spec).toLowerCase().includes(q));
+  return { lines: [...(grouped.get(true) ?? []), ...(grouped.get(false) ?? [])] };
 }

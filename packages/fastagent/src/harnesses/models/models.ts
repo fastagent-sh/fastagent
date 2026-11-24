@@ -22,11 +22,10 @@ export function providerOf(spec: string): string {
 
 /** Every chat model `models` offers, as `"provider/modelId"`, sorted. */
 export function listModels(models: Models): string[] {
-  const specs: string[] = [];
-  for (const provider of models.getProviders()) {
-    for (const model of provider.getModels()) specs.push(`${provider.id}/${model.id}`);
-  }
-  return specs.sort();
+  return models
+    .getProviders()
+    .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
+    .toSorted();
 }
 
 /**

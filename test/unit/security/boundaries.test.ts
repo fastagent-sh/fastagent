@@ -2,8 +2,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
+import { describe, expect, it } from "@effect/vitest";
 import * as Redacted from "effect/Redacted";
-import { describe, expect, it } from "vitest";
+import * as Schema from "effect/Schema";
 import { bindAddress, bindLabel, classifyBind, isBindAddress } from "../../../packages/fastagent/src/bind.ts";
 import { baseEnv, processEnvironment } from "../../../packages/fastagent/src/child-env.ts";
 import { enterInstance } from "../../../packages/fastagent/src/cli/instance.ts";
@@ -14,7 +15,7 @@ import {
   revealValues,
 } from "../../../packages/fastagent/src/declared-secrets.ts";
 import { apiKeysFrom } from "../../../packages/fastagent/src/http/server.ts";
-import { INSTANCE_NAME_ENV } from "../../../packages/fastagent/src/instance-name.ts";
+import { INSTANCE_NAME_ENV, checkInstanceName, instanceName } from "../../../packages/fastagent/src/instance-name.ts";
 import { INSTANCE_ROOT_ENV } from "../../../packages/fastagent/src/paths.ts";
 import { secretEquals } from "../../../packages/fastagent/src/http/secret.ts";
 import { browserCommand } from "../../../packages/fastagent/src/open-url.ts";
@@ -203,4 +204,72 @@ describe("declared secrets: the rule", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("security & parser property invariants (Arbitrary)", () => {
+  const Platform = Schema.Literals(["darwin", "win32", "linux"]);
+  const UnsafeScheme = Schema.Literals(["file", "ftp", "javascript", "data", "smb", "ssh", "mailto"]);
+  const Octet = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }));
+  const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));
+
+  it.prop(
+    "browserCommand only ever emits https: or loopback http: URLs across arbitrary inputs and platforms",
+    [Schema.String, Platform],
+    ([raw, platform]) => {
+      const cmd = browserCommand(raw, platform);
+      if (cmd === undefined) return;
+      const urlArg = cmd.args.at(-1);
+      expect(urlArg).toBeDefined();
+      expect(urlArg?.startsWith("-")).toBe(false);
+      const parsed = new URL(urlArg as string);
+      const allowed =
+        parsed.protocol === "https:" ||
+        (parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname));
+      expect(allowed).toBe(true);
+    },
+    { arbitrary: { runs: 60 } },
+  );
+
+  it.prop(
+    "browserCommand always refuses non-web schemes regardless of host or path",
+    [UnsafeScheme, Schema.String, Platform],
+    ([scheme, tail, platform]) => {
+      expect(browserCommand(`${scheme}://${tail}`, platform)).toBeUndefined();
+      expect(browserCommand(`${scheme}:${tail}`, platform)).toBeUndefined();
+    },
+    { arbitrary: { runs: 40 } },
+  );
+
+  it.prop(
+    "bind helpers accept every valid IPv4 literal and classify wildcard/loopback/specific consistently",
+    [Octet, Octet, Octet, Octet, Port],
+    ([a, b, c, d, port]) => {
+      const ip = `${a}.${b}.${c}.${d}`;
+      expect(isBindAddress(ip)).toBe(true);
+      expect(bindAddress(ip)).toBe(ip);
+      const kind = classifyBind(ip);
+      if (a === 0 && b === 0 && c === 0 && d === 0) {
+        expect(kind).toBe("wildcard");
+        expect(bindLabel(ip, port)).toBe(`port ${port}`);
+      } else if (a === 127) {
+        expect(kind).toBe("loopback");
+        expect(bindLabel(ip, port)).toBe(`${ip}:${port}`);
+      } else {
+        expect(kind).toBe("specific");
+        expect(bindLabel(ip, port)).toBe(`${ip}:${port}`);
+      }
+    },
+    { arbitrary: { runs: 50 } },
+  );
+
+  it.prop(
+    "instanceName always derives a valid single path segment accepted by checkInstanceName",
+    [Schema.String],
+    ([raw]) => {
+      const derived = instanceName(raw);
+      expect(derived).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(checkInstanceName(derived)).toBe(derived);
+    },
+    { arbitrary: { runs: 60 } },
+  );
 });

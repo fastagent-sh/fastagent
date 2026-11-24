@@ -32,11 +32,14 @@ export function bindAddress(host: string): string {
  * How far a bind address reaches: `wildcard` (unset or all-interfaces) reaches every interface and answers on
  * loopback too; `loopback` is this machine only; `specific` is one interface, reachable only as itself.
  */
+const WILDCARD_HOSTS: ReadonlySet<string> = new Set(["0.0.0.0", "::", "::0"]);
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "::1"]);
+
 export function classifyBind(host: string | undefined): "wildcard" | "loopback" | "specific" {
   if (host === undefined) return "wildcard";
   const h = normalize(host);
-  if (h === "0.0.0.0" || h === "::" || h === "::0") return "wildcard";
-  if (h === "localhost" || h === "::1" || /^127\.\d+\.\d+\.\d+$/.test(h)) return "loopback";
+  if (WILDCARD_HOSTS.has(h)) return "wildcard";
+  if (LOOPBACK_HOSTS.has(h) || /^127\.\d+\.\d+\.\d+$/.test(h)) return "loopback";
   return "specific";
 }
 
@@ -50,7 +53,6 @@ export function bindLabel(host: string | undefined, port: number): string {
 
 /** The address a local client should dial for a serve bound to `host` (the ready log's curl). */
 function clientHost(host: string | undefined): string {
-  if (classifyBind(host) === "wildcard") return "127.0.0.1";
-  // biome-ignore lint/style/noNonNullAssertion: only a wildcard bind leaves host undefined
-  return host!.includes(":") && !host!.startsWith("[") ? `[${host}]` : host!;
+  if (host === undefined || classifyBind(host) === "wildcard") return "127.0.0.1";
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }

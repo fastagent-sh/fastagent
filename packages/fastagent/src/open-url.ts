@@ -9,15 +9,14 @@ import { spawn } from "node:child_process";
  * every OAuth URL carries as a command separator, so `rundll32 url.dll,FileProtocolHandler` takes the URL as one
  * argument instead.
  */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 export function browserCommand(url: string, platform: NodeJS.Platform): { cmd: string; args: string[] } | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return undefined; // not a URL: nothing to open
+  const parsed = URL.parse(url);
+  if (parsed === null) return undefined;
+  if (!(parsed.protocol === "https:" || (parsed.protocol === "http:" && LOOPBACK_HOSTS.has(parsed.hostname)))) {
+    return undefined;
   }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
-  if (!(parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback))) return undefined;
   const href = parsed.href;
   if (platform === "darwin") return { cmd: "open", args: [href] };
   if (platform === "win32") return { cmd: "rundll32", args: ["url.dll,FileProtocolHandler", href] };

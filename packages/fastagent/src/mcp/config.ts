@@ -94,16 +94,20 @@ function configStrings(server: McpServerDeclaration): string[] {
     : [server.command, ...(server.args ?? []), ...Object.values(server.env ?? {})];
 }
 
-function variables(value: string, server: string, file: string): string[] {
-  const names: string[] = [];
-  const rest = value.replace(/\$\{([^}]*)\}/g, (_match, name: string) => {
-    if (!isEnvName(name))
-      throw new McpError("configuration", `${file}: ${server} supports only \${NAME} substitutions`, server);
-    names.push(name);
-    return "";
-  });
-  if (rest.includes("${") || rest.includes("$("))
+function variables(value: string, server: string, file: string): readonly string[] {
+  const names = Iterator.from(value.matchAll(/\$\{([^}]*)\}/g))
+    .map((match) => {
+      const name = match[1] ?? "";
+      if (!isEnvName(name)) {
+        throw new McpError("configuration", `${file}: ${server} supports only \${NAME} substitutions`, server);
+      }
+      return name;
+    })
+    .toArray();
+  const rest = value.replace(/\$\{[^}]*\}/g, "");
+  if (rest.includes("${") || rest.includes("$(")) {
     throw new McpError("configuration", `${file}: unsupported substitution in ${server}`, server);
+  }
   return names;
 }
 
@@ -160,6 +164,8 @@ export function literalCredentialAdvice({ field, key }: { field: "headers" | "en
     : `write \${${name}}`;
 }
 
+const MCP_LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
 function checkMcpUrl(value: string, server?: string, file = "mcpServers"): URL {
   const url = URL.parse(value);
   if (
@@ -169,8 +175,7 @@ function checkMcpUrl(value: string, server?: string, file = "mcpServers"): URL {
     url.username ||
     url.password ||
     url.hash ||
-    (url.protocol !== "https:" &&
-      !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+    (url.protocol !== "https:" && !(url.protocol === "http:" && MCP_LOOPBACK_HOSTS.has(url.hostname)))
   ) {
     throw new McpError(
       "configuration",
@@ -210,8 +215,11 @@ export function resolveMcpServers(
         }
         return { name, type: "http", url: checkMcpUrl(server.url, name, file).href, headers };
       }
-      let command = expand(server.command);
-      if (!isAbsolute(command) && /[/\\]/.test(command)) command = resolve(base, command);
+      const expandedCommand = expand(server.command);
+      const command =
+        !isAbsolute(expandedCommand) && /[/\\]/.test(expandedCommand)
+          ? resolve(base, expandedCommand)
+          : expandedCommand;
       return {
         name,
         type: "stdio",
