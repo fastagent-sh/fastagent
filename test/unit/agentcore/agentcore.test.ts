@@ -340,6 +340,32 @@ describe("an agent on AgentCore", () => {
       await handler.close();
     }
   });
+
+  it("closes an in-flight opening instance when handler.close() races with it and refuses later invocations", async () => {
+    const gate = Promise.withResolvers<Record<string, string>>();
+    const started = Promise.withResolvers<void>();
+    const dir = await fauxAgent("fa-agentcore-close-race-");
+    const handler = agentCoreHandler(await loadSourceDefinition(dir), {
+      database: { url: postgres.url },
+      root: dir,
+      secrets: process.env,
+      values: () => {
+        started.resolve();
+        return gate.promise;
+      },
+    });
+    const session = freshInstance();
+    const request = { request: { method: "GET", path: "/v1/agent" } };
+    const first = handler.fetch(invocation(session, request));
+    await started.promise;
+    const closeA = handler.close();
+    const closeB = handler.close();
+    const late = await answered(await handler.fetch(invocation(session, request)));
+    expect([late.status, late.body.error.code]).toEqual([503, "unavailable"]);
+    gate.resolve({});
+    await Promise.all([closeA, closeB]);
+    await first.catch(() => undefined);
+  });
 });
 
 describe("the agent's values from its secret", () => {

@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type Agent,
@@ -20,8 +22,10 @@ import {
   createInvoker,
   idempotencyStorageKey,
   memoryConversationStore,
+  memoryConversationStoreEffect,
   postgresConversationStore,
   sqliteConversationStore,
+  sqliteConversationStoreEffect,
 } from "../../../packages/fastagent/src/conversations.ts";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
 import { OpenApi } from "effect/http-api";
@@ -212,8 +216,17 @@ describe("the Agent API over HTTP", () => {
       const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
       const sid = (id: string) => SessionId.make(id);
 
-      let clock = 1_000;
-      const mem = memoryConversationStore({ ephemeralTtlMs: 100, maxEphemeral: 2, now: () => clock });
+      let nowMs = 1_000;
+      const clock: Clock.Clock = {
+        currentTimeMillisUnsafe: () => nowMs,
+        currentTimeMillis: Effect.sync(() => nowMs),
+        monotonicTimeNanosUnsafe: () => BigInt(nowMs) * 1_000_000n,
+        monotonicTimeNanos: Effect.sync(() => BigInt(nowMs) * 1_000_000n),
+        currentTimeNanosUnsafe: () => BigInt(nowMs) * 1_000_000n,
+        currentTimeNanos: Effect.sync(() => BigInt(nowMs) * 1_000_000n),
+        sleep: () => Effect.void,
+      };
+      const mem = memoryConversationStore({ ephemeralTtlMs: 100, maxEphemeral: 2, clock });
       await mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
       await mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
       await mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
@@ -222,25 +235,50 @@ describe("the Agent API over HTTP", () => {
       expect(await mem.get(idemKey("2"))).toBe("s-2");
       expect(await mem.get(idemKey("3"))).toBe("s-3");
       expect(await mem.get(convKey("ops"))).toBe("s-ops");
-      clock += 200;
+      nowMs += 200;
       expect(await mem.get(idemKey("2"))).toBeUndefined();
       expect(await mem.get(idemKey("3"))).toBeUndefined();
       expect(await mem.get(convKey("ops"))).toBe("s-ops");
+
+      const effectStore = memoryConversationStoreEffect({ ephemeralTtlMs: 100 });
+      const effectOutcome = await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* effectStore.set(idemKey("eff"), sid("s-eff"), { ephemeral: true });
+          const before = yield* effectStore.get(idemKey("eff"));
+          nowMs += 200;
+          const after = yield* effectStore.get(idemKey("eff"));
+          return { before, after };
+        }).pipe(Effect.provideService(Clock.Clock, clock)),
+      );
+      expect(effectOutcome).toEqual({ before: "s-eff", after: undefined });
 
       const dir = mkdtempSync(join(tmpdir(), "fa-conv-ttl-"));
       try {
         const sql = sqliteConversationStore(join(dir, "conversations.sqlite"), {
           ephemeralTtlMs: 100,
-          now: () => clock,
+          clock,
         });
         await sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
         await sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
-        clock += 200;
+        nowMs += 200;
         await sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
         expect(await sql.get(idemKey("old"))).toBeUndefined();
         expect(await sql.get(idemKey("new"))).toBe("s-new");
         expect(await sql.get(convKey("ops"))).toBe("s-ops");
         await sql.close();
+
+        const sqlEff = sqliteConversationStoreEffect(join(dir, "conversations-eff.sqlite"), { ephemeralTtlMs: 100 });
+        const sqlEffOutcome = await Effect.runPromise(
+          Effect.gen(function* () {
+            yield* sqlEff.set(idemKey("eff-sql"), sid("s-eff-sql"), { ephemeral: true });
+            const before = yield* sqlEff.get(idemKey("eff-sql"));
+            nowMs += 200;
+            const after = yield* sqlEff.get(idemKey("eff-sql"));
+            yield* sqlEff.close();
+            return { before, after };
+          }).pipe(Effect.provideService(Clock.Clock, clock)),
+        );
+        expect(sqlEffOutcome).toEqual({ before: "s-eff-sql", after: undefined });
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
