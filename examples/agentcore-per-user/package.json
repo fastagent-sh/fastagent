@@ -9,9 +9,9 @@
     "start": "fastagent build && fastagent start"
   },
   "dependencies": {
-    "@fastagent-sh/agentcore": "^0.35.1",
-    "@fastagent-sh/client-agentcore": "^0.35.1",
-    "@fastagent-sh/fastagent": "^0.35.1"
+    "@fastagent-sh/agentcore": "^0.35.2",
+    "@fastagent-sh/client-agentcore": "^0.35.2",
+    "@fastagent-sh/fastagent": "^0.35.2"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
