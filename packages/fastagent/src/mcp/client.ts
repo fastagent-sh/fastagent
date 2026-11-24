@@ -10,11 +10,13 @@ import {
   SdkHttpError,
 } from "@modelcontextprotocol/client";
 import { DEFAULT_INHERITED_ENV_VARS, StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import { abortThenJoin, joinPromise, originalError } from "../promise-bridge.ts";
+import { PromiseFailure, abortThenJoin, fromPromise, joinPromise, originalError } from "../promise-bridge.ts";
 import { McpError } from "../mcp-api.ts";
 import type { McpServer } from "./config.ts";
 import { log } from "../log.ts";
@@ -54,105 +56,153 @@ function requestFetch(fetchImpl: typeof globalThis.fetch, timeoutMs: number): ty
   };
 }
 
-export async function openMcpClients(
+const openMcpClientsEffect = Effect.fn("mcp.openClients")(function* (
   servers: readonly McpServer[],
-  /** The transport HTTP servers are reached with; a test's stand-in. Default: the global `fetch`. */
-  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
-): Promise<McpClients> {
-  const lifetime = Scope.makeUnsafe();
-  const cleanupErrors: unknown[] = [];
+  fetchImpl: typeof globalThis.fetch,
+) {
+  const services = yield* Effect.context<never>();
+  const runPromiseExit = Effect.runPromiseExitWith(services);
+  const runSync = Effect.runSyncWith(services);
+  const lifetime = yield* Scope.make();
+  const cleanupErrors = yield* Ref.make<unknown[]>([]);
+  const closeOutcome = Ref.makeUnsafe<Deferred.Deferred<void, PromiseFailure> | undefined>(undefined);
   const tools: McpTool[] = [];
   const names = new Set<string>();
-  let closing: Promise<void> | undefined;
   const runEffect = Effect.fn("mcp.callTool")(function* <A>(work: Effect.Effect<A, unknown>) {
     const fiber = yield* Effect.forkIn(work, lifetime);
     return yield* Fiber.join(fiber);
   });
   const run = async <A>(work: Effect.Effect<A, unknown>): Promise<A> => {
-    if (closing) throw new McpError("connection", "MCP clients are closed");
-    const result = await Effect.runPromiseExit(runEffect(work));
+    if (Ref.getUnsafe(closeOutcome) !== undefined) throw new McpError("connection", "MCP clients are closed");
+    const result = await runPromiseExit(runEffect(work));
     if (Exit.isFailure(result)) throw originalError(result.cause);
     return result.value;
   };
-  const close = () =>
-    (closing ??= (async () => {
-      await Effect.runPromise(Scope.close(lifetime, Exit.void));
-      if (cleanupErrors.length) throw new AggregateError(cleanupErrors, "MCP cleanup failed");
-    })());
-  let openingServer: string | undefined;
-  try {
+  const closeEffect = Effect.fn("mcp.close")(function* () {
+    const decision = yield* Ref.modify(
+      closeOutcome,
+      (
+        current,
+      ): readonly [
+        {
+          readonly isLeader: boolean;
+          readonly deferred: Deferred.Deferred<void, PromiseFailure>;
+        },
+        Deferred.Deferred<void, PromiseFailure>,
+      ] => {
+        if (current !== undefined) return [{ isLeader: false, deferred: current }, current];
+        const next = Deferred.makeUnsafe<void, PromiseFailure>();
+        return [{ isLeader: true, deferred: next }, next];
+      },
+    );
+    if (!decision.isLeader) return yield* Deferred.await(decision.deferred);
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        yield* Scope.close(lifetime, Exit.void);
+        const errors = yield* Ref.get(cleanupErrors);
+        const finalExit =
+          errors.length === 0
+            ? Exit.void
+            : Exit.fail(new PromiseFailure(new AggregateError(errors, "MCP cleanup failed")));
+        yield* Deferred.done(decision.deferred, finalExit);
+      }),
+    );
+    return yield* Deferred.await(decision.deferred);
+  });
+  const close = async (): Promise<void> => {
+    const exit = await runPromiseExit(closeEffect());
+    if (Exit.isFailure(exit)) throw originalError(exit.cause);
+  };
+
+  const openingServer = yield* Ref.make<string | undefined>(undefined);
+  return yield* Effect.gen(function* () {
     for (const server of servers) {
-      openingServer = server.name;
-      const client = new Client(
-        { name: "FastAgent", version: "1" },
-        { versionNegotiation: { mode: { pin: "2026-07-28" }, probe: { timeoutMs: 15_000, maxRetries: 0 } } },
-      );
-      await Effect.runPromise(
-        Scope.addFinalizer(
-          lifetime,
-          joinPromise(() => client.close()).pipe(
+      yield* Ref.set(openingServer, server.name);
+      const client = yield* Effect.acquireRelease(
+        Effect.sync(
+          () =>
+            new Client(
+              { name: "FastAgent", version: "1" },
+              { versionNegotiation: { mode: { pin: "2026-07-28" }, probe: { timeoutMs: 15_000, maxRetries: 0 } } },
+            ),
+        ),
+        (acquired) =>
+          joinPromise(() => acquired.close()).pipe(
             Effect.catchCause((cause) =>
-              Effect.sync(() => {
-                cleanupErrors.push(mcpFailure(originalError(cause), "MCP cleanup", server.name));
-              }),
+              Ref.update(cleanupErrors, (list) => [
+                ...list,
+                mcpFailure(originalError(cause), "MCP cleanup", server.name),
+              ]),
             ),
           ),
-        ),
       );
       client.onerror = (error) => log.warn(`[mcp] ${mcpFailure(error, "Protocol error", server.name).message}`);
-      let disconnected = false;
+      const disconnected = Ref.makeUnsafe(false);
       client.onclose = () => {
-        disconnected = true;
+        runSync(Ref.set(disconnected, true));
       };
-      let transport: StdioClientTransport | StreamableHTTPClientTransport;
-      if (server.type === "stdio") {
-        transport = new StdioClientTransport({
-          command: server.command,
-          args: server.args,
-          cwd: server.cwd,
-          env: ownEnvironment(server.env),
-          stderr: "pipe",
-        });
-        // Draining prevents a noisy child from blocking. Raw stderr can contain its supplied secrets.
-        transport.stderr?.on("data", () => {});
-      } else {
-        transport = new StreamableHTTPClientTransport(new URL(server.url), {
-          fetch: requestFetch(fetchImpl, 60_000),
-          requestInit: { headers: server.headers },
-        });
-      }
       // Register the transport separately: SDK discovery can fail before Client takes ownership of it.
-      await Effect.runPromise(
-        Scope.addFinalizer(
-          lifetime,
-          joinPromise(() => transport.close()).pipe(
+      const transport = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => {
+            if (server.type === "stdio") {
+              const stdio = new StdioClientTransport({
+                command: server.command,
+                args: server.args,
+                cwd: server.cwd,
+                env: ownEnvironment(server.env),
+                stderr: "pipe",
+              });
+              // Draining prevents a noisy child from blocking. Raw stderr can contain its supplied secrets.
+              stdio.stderr?.on("data", () => {});
+              return stdio;
+            }
+            return new StreamableHTTPClientTransport(new URL(server.url), {
+              fetch: requestFetch(fetchImpl, 60_000),
+              requestInit: { headers: server.headers },
+            });
+          },
+          catch: (cause) => new PromiseFailure(cause),
+        }),
+        (acquired) =>
+          joinPromise(() => acquired.close()).pipe(
             Effect.catchCause((cause) =>
-              Effect.sync(() => {
-                cleanupErrors.push(mcpFailure(originalError(cause), "MCP transport cleanup", server.name));
-              }),
+              Ref.update(cleanupErrors, (list) => [
+                ...list,
+                mcpFailure(originalError(cause), "MCP transport cleanup", server.name),
+              ]),
             ),
           ),
-        ),
       );
-      await client.connect(transport, { timeout: 30_000 });
-      if (!client.getServerCapabilities()?.tools)
-        throw new McpError(
-          "protocol",
-          "MCP server does not offer tools; other capabilities are not supported",
-          server.name,
+      yield* fromPromise(() => client.connect(transport, { timeout: 30_000 }));
+      if (!client.getServerCapabilities()?.tools) {
+        return yield* Effect.fail(
+          new PromiseFailure(
+            new McpError(
+              "protocol",
+              "MCP server does not offer tools; other capabilities are not supported",
+              server.name,
+            ),
+          ),
         );
-      const listed = await client.listTools(undefined, { timeout: 30_000 });
+      }
+      const listed = yield* fromPromise(() => client.listTools(undefined, { timeout: 30_000 }));
       for (const definition of listed.tools) {
         const name = `mcp__${server.name}__${definition.name}`;
-        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name) || names.has(name))
-          throw new McpError("configuration", `Invalid or duplicate MCP tool name ${name}`, server.name);
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name) || names.has(name)) {
+          return yield* Effect.fail(
+            new PromiseFailure(
+              new McpError("configuration", `Invalid or duplicate MCP tool name ${name}`, server.name),
+            ),
+          );
+        }
         names.add(name);
         tools.push({
           name,
           server: server.name,
           definition,
           async call(args, signal, progress) {
-            if (disconnected)
+            if (Ref.getUnsafe(disconnected))
               throw new McpError("connection", "MCP server disconnected; reopen the agent to reconnect", server.name);
             const abort = new AbortController();
             const forwarded = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
@@ -187,15 +237,35 @@ export async function openMcpClients(
         });
       }
     }
-    return { tools, close };
-  } catch (error) {
-    try {
-      await close();
-    } catch (cleanup) {
-      throw new AggregateError([mcpFailure(error, "MCP open", openingServer), cleanup], "MCP open and cleanup failed");
-    }
-    throw mcpFailure(error, "MCP open", openingServer);
-  }
+    return { tools, close } satisfies McpClients;
+  }).pipe(
+    Scope.provide(lifetime),
+    Effect.catchCause((cause) =>
+      Effect.gen(function* () {
+        const serverName = yield* Ref.get(openingServer);
+        const openErr = mcpFailure(originalError(cause), "MCP open", serverName);
+        const cleanupExit = yield* Effect.exit(closeEffect());
+        if (Exit.isFailure(cleanupExit)) {
+          return yield* Effect.fail(
+            new PromiseFailure(
+              new AggregateError([openErr, originalError(cleanupExit.cause)], "MCP open and cleanup failed"),
+            ),
+          );
+        }
+        return yield* Effect.fail(new PromiseFailure(openErr));
+      }),
+    ),
+  );
+});
+
+export async function openMcpClients(
+  servers: readonly McpServer[],
+  /** The transport HTTP servers are reached with; a test's stand-in. Default: the global `fetch`. */
+  fetchImpl: typeof globalThis.fetch = globalThis.fetch,
+): Promise<McpClients> {
+  const exit = await Effect.runPromiseExit(openMcpClientsEffect(servers, fetchImpl));
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw originalError(exit.cause);
 }
 
 const safeReasons = new Map<string, string>([

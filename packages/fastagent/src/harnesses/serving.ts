@@ -4,13 +4,17 @@
  * selected harness (`pi-durable` or `dsh`).
  */
 import { dirname, isAbsolute, join } from "node:path";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
 import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
 import { createCloseSignal } from "../close-signal.ts";
 import {
-  type ConversationStore,
   createInvoker,
   memoryConversationStore,
   postgresConversationStore,
@@ -27,6 +31,7 @@ import { instanceName, INSTANCE_NAME_ENV } from "../instance-name.ts";
 import { type McpClients, openMcpClients } from "../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../mcp/config.ts";
 import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../paths.ts";
+import { PromiseFailure, fromPromise, originalError } from "../promise-bridge.ts";
 import { type Service, serveAgent } from "../service.ts";
 import { NOT_HOSTED, type RunsAs } from "../serving-command.ts";
 import { fastagentVersion } from "../version.ts";
@@ -211,24 +216,46 @@ export function describeInstanceStorage(place: InstancePlace): string {
   return `PostgreSQL ${describeDatabase(url)}, ${instance}`;
 }
 
-export async function openServing(definition: AgentDefinition, options: OpenServingOptions): Promise<OpenedServing> {
+async function runServingPromise<A>(effect: Effect.Effect<A, PromiseFailure>): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect);
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw originalError(exit.cause);
+}
+
+const openServingEffect = Effect.fn("serving.openServing")(function* (
+  definition: AgentDefinition,
+  options: OpenServingOptions,
+) {
   const { dir, config } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const selection = resolveHarnessSelection(
-    config,
-    {
-      ...(options.harness === undefined ? {} : { harness: options.harness }),
-      ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
-    },
-    options.ownEnv,
-  );
-  const dshModule = selection.harness === "dsh" ? await loadDshModule() : undefined;
-  const name = instanceName(definition.name, options.name);
-  const mcpServers = declareMcp(config.mcpServers, dir);
+  const selection = yield* Effect.try({
+    try: () =>
+      resolveHarnessSelection(
+        config,
+        {
+          ...(options.harness === undefined ? {} : { harness: options.harness }),
+          ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
+        },
+        options.ownEnv,
+      ),
+    catch: (cause) => new PromiseFailure(cause),
+  });
+  const dshModule = selection.harness === "dsh" ? yield* fromPromise(() => loadDshModule()) : undefined;
+  const name = yield* Effect.try({
+    try: () => instanceName(definition.name, options.name),
+    catch: (cause) => new PromiseFailure(cause),
+  });
+  const mcpServers = yield* Effect.try({
+    try: () => declareMcp(config.mcpServers, dir),
+    catch: (cause) => new PromiseFailure(cause),
+  });
   const redactedSecrets = redactValues(options.secrets);
   const secrets = revealValues(redactedSecrets);
-  const code = buildDefinition(definition, secrets);
+  const code = yield* Effect.try({
+    try: () => buildDefinition(definition, secrets),
+    catch: (cause) => new PromiseFailure(cause),
+  });
   const env = { ...options.ownEnv, ...secrets };
   const processEnv = processEnvironment(
     {
@@ -255,168 +282,228 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     ...(options.database === undefined ? {} : { database: options.database }),
   };
   const rawDatabase = chosen === "instance" ? databaseOf(place) : undefined;
-  const ownedSharedPg: SharedPostgresDatabase | undefined =
-    rawDatabase !== undefined && sharedHandleOf(rawDatabase) === undefined
-      ? openPostgresDatabase(rawDatabase)
-      : undefined;
-  const database: PostgresDatabase | undefined = ownedSharedPg ?? rawDatabase;
   const storageDescription = describeInstanceStorage(place);
-  // Fail fast on invalid OTLP settings before opening credentials or harness storage.
-  const traces = otlpTraces(env, { serviceName: name, serviceVersion: await fastagentVersion() });
-  let durableCreds: ManagedDurableCredentialStore | undefined;
-  let models: ModelEnvironment;
-  try {
-    if (chosen === "instance") {
-      if (database !== undefined && place.name === undefined) {
-        throw new Error(
-          "an instance in a database is opened by its name, and none was given: " +
-            `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
-        );
-      }
-      durableCreds =
-        database !== undefined
-          ? postgresDurableCredentialStore(database, place.name as string)
-          : sqliteDurableCredentialStore(join(stateRoot, "credentials.sqlite"));
+  const serviceVersion = yield* fromPromise(() => fastagentVersion());
+
+  const lifetime = yield* Scope.make();
+  const recordFailures = yield* Ref.make(false);
+  const cleanupFailures = yield* Ref.make<unknown[]>([]);
+  // Finalizers never fail (Effect 4 turns finalizer defects into masked body errors): during normal close they
+  // record failures into `cleanupFailures` so every step still runs and all failures surface together.
+  const release = (step: () => void | Promise<void>): Effect.Effect<void> =>
+    fromPromise(async () => step()).pipe(
+      Effect.catchCause((cause) =>
+        Ref.get(recordFailures).pipe(
+          Effect.flatMap((recording) =>
+            recording ? Ref.update(cleanupFailures, (list) => [...list, originalError(cause)]) : Effect.void,
+          ),
+        ),
+      ),
+    );
+
+  return yield* Effect.gen(function* () {
+    const ownedSharedPg: SharedPostgresDatabase | undefined =
+      rawDatabase !== undefined && sharedHandleOf(rawDatabase) === undefined
+        ? yield* Effect.acquireRelease(
+            Effect.try({
+              try: () => openPostgresDatabase(rawDatabase),
+              catch: (cause) => new PromiseFailure(cause),
+            }),
+            (pg) => release(() => pg.close()),
+          )
+        : undefined;
+    const database: PostgresDatabase | undefined = ownedSharedPg ?? rawDatabase;
+    // Fail fast on invalid OTLP settings before opening credentials or harness storage.
+    const traces = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () => otlpTraces(env, { serviceName: name, serviceVersion }),
+        catch: (cause) => new PromiseFailure(cause),
+      }),
+      (created) => (created === undefined ? Effect.void : release(() => created.close())),
+    );
+    if (chosen === "instance" && database !== undefined && place.name === undefined) {
+      return yield* Effect.fail(
+        new PromiseFailure(
+          new Error(
+            "an instance in a database is opened by its name, and none was given: " +
+              `set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
+          ),
+        ),
+      );
     }
-    models = await modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
-      environment: secrets,
-      ...(durableCreds !== undefined
-        ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
-        : {}),
-    });
-  } catch (error) {
-    await durableCreds?.close().catch(() => undefined);
-    await ownedSharedPg?.close().catch(() => undefined);
-    await traces?.close();
-    throw error;
-  }
-
-  const work = createWorkTracker();
-  let auth: AuthManager | undefined;
-  const ctx: HarnessOpenContext = {
-    definition,
-    options,
-    selection,
-    name,
-    workdir,
-    projectDir,
-    stateRoot,
-    chosen,
-    place,
-    database,
-    maxMessageBytes: messageBytesFor(database?.limits),
-    storageDescription,
-    secrets: redactedSecrets,
-    env,
-    processEnv,
-    code,
-    models,
-    traces,
-    work,
-    openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
-    closeAuth: () => auth?.close(),
-  };
-
-  let runtimeAgent: ServingAgent;
-  try {
-    runtimeAgent = dshModule !== undefined ? await openDshRuntime(ctx, dshModule) : await openPiDurableRuntime(ctx);
-  } catch (error) {
-    await durableCreds?.close().catch(() => undefined);
-    await ownedSharedPg?.close().catch(() => undefined);
-    await traces?.close();
-    throw error;
-  }
-
-  let conversations: ConversationStore;
-  try {
-    if (durableCreds !== undefined) {
-      auth = createAuthManager({
-        models,
-        durableStore: durableCreds,
-        providers: code.providers,
+    // Acquired before durableCreds and runtimeAgent so LIFO scope close releases in reverse:
+    // auth -> runtimeAgent -> durableCreds -> conversations -> traces -> ownedSharedPg.
+    const conversations = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () =>
+          chosen === "memory"
+            ? memoryConversationStore()
+            : chosen !== "instance"
+              ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
+              : database !== undefined
+                ? postgresConversationStore(database, place.name as string)
+                : sqliteConversationStore(join(stateRoot, "conversations.sqlite")),
+        catch: (cause) => new PromiseFailure(cause),
+      }),
+      (store) => release(() => store.close()),
+    );
+    const durableCreds: ManagedDurableCredentialStore | undefined =
+      chosen === "instance"
+        ? yield* Effect.acquireRelease(
+            Effect.try({
+              try: () =>
+                database !== undefined
+                  ? postgresDurableCredentialStore(database, place.name as string)
+                  : sqliteDurableCredentialStore(join(stateRoot, "credentials.sqlite")),
+              catch: (cause) => new PromiseFailure(cause),
+            }),
+            (store) => release(() => store.close()),
+          )
+        : undefined;
+    const models = yield* fromPromise(() =>
+      modelEnvironment(projectDir, authPath === undefined ? {} : { authPath }, code.providers, {
         environment: secrets,
-        work,
-      });
-    }
-    conversations =
-      chosen === "memory"
-        ? memoryConversationStore()
-        : chosen !== "instance"
-          ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
-          : database !== undefined
-            ? postgresConversationStore(database, place.name as string)
-            : sqliteConversationStore(join(stateRoot, "conversations.sqlite"));
-  } catch (error) {
-    auth?.close();
-    await durableCreds?.close().catch(() => undefined);
-    await runtimeAgent.close().catch(() => undefined);
-    await ownedSharedPg?.close().catch(() => undefined);
-    throw error;
-  }
-
-  const closeSignal = createCloseSignal();
-  runtimeAgent.subscribeClose?.(closeSignal.mark);
-
-  let markClosed!: () => void;
-  const closed = new Promise<void>((resolve) => {
-    markClosed = resolve;
-  });
-
-  let closingAgent: Promise<void> | undefined;
-  const wrappedAgent: ServingAgent = {
-    ...runtimeAgent,
-    closed,
-    ready: () => !closeSignal.isClosing(),
-    subscribeClose: closeSignal.subscribe,
-    close: () => {
-      closeSignal.mark();
-      closingAgent ??= (async () => {
-        const failures: unknown[] = [];
-        try {
-          auth?.close();
-          await runtimeAgent.close().catch((error: unknown) => failures.push(error));
-          await durableCreds?.close().catch((error: unknown) => failures.push(error));
-          await conversations.close().catch((error: unknown) => failures.push(error));
-          await ownedSharedPg?.close().catch((error: unknown) => failures.push(error));
-        } finally {
-          markClosed();
-        }
-        if (failures.length > 0) {
-          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed");
-        }
-      })();
-      return closingAgent;
-    },
-  };
-  void runtimeAgent.closed?.then(
-    () =>
-      wrappedAgent.close().catch((error: unknown) => {
-        log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
+        ...(durableCreds !== undefined
+          ? { credentialStore: (fallback) => overlayCredentialStore(() => durableCreds, fallback) }
+          : {}),
       }),
-    () =>
-      wrappedAgent.close().catch((error: unknown) => {
-        log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
-      }),
+    );
+    const work = createWorkTracker();
+    const authRef = yield* Ref.make<AuthManager | undefined>(undefined);
+    const ctx: HarnessOpenContext = {
+      definition,
+      options,
+      selection,
+      name,
+      workdir,
+      projectDir,
+      stateRoot,
+      chosen,
+      place,
+      database,
+      maxMessageBytes: messageBytesFor(database?.limits),
+      storageDescription,
+      secrets: redactedSecrets,
+      env,
+      processEnv,
+      code,
+      models,
+      traces,
+      work,
+      openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
+      closeAuth: () => Ref.getUnsafe(authRef)?.close(),
+    };
+    const runtimeAgent = yield* Effect.acquireRelease(
+      fromPromise(() => (dshModule !== undefined ? openDshRuntime(ctx, dshModule) : openPiDurableRuntime(ctx))),
+      (agent) => release(() => agent.close()),
+    );
+    const auth: AuthManager | undefined =
+      durableCreds !== undefined
+        ? yield* Effect.acquireRelease(
+            Effect.try({
+              try: () =>
+                createAuthManager({
+                  models,
+                  durableStore: durableCreds,
+                  providers: code.providers,
+                  environment: secrets,
+                  work,
+                }),
+              catch: (cause) => new PromiseFailure(cause),
+            }),
+            (manager) => release(() => manager.close()),
+          )
+        : undefined;
+    yield* Ref.set(authRef, auth);
+
+    const closeSignal = createCloseSignal();
+    runtimeAgent.subscribeClose?.(closeSignal.mark);
+    const closedGate = Promise.withResolvers<void>();
+    const closeOutcome = Ref.makeUnsafe<Deferred.Deferred<void, PromiseFailure> | undefined>(undefined);
+    const closeAgentEffect = Effect.fn("serving.closeAgent")(function* () {
+      const decision = yield* Ref.modify(
+        closeOutcome,
+        (
+          current,
+        ): readonly [
+          {
+            readonly isLeader: boolean;
+            readonly deferred: Deferred.Deferred<void, PromiseFailure>;
+          },
+          Deferred.Deferred<void, PromiseFailure>,
+        ] => {
+          if (current !== undefined) return [{ isLeader: false, deferred: current }, current];
+          const next = Deferred.makeUnsafe<void, PromiseFailure>();
+          return [{ isLeader: true, deferred: next }, next];
+        },
+      );
+      if (!decision.isLeader) return yield* Deferred.await(decision.deferred);
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* Ref.set(recordFailures, true);
+          yield* Scope.close(lifetime, Exit.void).pipe(Effect.ensuring(Effect.sync(() => closedGate.resolve())));
+          const failures = yield* Ref.get(cleanupFailures);
+          const finalExit =
+            failures.length === 0
+              ? Exit.void
+              : Exit.fail(
+                  new PromiseFailure(
+                    failures.length === 1 ? failures[0] : new AggregateError(failures, "Agent close failed"),
+                  ),
+                );
+          yield* Deferred.done(decision.deferred, finalExit);
+        }),
+      );
+      return yield* Deferred.await(decision.deferred);
+    });
+
+    const wrappedAgent: ServingAgent = {
+      ...runtimeAgent,
+      closed: closedGate.promise,
+      ready: () => !closeSignal.isClosing(),
+      subscribeClose: closeSignal.subscribe,
+      close: () => {
+        closeSignal.mark();
+        return runServingPromise(closeAgentEffect());
+      },
+    };
+    void runtimeAgent.closed?.then(
+      () =>
+        wrappedAgent.close().catch((error: unknown) => {
+          log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
+        }),
+      () =>
+        wrappedAgent.close().catch((error: unknown) => {
+          log.warn(`[fastagent] closing after runtime shutdown failed: ${String(error)}`);
+        }),
+    );
+    const invoker = createInvoker(wrappedAgent, conversations, { keyPrefix: `${selection.harness}:` });
+
+    return {
+      agent: wrappedAgent,
+      invoker,
+      busy: () => work.active() > 0 || (runtimeAgent.busy?.() ?? false),
+      harness: selection.harness,
+      ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
+      ...(auth === undefined ? {} : { auth }),
+      definition,
+      name,
+      code,
+      config,
+      secrets: redactedSecrets,
+      models,
+      agentDir: projectDir,
+      workdir,
+      stateRoot,
+    } satisfies OpenedServing;
+  }).pipe(
+    Scope.provide(lifetime),
+    Effect.onError(() => Scope.close(lifetime, Exit.void)),
   );
-  const invoker = createInvoker(wrappedAgent, conversations, { keyPrefix: `${selection.harness}:` });
+});
 
-  return {
-    agent: wrappedAgent,
-    invoker,
-    busy: () => work.active() > 0 || (runtimeAgent.busy?.() ?? false),
-    harness: selection.harness,
-    ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
-    ...(auth === undefined ? {} : { auth }),
-    definition,
-    name,
-    code,
-    config,
-    secrets: redactedSecrets,
-    models,
-    agentDir: projectDir,
-    workdir,
-    stateRoot,
-  };
+export function openServing(definition: AgentDefinition, options: OpenServingOptions): Promise<OpenedServing> {
+  return runServingPromise(openServingEffect(definition, options));
 }
 
 /** An agent opened in this process: the Agent API, and how it is served and operated. */
@@ -507,8 +594,108 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
   });
   const { agent, invoker } = opened;
   const piHarness = agent.harness;
-  let served: Promise<Service> | undefined;
-  let closing: Promise<void> | undefined;
+  type LocalAgentState =
+    | { readonly _tag: "idle" }
+    | { readonly _tag: "serving"; readonly ready: Deferred.Deferred<Service, PromiseFailure> }
+    | { readonly _tag: "served"; readonly service: Service }
+    | { readonly _tag: "closed"; readonly done: Deferred.Deferred<void, PromiseFailure> };
+  const state = Ref.makeUnsafe<LocalAgentState>({ _tag: "idle" });
+
+  const serveEffect = Effect.fn("serving.localAgent.serve")(function* (serveOptions: ServeAgentOptions = {}) {
+    const decision = yield* Ref.modify(
+      state,
+      (
+        current,
+      ): readonly [
+        (
+          | { readonly _tag: "lead"; readonly ready: Deferred.Deferred<Service, PromiseFailure> }
+          | { readonly _tag: "refused"; readonly reason: string }
+        ),
+        LocalAgentState,
+      ] => {
+        if (current._tag === "closed") return [{ _tag: "refused", reason: "this agent is closed" }, current];
+        if (current._tag !== "idle") return [{ _tag: "refused", reason: "this agent is already served" }, current];
+        const ready = Deferred.makeUnsafe<Service, PromiseFailure>();
+        return [
+          { _tag: "lead", ready },
+          { _tag: "serving", ready },
+        ];
+      },
+    );
+    if (decision._tag === "refused") {
+      return yield* Effect.fail(new PromiseFailure(new Error(decision.reason)));
+    }
+    const outcome = yield* Effect.uninterruptible(
+      fromPromise(() => serveAgent(opened, serveOptions)).pipe(
+        Effect.exit,
+        Effect.tap((exit) =>
+          Ref.update(state, (current): LocalAgentState => {
+            if (current._tag !== "serving" || current.ready !== decision.ready) return current;
+            return Exit.isSuccess(exit) ? { _tag: "served", service: exit.value } : { _tag: "idle" };
+          }),
+        ),
+        Effect.tap((exit) => Deferred.done(decision.ready, exit)),
+      ),
+    );
+    return yield* outcome;
+  });
+
+  const closeEffect = Effect.fn("serving.localAgent.close")(function* () {
+    const decision = yield* Ref.modify(
+      state,
+      (
+        current,
+      ): readonly [
+        (
+          | { readonly _tag: "join"; readonly done: Deferred.Deferred<void, PromiseFailure> }
+          | {
+              readonly _tag: "lead";
+              readonly done: Deferred.Deferred<void, PromiseFailure>;
+              readonly previous: LocalAgentState;
+            }
+        ),
+        LocalAgentState,
+      ] => {
+        if (current._tag === "closed") return [{ _tag: "join", done: current.done }, current];
+        const done = Deferred.makeUnsafe<void, PromiseFailure>();
+        return [
+          { _tag: "lead", done, previous: current },
+          { _tag: "closed", done },
+        ];
+      },
+    );
+    if (decision._tag === "join") return yield* Deferred.await(decision.done);
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        let service: Service | undefined;
+        if (decision.previous._tag === "served") {
+          service = decision.previous.service;
+        } else if (decision.previous._tag === "serving") {
+          const servedExit = yield* Effect.exit(Deferred.await(decision.previous.ready));
+          if (Exit.isSuccess(servedExit)) service = servedExit.value;
+        }
+        const failures: unknown[] = [];
+        if (service !== undefined) {
+          const serviceClose = service.close;
+          const exit = yield* Effect.exit(fromPromise(() => serviceClose()));
+          if (Exit.isFailure(exit)) failures.push(originalError(exit.cause));
+        }
+        const agentExit = yield* Effect.exit(fromPromise(() => agent.close()));
+        if (Exit.isFailure(agentExit)) failures.push(originalError(agentExit.cause));
+        const finalExit =
+          failures.length === 0
+            ? Exit.void
+            : Exit.fail(
+                new PromiseFailure(
+                  failures.length === 1 ? failures[0] : new AggregateError(failures, "the agent did not close cleanly"),
+                ),
+              );
+        yield* Deferred.done(decision.done, finalExit);
+      }),
+    );
+    return yield* Deferred.await(decision.done);
+  });
+
   return {
     info: agent.info,
     usage: agent.usage,
@@ -518,29 +705,9 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     invokeStream: invoker.invokeStream,
     ...(piHarness === undefined ? {} : { harness: piHarness }),
     ...(agent.closed === undefined ? {} : { closed: agent.closed }),
-    ready: () => closing === undefined && (agent.ready?.() ?? true),
+    ready: () => Ref.getUnsafe(state)._tag !== "closed" && (agent.ready?.() ?? true),
     busy: () => opened.busy(),
-    serve(serveOptions = {}) {
-      if (closing !== undefined) return Promise.reject(new Error("this agent is closed"));
-      if (served !== undefined) return Promise.reject(new Error("this agent is already served"));
-      const serving: Promise<Service> = serveAgent(opened, serveOptions);
-      served = serving;
-      serving.catch(() => {
-        if (served === serving) served = undefined;
-      });
-      return serving;
-    },
-    close() {
-      closing ??= (async () => {
-        const service = await served?.catch(() => undefined);
-        const failures: unknown[] = [];
-        await service?.close().catch((error: unknown) => failures.push(error));
-        await agent.close().catch((error: unknown) => failures.push(error));
-        if (failures.length > 0) {
-          throw failures.length === 1 ? failures[0] : new AggregateError(failures, "the agent did not close cleanly");
-        }
-      })();
-      return closing;
-    },
+    serve: (serveOptions = {}) => runServingPromise(serveEffect(serveOptions)),
+    close: () => runServingPromise(closeEffect()),
   };
 }
