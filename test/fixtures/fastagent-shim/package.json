@@ -1,1 +1,1 @@
-{ "name": "@fastagent-sh/fastagent", "private": true, "type": "module", "exports": { ".": "./index.js" } }
+{ "name": "@fastagent-sh/fastagent", "private": true, "type": "module", "exports": { ".": "./index.js", "./internal": "./internal.js" } }
