@@ -57,8 +57,9 @@ function exampleManifests(dir = "examples") {
 	let entries;
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return [];
+	} catch (error) {
+		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+		throw error;
 	}
 	const found = [];
 	for (const entry of entries) {
