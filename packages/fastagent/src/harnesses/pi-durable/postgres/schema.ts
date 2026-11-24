@@ -6,6 +6,7 @@
  * DSQL has none.
  */
 import type { CreateIndex, PgDatabase } from "../../../postgres.ts";
+import { migratePgSchema } from "../../../postgres-kit.ts";
 
 const VERSION = 1;
 
@@ -55,49 +56,10 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS durable_schema (version integer PRIMARY KEY)`,
 ];
 
-/**
- * PostgreSQL's codes for an object a concurrent `CREATE … IF NOT EXISTS` made first: `IF NOT EXISTS` checks before it
- * creates, so the loser of a race fails on the relation (42P07), its row type (42710) or a catalog key (23505).
- */
-const MADE_CONCURRENTLY = new Set(["42P07", "42710", "23505"]);
-
-const createIndexAsWritten: CreateIndex = async (db, statement) => {
-  await db.query(statement);
-};
-
-/**
- * Make the tables, unless the database has them: two instances opening a new database at once both make them, and the
- * one that loses a race finds them made. Each statement is its own transaction, as a database that allows one DDL
- * statement in a transaction needs. An index that is a job to wait for (DSQL's) is waited for with the others, once all
- * are started: in turn, a new database's first open takes minutes. They are started one at a time, since such a
- * database refuses two schema changes at once (DSQL's `OC001`).
- */
-export async function migrate(db: PgDatabase, createIndex: CreateIndex = createIndexAsWritten): Promise<void> {
-  const current = await db
-    .query<{ version: number }>("SELECT max(version) AS version FROM durable_schema")
-    .then(([row]) => row?.version ?? 0)
-    .catch((error: { code?: string }) => {
-      if (error.code === "42P01") return 0;
-      throw error;
-    });
-  if (current > VERSION) {
-    throw new Error(`the database holds storage of version ${current}, newer than this FastAgent's ${VERSION}`);
-  }
-  if (current === VERSION) return;
-  const madeOrFound = <T>(made: Promise<T>): Promise<T | undefined> =>
-    made.catch((error: { code?: string }) => {
-      if (!MADE_CONCURRENTLY.has(error.code ?? "")) throw error;
-      return undefined;
-    });
-  const isIndex = (statement: string) => statement.startsWith("CREATE INDEX");
-  for (const statement of TABLES.filter((s) => !isIndex(s))) await madeOrFound(db.query(statement));
-  const jobs: (() => Promise<void>)[] = [];
-  for (const statement of TABLES.filter(isIndex)) {
-    const job = await madeOrFound(createIndex(db, statement));
-    if (job) jobs.push(job);
-  }
-  const built = await Promise.allSettled(jobs.map((job) => job()));
-  const failed = built.find((result) => result.status === "rejected");
-  if (failed !== undefined) throw failed.reason;
-  await db.query("INSERT INTO durable_schema (version) VALUES ($1) ON CONFLICT (version) DO NOTHING", [VERSION]);
+/** Make the `pi-durable` tables and indexes (idempotent across concurrent openers and Aurora DSQL async jobs). */
+export async function migrate(db: PgDatabase, createIndex?: CreateIndex): Promise<void> {
+  await migratePgSchema(db, TABLES, {
+    ...(createIndex === undefined ? {} : { createIndex }),
+    version: { table: "durable_schema", current: VERSION },
+  });
 }

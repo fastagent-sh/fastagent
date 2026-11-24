@@ -21,26 +21,27 @@ const INT8 = 20;
 const CONNECT_TIMEOUT_MS = 10_000;
 const ATTEMPTS = 4;
 
-/** Whether `error` is a transient PostgreSQL / Aurora DSQL failure safe for a caller to retry. */
+const PASSING_SOCKET = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "EPIPE",
+]);
+const PASSING_SQLSTATE = /^(08|53|57P0[1-3]$|40001$|40P01$|OC00[01]$)/;
+
+/** Whether `error` (or its `cause` chain) is a transient PostgreSQL / Aurora DSQL failure safe to treat as unavailable. */
 export function isTransientPgError(error: unknown): boolean {
-  const code = (error as { code?: unknown })?.code;
-  if (typeof code === "string") {
-    if (["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN", "EPIPE"].includes(code)) return true;
-    if (
-      code.startsWith("08") ||
-      code.startsWith("53") ||
-      code === "40001" ||
-      code === "40P01" ||
-      code === "57P01" ||
-      code === "57P02" ||
-      code === "57P03" ||
-      code === "OC000" ||
-      code === "OC001"
-    ) {
-      return true;
-    }
+  for (let at: unknown = error; at instanceof Error; at = at.cause) {
+    const code = (at as { code?: unknown }).code;
+    if (typeof code === "string" && (PASSING_SOCKET.has(code) || PASSING_SQLSTATE.test(code))) return true;
+    if (/Connection terminated|timeout exceeded when trying to connect/.test(at.message)) return true;
   }
-  return error instanceof Error && /Connection terminated|timeout exceeded when trying to connect/.test(error.message);
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" && (PASSING_SOCKET.has(code) || PASSING_SQLSTATE.test(code));
 }
 
 /** An error that means the database was not reached: nothing the attempt sent took effect, or nothing was sent. */

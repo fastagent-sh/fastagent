@@ -67,18 +67,24 @@ import {
   type PostgresLimits,
   type PostgresOptions,
   describeDatabase,
+  isTransientPgError,
   openPgDatabase,
   sharedHandleOf,
 } from "../../../postgres.ts";
+import {
+  DEFAULT_LEASE_MS,
+  DEFAULT_LEASE_WAIT_MS,
+  InstanceHeld,
+  type PgInstanceLease,
+  acquirePgInstanceLease,
+  isPgConflict,
+} from "../../../postgres-kit.ts";
 import { migrate } from "./schema.ts";
 import { type StoredText, type ValueKind, readTexts } from "./values.ts";
 
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 type StoredEntry = { readonly entry: EntryRecord; readonly commitSeq: Seq };
 type Order = "ascending" | "descending";
-
-/** How long a holder that stops renewing keeps the instance: a crashed process's successor waits at most this. */
-const LEASE_MS = 30_000;
 
 interface LeaseOptions {
   /** How long a holder that stops renewing keeps the instance. */
@@ -87,19 +93,7 @@ interface LeaseOptions {
   waitMs: number;
 }
 
-const DEFAULT_LEASE: LeaseOptions = { leaseMs: LEASE_MS, waitMs: LEASE_MS + 5_000 };
-
-/**
- * Renew every quarter of the lease so the third missed tick lands at 3/4 — comfortably past {@link GIVE_UP_AFTER} (2/3)
- * even with sub-millisecond timer jitter, while still a full quarter ahead of lease expiry.
- */
-const RENEW_EVERY = 1 / 4;
-/** The share of the lease a holder goes without renewing before it gives the instance up. */
-const GIVE_UP_AFTER = 2 / 3;
-
-/** OCC conflicts: PostgreSQL's serialization failure, and Aurora DSQL's own code for it. */
-const CONFLICT = new Set(["40001", "OC000"]);
-const isConflict = (error: unknown) => CONFLICT.has(String((error as { code?: unknown }).code));
+const DEFAULT_LEASE: LeaseOptions = { leaseMs: DEFAULT_LEASE_MS, waitMs: DEFAULT_LEASE_WAIT_MS };
 
 function scanStart(requested: Order | undefined, cursor: Cursor | undefined, fallback: Order) {
   if (requested !== undefined && requested !== "ascending" && requested !== "descending") {
@@ -154,33 +148,7 @@ const KINDS: Record<string, ValueKind> = {
   durable_submissions: "submission",
 };
 
-/** The refusal of an opener of an instance another process holds: one that passes once that process lets it go. */
-export class InstanceHeld extends Unavailable {}
-
-/**
- * What says a database is out of reach for a moment rather than refusing: a connection that could not be made or was
- * lost (Node's socket errors, SQLSTATE class 08), a server short of resources (53) or shutting down (57P01-57P03), and
- * a transaction that lost a race (40001, 40P01; Aurora DSQL's OC000 and OC001).
- */
-const PASSING_SOCKET = new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "EAI_AGAIN",
-  "EPIPE",
-]);
-const PASSING_SQLSTATE = /^(08|53|57P0[1-3]$|40001$|40P01$|OC00[01]$)/;
-
-function passes(error: unknown): boolean {
-  for (let at = error; at instanceof Error; at = at.cause) {
-    const code = (at as { code?: unknown }).code;
-    if (typeof code === "string" && (PASSING_SOCKET.has(code) || PASSING_SQLSTATE.test(code))) return true;
-    if (/Connection terminated unexpectedly|timeout exceeded when trying to connect/.test(at.message)) return true;
-  }
-  return false;
-}
+export { InstanceHeld };
 
 export interface OpenOptions {
   /** What else opens the instance, for the refusal of a second opener. */
@@ -197,24 +165,17 @@ export class PostgresStorage implements Storage {
   private closing: Promise<void> | undefined;
   private admittedReads = 0;
   private readsDrained: (() => void) | undefined;
-  /** Why this process may no longer write the instance: another took it over. */
-  private lost: Error | undefined;
-  private renewal: ReturnType<typeof setInterval> | undefined;
-  /** When the lease was last extended, by this process's clock. */
-  private renewedAt = Date.now();
-  private onLost: ((error: Error) => void) | undefined;
   private readonly db: PgDatabase;
   private readonly instance: string;
   private nextId: number;
-  /** This process's token: what the metadata row carries while it writes the instance. */
-  private readonly owner: string;
+  private readonly lease: PgInstanceLease<number>;
   private readonly limits: PostgresLimits;
 
-  private constructor(db: PgDatabase, instance: string, nextId: number, owner: string, limits: PostgresLimits) {
+  private constructor(db: PgDatabase, instance: string, lease: PgInstanceLease<number>, limits: PostgresLimits) {
     this.db = db;
     this.instance = instance;
-    this.nextId = nextId;
-    this.owner = owner;
+    this.nextId = lease.taken;
+    this.lease = lease;
     this.limits = limits;
   }
 
@@ -225,117 +186,34 @@ export class PostgresStorage implements Storage {
    * database was out of reach for most of the lease. An instance another `agent` made is refused.
    */
   static async open(db: PgDatabase, instance: string, options: OpenOptions = {}): Promise<PostgresStorage> {
-    const lease = options.lease ?? DEFAULT_LEASE;
-    const owner = crypto.randomUUID();
+    const leaseOpts = options.lease ?? DEFAULT_LEASE;
     await db.query(
       "INSERT INTO durable_metadata (instance, next_id, next_seq) VALUES ($1, 2, 1) ON CONFLICT (instance) DO NOTHING",
       [instance],
     );
-    await db.query("INSERT INTO durable_leases (instance) VALUES ($1) ON CONFLICT (instance) DO NOTHING", [instance]);
-    const deadline = Date.now() + lease.waitMs;
-    let waiting = false;
-    while (true) {
-      const taken = await PostgresStorage.take(db, instance, owner, lease.leaseMs, options.agent);
-      if (taken !== undefined) {
-        const storage = new PostgresStorage(db, instance, taken, owner, options.limits ?? {});
-        storage.onLost = options.onLost;
-        storage.renewEvery(lease.leaseMs);
-        return storage;
-      }
-      const [held] = await db.query<{ lease_until: Date | null }>(
-        "SELECT lease_until FROM durable_leases WHERE instance = $1",
-        [instance],
-      );
-      const until = held?.lease_until?.toISOString() ?? "now";
-      if (Date.now() >= deadline) {
-        const who = options.holders === undefined ? "" : `: ${options.holders} is running`;
-        throw new InstanceHeld(
-          `the instance "${instance}" is held by another process until ${until}${who}. Stop that one first`,
-        );
-      }
-      if (!waiting) {
-        waiting = true;
-        log.info(`[fastagent] the instance "${instance}" is held by another process until ${until}; waiting`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, lease.leaseMs / 3)));
-    }
-  }
-
-  /**
-   * Take the lease when no one holds it, or its holder let it lapse: the next id, or `undefined` while held. The first
-   * agent to take an instance makes it its own; another agent's take is refused and changes nothing.
-   */
-  private static async take(db: PgDatabase, instance: string, owner: string, leaseMs: number, agent?: string) {
-    return db
-      .transaction(async (tx) => {
-        const [leased] = await tx.query(
-          `UPDATE durable_leases SET owner = $2, lease_until = now() + make_interval(secs => $3::double precision / 1000)
-            WHERE instance = $1 AND (owner IS NULL OR lease_until < now()) RETURNING instance`,
-          [instance, owner, leaseMs],
-        );
-        if (leased === undefined) return undefined;
+    const lease = await acquirePgInstanceLease<number>(db, {
+      table: "durable_leases",
+      instance,
+      leaseMs: leaseOpts.leaseMs,
+      waitMs: leaseOpts.waitMs,
+      ...(options.holders === undefined ? {} : { holders: options.holders }),
+      ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
+      onTake: async (tx, owner) => {
         const [metadata] = await tx.query<{ next_id: number; agent: string | null }>(
           "UPDATE durable_metadata SET owner = $2, agent = COALESCE(agent, $3) WHERE instance = $1 RETURNING next_id, agent",
-          [instance, owner, agent ?? null],
+          [instance, owner, options.agent ?? null],
         );
-        if (agent !== undefined && metadata?.agent !== agent) {
+        if (options.agent !== undefined && metadata?.agent !== options.agent) {
           throw new Error(
-            `the instance "${instance}" belongs to the agent "${metadata?.agent}", not "${agent}": ` +
+            `the instance "${instance}" belongs to the agent "${metadata?.agent}", not "${options.agent}": ` +
               "give this one another name (FASTAGENT_NAME)",
           );
         }
-        return metadata?.next_id;
-      })
-      .catch((error: unknown) => {
-        // Another opener took it in the same moment: held.
-        if (isConflict(error)) return undefined;
-        throw error;
-      });
-  }
-
-  private renewEvery(leaseMs: number): void {
-    this.renewal = setInterval(() => {
-      this.db
-        .query(
-          `UPDATE durable_leases SET lease_until = now() + make_interval(secs => $3::double precision / 1000)
-            WHERE instance = $1 AND owner = $2 RETURNING instance`,
-          [this.instance, this.owner, leaseMs],
-        )
-        .then(
-          ([kept]) => {
-            if (kept === undefined) this.giveUp(this.loseLease());
-            else this.renewedAt = Date.now();
-          },
-          (error: unknown) => {
-            const unrenewedMs = Date.now() - this.renewedAt;
-            log.warn(`[fastagent] renewing the lease of "${this.instance}" failed: ${String(error)}`);
-            // The next tick retries, while a successor cannot take the instance yet.
-            if (unrenewedMs < leaseMs * GIVE_UP_AFTER) return;
-            this.giveUp(
-              this.loseLease(
-                new Error(
-                  `the instance "${this.instance}" was given up: its lease went ${Math.round(unrenewedMs / 1000)}s ` +
-                    `without renewal (${String(error)}), and another process may take it over after ${leaseMs / 1000}s`,
-                ),
-              ),
-            );
-          },
-        );
-    }, leaseMs * RENEW_EVERY);
-    this.renewal.unref();
-  }
-
-  private loseLease(why?: Error): Error {
-    clearInterval(this.renewal);
-    this.lost ??= why ?? new Error(`the instance "${this.instance}" was taken over by another process`);
-    return this.lost;
-  }
-
-  /** Say, once, that this process no longer holds the instance: what runs in it must stop. */
-  private giveUp(lost: Error): void {
-    const onLost = this.onLost;
-    this.onLost = undefined;
-    onLost?.(lost);
+        if (metadata === undefined) throw new Error(`the instance "${instance}" has no metadata row`);
+        return metadata.next_id;
+      },
+    });
+    return new PostgresStorage(db, instance, lease, options.limits ?? {});
   }
 
   /**
@@ -350,7 +228,7 @@ export class PostgresStorage implements Storage {
     _context: Context,
   ): Promise<CommitResult> {
     this.assertOpen();
-    if (this.lost !== undefined) throw this.lost;
+    if (this.lease.lost !== undefined) throw this.lease.lost;
     const seqs: Seq[] = [];
     const garbage = new Map<number, number>();
     let refused: { error: unknown } | undefined;
@@ -427,13 +305,13 @@ export class PostgresStorage implements Storage {
         if (seqs.length === 0) return;
         const [fenced] = await tx.query(
           "UPDATE durable_metadata SET next_id = $2, next_seq = $3 WHERE instance = $1 AND owner = $4 RETURNING instance",
-          [this.instance, Math.max(metadata.next_id, candidateNextId), next, this.owner],
+          [this.instance, Math.max(metadata.next_id, candidateNextId), next, this.lease.owner],
         );
-        if (fenced === undefined) throw this.loseLease();
+        if (fenced === undefined) throw this.lease.lose();
       })
       .catch((error: unknown) => {
         // A takeover committed while this commit ran: its write of the metadata row won.
-        if (isConflict(error)) throw this.loseLease();
+        if (isPgConflict(error)) throw this.lease.lose();
         throw error;
       });
     // `COMMIT` returned: the stored batches are durable.
@@ -837,14 +715,10 @@ export class PostgresStorage implements Storage {
   close(_context: Context): Promise<void> {
     if (this.closing === undefined) {
       this.closed = true;
-      clearInterval(this.renewal);
       this.closing = (async () => {
         if (this.admittedReads > 0) await new Promise<void>((resolve) => (this.readsDrained = resolve));
         try {
-          await this.db.query(
-            "UPDATE durable_leases SET owner = NULL, lease_until = NULL WHERE instance = $1 AND owner = $2",
-            [this.instance, this.owner],
-          );
+          await this.lease.release();
         } finally {
           await this.db.close();
         }
@@ -987,7 +861,7 @@ export async function openPostgresStorage(
       return storage;
     } catch (error) {
       if (error instanceof InstanceHeld || shared.isClosed()) throw error;
-      const failed = passes(error) ? Unavailable : Error;
+      const failed = isTransientPgError(error) ? Unavailable : Error;
       throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, { cause: error });
     }
   }
@@ -1001,7 +875,7 @@ export async function openPostgresStorage(
       .close()
       .catch((cleanup: unknown) => log.warn(`[fastagent] closing the database failed: ${String(cleanup)}`));
     if (error instanceof InstanceHeld) throw error;
-    const failed = passes(error) ? Unavailable : Error;
+    const failed = isTransientPgError(error) ? Unavailable : Error;
     throw new failed(`the database ${describeDatabase(url)}: ${(error as Error).message}`, {
       cause: error,
     });
