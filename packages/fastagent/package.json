@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/fastagent",
-  "version": "0.34.0",
+  "version": "0.35.0",
   "description": "The TypeScript runtime for production AI agents: write in Markdown & TypeScript, package as an npm artifact, embed in Node.js, self-host with Docker, or deploy to Fly.io, Railway & AWS.",
   "keywords": [
     "ai-agent",
@@ -76,7 +76,7 @@
     "@earendil-works/pi-schema": "1.6.0",
     "@earendil-works/pi-telemetry": "1.6.0",
     "@effect/platform-node": "^4.1.5",
-    "@fastagent-sh/client": "0.34.0",
+    "@fastagent-sh/client": "0.35.0",
     "@modelcontextprotocol/client": "2.4.0",
     "chokidar": "^6.0.0",
     "commander": "^15.0.0",
