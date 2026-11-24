@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
+import * as Schema from "effect/Schema";
 import { applyEnvValues } from "../../../packages/fastagent/src/env.ts";
-import { dotEnvPath, loadEnvValues } from "../../../packages/fastagent/src/value-file.ts";
+import { dotEnvPath, loadEnvValues, parseEnvContent } from "../../../packages/fastagent/src/value-file.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -51,5 +52,43 @@ describe("loadEnvValues + applyEnvValues", () => {
     } finally {
       for (const name of created) delete process.env[name];
     }
+  });
+
+  const EnvKeyChars = Schema.Array(Schema.Literals(["A", "B", "Z", "0", "9", "_"])).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(16),
+  );
+  const EnvValue = Schema.String.check(Schema.isMaxLength(64));
+
+  it.prop(
+    "round-trips arbitrary quoted/unquoted .env entries with comments, blank lines, and last-occurrence-wins",
+    [EnvKeyChars, EnvValue, EnvValue, Schema.Boolean],
+    ([keyChars, rawFirst, rawSecond, doubleQuoted]) => {
+      const key = `K_${keyChars.join("")}`;
+      const clean = (s: string) => s.replace(/[\r\n]/g, "").trim();
+      const first = clean(rawFirst);
+      const second = clean(rawSecond).replace(/["']/g, "");
+      const quote = doubleQuoted ? '"' : "'";
+      const content = [
+        "# leading comment",
+        "",
+        `${key}=${first}`,
+        "   # indented comment",
+        `${key}=${quote}${second}${quote}`,
+      ].join("\n");
+      const parsed = parseEnvContent(content);
+      expect(parsed.size).toBe(1);
+      expect(parsed.get(key)).toBe(second);
+    },
+    { arbitrary: { runs: 40 } },
+  );
+
+  it("preserves a single unmatched quote character instead of collapsing it to empty string", () => {
+    expect(parseEnvContent("SINGLE_DQ=\"\nSINGLE_SQ='\n")).toEqual(
+      new Map([
+        ["SINGLE_DQ", '"'],
+        ["SINGLE_SQ", "'"],
+      ]),
+    );
   });
 });

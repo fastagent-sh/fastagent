@@ -7,20 +7,24 @@ import { join } from "node:path";
 import { resolveSecretsDir } from "./paths.ts";
 
 /** Parse .env content into key → value (comments/blanks skipped, surrounding quotes stripped, last occurrence wins). */
+function stripSurroundingQuotes(value: string): string {
+  const quote = value[0];
+  return value.length >= 2 && (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
+}
+
 export function parseEnvContent(content: string): Map<string, string> {
-  const parsed = new Map<string, string>();
-  for (const raw of content.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("#")) continue;
-    const eq = line.indexOf("=");
-    if (eq < 1) continue; // no `=`, or an empty key
-    const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.at(-1) === quote) value = value.slice(1, -1);
-    parsed.set(key, value);
-  }
-  return parsed;
+  return new Map(
+    Iterator.from(content.split("\n")).flatMap((raw) => {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) return [];
+      const eq = line.indexOf("=");
+      if (eq < 1) return []; // no `=`, or an empty key
+      const key = line.slice(0, eq).trim();
+      if (!key) return [];
+      const value = stripSurroundingQuotes(line.slice(eq + 1).trim());
+      return [[key, value] as const];
+    }),
+  );
 }
 
 /**

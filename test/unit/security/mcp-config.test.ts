@@ -2,8 +2,15 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { declareMcp, loadMcp, mcpSecrets, resolveMcpServers } from "../../../packages/fastagent/src/mcp/config.ts";
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+import {
+  declareMcp,
+  literalCredentials,
+  loadMcp,
+  mcpSecrets,
+  resolveMcpServers,
+} from "../../../packages/fastagent/src/mcp/config.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -58,4 +65,69 @@ describe("the servers of the program, from fastagent.config.ts", () => {
   ])("refuses an unsupported declaration without printing credential values", async (servers) => {
     expect(() => declareMcp(servers, dir)).toThrow(/fastagent\.config\.ts/);
   });
+
+  const IdentChars = Schema.Array(Schema.Literals(["a", "b", "z", "0", "9", "-"])).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(12),
+  );
+  const EnvChars = Schema.Array(Schema.Literals(["A", "K", "Z", "1", "_"])).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(12),
+  );
+  const SecretValue = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
+
+  it.prop(
+    "tracks ${VAR} references in mcpSecrets without flagging them as literals and expands only declared env vars",
+    [IdentChars, EnvChars, SecretValue],
+    ([serverChars, envChars, rawVal]) => {
+      const serverName = `s-${serverChars.join("")}`;
+      const envName = `V_${envChars.join("")}`;
+      const secretVal = rawVal.replace(/[\r\n\0]/g, "x") || "x";
+      const declared = declareMcp(
+        { [serverName]: { command: "node", env: { TOKEN: `prefix-\${${envName}}` } } },
+        "/tmp/agent",
+      );
+      expect(mcpSecrets(declared).map((s) => s.name)).toEqual([envName]);
+      expect(literalCredentials(declared)).toEqual([]);
+      const [resolved] = resolveMcpServers(
+        declared,
+        { [envName]: secretVal, UNRELATED_SECRET: "must-not-leak" },
+        undefined,
+        "/tmp/work",
+        { PATH: "/usr/bin" },
+      );
+      expect(resolved?.type).toBe("stdio");
+      if (resolved?.type === "stdio") {
+        expect(resolved.env.TOKEN).toBe(`prefix-${secretVal}`);
+        expect(resolved.env.UNRELATED_SECRET).toBeUndefined();
+      }
+    },
+    { arbitrary: { runs: 30 } },
+  );
+
+  it.prop(
+    "flags non-empty literal header/env credentials and refuses non-loopback HTTP or credentialed MCP URLs",
+    [IdentChars, SecretValue],
+    ([serverChars, rawLiteral]) => {
+      const serverName = `h-${serverChars.join("")}`;
+      const literal = rawLiteral.replace(/\$\{/g, "x").replace(/[\r\n\0]/g, "x") || "lit";
+      const declared = declareMcp(
+        { [serverName]: { type: "http", url: "https://mcp.example.com/v1", headers: { "x-api-key": literal } } },
+        "/tmp/agent",
+      );
+      expect(literalCredentials(declared)).toEqual([
+        { file: "fastagent.config.ts", server: serverName, field: "headers", key: "x-api-key" },
+      ]);
+      expect(() =>
+        declareMcp({ [serverName]: { type: "http", url: `http://${serverName}.example.com/mcp` } }, "/tmp/agent"),
+      ).toThrow(/MCP endpoints require HTTPS/);
+      expect(() =>
+        declareMcp(
+          { [serverName]: { type: "http", url: `https://user:pass@${serverName}.example.com/mcp` } },
+          "/tmp/agent",
+        ),
+      ).toThrow(/MCP endpoints require HTTPS/);
+    },
+    { arbitrary: { runs: 30 } },
+  );
 });
