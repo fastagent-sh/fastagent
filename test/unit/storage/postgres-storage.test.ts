@@ -4,7 +4,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { type PgDatabase, openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
+import {
+  type PgDatabase,
+  openPgDatabase,
+  openPostgresDatabase,
+  sharedHandleOf,
+} from "../../../packages/fastagent/src/postgres.ts";
 import { acquirePgInstanceLease, migratePgSchema, splitPgText } from "../../../packages/fastagent/src/postgres-kit.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
@@ -517,7 +522,7 @@ describe("postgres-kit shared storage primitives", () => {
     const db = openPgDatabase(postgres.url);
     try {
       await migratePgSchema(db, [
-        "CREATE TABLE IF NOT EXISTS kit_test_leases (instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ)",
+        "CREATE TABLE IF NOT EXISTS kit_test_leases (instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ, handoff_requested_at TIMESTAMPTZ)",
       ]);
       const name = freshInstance();
       await expect(
@@ -542,6 +547,145 @@ describe("postgres-kit shared storage primitives", () => {
       await claimed.release();
     } finally {
       await db.close();
+    }
+  });
+
+  it("coalesces lease renewals on a SharedPostgresDatabase into one batched SQL query per tick", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const shared = openPostgresDatabase({ url: postgres.url }, { max: 4 });
+    const handle = sharedHandleOf(shared)!;
+    const origQuery = handle.borrowed.query.bind(handle.borrowed);
+    let renewQueries = 0;
+    let renewedMaxBatch = 0;
+    (handle.borrowed as { query: PgDatabase["query"] }).query = async (text, params) => {
+      if (text.includes("UPDATE durable_leases") && text.includes("unnest(")) {
+        renewQueries += 1;
+        const instances = Array.isArray(params?.[0]) ? params[0].length : 0;
+        renewedMaxBatch = Math.max(renewedMaxBatch, instances);
+      }
+      return origQuery(text, params);
+    };
+    const storages: PostgresStorage[] = [];
+    try {
+      for (let i = 0; i < 5; i++) {
+        storages.push(await openPostgresStorage(shared, freshInstance()));
+      }
+      expect(renewQueries).toBe(0);
+      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.waitFor(() => expect(renewQueries).toBe(1), { timeout: 5_000 });
+      expect(renewedMaxBatch).toBe(5);
+    } finally {
+      await Promise.all(storages.map((s) => s.close(BACKGROUND_CONTEXT)));
+      await shared.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("cooperatively hands off an idle lease without interrupting busy holders or zero-wait probes", async () => {
+    const db = openPgDatabase(postgres.url);
+    try {
+      await migratePgSchema(db, [
+        "CREATE TABLE IF NOT EXISTS kit_handoff_leases (instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ, handoff_requested_at TIMESTAMPTZ)",
+      ]);
+      const name = freshInstance();
+      let busy = true;
+      let lostError: Error | undefined;
+      let holder!: Awaited<ReturnType<typeof acquirePgInstanceLease>>;
+      holder = await acquirePgInstanceLease(db, {
+        table: "kit_handoff_leases",
+        instance: name,
+        leaseMs: 1_200,
+        waitMs: 0,
+        canYield: () => !busy,
+        onLost: (err) => {
+          lostError = err;
+          void holder.release();
+        },
+      });
+
+      // A zero-wait probe fails immediately and never sets handoff_requested_at.
+      await expect(
+        acquirePgInstanceLease(db, { table: "kit_handoff_leases", instance: name, leaseMs: 1_200, waitMs: 0 }),
+      ).rejects.toBeInstanceOf(InstanceHeld);
+      const [probeRow] = await db.query<{ handoff_requested_at: Date | null }>(
+        "SELECT handoff_requested_at FROM kit_handoff_leases WHERE instance = $1",
+        [name],
+      );
+      expect(probeRow?.handoff_requested_at).toBeNull();
+
+      // While busy === true, a waiting contender requests handoff but must NOT preempt the active holder.
+      const contender = acquirePgInstanceLease(db, {
+        table: "kit_handoff_leases",
+        instance: name,
+        leaseMs: 1_200,
+        waitMs: 5_000,
+      });
+      await vi.waitFor(
+        async () => {
+          const [row] = await db.query<{ handoff_requested_at: Date | null }>(
+            "SELECT handoff_requested_at FROM kit_handoff_leases WHERE instance = $1",
+            [name],
+          );
+          expect(row?.handoff_requested_at).not.toBeNull();
+        },
+        { timeout: 3_000 },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(lostError).toBeUndefined();
+
+      // Once idle (busy = false), the holder yields on its next renewal tick and the contender takes over cleanly.
+      busy = false;
+      const successor = await contender;
+      expect(lostError?.message).toMatch(/handed off while idle/);
+      await successor.release();
+      await holder.release();
+    } finally {
+      await db.close();
+    }
+  });
+
+  it("hands off an idle pi-durable openAgent instance cooperatively to a successor process", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const shared = openPostgresDatabase({ url: postgres.url }, { max: 4 });
+    const dir = await fauxAgent("fa-pg-handoff-");
+    const name = freshInstance();
+    let firstClosed = false;
+    const first = await openSource(dir, { name, database: shared });
+    void first.closed?.then(() => {
+      firstClosed = true;
+    });
+    try {
+      const openingSecond = openSource(dir, {
+        name,
+        secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url },
+      });
+      await vi.waitFor(
+        async () => {
+          const db = openPgDatabase(postgres.url);
+          try {
+            const [row] = await db.query<{ handoff_requested_at: Date | null }>(
+              "SELECT handoff_requested_at FROM durable_leases WHERE instance = $1",
+              [name],
+            );
+            expect(row?.handoff_requested_at).not.toBeNull();
+          } finally {
+            await db.close();
+          }
+        },
+        { timeout: 5_000 },
+      );
+      await vi.advanceTimersByTimeAsync(8_000);
+      const second = await openingSecond;
+      await vi.waitFor(() => expect(firstClosed).toBe(true), { timeout: 5_000 });
+      const session = await second.sessions.create();
+      expect(
+        (await second.messages.send({ sessionId: session.id, content: "after handoff" }, { wait: 15 })).status,
+      ).toBe("completed");
+      await second.close();
+      await first.close();
+    } finally {
+      await shared.close();
+      vi.useRealTimers();
     }
   });
 });

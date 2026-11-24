@@ -63,6 +63,7 @@ export interface DshPgStoreKit {
       readonly owner?: string;
       readonly leaseMs?: number;
       readonly waitMs?: number;
+      readonly canYield?: () => boolean;
       readonly onLost?: (error: Error) => void;
       readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
       readonly formatHeldError?: (info: {
@@ -84,6 +85,8 @@ export interface PostgresDshStoreOptions {
   readonly waitMs?: number;
   /** Custom owner identifier for diagnostics. Default: random UUID. */
   readonly owner?: string;
+  /** Optional predicate reporting whether this instance is idle and safe to yield on cooperative handoff. */
+  readonly canYield?: () => boolean;
   /** Invoked once if the single-writer lease is lost or fails renewal before expiry. */
   readonly onLost?: (error: Error) => void;
   /** Index builder for databases requiring async index creation (Aurora DSQL). */
@@ -123,9 +126,10 @@ const MIGRATION_STATEMENTS: readonly string[] = [
     owner    TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS dsh_leases (
-    instance    TEXT PRIMARY KEY,
-    owner       TEXT,
-    lease_until TIMESTAMPTZ
+    instance             TEXT PRIMARY KEY,
+    owner                TEXT,
+    lease_until          TIMESTAMPTZ,
+    handoff_requested_at TIMESTAMPTZ
   )`,
   `CREATE TABLE IF NOT EXISTS dsh_sessions (
     instance              TEXT NOT NULL,
@@ -275,6 +279,7 @@ async function defaultAcquireLease(
     readonly owner?: string;
     readonly leaseMs?: number;
     readonly waitMs?: number;
+    readonly canYield?: () => boolean;
     readonly onLost?: (error: Error) => void;
     readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
     readonly formatHeldError?: (info: {
@@ -297,8 +302,12 @@ async function defaultAcquireLease(
     const acquired = await db
       .transaction(async (tx) => {
         const [leased] = await tx.query(
-          `UPDATE ${table} SET owner = $2, lease_until = now() + make_interval(secs => $3::double precision / 1000)
-            WHERE instance = $1 AND (owner IS NULL OR lease_until < now()) RETURNING instance`,
+          `UPDATE ${table}
+            SET owner = $2,
+                lease_until = now() + make_interval(secs => $3::double precision / 1000),
+                handoff_requested_at = NULL
+            WHERE instance = $1 AND (owner IS NULL OR lease_until < now())
+            RETURNING instance`,
           [instance, owner, leaseMs],
         );
         if (leased === undefined) return false;
@@ -310,10 +319,11 @@ async function defaultAcquireLease(
         throw error;
       });
     if (acquired) break;
-    const [held] = await db.query<{ owner: string | null; lease_until: Date | null }>(
-      `SELECT owner, lease_until FROM ${table} WHERE instance = $1`,
-      [instance],
-    );
+    const [held] = await db.query<{
+      owner: string | null;
+      lease_until: Date | null;
+      handoff_requested_at: Date | null;
+    }>(`SELECT owner, lease_until, handoff_requested_at FROM ${table} WHERE instance = $1`, [instance]);
     const holder = held?.owner ?? undefined;
     const until = held?.lease_until?.toISOString() ?? "now";
     if (Date.now() >= deadline) {
@@ -321,6 +331,17 @@ async function defaultAcquireLease(
         options.formatHeldError?.({ instance, until, ...(holder === undefined ? {} : { holder }) }) ??
         new DshInstanceHeldError(instance, holder ?? "unknown")
       );
+    }
+    if (held?.handoff_requested_at === null && holder !== undefined) {
+      await db
+        .query(
+          `UPDATE ${table} SET handoff_requested_at = now()
+            WHERE instance = $1 AND owner IS NOT NULL AND owner <> $2 AND handoff_requested_at IS NULL`,
+          [instance, owner],
+        )
+        .catch((error: unknown) => {
+          if (!defaultIsConflict(error)) throw error;
+        });
     }
     const remaining = Math.max(5, deadline - Date.now());
     await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, leaseMs / 3, remaining)));
@@ -346,15 +367,31 @@ async function defaultAcquireLease(
     () => {
       if (released || lost !== undefined) return;
       void db
-        .query(
-          `UPDATE ${table} SET lease_until = now() + make_interval(secs => $3::double precision / 1000)
-          WHERE instance = $1 AND owner = $2 RETURNING instance`,
+        .query<{ instance: string; handoff_requested_at: Date | null }>(
+          `UPDATE ${table}
+            SET lease_until = now() + make_interval(secs => $3::double precision / 1000),
+                handoff_requested_at = CASE
+                  WHEN handoff_requested_at < now() - make_interval(secs => $3::double precision / 1000)
+                    THEN NULL
+                  ELSE handoff_requested_at
+                END
+            WHERE instance = $1 AND owner = $2
+            RETURNING instance, handoff_requested_at`,
           [instance, owner, leaseMs],
         )
         .then(
           ([kept]) => {
-            if (kept === undefined) lose(undefined, true);
-            else renewedAt = Date.now();
+            if (kept === undefined) {
+              lose(undefined, true);
+              return;
+            }
+            renewedAt = Date.now();
+            if (kept.handoff_requested_at !== null && options.canYield?.() === true) {
+              lose(
+                new Error(`PostgreSQL DSH lease for "${instance}" was handed off while idle to another process`),
+                true,
+              );
+            }
           },
           (error: unknown) => {
             const unrenewedMs = Date.now() - renewedAt;
@@ -384,10 +421,11 @@ async function defaultAcquireLease(
       released = true;
       onLost = undefined;
       clearInterval(timer);
-      await db.query(`UPDATE ${table} SET owner = NULL, lease_until = NULL WHERE instance = $1 AND owner = $2`, [
-        instance,
-        owner,
-      ]);
+      await db.query(
+        `UPDATE ${table} SET owner = NULL, lease_until = NULL, handoff_requested_at = NULL
+          WHERE instance = $1 AND owner = $2`,
+        [instance, owner],
+      );
     },
   };
 }
@@ -519,6 +557,7 @@ export async function openPostgresDshStore(
     owner,
     leaseMs,
     waitMs,
+    ...(options.canYield === undefined ? {} : { canYield: options.canYield }),
     ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
     onTake: async (tx, newOwner) => {
       await tx.query("UPDATE dsh_metadata SET owner = $2 WHERE instance = $1", [instance, newOwner]);

@@ -1,10 +1,10 @@
 /**
  * Harness-neutral PostgreSQL and Aurora DSQL storage primitives shared across `pi-durable`, `@fastagent-sh/harness-dsh`,
  * and future harnesses: idempotent DDL + async index migration, OCC conflict detection, UTF-8 value chunking for
- * `bytesPerValue` caps, and single-writer instance leasing.
+ * `bytesPerValue` caps, pooled batch lease renewal, and cooperative idle lease handoff.
  */
 import { log } from "./log.ts";
-import type { CreateIndex, PgDatabase, PgExecutor } from "./postgres.ts";
+import type { CreateIndex, PgDatabase, PgExecutor, SharedPostgresHandle } from "./postgres.ts";
 import { Unavailable } from "./unavailable.ts";
 
 /**
@@ -131,17 +131,172 @@ export const DEFAULT_LEASE_WAIT_MS = DEFAULT_LEASE_MS + 5_000;
  */
 const RENEW_EVERY = 1 / 4;
 const GIVE_UP_AFTER = 2 / 3;
+/** Maximum instances renewed in a single batch SQL statement (safely below Aurora DSQL's 3,000-row transaction cap). */
+const RENEW_BATCH_SIZE = 500;
+
+interface LeaseRenewalEntry {
+  readonly instance: string;
+  readonly owner: string;
+  readonly leaseMs: number;
+  readonly canYield: (() => boolean) | undefined;
+  readonly isActive: () => boolean;
+  readonly lose: (why?: Error, notify?: boolean) => Error;
+  renewedAt: number;
+}
+
+interface LeaseBucket {
+  readonly table: string;
+  readonly leaseMs: number;
+  readonly entries: Set<LeaseRenewalEntry>;
+  readonly timer: ReturnType<typeof setInterval>;
+  inFlight: boolean;
+}
+
+/**
+ * Renew a batch of leases in one SQL statement (compatible with PostgreSQL and Aurora DSQL), expire stale handoff
+ * requests older than `leaseMs`, detect lost leases, and trigger cooperative handoff for idle instances.
+ */
+async function renewLeaseBatch(
+  db: Pick<PgDatabase, "query">,
+  table: string,
+  leaseMs: number,
+  entries: readonly LeaseRenewalEntry[],
+): Promise<void> {
+  const active = entries.filter((entry) => entry.isActive());
+  if (active.length === 0) return;
+
+  for (let offset = 0; offset < active.length; offset += RENEW_BATCH_SIZE) {
+    const batch = active.slice(offset, offset + RENEW_BATCH_SIZE);
+    try {
+      const rows = await db.query<{ instance: string; handoff_requested_at: Date | null }>(
+        `UPDATE ${table}
+          SET lease_until = now() + make_interval(secs => $3::double precision / 1000),
+              handoff_requested_at = CASE
+                WHEN handoff_requested_at < now() - make_interval(secs => $3::double precision / 1000)
+                  THEN NULL
+                ELSE handoff_requested_at
+              END
+          WHERE (instance, owner) IN (SELECT * FROM unnest($1::text[], $2::text[]))
+          RETURNING instance, handoff_requested_at`,
+        [batch.map((e) => e.instance), batch.map((e) => e.owner), leaseMs],
+      );
+      const keptByInstance = new Map<string, Date | null>(rows.map((r) => [r.instance, r.handoff_requested_at]));
+      const now = Date.now();
+      for (const entry of batch) {
+        if (!entry.isActive()) continue;
+        if (!keptByInstance.has(entry.instance)) {
+          entry.lose(undefined, true);
+          continue;
+        }
+        entry.renewedAt = now;
+        const requestedAt = keptByInstance.get(entry.instance);
+        if (requestedAt !== null && requestedAt !== undefined && entry.canYield?.() === true) {
+          log.info(`[fastagent] handing off idle instance "${entry.instance}" to another process`);
+          entry.lose(new Error(`the instance "${entry.instance}" was handed off while idle to another process`), true);
+        }
+      }
+    } catch (error) {
+      const now = Date.now();
+      for (const entry of batch) {
+        if (!entry.isActive()) continue;
+        const unrenewedMs = now - entry.renewedAt;
+        log.warn(`[fastagent] renewing the lease of "${entry.instance}" failed: ${String(error)}`);
+        if (unrenewedMs < leaseMs * GIVE_UP_AFTER) continue;
+        entry.lose(
+          new Error(
+            `the instance "${entry.instance}" was given up: its lease went ${Math.round(unrenewedMs / 1000)}s ` +
+              `without renewal (${String(error)}), and another process may take it over after ${leaseMs / 1000}s`,
+          ),
+          true,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Coalesced per-pool lease renewer: groups all active leases sharing a `SharedPostgresHandle` by `(table, leaseMs)`
+ * into one interval timer per bucket, reducing N-tenant idle heartbeat traffic from O(N) queries/tick to O(1).
+ */
+class PgLeasePool {
+  private readonly buckets = new Map<string, LeaseBucket>();
+  private readonly db: PgDatabase;
+
+  constructor(handle: SharedPostgresHandle) {
+    this.db = handle.borrowed;
+    handle.onClose(() => this.dispose());
+  }
+
+  register(table: string, entry: LeaseRenewalEntry): () => void {
+    const key = `${table}:${entry.leaseMs}`;
+    let bucket = this.buckets.get(key);
+    if (bucket === undefined) {
+      const entries = new Set<LeaseRenewalEntry>();
+      const created: LeaseBucket = {
+        table,
+        leaseMs: entry.leaseMs,
+        entries,
+        inFlight: false,
+        timer: setInterval(() => {
+          if (created.inFlight || created.entries.size === 0) return;
+          created.inFlight = true;
+          void renewLeaseBatch(this.db, created.table, created.leaseMs, [...created.entries]).finally(() => {
+            created.inFlight = false;
+          });
+        }, entry.leaseMs * RENEW_EVERY),
+      };
+      created.timer.unref();
+      this.buckets.set(key, created);
+      bucket = created;
+    }
+    bucket.entries.add(entry);
+    const activeBucket = bucket;
+    return () => {
+      activeBucket.entries.delete(entry);
+      if (activeBucket.entries.size === 0) {
+        clearInterval(activeBucket.timer);
+        if (this.buckets.get(key) === activeBucket) this.buckets.delete(key);
+      }
+    };
+  }
+
+  private dispose(): void {
+    for (const bucket of this.buckets.values()) {
+      clearInterval(bucket.timer);
+      bucket.entries.clear();
+    }
+    this.buckets.clear();
+  }
+}
+
+const poolRenewers = new WeakMap<SharedPostgresHandle, PgLeasePool>();
+
+function leasePoolFor(handle: SharedPostgresHandle): PgLeasePool {
+  let pool = poolRenewers.get(handle);
+  if (pool === undefined) {
+    pool = new PgLeasePool(handle);
+    poolRenewers.set(handle, pool);
+  }
+  return pool;
+}
 
 export interface PgLeaseOptions<TTake = void> {
-  /** Lease table with `(instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ)`. */
+  /** Lease table with `(instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ, handoff_requested_at TIMESTAMPTZ)`. */
   readonly table: string;
   readonly instance: string;
   readonly owner?: string;
   readonly leaseMs?: number;
   readonly waitMs?: number;
+  /** Optional shared pool handle to coalesce lease renewals across all instances on the same pool. */
+  readonly pool?: SharedPostgresHandle;
+  /**
+   * Optional predicate reporting whether this instance is currently idle and safe to yield to a waiting process
+   * when a cooperative handoff is requested. Never yields when unset or returning `false`.
+   */
+  readonly canYield?: () => boolean;
   /** Human-readable description of what else opens the instance, included in the default `InstanceHeld` error. */
   readonly holders?: string;
-  /** Invoked once if the lease is lost (taken over or unreachable past `2/3` of `leaseMs`). */
+  /** Invoked once if the lease is lost (taken over, handed off while idle, or unreachable past `2/3` of `leaseMs`). */
   readonly onLost?: (error: Error) => void;
   /**
    * Optional work executed inside the lease-acquisition transaction right after the lease row is claimed.
@@ -170,7 +325,9 @@ export interface PgInstanceLease<TTake = void> {
 
 /**
  * Acquire and maintain a single-writer instance lease in PostgreSQL or Aurora DSQL.
- * Uses `timestamptz` and `now() + make_interval(...)` semantics verified on both standard PostgreSQL and Aurora DSQL.
+ * - Uses `timestamptz` and `now() + make_interval(...)` semantics verified on both PostgreSQL and Aurora DSQL.
+ * - When `pool` is provided, coalesces renewals across all instances sharing that pool into one batched query per tick.
+ * - When waiting (`waitMs > 0`), writes `handoff_requested_at` so an idle holder yields cleanly instead of blocking until expiry.
  */
 export async function acquirePgInstanceLease<TTake = void>(
   db: Pick<PgDatabase, "query" | "transaction">,
@@ -200,8 +357,12 @@ export async function acquirePgInstanceLease<TTake = void>(
     const attempt = await db
       .transaction(async (tx) => {
         const [leased] = await tx.query(
-          `UPDATE ${table} SET owner = $2, lease_until = now() + make_interval(secs => $3::double precision / 1000)
-            WHERE instance = $1 AND (owner IS NULL OR lease_until < now()) RETURNING instance`,
+          `UPDATE ${table}
+            SET owner = $2,
+                lease_until = now() + make_interval(secs => $3::double precision / 1000),
+                handoff_requested_at = NULL
+            WHERE instance = $1 AND (owner IS NULL OR lease_until < now())
+            RETURNING instance`,
           [instance, owner, leaseMs],
         );
         if (leased === undefined) return { acquired: false as const };
@@ -218,10 +379,11 @@ export async function acquirePgInstanceLease<TTake = void>(
       break;
     }
 
-    const [held] = await db.query<{ owner: string | null; lease_until: Date | null }>(
-      `SELECT owner, lease_until FROM ${table} WHERE instance = $1`,
-      [instance],
-    );
+    const [held] = await db.query<{
+      owner: string | null;
+      lease_until: Date | null;
+      handoff_requested_at: Date | null;
+    }>(`SELECT owner, lease_until, handoff_requested_at FROM ${table} WHERE instance = $1`, [instance]);
     const until = held?.lease_until?.toISOString() ?? "now";
     const holder = held?.owner ?? undefined;
     if (Date.now() >= deadline) {
@@ -233,6 +395,20 @@ export async function acquirePgInstanceLease<TTake = void>(
         `the instance "${instance}" is held by another process until ${until}${who}. Stop that one first`,
       );
     }
+
+    // Signal the current holder that another process is waiting to take over; an idle holder yields on its next tick.
+    if (held?.handoff_requested_at === null && holder !== undefined) {
+      await db
+        .query(
+          `UPDATE ${table} SET handoff_requested_at = now()
+            WHERE instance = $1 AND owner IS NOT NULL AND owner <> $2 AND handoff_requested_at IS NULL`,
+          [instance, owner],
+        )
+        .catch((error: unknown) => {
+          if (!isPgConflict(error)) throw error;
+        });
+    }
+
     if (!waiting) {
       waiting = true;
       log.info(`[fastagent] the instance "${instance}" is held by another process until ${until}; waiting`);
@@ -243,11 +419,11 @@ export async function acquirePgInstanceLease<TTake = void>(
 
   let lost: Error | undefined;
   let released = false;
-  let renewedAt = Date.now();
   let onLost = options.onLost;
+  let unregister = () => {};
 
   const lose = (why?: Error, notify = false): Error => {
-    clearInterval(renewal);
+    unregister();
     lost ??=
       why ??
       options.formatLostError?.(instance) ??
@@ -260,34 +436,30 @@ export async function acquirePgInstanceLease<TTake = void>(
     return lost;
   };
 
-  const renewal = setInterval(() => {
-    if (released || lost !== undefined) return;
-    void db
-      .query(
-        `UPDATE ${table} SET lease_until = now() + make_interval(secs => $3::double precision / 1000)
-          WHERE instance = $1 AND owner = $2 RETURNING instance`,
-        [instance, owner, leaseMs],
-      )
-      .then(
-        ([kept]) => {
-          if (kept === undefined) lose(undefined, true);
-          else renewedAt = Date.now();
-        },
-        (error: unknown) => {
-          const unrenewedMs = Date.now() - renewedAt;
-          log.warn(`[fastagent] renewing the lease of "${instance}" failed: ${String(error)}`);
-          if (unrenewedMs < leaseMs * GIVE_UP_AFTER) return;
-          lose(
-            new Error(
-              `the instance "${instance}" was given up: its lease went ${Math.round(unrenewedMs / 1000)}s ` +
-                `without renewal (${String(error)}), and another process may take it over after ${leaseMs / 1000}s`,
-            ),
-            true,
-          );
-        },
-      );
-  }, leaseMs * RENEW_EVERY);
-  renewal.unref();
+  const entry: LeaseRenewalEntry = {
+    instance,
+    owner,
+    leaseMs,
+    canYield: options.canYield,
+    isActive: () => !released && lost === undefined,
+    lose,
+    renewedAt: Date.now(),
+  };
+
+  if (options.pool !== undefined) {
+    unregister = leasePoolFor(options.pool).register(table, entry);
+  } else {
+    let inFlight = false;
+    const renewal = setInterval(() => {
+      if (inFlight || !entry.isActive()) return;
+      inFlight = true;
+      void renewLeaseBatch(db, table, leaseMs, [entry]).finally(() => {
+        inFlight = false;
+      });
+    }, leaseMs * RENEW_EVERY);
+    renewal.unref();
+    unregister = () => clearInterval(renewal);
+  }
 
   return {
     owner,
@@ -300,11 +472,12 @@ export async function acquirePgInstanceLease<TTake = void>(
       if (released) return;
       released = true;
       onLost = undefined;
-      clearInterval(renewal);
-      await db.query(`UPDATE ${table} SET owner = NULL, lease_until = NULL WHERE instance = $1 AND owner = $2`, [
-        instance,
-        owner,
-      ]);
+      unregister();
+      await db.query(
+        `UPDATE ${table} SET owner = NULL, lease_until = NULL, handoff_requested_at = NULL
+          WHERE instance = $1 AND owner = $2`,
+        [instance, owner],
+      );
     },
   };
 }

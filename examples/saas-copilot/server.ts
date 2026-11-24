@@ -22,41 +22,88 @@ const sharedDb: SharedPostgresDatabase | undefined = process.env.FASTAGENT_DATAB
   : undefined;
 
 const TENANT_PATTERN = /^[a-z0-9][a-z0-9_-]{0,62}$/;
-const tenants = new Map<string, Promise<LocalAgent>>();
+const TENANT_IDLE_MS = Number(process.env.TENANT_IDLE_MS ?? 5 * 60_000);
+const MAX_CACHED_TENANTS = Number(process.env.MAX_CACHED_TENANTS ?? 200);
 
-function getTenantAgent(tenantId: string): Promise<LocalAgent> {
+interface TenantEntry {
+  readonly pending: Promise<LocalAgent>;
+  agent?: LocalAgent;
+  lastUsedAt: number;
+  activeStreams: number;
+}
+
+const tenants = new Map<string, TenantEntry>();
+
+function isTenantIdle(entry: TenantEntry): boolean {
+  return entry.agent !== undefined && entry.activeStreams === 0 && !entry.agent.busy();
+}
+
+function evictOverflowTenants(): void {
+  if (tenants.size <= MAX_CACHED_TENANTS) return;
+  const victims = [...tenants.entries()]
+    .filter(([, entry]) => isTenantIdle(entry))
+    .toSorted(([, a], [, b]) => a.lastUsedAt - b.lastUsedAt);
+  for (const [id, entry] of victims) {
+    if (tenants.size <= MAX_CACHED_TENANTS) break;
+    tenants.delete(id);
+    void entry.agent?.close().catch(() => undefined);
+  }
+}
+
+const reaper = setInterval(() => {
+  const cutoff = Date.now() - TENANT_IDLE_MS;
+  for (const [id, entry] of [...tenants.entries()]) {
+    if (entry.lastUsedAt > cutoff || !isTenantIdle(entry)) continue;
+    tenants.delete(id);
+    void entry.agent?.close().catch(() => undefined);
+  }
+}, Math.min(60_000, Math.max(5_000, Math.floor(TENANT_IDLE_MS / 2))));
+reaper.unref();
+
+function getTenantEntry(tenantId: string): TenantEntry {
   if (!TENANT_PATTERN.test(tenantId)) {
     throw new Error(`Invalid tenant id "${tenantId}"`);
   }
-  let pending = tenants.get(tenantId);
-  if (pending === undefined) {
-    pending = openAgent(definition, {
-      root: resolve(process.env.TENANTS_ROOT ?? "./.tenants", tenantId),
-      name: `tenant-${tenantId}`,
-      ...(sharedDb ? { database: sharedDb } : {}),
-      secrets: {
-        TENANT_ID: tenantId,
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        APP_API_BASE: process.env.APP_API_BASE,
-        APP_API_TOKEN: process.env.APP_API_TOKEN,
-      },
-      env: baseEnv(process.env),
-      ...(process.env.FASTAGENT_MODEL ? { model: process.env.FASTAGENT_MODEL } : {}),
-    })
-      .then((agent) => {
-        void agent.closed?.then(() => {
-          if (tenants.get(tenantId) === pending) tenants.delete(tenantId);
-        });
-        return agent;
-      })
-      .catch((error) => {
-        if (tenants.get(tenantId) === pending) tenants.delete(tenantId);
-        throw error;
-      });
-    tenants.set(tenantId, pending);
+  let entry = tenants.get(tenantId);
+  if (entry !== undefined) {
+    entry.lastUsedAt = Date.now();
+    return entry;
   }
-  return pending;
+  const pending = openAgent(definition, {
+    root: resolve(process.env.TENANTS_ROOT ?? "./.tenants", tenantId),
+    name: `tenant-${tenantId}`,
+    ...(sharedDb ? { database: sharedDb } : {}),
+    secrets: {
+      TENANT_ID: tenantId,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      APP_API_BASE: process.env.APP_API_BASE,
+      APP_API_TOKEN: process.env.APP_API_TOKEN,
+    },
+    env: baseEnv(process.env),
+    ...(process.env.FASTAGENT_MODEL ? { model: process.env.FASTAGENT_MODEL } : {}),
+  })
+    .then((agent) => {
+      if (tenants.get(tenantId)?.pending === pending) {
+        entry!.agent = agent;
+      }
+      void agent.closed?.then(() => {
+        if (tenants.get(tenantId)?.pending === pending) tenants.delete(tenantId);
+      });
+      return agent;
+    })
+    .catch((error) => {
+      if (tenants.get(tenantId)?.pending === pending) tenants.delete(tenantId);
+      throw error;
+    });
+  entry = { pending, lastUsedAt: Date.now(), activeStreams: 0 };
+  tenants.set(tenantId, entry);
+  evictOverflowTenants();
+  return entry;
+}
+
+function getTenantAgent(tenantId: string): Promise<LocalAgent> {
+  return getTenantEntry(tenantId).pending;
 }
 
 const app = new Hono();
@@ -104,40 +151,51 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
 app.get("/api/sessions/:sessionId/events", async (c) => {
   const tenantId = tenantFromHeader(c.req.header("x-tenant-id"));
   if (!tenantId) return c.json({ error: "missing or invalid x-tenant-id header" }, 401);
-  const agent = await getTenantAgent(tenantId);
-  const after = c.req.query("after") ?? c.req.header("last-event-id") ?? undefined;
-  const controller = new AbortController();
-  const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
-  const iterator = agent.sessions
-    .events(c.req.param("sessionId"), { ...(after ? { after } : {}), signal })
-    [Symbol.asyncIterator]();
-
-  let first: IteratorResult<SessionEvent>;
+  const entry = getTenantEntry(tenantId);
+  entry.activeStreams += 1;
+  let streamAttached = false;
   try {
-    first = await iterator.next();
-  } catch (error) {
-    controller.abort();
-    if (error instanceof AgentError) {
-      return c.json({ error: { code: error.code, message: error.message } }, error.code === "not_found" ? 404 : 409);
-    }
-    throw error;
-  }
+    const agent = await entry.pending;
+    const after = c.req.query("after") ?? c.req.header("last-event-id") ?? undefined;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([c.req.raw.signal, controller.signal]);
+    const iterator = agent.sessions
+      .events(c.req.param("sessionId"), { ...(after ? { after } : {}), signal })
+      [Symbol.asyncIterator]();
 
-  return streamSSE(c, async (stream) => {
-    stream.onAbort(() => controller.abort());
+    let first: IteratorResult<SessionEvent>;
     try {
-      for (let next = first; !next.done; next = await iterator.next()) {
-        const event = next.value;
-        await stream.writeSSE({
-          event: event.type,
-          data: JSON.stringify(event),
-          ...(event.type === "entry" ? { id: event.entry.id } : {}),
-        });
-      }
-    } finally {
+      first = await iterator.next();
+    } catch (error) {
       controller.abort();
+      if (error instanceof AgentError) {
+        return c.json({ error: { code: error.code, message: error.message } }, error.code === "not_found" ? 404 : 409);
+      }
+      throw error;
     }
-  });
+
+    streamAttached = true;
+    return streamSSE(c, async (stream) => {
+      stream.onAbort(() => controller.abort());
+      try {
+        for (let next = first; !next.done; next = await iterator.next()) {
+          entry.lastUsedAt = Date.now();
+          const event = next.value;
+          await stream.writeSSE({
+            event: event.type,
+            data: JSON.stringify(event),
+            ...(event.type === "entry" ? { id: event.entry.id } : {}),
+          });
+        }
+      } finally {
+        controller.abort();
+        entry.activeStreams -= 1;
+        entry.lastUsedAt = Date.now();
+      }
+    });
+  } finally {
+    if (!streamAttached) entry.activeStreams -= 1;
+  }
 });
 
 const port = Number(process.env.PORT ?? 3000);
@@ -148,8 +206,9 @@ const server = serve({ fetch: app.fetch, port }, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, async () => {
+    clearInterval(reaper);
     server.close();
-    const opened = await Promise.all([...tenants.values()].map((p) => p.catch(() => undefined)));
+    const opened = await Promise.all([...tenants.values()].map((entry) => entry.pending.catch(() => undefined)));
     await Promise.all(opened.map((a) => a?.close().catch(() => undefined)));
     await sharedDb?.close();
     process.exit(0);

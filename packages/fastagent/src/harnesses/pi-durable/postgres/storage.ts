@@ -66,6 +66,7 @@ import {
   type PostgresDatabase,
   type PostgresLimits,
   type PostgresOptions,
+  type SharedPostgresHandle,
   describeDatabase,
   isTransientPgError,
   openPgDatabase,
@@ -157,6 +158,8 @@ export interface OpenOptions {
   agent?: string;
   lease?: LeaseOptions;
   limits?: PostgresLimits;
+  pool?: SharedPostgresHandle;
+  canYield?: () => boolean;
   onLost?: (error: Error) => void;
 }
 
@@ -196,6 +199,8 @@ export class PostgresStorage implements Storage {
       instance,
       leaseMs: leaseOpts.leaseMs,
       waitMs: leaseOpts.waitMs,
+      ...(options.pool === undefined ? {} : { pool: options.pool }),
+      ...(options.canYield === undefined ? {} : { canYield: options.canYield }),
       ...(options.holders === undefined ? {} : { holders: options.holders }),
       ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
       onTake: async (tx, owner) => {
@@ -838,7 +843,7 @@ export class PostgresStorage implements Storage {
 export async function openPostgresStorage(
   database: string | PostgresDatabase,
   instance: string,
-  options: Omit<OpenOptions, "lease" | "limits"> & PostgresOptions = {},
+  options: Omit<OpenOptions, "lease" | "limits" | "pool"> & PostgresOptions = {},
 ): Promise<PostgresStorage> {
   const url = typeof database === "string" ? database : database.url;
   const shared = typeof database === "string" ? undefined : sharedHandleOf(database);
@@ -853,7 +858,7 @@ export async function openPostgresStorage(
     try {
       await shared.ensureMigrated("pi-durable", (db) => migrate(db, createIndex));
       shared.assertOpen();
-      const storage = await PostgresStorage.open(shared.borrowed, instance, openOpts);
+      const storage = await PostgresStorage.open(shared.borrowed, instance, { ...openOpts, pool: shared });
       if (shared.isClosed()) {
         await storage.close(BACKGROUND_CONTEXT).catch(() => undefined);
         shared.assertOpen();
