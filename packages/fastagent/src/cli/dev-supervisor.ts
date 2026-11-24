@@ -8,6 +8,7 @@ import { watch as watchTree } from "chokidar";
 import { AGENT_CONFIG_FILE, isUnderDir } from "../paths.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { log } from "../log.ts";
+import { readProcessEnv } from "../process-env.ts";
 
 /** The agent's code (its tools and extensions), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
@@ -64,7 +65,10 @@ export function listenForRestart(
 }
 
 /** Spawn the dev worker and restart it on agent-dir edits; supervise its lifecycle until the process exits. */
-export async function runDevSupervisor(agentDir: string): Promise<void> {
+export async function runDevSupervisor(
+  agentDir: string,
+  workerEnv: Readonly<Record<string, string>> = {},
+): Promise<void> {
   // The agent directory arrives RESOLVED from the command (which already routed its refusal through failStartup).
   let worker: ReturnType<typeof spawn> | undefined;
   let reloadPending = false;
@@ -76,7 +80,7 @@ export async function runDevSupervisor(agentDir: string): Promise<void> {
     // biome-ignore lint/style/noNonNullAssertion: argv[1] is always the script path under a node entry
     const w = spawn(process.execPath, [process.argv[1]!, ...process.argv.slice(2)], {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: { ...process.env, FASTAGENT_DEV_WORKER: "1" },
+      env: { ...readProcessEnv(), ...workerEnv, FASTAGENT_DEV_WORKER: "1" },
     });
     worker = w;
     w.on("message", (m: { type?: string }) => {

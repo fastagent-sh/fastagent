@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
 import type { Agent, AuthApi, InvokeApi } from "@fastagent-sh/client/agent-api";
 import { createCloseSignal } from "./close-signal.ts";
+import { type SecretInput, redactSecret } from "./declared-secrets.ts";
 import { type Handler, serveHandler, totalFetch } from "./http/serve.ts";
 import { cleanupQuietly } from "./promise-bridge.ts";
 import { apiHandler, isApiPath } from "./http/server.ts";
@@ -109,7 +110,7 @@ export function serviceOver(
 /** What {@link serveAgent} needs beyond an opened agent. */
 export interface ServeOptions {
   /** The keys the Agent API takes; without one it is not served. */
-  apiKeys?: readonly string[];
+  apiKeys?: readonly SecretInput[];
 }
 
 /** What the assembly serves: the opened agent, its invoker, and its optional auth manager. */
@@ -142,7 +143,7 @@ export async function serveAgent(opened: ServableAgent, options: ServeOptions = 
   const { agent, invoker, auth } = opened;
   const api = options.apiKeys?.length
     ? apiHandler(agent, {
-        keys: options.apiKeys,
+        keys: options.apiKeys.map(redactSecret),
         ...(invoker === undefined ? {} : { invoker }),
         ...(auth === undefined ? {} : { auth }),
       })

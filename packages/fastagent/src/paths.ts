@@ -6,6 +6,7 @@ import { type Stats, statSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { decodeRuntimeCliEnv } from "./process-env.ts";
 
 /** The user-global machinery home, `~/.fastagent`: the machine's model credentials. */
 export function globalHome(): string {
@@ -146,14 +147,19 @@ function defaultInstanceRoot(dir: string, mode: InstanceMode): string {
 }
 
 /** The agent's working directory: the instance root, else the project's default one. */
-export function resolveWorkdir(dir: string, env: NodeJS.ProcessEnv = process.env, mode: InstanceMode = "dev"): string {
-  return resolveOverridePath(env[INSTANCE_ROOT_ENV]) ?? defaultInstanceRoot(dir, mode);
+export function resolveWorkdir(
+  dir: string,
+  env?: Readonly<Record<string, string | undefined>>,
+  mode: InstanceMode = "dev",
+): string {
+  const root = env === undefined ? decodeRuntimeCliEnv().instanceRoot : env[INSTANCE_ROOT_ENV];
+  return resolveOverridePath(root) ?? defaultInstanceRoot(dir, mode);
 }
 
 /** The durable machine-state home (sessions and instance state): `.state` in the instance root. */
 export function resolveStateRoot(
   dir: string,
-  env: NodeJS.ProcessEnv = process.env,
+  env?: Readonly<Record<string, string | undefined>>,
   mode: InstanceMode = "dev",
 ): string {
   return join(resolveWorkdir(dir, env, mode), STATE_DIRNAME);
@@ -173,8 +179,8 @@ export const DEPLOYED_ENV = "FASTAGENT_DEPLOYED";
 
 /** Is this process the deployed container the generated artifacts describe? ONE reading of the
  *  environment fact the image states, so a second spelling cannot drift from it. */
-export function isDeployedWorkspace(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env[DEPLOYED_ENV]);
+export function isDeployedWorkspace(env?: Readonly<Record<string, string | undefined>>): boolean {
+  return Boolean(env === undefined ? decodeRuntimeCliEnv().deployed : env[DEPLOYED_ENV]);
 }
 
 /**

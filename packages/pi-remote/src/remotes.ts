@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, wri
 import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { type Agent, connectAgent } from "@fastagent-sh/client";
+import { hostEnv } from "./host-env.ts";
 import {
   type HttpRemoteConfig,
   type RemoteConfig,
@@ -31,12 +32,12 @@ export interface LoadRemotesOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-function defaultRemotesPath(env: NodeJS.ProcessEnv = process.env): string {
+function defaultRemotesPath(env: NodeJS.ProcessEnv = hostEnv()): string {
   return resolveRemotesPath(env, homedir());
 }
 
 export function loadRemotes(options: LoadRemotesOptions = {}): { path: string; config: RemotesFile } {
-  const env = options.env ?? process.env;
+  const env = options.env ?? hostEnv();
   const path = options.path ?? defaultRemotesPath(env);
   if (!existsSync(path)) {
     return { path, config: { remotes: {} } };
@@ -86,7 +87,7 @@ export function removeRemote(
 export async function connectRemote(
   name: string,
   remote: RemoteConfig,
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = hostEnv(),
 ): Promise<{ agent: Agent; defaultSessionId?: string }> {
   if (isHttpRemote(remote)) {
     const rawKey = remote.apiKey?.trim() || parseApiKeys(env.FASTAGENT_API_KEY)[0];

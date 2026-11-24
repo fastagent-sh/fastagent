@@ -14,7 +14,9 @@ import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harne
 import { describeInstanceStorage } from "../../harnesses/serving.ts";
 import { readCommands } from "../../harnesses/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
-import { resolveStateRoot, resolveWorkdir } from "../../paths.ts";
+import * as Redacted from "effect/Redacted";
+import { DATABASE_URL_ENV, resolveStateRoot, resolveWorkdir } from "../../paths.ts";
+import { readDatabaseUrlEnv, readProcessEnv } from "../../process-env.ts";
 import { agentDirOrExit, failStartup, failUsage } from "../fail.ts";
 
 export interface InfoOptions {
@@ -27,24 +29,31 @@ export interface InfoOptions {
 
 export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve(dirArg));
-  enterInstance(agentDir, opts.instance); // code may read its secrets, and fetch, when it is built
-  const workdir = resolveWorkdir(agentDir);
+  const instance = enterInstance(agentDir, opts.instance); // code may read its secrets, and fetch, when it is built
+  const configEnv = instance.configEnv;
+  const hostEnv = readProcessEnv();
+  const workdir = resolveWorkdir(agentDir, configEnv);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { config } = definition;
   const harnessSelection = (() => {
     try {
-      return resolveHarnessSelection(config, {
-        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
-        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
-      });
+      return resolveHarnessSelection(
+        config,
+        {
+          ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+          ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+        },
+        configEnv,
+      );
     } catch (error) {
       return failUsage(error instanceof Error ? error.message : String(error));
     }
   })();
-  const name = instanceName(definition.name, enteredInstanceName());
+  const entered = instance.name ?? enteredInstanceName(configEnv);
+  const name = instanceName(definition.name, entered);
   const presentation = agentPresentation(definition);
   const program = presentation.agent;
-  const modelSpec = modelSpecFor(config, opts.model);
+  const modelSpec = modelSpecFor(config, opts.model, configEnv);
   const declared = (() => {
     try {
       return definitionSecrets(definition);
@@ -52,26 +61,28 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       return failStartup(error);
     }
   })();
-  const unsetSecrets = missingSecrets(declared, process.env);
+  const unsetSecrets = missingSecrets(declared, hostEnv);
   // Built only when every required secret has a value: building is what reads them. A module that is not what its
   // directory holds is said as the refusal `dev` and `start` would stop on.
   const code =
     unsetSecrets.length === 0
       ? await Promise.resolve()
-          .then(() => buildDefinition(definition, process.env))
+          .then(() => buildDefinition(definition, hostEnv))
           .catch(failStartup)
       : undefined;
   const models = await modelEnvironment(agentDir, {}, code?.providers ?? [], {
-    environment: definedValues(process.env),
+    environment: definedValues(hostEnv),
   });
   const slash = modelSpec?.indexOf("/") ?? -1;
   const modelError =
     modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))
       ? undefined
       : `no provider "${modelSpec.slice(0, Math.max(slash, 0))}" offers "${modelSpec.slice(slash + 1)}"`;
-  const stateRoot = resolveStateRoot(agentDir);
-  const entered = enteredInstanceName();
-  const storagePlace = { stateRoot, env: process.env, ...(entered === undefined ? {} : { name: entered }) };
+  const stateRoot = resolveStateRoot(agentDir, configEnv);
+  const databaseUrl = readDatabaseUrlEnv();
+  const storageEnv: Readonly<Record<string, string | undefined>> =
+    databaseUrl === undefined ? configEnv : { ...configEnv, [DATABASE_URL_ENV]: Redacted.value(databaseUrl) };
+  const storagePlace = { stateRoot, env: storageEnv, ...(entered === undefined ? {} : { name: entered }) };
   const codingTools = [...resolveCodingTools(config.codingTools)];
   const commands = readCommands(agentDir).map(({ name, description }) => ({ name, description: description ?? null }));
   const auth = models.auth;

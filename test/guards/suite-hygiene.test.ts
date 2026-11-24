@@ -136,3 +136,57 @@ it("CLI unit tests use runInProcess instead of manually spying on process.cwd or
     .map(({ at }) => at);
   expect(offenders).toEqual([]);
 });
+
+const APPROVED_PROCESS_ENV_FILES = new Set([
+  "packages/fastagent/src/process-env.ts",
+  "packages/agentcore/src/cli.ts",
+  "packages/pi-remote/src/host-env.ts",
+]);
+
+function stripTsComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " ")).replace(/(?<!:)\/\/[^\n]*/g, "");
+}
+
+function walkPackageSources(): string[] {
+  const packagesDir = join(REPO_ROOT, "packages");
+  const out: string[] = [];
+  for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
+    if (!pkg.isDirectory()) continue;
+    const srcDir = join(packagesDir, pkg.name, "src");
+    if (!existsSync(srcDir)) continue;
+    for (const file of walkTs(srcDir)) {
+      if (file.includes("/scaffold/templates/")) continue;
+      out.push(file);
+    }
+  }
+  return out;
+}
+
+const packageSources = walkPackageSources().map((file) => {
+  const raw = readFileSync(file, "utf8");
+  return {
+    rel: relative(REPO_ROOT, file),
+    raw,
+    code: stripTsComments(raw),
+  };
+});
+
+it("direct process.env access is restricted to approved boundary decoders", () => {
+  const offenders = packageSources.flatMap(({ rel, code }) => {
+    if (APPROVED_PROCESS_ENV_FILES.has(rel)) return [];
+    return code
+      .split("\n")
+      .flatMap((line, i) => (/\bprocess\.env\b/.test(line) ? [`${rel}:${i + 1}: ${line.trim()}`] : []));
+  });
+  expect(offenders).toEqual([]);
+});
+
+it("source files contain no silent empty catch blocks", () => {
+  const offenders = packageSources.flatMap(({ rel, raw }) =>
+    [...raw.matchAll(/\bcatch\s*(?:\([^)]*\))?\s*\{\s*\}/g)].map((match) => {
+      const lineNo = raw.slice(0, match.index ?? 0).split("\n").length;
+      return `${rel}:${lineNo}: ${match[0]}`;
+    }),
+  );
+  expect(offenders).toEqual([]);
+});

@@ -13,6 +13,7 @@ import { log } from "../log.ts";
 import { modelRefOf } from "../model-ref.ts";
 import { type Needs, isNeeds } from "../needs.ts";
 import { AGENT_CONFIG_FILE as CONFIG_FILE } from "../paths.ts";
+import { decodeRuntimeCliEnv } from "../process-env.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 import { readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
@@ -35,9 +36,10 @@ async function loadConfig(dir: string): Promise<AgentConfig> {
 export function modelSpecFor(
   config: Pick<AgentConfig, "model">,
   flag: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  env?: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
-  return flag ?? (env.FASTAGENT_MODEL || config.model);
+  const fromEnv = env === undefined ? decodeRuntimeCliEnv().model : env.FASTAGENT_MODEL;
+  return flag ?? (fromEnv || config.model);
 }
 
 /** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */

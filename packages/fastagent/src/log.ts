@@ -1,4 +1,5 @@
 /** Leveled logging. */
+import { readOptionalEnv } from "./process-env.ts";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -11,7 +12,7 @@ let posture: LogLevel = "info";
 let warnedFor: string | undefined;
 
 function effectiveLevel(): LogLevel {
-  const raw = process.env.FASTAGENT_LOG_LEVEL;
+  const raw = readOptionalEnv("FASTAGENT_LOG_LEVEL");
   if (!raw) return posture;
   const value = raw.toLowerCase();
   if (isLevel(value)) return value;

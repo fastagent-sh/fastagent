@@ -3,19 +3,23 @@
  * the default. An agent's code reads it at import through the agent's OWN installed copy of this package, which shares
  * nothing with the CLI's copy but the process environment, so the mark lives there.
  */
+import { readOptionalEnv, setProcessEnvVar } from "./process-env.ts";
+
 export const DEV_SERVE_ENV = "FASTAGENT_DEV";
 
-export function markDevServe(env: NodeJS.ProcessEnv = process.env): void {
-  env[DEV_SERVE_ENV] = "1";
+export function markDevServe(env?: NodeJS.ProcessEnv): void {
+  if (env === undefined) setProcessEnvVar(DEV_SERVE_ENV, "1");
+  else env[DEV_SERVE_ENV] = "1";
 }
 
 /** For a command that is never `dev` (`start`), run from a shell or a tool that a `dev` process spawned. */
-export function unmarkDevServe(env: NodeJS.ProcessEnv = process.env): void {
-  delete env[DEV_SERVE_ENV];
+export function unmarkDevServe(env?: NodeJS.ProcessEnv): void {
+  if (env === undefined) setProcessEnvVar(DEV_SERVE_ENV, undefined);
+  else delete env[DEV_SERVE_ENV];
 }
 
-export function servedByDev(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[DEV_SERVE_ENV] === "1";
+export function servedByDev(env?: Readonly<Record<string, string | undefined>>): boolean {
+  return readOptionalEnv(DEV_SERVE_ENV, env) === "1";
 }
 
 /**

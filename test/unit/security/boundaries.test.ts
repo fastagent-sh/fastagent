@@ -1,7 +1,21 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { inspect } from "node:util";
+import * as Redacted from "effect/Redacted";
 import { describe, expect, it } from "vitest";
 import { bindAddress, bindLabel, classifyBind, isBindAddress } from "../../../packages/fastagent/src/bind.ts";
 import { baseEnv, processEnvironment } from "../../../packages/fastagent/src/child-env.ts";
-import { describeSecrets, missingSecrets } from "../../../packages/fastagent/src/declared-secrets.ts";
+import { enterInstance } from "../../../packages/fastagent/src/cli/instance.ts";
+import {
+  describeSecrets,
+  missingSecrets,
+  redactValues,
+  revealValues,
+} from "../../../packages/fastagent/src/declared-secrets.ts";
+import { apiKeysFrom } from "../../../packages/fastagent/src/http/server.ts";
+import { INSTANCE_NAME_ENV } from "../../../packages/fastagent/src/instance-name.ts";
+import { INSTANCE_ROOT_ENV } from "../../../packages/fastagent/src/paths.ts";
 import { secretEquals } from "../../../packages/fastagent/src/http/secret.ts";
 import { browserCommand } from "../../../packages/fastagent/src/open-url.ts";
 
@@ -149,5 +163,44 @@ describe("declared secrets: the rule", () => {
     expect(describeSecrets(declared)).toBe(
       "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); WEBHOOK_SECRET (src/tools/notify.ts)",
     );
+  });
+
+  it("keeps runtime secret maps and API keys redacted in strings, JSON, and inspect output until unwrapped", () => {
+    const rawSecret = "sk-live-super-secret-value";
+    const rawApiKey = "fa-api-key-super-secret";
+    const redacted = redactValues({ API_TOKEN: rawSecret, EMPTY: "", UNSET: undefined });
+    const keys = apiKeysFrom(`${rawApiKey}, second-key`);
+
+    expect(Redacted.isRedacted(redacted.API_TOKEN)).toBe(true);
+    expect(keys.every((k) => Redacted.isRedacted(k))).toBe(true);
+    expect(String(redacted.API_TOKEN)).not.toContain(rawSecret);
+    expect(JSON.stringify(redacted)).not.toContain(rawSecret);
+    expect(inspect(redacted)).not.toContain(rawSecret);
+    expect(JSON.stringify(keys)).not.toContain(rawApiKey);
+    expect(inspect(keys)).not.toContain(rawApiKey);
+    expect(revealValues(redacted)).toEqual({ API_TOKEN: rawSecret, EMPTY: "" });
+    expect(keys.map((k) => Redacted.value(k))).toEqual([rawApiKey, "second-key"]);
+    expect(missingSecrets([{ name: "API_TOKEN", declaredIn: "a.ts", optional: false }], redacted)).toEqual([]);
+    expect(
+      missingSecrets([{ name: "EMPTY", declaredIn: "a.ts", optional: false }], redacted).map((s) => s.name),
+    ).toEqual(["EMPTY"]);
+  });
+
+  it("resolves --root and --name via enterInstance without mutating process.env", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-enter-inst-"));
+    const customRoot = join(dir, "custom-root");
+    const beforeRoot = process.env[INSTANCE_ROOT_ENV];
+    const beforeName = process.env[INSTANCE_NAME_ENV];
+    try {
+      const entered = enterInstance(dir, { root: customRoot, name: "tenant_a" });
+      expect(entered.root).toBe(customRoot);
+      expect(entered.name).toBe("tenant_a");
+      expect(entered.configEnv[INSTANCE_ROOT_ENV]).toBe(customRoot);
+      expect(entered.configEnv[INSTANCE_NAME_ENV]).toBe("tenant_a");
+      expect(process.env[INSTANCE_ROOT_ENV]).toBe(beforeRoot);
+      expect(process.env[INSTANCE_NAME_ENV]).toBe(beforeName);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

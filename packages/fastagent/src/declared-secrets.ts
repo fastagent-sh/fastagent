@@ -10,6 +10,43 @@
  * value REQUIRED, it does not decide what travels.
  */
 
+import * as Redacted from "effect/Redacted";
+
+/** A secret accepted at a public boundary: plain string or already-redacted. */
+export type SecretInput = string | Redacted.Redacted<string>;
+
+/** Internal secret map holding every value as `Redacted<string>` so logs and JSON never reveal plaintext. */
+export type RedactedSecrets = Readonly<Record<string, Redacted.Redacted<string>>>;
+
+/** Boundary input shape for secret maps (plain strings, redacted values, or unset entries). */
+export type SecretValuesInput = Readonly<Record<string, SecretInput | undefined>>;
+
+/** Wrap a boundary secret in `Redacted<string>` without double-wrapping. */
+export function redactSecret(value: SecretInput): Redacted.Redacted<string> {
+  return Redacted.isRedacted(value) ? value : Redacted.make(value);
+}
+
+/** Unwrap a secret at an explicit outbound auth or env-injection boundary. */
+export function revealSecret(value: SecretInput): string {
+  return Redacted.isRedacted(value) ? Redacted.value(value) : value;
+}
+
+/** Normalize a boundary secret map into an immutable map of `Redacted<string>` values. */
+export function redactValues(secrets: SecretValuesInput): RedactedSecrets {
+  return Object.fromEntries(
+    Iterator.from(Object.entries(secrets))
+      .filter((entry): entry is [string, SecretInput] => entry[1] !== undefined)
+      .map(([name, value]) => [name, redactSecret(value)] as const),
+  );
+}
+
+/** Unwrap a redacted secret map at an outbound env-injection boundary (`needs`, MCP, models, child processes). */
+export function revealValues(secrets: RedactedSecrets): Record<string, string> {
+  return Object.fromEntries(
+    Iterator.from(Object.entries(secrets)).map(([name, value]) => [name, Redacted.value(value)] as const),
+  );
+}
+
 /** One env var some part of the definition declared, and where that declaration is. */
 export interface DeclaredSecret {
   /** The env-var name. */
@@ -31,19 +68,21 @@ function dedupeSecrets(declared: readonly DeclaredSecret[]): readonly DeclaredSe
 }
 
 /** The values of `secrets` that are set: what an environment is made of, since a name given no value is not one. */
-export function definedValues(secrets: Readonly<Record<string, string | undefined>>): Record<string, string> {
+export function definedValues(secrets: SecretValuesInput): Record<string, string> {
   return Object.fromEntries(
-    Iterator.from(Object.entries(secrets)).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    Iterator.from(Object.entries(secrets))
+      .filter((entry): entry is [string, SecretInput] => entry[1] !== undefined)
+      .map(([name, value]) => [name, revealSecret(value)] as const),
   );
 }
 
 /** Required names with no value in `env` — empty string counts as missing (an unset `.env` line). A name some
  *  declaration requires is required, whatever another says. */
-export function missingSecrets(
-  declared: readonly DeclaredSecret[],
-  env: Readonly<Record<string, string | undefined>>,
-): DeclaredSecret[] {
-  return dedupeSecrets(declared.filter((secret) => !secret.optional)).filter((secret) => !env[secret.name]);
+export function missingSecrets(declared: readonly DeclaredSecret[], env: SecretValuesInput): DeclaredSecret[] {
+  return dedupeSecrets(declared.filter((secret) => !secret.optional)).filter((secret) => {
+    const value = env[secret.name];
+    return value === undefined || revealSecret(value) === "";
+  });
 }
 
 /** "X_API_KEY, X_API_SECRET (src/tools/x-post.ts); GATEWAY_KEY (fastagent.config.ts providers[0])", grouped

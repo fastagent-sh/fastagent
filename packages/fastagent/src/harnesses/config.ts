@@ -3,6 +3,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
+import { decodeRuntimeCliEnv } from "../process-env.ts";
 import {
   CODING_TOOL_NAMES,
   HARNESS_NAMES,
@@ -49,14 +50,16 @@ export interface HarnessSelection {
 export function resolveHarnessSelection(
   config: Pick<AgentConfig, "harness" | "sandbox">,
   overrides: { readonly harness?: string; readonly sandbox?: string } = {},
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env?: Readonly<Record<string, string | undefined>>,
 ): HarnessSelection {
-  const rawHarness = overrides.harness ?? (env[HARNESS_ENV] || config.harness) ?? "pi-durable";
+  const envHarness = env === undefined ? decodeRuntimeCliEnv().harness : env[HARNESS_ENV];
+  const envSandbox = env === undefined ? decodeRuntimeCliEnv().sandbox : env[SANDBOX_ENV];
+  const rawHarness = overrides.harness ?? (envHarness || config.harness) ?? "pi-durable";
   if (!HARNESS_SET.has(rawHarness)) {
     throw new Error(`unknown harness ${JSON.stringify(rawHarness)} (allowed: ${HARNESS_NAMES.join(", ")})`);
   }
   const harness = rawHarness as HarnessName;
-  const rawSandbox = overrides.sandbox ?? (env[SANDBOX_ENV] || config.sandbox);
+  const rawSandbox = overrides.sandbox ?? (envSandbox || config.sandbox);
   if (rawSandbox !== undefined && !SANDBOX_SET.has(rawSandbox)) {
     throw new Error(`unknown sandbox mode ${JSON.stringify(rawSandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }

@@ -14,6 +14,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer } from "effect/http";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
@@ -47,13 +48,13 @@ export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "en
    * The agent's values read where they are kept (its Secrets Manager secret), over `secrets`: read as the instance
    * opens, so one that cannot be read is said to the invocation, and one fixed after the deploy is read at the next.
    */
-  values?: () => Promise<Readonly<Record<string, string>>>;
+  values?: () => Promise<Readonly<Record<string, string | Redacted.Redacted<string>>>>;
 }
 
 interface Opened {
   agent: LocalAgent;
   service: Service;
-  key: string;
+  key: Redacted.Redacted<string>;
 }
 
 /** A refusal as the Agent API answers it, inside the envelope AgentCore delivers whole. */
@@ -96,7 +97,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
     const agent = await openAgent(definition, { ...given, secrets, root, name, database: placed });
     let opened: Opened;
     try {
-      const key = randomBytes(32).toString("base64url");
+      const key = Redacted.make(randomBytes(32).toString("base64url"));
       opened = {
         agent,
         service: await agent.serve({ apiKeys: [key] }),
@@ -149,7 +150,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       return refused(code, `the instance "${name}" did not open: ${(error as Error)?.message ?? error}`);
     }
     const headers = new Headers(asked.headers);
-    headers.set("authorization", `Bearer ${opened.key}`);
+    headers.set("authorization", `Bearer ${Redacted.value(opened.key)}`);
     const unwrapped = new Request(new URL(asked.path, "http://agent"), {
       method: asked.method,
       headers,

@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { prepareDeployment, storageOwnerFromEnv } from "../../deploy/workspace.ts";
 import { isDeployedWorkspace, isUnderDir, INSTANCE_ROOT_ENV } from "../../paths.ts";
+import { decodeRuntimeCliEnv } from "../../process-env.ts";
 import { log, setLogLevel } from "../../log.ts";
 import { loadProjectBuild } from "../../definition/built.ts";
 import type { AgentDefinition } from "../../definition/definition.ts";
@@ -34,7 +35,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   const service = await openStartService(dirArg, opts).catch(failStartup);
   // An unset bind stays the wildcard: this is the container posture, and a published port needs it.
   serveService(service, {
-    port: portFlag ?? parsePort(process.env.PORT, "PORT env", "env") ?? DEFAULT_HTTP_PORT,
+    port: portFlag ?? parsePort(decodeRuntimeCliEnv().port, "PORT env", "env") ?? DEFAULT_HTTP_PORT,
     host: bindFlag,
   });
 }
@@ -44,29 +45,40 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
  * it becomes the instance's root, and the machinery points at it. The program stays where the image built it. Elsewhere,
  * nothing is taken.
  */
-async function prepareStartWorkspace(): Promise<void> {
-  if (!isDeployedWorkspace()) return;
-  const storage = process.env[INSTANCE_ROOT_ENV];
+async function prepareStartWorkspace(): Promise<string | undefined> {
+  if (!isDeployedWorkspace()) return undefined;
+  const storage = decodeRuntimeCliEnv().instanceRoot;
   if (!storage) throw new Error(`${INSTANCE_ROOT_ENV} is required for a deployment`);
   const root = resolve(storage);
   await prepareDeployment(root, storageOwnerFromEnv());
-  process.env[INSTANCE_ROOT_ENV] = root;
+  return root;
 }
 
 /** Take the storage on a deployed box, then open the built definition in `dirArg` and serve it. */
 async function openStartService(dirArg: string, opts: StartOptions): Promise<ServedAgent> {
-  await prepareStartWorkspace();
+  const deployedRoot = await prepareStartWorkspace();
+  const instanceFlags =
+    deployedRoot === undefined ? opts.instance : { ...opts.instance, root: opts.instance?.root ?? deployedRoot };
   // The build, never the source: refused when there is none or the project has moved on.
   let built: Promise<AgentDefinition> | undefined;
   const loadBuilt = (dir: string) => (built ??= loadProjectBuild(dir, { checkSources: !isDeployedWorkspace() }));
-  const { agentDir, modelSpec } = await enterAgentCommand(dirArg, opts, undefined, loadBuilt);
+  const { agentDir, modelSpec, instance } = await enterAgentCommand(
+    dirArg,
+    { ...opts, ...(instanceFlags === undefined ? {} : { instance: instanceFlags }) },
+    undefined,
+    loadBuilt,
+  );
   const definition = await loadBuilt(agentDir);
   const selection = (() => {
     try {
-      return resolveHarnessSelection(definition.config, {
-        ...(opts.harness === undefined ? {} : { harness: opts.harness }),
-        ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
-      });
+      return resolveHarnessSelection(
+        definition.config,
+        {
+          ...(opts.harness === undefined ? {} : { harness: opts.harness }),
+          ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
+        },
+        instance.configEnv,
+      );
     } catch (error) {
       return failUsage(error instanceof Error ? error.message : String(error));
     }
@@ -75,7 +87,7 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Ser
     model: modelSpec,
     harness: selection.harness,
     ...(selection.sandbox === undefined ? {} : { sandbox: selection.sandbox }),
-    ...instanceInputs(agentDir, { mode: "start" }),
+    ...instanceInputs(agentDir, { mode: "start", instance }),
   });
   await reportAssembly(opened, modelSpec);
   if (isUnderDir(opened.stateRoot, agentDir)) {

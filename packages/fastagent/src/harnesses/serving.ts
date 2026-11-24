@@ -16,7 +16,13 @@ import {
   postgresConversationStore,
   sqliteConversationStore,
 } from "../conversations.ts";
-import { definedValues } from "../declared-secrets.ts";
+import {
+  type RedactedSecrets,
+  type SecretInput,
+  type SecretValuesInput,
+  redactValues,
+  revealValues,
+} from "../declared-secrets.ts";
 import { instanceName, INSTANCE_NAME_ENV } from "../instance-name.ts";
 import { type McpClients, openMcpClients } from "../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../mcp/config.ts";
@@ -59,7 +65,7 @@ export interface OpenServingOptions {
    * a provider's variable): the one source of them, never this process's environment. A caller that wants its own
    * passes it (`process.env`).
    */
-  secrets: Readonly<Record<string, string | undefined>>;
+  secrets: SecretValuesInput;
   /**
    * The base environment of the processes the agent starts (`baseEnv(process.env)` is the CLI's), plus the declared
    * secrets. Nothing else of this process's reaches them.
@@ -142,8 +148,8 @@ export interface OpenedServing {
   code: BuiltDefinition;
   /** The definition's configuration (`fastagent.config.ts`). */
   config: AgentConfig;
-  /** The secrets it was given that hold a value: what its code was built with. */
-  secrets: Readonly<Record<string, string>>;
+  /** The secrets it was given that hold a value, kept redacted in runtime state. */
+  secrets: RedactedSecrets;
   models: ModelEnvironment;
   /** The project directory: whose `.secrets/` the instance reads. */
   agentDir: string;
@@ -179,7 +185,7 @@ export interface HarnessOpenContext {
   readonly database: PostgresDatabase | undefined;
   readonly maxMessageBytes: number | undefined;
   readonly storageDescription: string;
-  readonly secrets: Readonly<Record<string, string>>;
+  readonly secrets: RedactedSecrets;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly processEnv: Readonly<Record<string, string>>;
   readonly code: BuiltDefinition;
@@ -220,7 +226,8 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
   const dshModule = selection.harness === "dsh" ? await loadDshModule() : undefined;
   const name = instanceName(definition.name, options.name);
   const mcpServers = declareMcp(config.mcpServers, dir);
-  const secrets = definedValues(options.secrets);
+  const redactedSecrets = redactValues(options.secrets);
+  const secrets = revealValues(redactedSecrets);
   const code = buildDefinition(definition, secrets);
   const env = { ...options.ownEnv, ...secrets };
   const processEnv = processEnvironment(
@@ -299,7 +306,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     database,
     maxMessageBytes: messageBytesFor(database?.limits),
     storageDescription,
-    secrets,
+    secrets: redactedSecrets,
     env,
     processEnv,
     code,
@@ -404,7 +411,7 @@ export async function openServing(definition: AgentDefinition, options: OpenServ
     name,
     code,
     config,
-    secrets,
+    secrets: redactedSecrets,
     models,
     agentDir: projectDir,
     workdir,
@@ -436,7 +443,7 @@ export interface LocalAgent extends Agent, InvokeApi {
 
 export interface ServeAgentOptions {
   /** The keys a Caller of the Agent API may present. */
-  apiKeys?: readonly string[];
+  apiKeys?: readonly SecretInput[];
 }
 
 export interface OpenAgentOptions {
@@ -449,7 +456,7 @@ export interface OpenAgentOptions {
    * only source of them: nothing is read from the process's environment or from a file, so pass what the agent needs
    * (`process.env` is a choice an app can make).
    */
-  secrets?: Readonly<Record<string, string | undefined>>;
+  secrets?: SecretValuesInput;
   /**
    * The base environment of the processes the agent starts (its commands, stdio MCP servers, skill scripts). Default:
    * empty; `baseEnv(process.env)` is an app's own. The commands of the agent's declared packages come ahead on its

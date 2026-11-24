@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { SecretInput } from "./declared-secrets.ts";
 import { log } from "./log.ts";
+import { applyProcessEnvIfUnset } from "./process-env.ts";
 import { installProxyFetch } from "./proxy.ts";
 import { loadEnvValues, parseEnvContent, valueFileOf } from "./value-file.ts";
 
@@ -9,8 +11,8 @@ import { loadEnvValues, parseEnvContent, valueFileOf } from "./value-file.ts";
  * axes: a real env var wins over the file, and within the file the last
  * occurrence wins ({@link parseEnvContent}).
  */
-export function applyEnvValues(values: ReadonlyMap<string, string>): void {
-  for (const [key, value] of values) if (!(key in process.env)) process.env[key] = value;
+export function applyEnvValues(values: ReadonlyMap<string, SecretInput>): void {
+  applyProcessEnvIfUnset(values);
 }
 
 /**

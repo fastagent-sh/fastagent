@@ -5,6 +5,7 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import { readProcessEnv } from "./process-env.ts";
 
 /** git is not on the PATH. Its message names what needed it: `git is not installed: <why>`. */
 export class GitNotInstalled extends Error {}
@@ -13,13 +14,14 @@ export class GitNotInstalled extends Error {}
  * Never wait on a terminal prompt for a credential: a serving process has nobody to answer it, so git fails and says
  * why instead. Not covered by a test: it takes a remote that asks for a credential.
  */
-const gitEnv = (env: NodeJS.ProcessEnv) => ({ ...env, GIT_TERMINAL_PROMPT: "0" });
+const gitEnv = (env: Readonly<Record<string, string | undefined>>) => ({ ...env, GIT_TERMINAL_PROMPT: "0" });
 
 const execGit = promisify(execFile);
 
 /** git for one purpose, `why`: what a missing git is reported as needed for. It runs in `env`. */
-export function gitFor(why: string, env: NodeJS.ProcessEnv = process.env) {
+export function gitFor(why: string, env?: Readonly<Record<string, string | undefined>>) {
   const missing = () => new GitNotInstalled(`git is not installed: ${why}`);
+  const currentEnv = () => gitEnv(env ?? readProcessEnv());
   return {
     /**
      * git's answer in `cwd` (which must exist), or undefined when it answers with a non-zero exit. A git that cannot
@@ -29,7 +31,7 @@ export function gitFor(why: string, env: NodeJS.ProcessEnv = process.env) {
       try {
         return execFileSync("git", args, {
           cwd,
-          env: gitEnv(env),
+          env: currentEnv(),
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
         }).trim();
@@ -42,7 +44,7 @@ export function gitFor(why: string, env: NodeJS.ProcessEnv = process.env) {
     /** Run git in `cwd`: its output, or its stderr as the error. */
     async run(args: string[], cwd: string): Promise<string> {
       try {
-        return (await execGit("git", args, { cwd, env: gitEnv(env) })).stdout;
+        return (await execGit("git", args, { cwd, env: currentEnv() })).stdout;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") throw missing();
         const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();

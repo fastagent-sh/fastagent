@@ -1,4 +1,5 @@
 import * as undici from "undici";
+import { readProcessEnv } from "./process-env.ts";
 
 /**
  * What is ALWAYS exempt from the proxy. `EnvHttpProxyAgent` proxies EVERYTHING while NO_PROXY is empty — loopback
@@ -18,7 +19,7 @@ const LOOPBACK = "localhost,127.0.0.1,::1";
  * Its own function because installing happens ONCE per process, so these branches are unreachable through
  * {@link installProxyFetch} — and the wildcard one is the kind that is silently wrong until someone reads it.
  */
-function noProxyList(env: NodeJS.ProcessEnv = process.env): string {
+function noProxyList(env: Readonly<Record<string, string | undefined>> = readProcessEnv()): string {
   // Mirroring undici's own precedence (lowercase first) so our value cannot disagree with the one it would read.
   // `||`, not `??`: a `NO_PROXY=` line in a .env is an empty string, and undici treats it as "proxy everything".
   const declared = (env.no_proxy || env.NO_PROXY)?.trim();

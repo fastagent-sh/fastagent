@@ -13,6 +13,7 @@ import { writeFileAtomic } from "../atomic-write.ts";
 import { log } from "../log.ts";
 import { exists } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
+import { decodeRuntimeCliEnv } from "../process-env.ts";
 
 const SEGMENT = /^[a-zA-Z0-9_-]+$/;
 
@@ -29,8 +30,8 @@ function parseOwner(raw: string): string {
 }
 
 /** The agent this box runs, as the generated image names it (`FASTAGENT_NAME`), so its storage belongs to someone. */
-export function storageOwnerFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  const agent = env[INSTANCE_NAME_ENV];
+export function storageOwnerFromEnv(env?: Readonly<Record<string, string | undefined>>): string {
+  const agent = env === undefined ? decodeRuntimeCliEnv().instanceName : env[INSTANCE_NAME_ENV];
   if (!agent) {
     throw new Error(
       `${INSTANCE_NAME_ENV} is required for a deployment: it names the agent its storage belongs to, and the ` +

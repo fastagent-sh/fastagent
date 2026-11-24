@@ -6,6 +6,7 @@
 import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";
 import { enterAgentEnv } from "../../env.ts";
+import { readProcessEnv } from "../../process-env.ts";
 import { type ModelEnvironment, modelEnvironment } from "../../harnesses/models/environment.ts";
 import { providerOf } from "../../harnesses/models/models.ts";
 import { definitionProviders } from "../../harnesses/assembly.ts";
@@ -45,11 +46,13 @@ export async function runLoginCheck(
   let providers: Provider[] = [];
   if (agentDir) {
     enterAgentEnv(agentDir);
-    providers = await definitionProviders(agentDir, process.env).catch(failStartup);
+    providers = await definitionProviders(agentDir, readProcessEnv()).catch(failStartup);
   } else {
     installProxyFetch();
   }
-  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(process.env) });
+  const environment = await modelEnvironment(agentDir, {}, providers, {
+    environment: definedValues(readProcessEnv()),
+  });
   let provider = target;
   let modelId: string | undefined;
   if (target.includes("/")) {
