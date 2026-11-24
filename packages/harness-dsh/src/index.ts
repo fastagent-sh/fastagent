@@ -14,6 +14,7 @@ export {
   type DshPgDatabase,
   type DshPgExecutor,
   type DshPgLease,
+  type DshPgLeaseHandoff,
   type DshPgLimits,
   type DshPgStoreKit,
   type PostgresDshEventStore,

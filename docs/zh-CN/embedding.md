@@ -77,6 +77,11 @@ await tenantA.close();
 await db.close();
 ```
 
+多租户共享连接池生产提示：
+- **池级批量续约：** 共享同一个 `openPostgresDatabase()` 句柄的多个实例会自动把租约续约合并为每周期一条批量 SQL，避免随租户数量线性放大心跳写库压力。
+- **协作式空闲让渡：** 在滚动发布或多副本流量漂移时，若新副本请求打开某个已被旧副本持有但当前空闲（`!agent.busy()`）的实例，旧副本会在下一次续约周期主动释放租约并干净关闭（触发 `agent.closed`，方便宿主清理缓存），而不会阻塞至租约过期；正在执行任务（`agent.busy() === true`）的实例绝不会被中途打断。
+- **闲置句柄回收与粘性路由：** 宿主应按自身内存和 MCP 连接预算对长期空闲（`!agent.busy()` 且无活跃 SSE 流）的租户调用 `agent.close()`（参考 [`examples/saas-copilot/server.ts`](../../examples/saas-copilot/server.ts)），并在多副本部署下按租户 ID 做粘性路由，避免活跃对话期间跨副本争抢租约。
+
 ## 2. 调用 Agent API
 
 `LocalAgent` 暴露完整的 [Agent API](agent-api.md)（`sessions`、`messages`、`invoke`、`invokeStream`）以及生命周期辅助方法：

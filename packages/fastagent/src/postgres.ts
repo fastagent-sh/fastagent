@@ -194,6 +194,8 @@ export interface SharedPostgresHandle {
   isClosed(): boolean;
   assertOpen(): void;
   ensureMigrated(key: string, run: (db: PgDatabase) => Promise<void>): Promise<void>;
+  /** Register a cleanup listener invoked once when the shared pool begins closing. */
+  onClose(listener: () => void): () => void;
 }
 
 /**
@@ -238,6 +240,7 @@ export function openPostgresDatabase(
   let closed = false;
   let closing: Promise<void> | undefined;
   const migrations = new Map<string, Promise<void>>();
+  const closeListeners = new Set<() => void>();
 
   const assertOpen = () => {
     if (closed) throw new Error(`the shared database ${describeDatabase(url)} is closed`);
@@ -263,6 +266,16 @@ export function openPostgresDatabase(
       }
       return pending;
     },
+    onClose(listener) {
+      if (closed) {
+        listener();
+        return () => {};
+      }
+      closeListeners.add(listener);
+      return () => {
+        closeListeners.delete(listener);
+      };
+    },
   };
 
   const shared: SharedPostgresInternal = {
@@ -272,7 +285,13 @@ export function openPostgresDatabase(
     ...(limits === undefined ? {} : { limits }),
     ...(createIndex === undefined ? {} : { createIndex }),
     close() {
-      closed = true;
+      if (!closed) {
+        closed = true;
+        for (const listener of [...closeListeners]) {
+          closeListeners.delete(listener);
+          listener();
+        }
+      }
       closing ??= db.close();
       return closing;
     },

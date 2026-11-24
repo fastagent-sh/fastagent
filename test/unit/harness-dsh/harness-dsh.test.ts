@@ -835,6 +835,51 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           clearTimeout(releaseTimer);
           await priorHolder.close();
         }
+
+        // Cooperative idle handoff on DSH: a second openAgent takes over an idle holder on its next renewal tick.
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+        let coopFirst: Awaited<ReturnType<typeof openAgent>> | undefined;
+        let coopSecond: Awaited<ReturnType<typeof openAgent>> | undefined;
+        try {
+          const coopInstance = freshInstance();
+          let coopFirstClosed = false;
+          coopFirst = await openAgent(def, {
+            root: dir,
+            name: coopInstance,
+            harness: "dsh",
+            sandbox: "off",
+            database: shared,
+          });
+          void coopFirst.closed?.then(() => {
+            coopFirstClosed = true;
+          });
+          const openingSecond = openAgent(def, {
+            root: dir,
+            name: coopInstance,
+            harness: "dsh",
+            sandbox: "off",
+            database: { url: fresh.url },
+          });
+          await vi.waitFor(
+            async () => {
+              const [row] = await db.query<{ handoff_requested_at: Date | null }>(
+                "SELECT handoff_requested_at FROM dsh_leases WHERE instance = $1",
+                [coopInstance],
+              );
+              expect(row?.handoff_requested_at).not.toBeNull();
+            },
+            { timeout: 5_000 },
+          );
+          await vi.advanceTimersByTimeAsync(8_000);
+          coopSecond = await openingSecond;
+          await vi.waitFor(() => expect(coopFirstClosed).toBe(true), { timeout: 5_000 });
+          const created = await coopSecond.sessions.create({ title: "After DSH Handoff" });
+          expect((await coopSecond.sessions.get(created.id)).title).toBe("After DSH Handoff");
+        } finally {
+          await coopSecond?.close();
+          await coopFirst?.close();
+          vi.useRealTimers();
+        }
       } finally {
         await db.close();
       }

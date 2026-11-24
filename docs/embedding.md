@@ -77,6 +77,11 @@ await tenantA.close();
 await db.close();
 ```
 
+Operational notes for multi-tenant pools:
+- **Coalesced lease heartbeats:** Instances sharing an `openPostgresDatabase()` handle automatically batch their PostgreSQL lease renewals into one query per tick instead of one query per tenant.
+- **Cooperative idle handoff:** During rolling deploys or multi-replica traffic shifts, if another process requests an instance whose current holder is idle (`!agent.busy()`), the idle holder yields cleanly on its next renewal tick (`agent.closed` resolves so your host cache can evict the handle) instead of blocking until lease expiry. Active turns (`agent.busy() === true`) are never interrupted.
+- **Evict idle handles & route stickily:** Close long-idle tenants (`!agent.busy()` with no open SSE streams) to bound in-process memory and MCP clients (see [`examples/saas-copilot/server.ts`](../examples/saas-copilot/server.ts)), and prefer sticky routing by tenant ID across replicas so hot tenants stay local during active turns.
+
 ## 2. Call the Agent API
 
 `LocalAgent` exposes the full [Agent API](agent-api.md) (`sessions`, `messages`, `invoke`, `invokeStream`) plus lifecycle helpers:
