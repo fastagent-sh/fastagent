@@ -4,6 +4,7 @@ import { dirname, extname, relative, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const REPO_SLUG = "fastagent-sh/fastagent";
 const DISALLOWED_HOST = /(^|\.)fastagent\.sh$/i;
+const DISALLOWED_SVG_HOST = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)*fastagent\.sh\b/gi;
 
 async function collectPackageReadmes() {
   const packagesDir = resolve(repoRoot, "packages");
@@ -34,11 +35,18 @@ async function collectPackageManifests() {
   return manifests.sort();
 }
 
+async function collectAssetSvgs() {
+  const assetsDir = resolve(repoRoot, "assets");
+  const entries = await readdir(assetsDir, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isFile() && extname(entry.name) === ".svg")
+    .map((entry) => resolve(assetsDir, entry.name))
+    .sort();
+}
+
 async function docFiles(path, explicit = false) {
   const entries = await readdir(path, { withFileTypes: true }).catch(() => undefined);
-  if (!entries) {
-    return explicit || extname(path) === ".md" || path.endsWith(".github/ISSUE_TEMPLATE/config.yml") ? [resolve(path)] : [];
-  }
+  if (!entries) return explicit || extname(path) === ".md" ? [resolve(path)] : [];
   const nested = await Promise.all(
     entries
       .filter((entry) => entry.name !== "node_modules" && entry.name !== "dist")
@@ -151,8 +159,8 @@ function extractTargets(file, prose) {
   for (const match of prose.matchAll(/<img\b[^>]*\bsrc=(?:"([^"]+)"|'([^']+)')/gi)) {
     push(match.index, (match[1] ?? match[2]).trim());
   }
-  // Catch bare URLs in prose (e.g. coding-agent prompt blockquotes).
-  for (const match of prose.matchAll(/(?<![("'=])https?:\/\/[^\s"'<>)]+/g)) {
+  // Catch bare URLs in prose (including parenthesized URLs, while skipping Markdown links `](url)`).
+  for (const match of prose.matchAll(/(?<!\]\()(?<!["'=])https?:\/\/[^\s"'<>)]+/g)) {
     push(match.index, match[0].replace(/[.,;]+$/, ""));
   }
   return out;
@@ -168,11 +176,14 @@ const roots = [
   "docs",
   "examples",
   ".github",
+  ".github/ISSUE_TEMPLATE/config.yml",
 ].map((entry) => resolve(repoRoot, entry));
 
 const files = [
-  ...(await Promise.all(roots.map((root) => docFiles(root, true)))).flat(),
-  ...(await collectPackageReadmes()),
+  ...new Set([
+    ...(await Promise.all(roots.map((root) => docFiles(root, true)))).flat(),
+    ...(await collectPackageReadmes()),
+  ]),
 ].sort();
 
 const statCache = new Map();
@@ -181,14 +192,32 @@ const errors = [];
 
 for (const file of files) {
   const markdown = await readFile(file, "utf8");
+  const displayFile = relative(repoRoot, file);
+  // Enforce no fastagent.sh URLs across the full file, including inline and fenced code blocks.
+  const reportedDisallowedLines = new Set();
+  for (const match of markdown.matchAll(/https?:\/\/[^\s"'<>)`]+/g)) {
+    const candidate = match[0].replace(/[.,;]+$/, "");
+    const url = URL.parse(candidate);
+    if (url && DISALLOWED_HOST.test(url.hostname)) {
+      const line = markdown.slice(0, match.index).split("\n").length;
+      const key = `${line}:${candidate}`;
+      if (!reportedDisallowedLines.has(key)) {
+        reportedDisallowedLines.add(key);
+        errors.push(`${displayFile}:${line}: disallowed external fastagent.sh link ${candidate} (keep repository self-contained)`);
+      }
+    }
+  }
+
   const prose = extname(file) === ".yml" || extname(file) === ".yaml" ? markdown : withoutCode(markdown);
   for (const { index, target } of extractTargets(file, prose)) {
     const resolved = resolveTarget(file, target);
     if (!resolved) continue;
     const line = markdown.slice(0, index).split("\n").length;
-    const displayFile = relative(repoRoot, file);
     if (resolved.invalid) {
-      errors.push(`${displayFile}:${line}: ${resolved.invalid}`);
+      const key = `${line}:${target}`;
+      if (!reportedDisallowedLines.has(key)) {
+        errors.push(`${displayFile}:${line}: ${resolved.invalid}`);
+      }
       continue;
     }
     const { targetFile, fragment, kind } = resolved;
@@ -225,6 +254,14 @@ for (const manifest of await collectPackageManifests()) {
     if (url && DISALLOWED_HOST.test(url.hostname)) {
       errors.push(`${relative(repoRoot, manifest)}: disallowed homepage ${pkg.homepage} (keep repository self-contained)`);
     }
+  }
+}
+
+for (const svgFile of await collectAssetSvgs()) {
+  const content = await readFile(svgFile, "utf8");
+  for (const match of content.matchAll(DISALLOWED_SVG_HOST)) {
+    const line = content.slice(0, match.index).split("\n").length;
+    errors.push(`${relative(repoRoot, svgFile)}:${line}: disallowed fastagent.sh reference ${match[0]} (keep repository self-contained)`);
   }
 }
 
