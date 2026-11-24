@@ -513,7 +513,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
       parameters: EffectSchema.toStandardJSONSchemaV1(
         EffectSchema.Struct({
           city: EffectSchema.String,
-          count: EffectSchema.optional(EffectSchema.Number),
+          count: EffectSchema.optional(EffectSchema.Finite),
         }),
       ),
       execute: async ({ city, count }) => `${city}:${count ?? 1}`,

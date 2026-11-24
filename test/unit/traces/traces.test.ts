@@ -58,7 +58,11 @@ async function collector({ held = false } = {}) {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
-      received.push({ path: req.url, headers: req.headers, body: JSON.parse(body) });
+      received.push({
+        ...(req.url === undefined ? {} : { path: req.url }),
+        headers: req.headers,
+        body: JSON.parse(body),
+      });
       const answer = () => res.writeHead(200, { "content-type": "application/json" }).end("{}");
       if (answering) answer();
       else waiting.push(answer);

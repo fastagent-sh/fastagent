@@ -106,7 +106,12 @@ function parseRequest(body: unknown): EnvelopedRequest | undefined {
     return undefined;
   }
   if (request.body !== undefined && typeof request.body !== "string") return undefined;
-  return { method: request.method, path: request.path, headers: request.headers ?? {}, body: request.body };
+  return {
+    method: request.method,
+    path: request.path,
+    headers: request.headers ?? {},
+    ...(request.body === undefined ? {} : { body: request.body }),
+  };
 }
 
 /** Close a scope quietly so a finalizer failure never masks the caller's error. */
@@ -126,6 +131,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
   const placedDatabase = (): PostgresDatabase => (typeof database === "function" ? database() : database);
 
   const openInstance = Effect.fn("agentcore.openInstance")(function* (name: string) {
+    const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
     const scope = yield* Scope.make();
     return yield* Effect.gen(function* () {
       const extra =
@@ -153,7 +159,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       // Its runs stopped under it (the lease went to another process, or went unrenewed): clear the slot and close
       // the instance scope so the next invocation opens the instance cleanly.
       const reopen = () => {
-        void Effect.runPromise(
+        void runPromise(
           Ref.modify(slot, (current) =>
             current._tag === "open" && current.opened === opened
               ? ([true, { _tag: "empty" }] as const)

@@ -45,7 +45,7 @@ interface FlowRecord {
   readonly abort: AbortController;
   readonly startedAt: number;
   readonly release: () => void;
-  timeoutTimer?: ReturnType<typeof setTimeout>;
+  timeoutTimer?: ReturnType<typeof setTimeout> | undefined;
   updatedAt: number;
   settledAt?: number;
   version: number;
@@ -57,7 +57,7 @@ interface FlowRecord {
     intervalSeconds?: number;
     expiresInSeconds?: number;
   };
-  pending?: PendingPrompt;
+  pending?: PendingPrompt | undefined;
   messages: string[];
   verified?: "ok" | "unknown" | "n/a";
   error?: string;

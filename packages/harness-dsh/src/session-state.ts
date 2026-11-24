@@ -43,12 +43,12 @@ export interface LiveSession {
   meta: DshStoredSession;
   dshAgent?: DshLoopAgent;
   dshHandle?: AgentHandle;
-  instructionsDisposer?: () => void;
-  toolsDisposer?: () => void;
+  instructionsDisposer?: (() => void) | undefined;
+  toolsDisposer?: (() => void) | undefined;
   watchers: Set<Watcher>;
   waiters: Map<string, Set<Waiter>>;
   eventSeq: number;
-  pendingSettlement?: Promise<void>;
+  pendingSettlement?: Promise<void> | undefined;
   bufferedEvents: SessionEvent[];
   storageErrored: boolean;
   toolNamesByCallId: Map<string, string>;
@@ -58,7 +58,7 @@ export interface LiveSession {
   activeTools: Map<string, ActiveTool>;
   activeTurnMessageIds: string[];
   queuedMessages: QueuedMessage[];
-  lastAnswerInTurn?: { readonly entryId: string; readonly text: string };
+  lastAnswerInTurn?: { readonly entryId: string; readonly text: string } | undefined;
   retryCounts: Map<string, number>;
   cancelRequested: boolean;
   compacting: boolean;

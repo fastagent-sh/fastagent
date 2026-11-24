@@ -112,7 +112,12 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
   program.option("-C <dir>", "run as if fastagent was started in <dir>");
   if (options.version) program.version(options.version, "-v, --version", "print the fastagent version");
   if (options.examples || options.notes) {
-    specOf.set(program, { name: "fastagent", summary: "", examples: options.examples, notes: options.notes });
+    specOf.set(program, {
+      name: "fastagent",
+      summary: "",
+      ...(options.examples === undefined ? {} : { examples: options.examples }),
+      ...(options.notes === undefined ? {} : { notes: options.notes }),
+    });
   }
   // Subcommands inherit exitOverride/output/suggestion settings at .command() time — register last.
   for (const spec of specs) register(program, spec);

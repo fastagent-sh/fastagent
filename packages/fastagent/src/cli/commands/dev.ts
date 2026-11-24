@@ -53,7 +53,7 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
   // The model is picked ONCE, in the parent process (a TTY; watch and --no-watch both).
   const { agentDir, modelSpec, pickedModel, instance } = await enterAgentCommand(dirArg, {
     ...opts,
-    input: isWorker ? false : opts.input,
+    ...(isWorker ? { input: false } : {}),
   });
   if (isWorker || opts.watch === false) {
     await serveOnce(agentDir, modelSpec, instance, opts, (busy) => {

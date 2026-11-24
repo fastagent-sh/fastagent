@@ -36,7 +36,7 @@ export async function runStart(dirArg: string, opts: StartOptions): Promise<void
   // An unset bind stays the wildcard: this is the container posture, and a published port needs it.
   serveService(service, {
     port: portFlag ?? parsePort(decodeRuntimeCliEnv().port, "PORT env", "env") ?? DEFAULT_HTTP_PORT,
-    host: bindFlag,
+    ...(bindFlag === undefined ? {} : { host: bindFlag }),
   });
 }
 

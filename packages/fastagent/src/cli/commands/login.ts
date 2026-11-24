@@ -99,18 +99,26 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     : authPath;
   if (opts.input === false || opts.json === true || !isInteractive()) {
     const offered = await loginOptionsOver(statusFrom, providers);
-    return requestLogin(offered, { provider, method }, opts, {
-      providers,
-      valueFile: ownAgent === undefined ? undefined : dotEnvPath(ownAgent),
-      heldIn: async (id) => (typeof statusFrom === "string" ? statusFrom : statusFrom.layerOf(id)),
-    });
+    return requestLogin(
+      offered,
+      {
+        ...(provider === undefined ? {} : { provider }),
+        ...(method === undefined ? {} : { method }),
+      },
+      opts,
+      {
+        providers,
+        ...(ownAgent === undefined ? {} : { valueFile: dotEnvPath(ownAgent) }),
+        heldIn: async (id) => (typeof statusFrom === "string" ? statusFrom : statusFrom.layerOf(id)),
+      },
+    );
   }
   const timeout = givenTimeout === undefined ? undefined : AbortSignal.timeout(givenTimeout * 1000);
   // An entered API key is verified with one minimal request (login.ts); a rejected one is asked for again.
   const result = await loginFlow(terminalLoginIO(), {
     authPath,
     providers,
-    statusFrom: typeof statusFrom === "string" ? undefined : statusFrom,
+    ...(typeof statusFrom === "string" ? {} : { statusFrom }),
     ...(provider ? { provider } : {}),
     ...(method ? { method } : {}),
     ...(timeout ? { signal: timeout } : {}),
@@ -191,7 +199,14 @@ async function requestLogin(
   const global = opts.global ? " -g" : "";
   let choice: SignInOption;
   try {
-    choice = await chooseLogin(offered, given, undefined);
+    choice = await chooseLogin(
+      offered,
+      {
+        ...(given.provider === undefined ? {} : { provider: given.provider }),
+        ...(given.method === undefined ? {} : { method: given.method }),
+      },
+      undefined,
+    );
   } catch (error) {
     if (!(error instanceof LoginRefused)) throw error;
     return reportNeedChoice(error, opts, { flags: global, statuses: true });

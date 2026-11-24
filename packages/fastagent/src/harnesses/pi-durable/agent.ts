@@ -328,7 +328,7 @@ function durableAgent(
   const conversationOf = Effect.fn("pi-durable.conversationOf")(function* (sessionId: string) {
     const conversation = yield* reads.conversation(sessionId);
     if (conversation === undefined) {
-      return yield* Effect.fail(agentError("not_found", `No session ${sessionId}`));
+      return yield* agentError("not_found", `No session ${sessionId}`);
     }
     return conversation;
   });
@@ -348,9 +348,9 @@ function durableAgent(
       const known = toolsByName();
       const unknown = tools.filter((name) => !known.has(name));
       if (unknown.length > 0) {
-        return yield* Effect.fail(
-          agentError("invalid_request", `This agent has no tool named ${unknown.join(", ")}`, { tools: unknown }),
-        );
+        return yield* agentError("invalid_request", `This agent has no tool named ${unknown.join(", ")}`, {
+          tools: unknown,
+        });
       }
       registrations = tools.map((name) => known.get(name) as ToolRegistration);
     } else registrations = tools;

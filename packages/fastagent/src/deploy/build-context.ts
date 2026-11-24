@@ -123,7 +123,13 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present(["node_modules"]);
   const machineryPaths = [...secretPaths, ...(stateRel && !inInstances ? [stateRel] : [])];
-  return { machineryPaths, leakCandidates, stateShips, instancesShip, depDirs };
+  return {
+    machineryPaths,
+    leakCandidates,
+    ...(stateShips === undefined ? {} : { stateShips }),
+    ...(instancesShip === undefined ? {} : { instancesShip }),
+    depDirs,
+  };
 }
 
 /** The ignore files Docker reads for the generated Dockerfile: the one beside it first, then the context's. */

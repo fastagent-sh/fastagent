@@ -5,6 +5,8 @@
 import * as ByteSize from "effect/ByteSize";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Ref from "effect/Ref";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
@@ -27,7 +29,7 @@ import { createInvoker, memoryConversationStore } from "../conversations.ts";
 import { type SecretInput, redactSecret, revealSecret } from "../declared-secrets.ts";
 import type { Handler } from "./serve.ts";
 import { secretEquals } from "./secret.ts";
-import { PromiseFailure, fromPromise, abortThenJoin } from "../promise-bridge.ts";
+import { PromiseFailure, fromPromise } from "../promise-bridge.ts";
 import { log } from "../log.ts";
 import {
   API_PREFIX,
@@ -87,11 +89,25 @@ function refusal(operation: string) {
 
 /** An Agent operation, told to let go if its request does (a Caller that left). */
 const call = Effect.fn("http.api.call")(function* <A>(operation: string, run: (signal: AbortSignal) => Promise<A>) {
-  const controller = new AbortController();
-  return yield* abortThenJoin(
-    operation,
-    () => run(controller.signal),
-    () => controller.abort(),
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const pending = yield* Ref.make<{ readonly promise: Promise<A> } | undefined>(undefined);
+      // Registered BEFORE `Effect.abortSignal` so LIFO scope close aborts the signal first, then joins settlement.
+      yield* Effect.addFinalizer((exit) =>
+        Exit.hasInterrupts(exit)
+          ? Ref.get(pending).pipe(
+              Effect.flatMap((p) => (p === undefined ? Effect.void : Effect.exit(fromPromise(() => p.promise)))),
+            )
+          : Effect.void,
+      );
+      const signal = yield* Effect.abortSignal;
+      const issued = yield* Effect.try({
+        try: () => ({ promise: run(signal) }),
+        catch: (cause) => new PromiseFailure(cause),
+      });
+      yield* Ref.set(pending, issued);
+      return yield* fromPromise(() => issued.promise);
+    }),
   ).pipe(Effect.mapError(refusal(operation)));
 });
 
@@ -214,10 +230,11 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
         call("sessions.entries", () => agent.sessions.entries(params.sessionId, query)),
       )
       .handle("events", ({ params, query, headers }) =>
-        serverSent("sessions.events", SessionEventFrame, () =>
+        serverSent("sessions.events", SessionEventFrame, () => {
           // An EventSource reconnects to the URL it opened and says where it got to in this header.
-          agent.sessions.events(params.sessionId, { after: headers["last-event-id"] ?? query.after }),
-        ),
+          const after = headers["last-event-id"] ?? query.after;
+          return agent.sessions.events(params.sessionId, after === undefined ? {} : { after });
+        }),
       )
       .handle("cancel", ({ params }) => call("sessions.cancel", () => agent.sessions.cancel(params.sessionId)))
       .handle("compact", ({ params, payload }) =>
@@ -232,24 +249,36 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
         const { wait, stream, ...message } = payload;
         const request = { ...message, sessionId: params.sessionId, idempotencyKey: headers["idempotency-key"] };
         if (!stream) {
-          return call("messages.send", (signal) => agent.messages.send(request, { wait: capped(wait), signal }));
+          const waitSeconds = capped(wait);
+          return call("messages.send", (signal) =>
+            agent.messages.send(request, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
+          );
         }
         if (wait !== undefined) {
           return Effect.fail(agentError("invalid_request", "a streamed message is watched, not waited for: drop wait"));
         }
         return serverSent("messages.stream", MessageStreamEventFrame, () => agent.messages.stream(request));
       })
-      .handle("getMessage", ({ params, query }) =>
-        call("messages.get", (signal) => agent.messages.get(params, { wait: capped(query.wait), signal })),
-      )
-      .handle("getMessageByKey", ({ params, query }) =>
-        call("messages.get", (signal) => agent.messages.get(params, { wait: capped(query.wait), signal })),
-      )
+      .handle("getMessage", ({ params, query }) => {
+        const waitSeconds = capped(query.wait);
+        return call("messages.get", (signal) =>
+          agent.messages.get(params, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
+        );
+      })
+      .handle("getMessageByKey", ({ params, query }) => {
+        const waitSeconds = capped(query.wait);
+        return call("messages.get", (signal) =>
+          agent.messages.get(params, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
+        );
+      })
       .handle("invoke", ({ headers, payload }) => {
         const { wait, stream, ...rest } = payload;
         const request = { ...rest, idempotencyKey: headers["idempotency-key"] };
         if (!stream) {
-          return call("invoke", (signal) => invoker.invoke(request, { wait: invokeCapped(wait), signal }));
+          const waitSeconds = invokeCapped(wait);
+          return call("invoke", (signal) =>
+            invoker.invoke(request, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
+          );
         }
         if (wait !== undefined) {
           return Effect.fail(agentError("invalid_request", "a streamed invoke is watched, not waited for: drop wait"));
@@ -271,7 +300,12 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       .handle("getAuthLogin", ({ params, query }) =>
         auth === undefined
           ? noAuth()
-          : call("auth.getLogin", (signal) => auth.getLogin(params.flowId, { wait: capped(query.wait), signal })),
+          : (() => {
+              const waitSeconds = capped(query.wait);
+              return call("auth.getLogin", (signal) =>
+                auth.getLogin(params.flowId, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
+              );
+            })(),
       )
       .handle("submitAuthInput", ({ params, payload }) =>
         auth === undefined

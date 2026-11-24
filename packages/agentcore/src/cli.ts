@@ -179,7 +179,11 @@ async function invoke(
   const { connectAgentCore } = await loadAgentCoreClient();
   let agent: Agent;
   try {
-    agent = connectAgentCore({ runtimeArn, sessionId: instance, qualifier: flags.qualifier });
+    agent = connectAgentCore({
+      runtimeArn,
+      sessionId: instance,
+      ...(flags.qualifier === undefined ? {} : { qualifier: flags.qualifier }),
+    });
   } catch (error) {
     usageError(error instanceof Error ? error.message : String(error));
   }
@@ -190,9 +194,9 @@ async function invoke(
       ? `${runtimeArn} (instance ${instance})`
       : `${runtimeArn} (instance ${instance}, qualifier ${flags.qualifier})`;
   const exitCode = await invokeOverApi(agent, where, input.message, {
-    session: flags.session,
-    settings,
-    json: flags.json,
+    ...(flags.session === undefined ? {} : { session: flags.session }),
+    ...(settings === undefined ? {} : { settings }),
+    ...(flags.json === undefined ? {} : { json: flags.json }),
     authHint: AGENTCORE_AUTH_HINT,
     continueFlags: (sessionId) => `--instance ${instance} --session ${sessionId}`,
   });
@@ -229,12 +233,12 @@ export const run: ExtensionCli["run"] = async (args) => {
     if (extra.length > 1) usageError("invoke takes at most one <message> argument");
     if (hasInitFlags) usageError("--force and --no-install are init's");
     return invoke(extra[0], {
-      arn: values.arn,
-      instance: values.instance,
-      session: values.session,
-      qualifier: values.qualifier,
-      model: values.model,
-      json: values.json,
+      ...(values.arn === undefined ? {} : { arn: values.arn }),
+      ...(values.instance === undefined ? {} : { instance: values.instance }),
+      ...(values.session === undefined ? {} : { session: values.session }),
+      ...(values.qualifier === undefined ? {} : { qualifier: values.qualifier }),
+      ...(values.model === undefined ? {} : { model: values.model }),
+      ...(values.json === undefined ? {} : { json: values.json }),
     });
   }
   if (extra.length > 0) usageError(`${command} takes no positional arguments (use \`fastagent -C <dir>\`)`);

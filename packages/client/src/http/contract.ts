@@ -136,7 +136,7 @@ function serverSent<S extends Schema.Codec<{ readonly type: string }, unknown>>(
       SchemaTransformation.transformEffect({
         decode: ({ event, data }) =>
           known.has(event)
-            ? Schema.decodeUnknownEffect(json)(data).pipe(Effect.mapError((error) => error.issue))
+            ? Schema.decodeEffect(json)(data).pipe(Effect.mapError((error) => error.issue))
             : Effect.succeed({ type: event }),
         encode: (value) =>
           !known.has(value.type)

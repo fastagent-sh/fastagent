@@ -50,8 +50,8 @@ export interface RemoteEditorCallbacks {
 export class RemoteEditor extends CustomEditor {
   private readonly kb: KeybindingsManager;
   private readonly callbacks: RemoteEditorCallbacks;
-  private hostOnSubmit?: (text: string) => void;
-  private wrappedOnSubmit?: (text: string) => void;
+  private hostOnSubmit?: ((text: string) => void) | undefined;
+  private wrappedOnSubmit?: ((text: string) => void) | undefined;
 
   constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, callbacks: RemoteEditorCallbacks) {
     super(tui, theme, keybindings);
