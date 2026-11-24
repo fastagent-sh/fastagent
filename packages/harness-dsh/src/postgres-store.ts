@@ -528,6 +528,7 @@ export async function openPostgresDshStore(
   });
 
   let storeClosed = false;
+  let closing: Promise<void> | undefined;
   const writers = new Set<string>();
 
   const assertStoreOpen = () => {
@@ -1065,11 +1066,14 @@ export async function openPostgresDshStore(
       });
     },
 
-    async close() {
-      if (storeClosed) return;
+    close() {
       storeClosed = true;
-      writers.clear();
-      await lease.release().catch(() => {});
+      closing ??= (async () => {
+        writers.clear();
+        await writeChain;
+        await lease.release().catch(() => {});
+      })();
+      return closing;
     },
   };
 }
