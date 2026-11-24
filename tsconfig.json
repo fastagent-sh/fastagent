@@ -23,7 +23,24 @@
         ],
         "diagnosticSeverity": {
           "floatingEffect": "error"
-        }
+        },
+        "overrides": [
+          {
+            "include": ["test/**/*.ts"],
+            "options": {
+              "allowedUnstableApis": [
+                "@effect/platform-node/NodeHttpServer",
+                "@effect/vitest",
+                "effect/Arbitrary",
+                "effect/ByteSize",
+                "effect/encoding/Sse",
+                "effect/http",
+                "effect/http-api",
+                "effect/net/NetAddress"
+              ]
+            }
+          }
+        ]
       }
     ],
     "noEmit": true,

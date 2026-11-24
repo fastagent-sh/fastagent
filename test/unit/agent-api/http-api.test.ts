@@ -1,18 +1,32 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as Clock from "effect/Clock";
+import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import { OpenApi } from "effect/http-api";
+import { TestClock } from "effect/testing";
 import {
   type Agent,
-  type AgentErrorData,
+  AgentErrorData,
   ConversationId,
   type DecodedMessageKey,
+  Entry,
   type ErrorCode,
   IdempotencyKey,
+  InvokeRequest,
+  Message,
   MessageId,
   MessageKey,
+  MessageStreamEvent,
+  SendRequest,
+  Session,
+  SessionEvent,
   SessionId,
   decodeRequest,
 } from "../../../packages/client/src/agent-api.ts";
@@ -24,12 +38,17 @@ import {
   memoryConversationStore,
   memoryConversationStoreEffect,
   postgresConversationStore,
-  sqliteConversationStore,
   sqliteConversationStoreEffect,
 } from "../../../packages/fastagent/src/conversations.ts";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
-import { OpenApi } from "effect/http-api";
-import { AgentHttpApi, statusOf } from "../../../packages/client/src/http/contract.ts";
+import {
+  AgentHttpApi,
+  MessageStreamEventFrame,
+  Refusal,
+  SessionEventFrame,
+  statusOf,
+} from "../../../packages/client/src/http/contract.ts";
+import { sseEventStream } from "../../../packages/fastagent/src/http/server.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { durableSubject } from "../../harnesses/durable-subject.ts";
 import { KEY, type Served, httpSubject, served } from "../../harnesses/http-subject.ts";
@@ -211,78 +230,50 @@ describe("the Agent API over HTTP", () => {
       await expect(badIter.next()).rejects.toMatchObject({ code: "invalid_request" });
     });
 
-    it("expires and bounds ephemeral idempotency bindings without evicting named conversations, honors AbortSignal, and maps transient PG failures to unavailable", async () => {
-      const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
-      const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
-      const sid = (id: string) => SessionId.make(id);
-
-      let nowMs = 1_000;
-      const clock: Clock.Clock = {
-        currentTimeMillisUnsafe: () => nowMs,
-        currentTimeMillis: Effect.sync(() => nowMs),
-        monotonicTimeNanosUnsafe: () => BigInt(nowMs) * 1_000_000n,
-        monotonicTimeNanos: Effect.sync(() => BigInt(nowMs) * 1_000_000n),
-        currentTimeNanosUnsafe: () => BigInt(nowMs) * 1_000_000n,
-        currentTimeNanos: Effect.sync(() => BigInt(nowMs) * 1_000_000n),
-        sleep: () => Effect.void,
-      };
-      const mem = memoryConversationStore({ ephemeralTtlMs: 100, maxEphemeral: 2, clock });
-      await mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
-      await mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
-      await mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
-      await mem.set(idemKey("3"), sid("s-3"), { ephemeral: true });
-      expect(await mem.get(idemKey("1"))).toBeUndefined();
-      expect(await mem.get(idemKey("2"))).toBe("s-2");
-      expect(await mem.get(idemKey("3"))).toBe("s-3");
-      expect(await mem.get(convKey("ops"))).toBe("s-ops");
-      nowMs += 200;
-      expect(await mem.get(idemKey("2"))).toBeUndefined();
-      expect(await mem.get(idemKey("3"))).toBeUndefined();
-      expect(await mem.get(convKey("ops"))).toBe("s-ops");
-
-      const effectStore = memoryConversationStoreEffect({ ephemeralTtlMs: 100 });
-      const effectOutcome = await Effect.runPromise(
+    it.effect(
+      "expires and bounds ephemeral idempotency bindings without evicting named conversations via TestClock",
+      () =>
         Effect.gen(function* () {
-          yield* effectStore.set(idemKey("eff"), sid("s-eff"), { ephemeral: true });
-          const before = yield* effectStore.get(idemKey("eff"));
-          nowMs += 200;
-          const after = yield* effectStore.get(idemKey("eff"));
-          return { before, after };
-        }).pipe(Effect.provideService(Clock.Clock, clock)),
-      );
-      expect(effectOutcome).toEqual({ before: "s-eff", after: undefined });
+          const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
+          const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
+          const sid = (id: string) => SessionId.make(id);
 
-      const dir = mkdtempSync(join(tmpdir(), "fa-conv-ttl-"));
-      try {
-        const sql = sqliteConversationStore(join(dir, "conversations.sqlite"), {
-          ephemeralTtlMs: 100,
-          clock,
-        });
-        await sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
-        await sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
-        nowMs += 200;
-        await sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
-        expect(await sql.get(idemKey("old"))).toBeUndefined();
-        expect(await sql.get(idemKey("new"))).toBe("s-new");
-        expect(await sql.get(convKey("ops"))).toBe("s-ops");
-        await sql.close();
+          const mem = memoryConversationStoreEffect({ ephemeralTtlMs: 100, maxEphemeral: 2 });
+          yield* mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+          yield* mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
+          yield* mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
+          yield* mem.set(idemKey("3"), sid("s-3"), { ephemeral: true });
+          expect(yield* mem.get(idemKey("1"))).toBeUndefined();
+          expect(yield* mem.get(idemKey("2"))).toBe("s-2");
+          expect(yield* mem.get(idemKey("3"))).toBe("s-3");
+          expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
+          yield* TestClock.adjust("200 millis");
+          expect(yield* mem.get(idemKey("2"))).toBeUndefined();
+          expect(yield* mem.get(idemKey("3"))).toBeUndefined();
+          expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
 
-        const sqlEff = sqliteConversationStoreEffect(join(dir, "conversations-eff.sqlite"), { ephemeralTtlMs: 100 });
-        const sqlEffOutcome = await Effect.runPromise(
-          Effect.gen(function* () {
-            yield* sqlEff.set(idemKey("eff-sql"), sid("s-eff-sql"), { ephemeral: true });
-            const before = yield* sqlEff.get(idemKey("eff-sql"));
-            nowMs += 200;
-            const after = yield* sqlEff.get(idemKey("eff-sql"));
-            yield* sqlEff.close();
-            return { before, after };
-          }).pipe(Effect.provideService(Clock.Clock, clock)),
-        );
-        expect(sqlEffOutcome).toEqual({ before: "s-eff-sql", after: undefined });
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+          const dir = yield* Effect.acquireRelease(
+            Effect.sync(() => mkdtempSync(join(tmpdir(), "fa-conv-ttl-"))),
+            (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+          );
+          const sql = yield* Effect.acquireRelease(
+            Effect.sync(() =>
+              sqliteConversationStoreEffect(join(dir, "conversations.sqlite"), { ephemeralTtlMs: 100 }),
+            ),
+            (store) => Effect.ignore(store.close()),
+          );
+          yield* sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+          yield* sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
+          yield* TestClock.adjust("200 millis");
+          yield* sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
+          expect(yield* sql.get(idemKey("old"))).toBeUndefined();
+          expect(yield* sql.get(idemKey("new"))).toBe("s-new");
+          expect(yield* sql.get(convKey("ops"))).toBe("s-ops");
+        }),
+    );
 
+    it("honors AbortSignal in createInvoker and maps transient PG failures to unavailable", async () => {
+      const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
       const invoker = createInvoker(agent, memoryConversationStore());
       const beforeCount = (await agent.sessions.list()).data.length;
       const aborted = new AbortController();
@@ -373,4 +364,114 @@ describe("refusals over HTTP", () => {
       expect([code, statusOf(error as AgentErrorData)]).toEqual([code, status]);
     }
   });
+});
+
+describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
+  it.effect("emits SSE keep-alive comments on virtual time and closes cleanly with stream_error on shutdown", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<SessionEvent>();
+      const closing = new AbortController();
+      const chunks = yield* Ref.make<string[]>([]);
+      const stream = sseEventStream("sessions.events", SessionEventFrame, Stream.fromQueue(events), {
+        keepAliveMs: 20_000,
+        closing: closing.signal,
+      });
+      const fiber = yield* Effect.forkChild(
+        Stream.runForEach(stream, (chunk) => Ref.update(chunks, (list) => [...list, chunk])),
+      );
+      yield* Queue.offer(events, { type: "delta", channel: "text", text: "hi" });
+      yield* TestClock.adjust("20 seconds");
+      yield* TestClock.adjust("20 seconds");
+      closing.abort();
+      yield* Fiber.join(fiber);
+      const collected = yield* Ref.get(chunks);
+      expect(collected.some((c) => c.includes("event: delta") && c.includes('"text":"hi"'))).toBe(true);
+      expect(collected.filter((c) => c === ": open\n\n").length).toBeGreaterThanOrEqual(2);
+      expect(collected.at(-1)).toContain("event: stream_error");
+      expect(collected.at(-1)).toContain("the service is closing");
+    }),
+  );
+
+  it.effect("drives exponential retry backoff and scoped resource cleanup deterministically with TestClock", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const released = yield* Ref.make(false);
+      const work = Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.acquireRelease(Effect.void, () => Ref.set(released, true));
+          const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
+          if (attempt < 3) return yield* Effect.fail("transient" as const);
+          return attempt;
+        }),
+      );
+      const fiber = yield* Effect.forkChild(
+        Effect.retry(work, { schedule: Schedule.exponential("100 millis"), times: 2 }),
+      );
+      yield* TestClock.adjust("100 millis");
+      yield* TestClock.adjust("200 millis");
+      expect(yield* Fiber.join(fiber)).toBe(3);
+      expect(yield* Ref.get(attempts)).toBe(3);
+      expect(yield* Ref.get(released)).toBe(true);
+    }),
+  );
+
+  it.prop(
+    "round-trips Agent API domain schemas through JSON without loss",
+    [SendRequest, InvokeRequest, MessageKey, AgentErrorData, Session, Message, Entry],
+    ([sendReq, invokeReq, msgKey, errData, session, message, entry]) => {
+      const check = <A, E>(schema: Schema.Codec<A, E>, value: A) => {
+        const json = Schema.fromJsonString(schema);
+        const encoded = Schema.encodeSync(json)(value);
+        const decoded = Schema.decodeUnknownSync(json)(encoded);
+        expect(Schema.encodeSync(json)(decoded)).toBe(encoded);
+      };
+      check(SendRequest, sendReq);
+      check(InvokeRequest, invokeReq);
+      check(MessageKey, msgKey);
+      check(AgentErrorData, errData);
+      check(Session, session);
+      check(Message, message);
+      check(Entry, entry);
+    },
+    { arbitrary: { runs: 25 } },
+  );
+
+  it.prop(
+    "round-trips SessionEventFrame, MessageStreamEventFrame, and Refusal codecs and maps every error to a valid HTTP status",
+    [SessionEvent, MessageStreamEvent, AgentErrorData],
+    ([sessionEvent, messageEvent, errData]) => {
+      const sessionFrame = Schema.encodeSync(SessionEventFrame)(sessionEvent);
+      const decodedSession = Schema.decodeSync(SessionEventFrame)(sessionFrame);
+      expect(decodedSession.type).toBe(sessionEvent.type);
+      if (sessionEvent.type === "entry") expect(sessionFrame.id).toBe(sessionEvent.entry.id);
+
+      const msgFrame = Schema.encodeSync(MessageStreamEventFrame)(messageEvent);
+      const decodedMsg = Schema.decodeSync(MessageStreamEventFrame)(msgFrame);
+      expect(decodedMsg.type).toBe(messageEvent.type);
+
+      const refusal = Schema.decodeSync(Refusal)({ error: errData });
+      expect(Schema.encodeSync(Refusal)(refusal).error).toEqual(errData);
+      expect([400, 401, 404, 409, 413, 429, 500, 503]).toContain(statusOf(errData));
+    },
+    { arbitrary: { runs: 25 } },
+  );
+
+  it.effect.prop(
+    "preserves named conversation bindings across TTL expiry while expiring ephemeral idempotency bindings",
+    [ConversationId, IdempotencyKey, SessionId, SessionId],
+    ([conversation, idempotency, durableSession, ephemeralSession]) =>
+      Effect.gen(function* () {
+        const store = memoryConversationStoreEffect({ ephemeralTtlMs: 60_000, maxEphemeral: 4 });
+        const namedKey = conversationStorageKey("", conversation);
+        const ephKey = idempotencyStorageKey("", idempotency);
+        yield* store.set(namedKey, durableSession, { ephemeral: false });
+        yield* store.set(ephKey, ephemeralSession, { ephemeral: true });
+        expect(yield* store.get(namedKey)).toBe(durableSession);
+        expect(yield* store.get(ephKey)).toBe(ephemeralSession);
+        yield* TestClock.adjust("60 seconds");
+        expect(yield* store.get(ephKey)).toBeUndefined();
+        expect(yield* store.get(namedKey)).toBe(durableSession);
+      }),
+    { arbitrary: { runs: 25 } },
+  );
 });

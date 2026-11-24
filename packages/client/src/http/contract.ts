@@ -191,7 +191,7 @@ const InvokeBody = Schema.Struct({
  */
 const KeyHeader = Schema.String.pipe(Schema.decodeTo(IdempotencyKey, SchemaTransformation.stringFromUriComponent));
 
-const WaitQuery = { wait: Schema.optional(Schema.NumberFromString.check(Schema.isGreaterThanOrEqualTo(0))) };
+const WaitQuery = { wait: Schema.optional(Schema.FiniteFromString.check(Schema.isGreaterThanOrEqualTo(0))) };
 
 const AgentGroup = HttpApiGroup.make("agent")
   .add(
