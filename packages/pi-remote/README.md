@@ -1,6 +1,6 @@
 # @fastagent-sh/pi-remote
 
-Chat with and operate your deployed [FastAgent](https://fastagent.sh) services directly from the [Pi](https://pi.dev) terminal—over HTTP or installed cloud transports like `@fastagent-sh/client-agentcore`.
+Chat with and operate your deployed [FastAgent](https://github.com/fastagent-sh/fastagent) services directly from the [Pi](https://pi.dev) terminal—over HTTP or installed cloud transports like `@fastagent-sh/client-agentcore`.
 
 ## Install
 
@@ -46,4 +46,4 @@ Run `/fa` inside Pi to add a remote interactively, manage HTTP remotes with `fas
   - The first message in an untitled session sets a concise title automatically.
 - **Remote management:** `/fa off`, `/fa sessions`, `/fa key [--clear]` (server API key), `/fa remotes` (add/remove/switch), `/fa delete`, `/fa status`.
 
-See [Remotes & clients](https://fastagent.sh/docs/remotes/).
+See [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).

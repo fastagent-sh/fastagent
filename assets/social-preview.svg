@@ -48,7 +48,7 @@
   <text x="1059" y="398.5" font-size="15" fill="#45cbd3" text-anchor="middle" letter-spacing="1.5">LIVE</text>
 
   <g font-size="21">
-    <text x="108" y="458"><tspan fill="#45cbd3">❯ </tspan><tspan fill="#f1f4f7">claude </tspan><tspan fill="#e6c68a">"read fastagent.sh/start.md, build an incident agent"</tspan></text>
+    <text x="108" y="458"><tspan fill="#45cbd3">❯ </tspan><tspan fill="#f1f4f7">claude </tspan><tspan fill="#e6c68a">"read docs/ai-start.md, build an incident agent"</tspan></text>
     <text x="108" y="496"><tspan fill="#8fdc8a">✓ </tspan><tspan fill="#c3cad4">wrote SYSTEM.md · skills/ · src/tools/ · </tspan><tspan fill="#45cbd3">fastagent.config.ts</tspan></text>
     <text x="108" y="534"><tspan fill="#45cbd3">❯ </tspan><tspan fill="#f1f4f7">fastagent dev</tspan></text>
     <text x="108" y="572"><tspan fill="#6b7480">[fastagent] </tspan><tspan fill="#c3cad4">Agent API (/v1) · durable sessions</tspan><tspan fill="#6b7480"> — listening on </tspan><tspan fill="#45cbd3">:8787</tspan></text>

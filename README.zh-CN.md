@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://fastagent.sh"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — 面向生产级 AI Agent 的 TypeScript 运行时。" width="860"></a>
+  <a href="https://github.com/fastagent-sh/fastagent"><img src="https://raw.githubusercontent.com/fastagent-sh/fastagent/main/assets/hero.png" alt="FastAgent — 面向生产级 AI Agent 的 TypeScript 运行时。" width="860"></a>
 </p>
 
 <h3 align="center">面向生产级 AI Agent 的 TypeScript 运行时。</h3>
@@ -64,7 +64,7 @@ fastagent invoke "hello"      # 通过 Agent API 发送消息
 
 **正在使用 Coding Agent？** 把下面这句粘贴给 Claude Code、Codex、Cursor 或 Pi：
 
-> Read https://fastagent.sh/start.md and build an agent in this project.
+> Read https://raw.githubusercontent.com/fastagent-sh/fastagent/main/docs/ai-start.md and build an agent in this project.
 
 > **提示：** 不想全局安装？使用 `npx @fastagent-sh/fastagent <command>`（切勿使用 `npx fastagent`，那是另一个无关包）。完整步骤见[快速上手](./docs/zh-CN/quickstart.md)。
 

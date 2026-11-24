@@ -1,6 +1,6 @@
 # @fastagent-sh/client
 
-Call any HTTP [FastAgent](https://fastagent.sh) service—or manage its remote model-provider logins—from Node, Bun, Deno, or edge workers. Zero Node dependencies; needs only `fetch`.
+Call any HTTP [FastAgent](https://github.com/fastagent-sh/fastagent) service—or manage its remote model-provider logins—from Node, Bun, Deno, or edge workers. Zero Node dependencies; needs only `fetch`.
 
 ```bash
 npm i @fastagent-sh/client
@@ -33,4 +33,4 @@ const providers = await auth.providers();
 
 Also exports the Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and pluggable `remotes.json` transport contract (`/remotes`) used by cloud transport clients like `@fastagent-sh/client-agentcore`.
 
-See [Agent API](https://fastagent.sh/docs/agent-api/) and [Remotes & clients](https://fastagent.sh/docs/remotes/).
+See [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) and [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).
