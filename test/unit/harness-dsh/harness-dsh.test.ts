@@ -11,7 +11,11 @@ import {
   openPostgresDshStore,
   openSqliteDshStore,
 } from "@fastagent-sh/harness-dsh";
-import { buildDshSandboxPolicy, resolveConfinedPath } from "../../../packages/harness-dsh/src/sandbox.ts";
+import {
+  buildDshSandboxPolicy,
+  resolveConfinedPath,
+  verifyBashSandbox,
+} from "../../../packages/harness-dsh/src/sandbox.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
@@ -777,6 +781,58 @@ export default defineTool({
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("verifies bash OS sandbox fail-fast and skips probing when bash or sandbox is off", async () => {
+    const workdir = mkdtempSync(join(tmpdir(), "fa-dsh-sandbox-preflight-"));
+    try {
+      await expect(verifyBashSandbox(undefined, { workdir, mode: "read-only" })).rejects.toMatchObject({
+        code: "unavailable",
+        message: expect.stringMatching(/no sandbox provider is available/),
+      });
+
+      const failingConfine = vi.fn(async () => {
+        throw new Error("SANDBOX_UNAVAILABLE: neither bwrap nor landlock is usable");
+      });
+      await expect(
+        verifyBashSandbox({ confine: failingConfine }, { workdir, mode: "read-only" }),
+      ).rejects.toMatchObject({
+        code: "unavailable",
+        message: expect.stringMatching(/OS sandbox \(read-only\) is unavailable for bash tools.*SANDBOX_UNAVAILABLE/),
+      });
+      expect(failingConfine).toHaveBeenCalledTimes(1);
+
+      const passingConfine = vi.fn(async () => ({
+        argv: ["bwrap", "--", "true"],
+        enforcement: "full" as const,
+        denialSignatures: [],
+        runnerFailureRules: [],
+      }));
+      await verifyBashSandbox({ confine: passingConfine }, { workdir, mode: "off" });
+      expect(passingConfine).not.toHaveBeenCalled();
+
+      await verifyBashSandbox({ confine: passingConfine }, { workdir, mode: "workspace" });
+      expect(passingConfine).toHaveBeenCalledTimes(1);
+      expect(passingConfine).toHaveBeenCalledWith(["true"], expect.objectContaining({ mode: "workspace-write" }));
+
+      // Without bash or with sandbox: "off", openDshAgent boots without requiring an OS subprocess sandbox.
+      const readOnlyNoBash = await openDshAgent({
+        name: "no-bash",
+        workdir,
+        sandbox: "read-only",
+        codingTools: ["read"],
+      });
+      await readOnlyNoBash.close();
+      const unconfinedBash = await openDshAgent({
+        name: "sandbox-off",
+        workdir,
+        sandbox: "off",
+        codingTools: ["read", "bash"],
+      });
+      await unconfinedBash.close();
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
     }
   });
 });

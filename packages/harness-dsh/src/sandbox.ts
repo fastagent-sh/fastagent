@@ -4,8 +4,9 @@
  */
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import type { SandboxPolicy as DshRuntimeSandboxPolicy } from "@deepseek-ai/dsh-sandbox";
+import type { SandboxPolicy as DshRuntimeSandboxPolicy, SandboxProvider } from "@deepseek-ai/dsh-sandbox";
 import type { SessionId } from "@deepseek-ai/dsh-session";
+import { agentError } from "@fastagent-sh/client/agent-api";
 import type { DshSandboxMode, DshSandboxPolicy } from "./types.ts";
 
 /**
@@ -57,6 +58,31 @@ export function toRuntimeSandboxPolicy(options: {
     workspaceRoot,
     ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
   };
+}
+
+/**
+ * Probe and cache the OS sandbox runner at startup so misconfigured containers fail fast instead of
+ * reporting healthy and failing on the first `bash` tool call.
+ */
+export async function verifyBashSandbox(
+  provider: Pick<SandboxProvider, "confine"> | undefined,
+  options: { readonly workdir: string; readonly mode: DshSandboxMode },
+): Promise<void> {
+  if (options.mode === "off") return;
+  const runtimePolicy = toRuntimeSandboxPolicy(options);
+  if (provider === undefined || runtimePolicy === undefined) {
+    throw agentError("unavailable", "OS sandbox is required for bash tools, but no sandbox provider is available");
+  }
+  try {
+    await provider.confine(["true"], runtimePolicy);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw agentError(
+      "unavailable",
+      `OS sandbox (${options.mode}) is unavailable for bash tools on this host: ${detail}. ` +
+        `Enable a supported OS sandbox (bwrap or Landlock on Linux, sandbox-exec on macOS), remove "bash" from codingTools, or set sandbox: "off".`,
+    );
+  }
 }
 
 function safeRealpath(target: string): string {

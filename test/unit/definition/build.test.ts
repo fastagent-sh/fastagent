@@ -101,6 +101,31 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
     expect(readdirSync(badProvider)).not.toContain("dist");
   });
 
+  it("places optional harness packages (@fastagent-sh/harness-dsh) in dist/ peerDependencies", async () => {
+    const dir = project({
+      ...FILES,
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh", sandbox: "read-only" };\n',
+      "package.json": JSON.stringify({
+        name: "@acme/sandboxed-agent",
+        version: "1.0.0",
+        type: "module",
+        dependencies: {
+          "@fastagent-sh/fastagent": "^0.35.0",
+          "@fastagent-sh/harness-dsh": "^0.35.0",
+          lodash: "^4",
+        },
+      }),
+    });
+    const { dist } = await buildProject(dir);
+    expect(JSON.parse(readFileSync(join(dist, "package.json"), "utf8"))).toMatchObject({
+      dependencies: { lodash: "^4" },
+      peerDependencies: {
+        "@fastagent-sh/fastagent": "^0.35.0",
+        "@fastagent-sh/harness-dsh": "^0.35.0",
+      },
+    });
+  });
+
   it("`fastagent build --json` compiles through the CLI entry and emits dist/", async () => {
     const dir = await agentWorkspace("fa-cli-build-");
     const built = await runInProcess(["-C", dir, "build", "--json"]);

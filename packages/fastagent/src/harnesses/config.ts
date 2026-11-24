@@ -37,6 +37,16 @@ const SANDBOX_SET = new Set<string>(SANDBOX_MODES);
 export const HARNESS_ENV = "FASTAGENT_HARNESS";
 export const SANDBOX_ENV = "FASTAGENT_SANDBOX";
 
+/** Optional external runtime packages required by non-default harnesses. */
+export const OPTIONAL_HARNESS_PACKAGES = {
+  dsh: "@fastagent-sh/harness-dsh",
+} as const satisfies Partial<Record<HarnessName, string>>;
+
+/** Optional runtime package required by `harness`, or `undefined` for the built-in `pi-durable` harness. */
+export function harnessPackage(harness: HarnessName | undefined): string | undefined {
+  return harness === "dsh" ? OPTIONAL_HARNESS_PACKAGES.dsh : undefined;
+}
+
 export interface HarnessSelection {
   readonly harness: HarnessName;
   readonly sandbox?: SandboxMode;
