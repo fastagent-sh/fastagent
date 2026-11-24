@@ -6,7 +6,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { OpenApi } from "effect/http-api";
@@ -49,6 +48,7 @@ import {
   statusOf,
 } from "../../../packages/client/src/http/contract.ts";
 import { sseEventStream } from "../../../packages/fastagent/src/http/server.ts";
+import { abortThenJoin } from "../../../packages/fastagent/src/promise-bridge.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { durableSubject } from "../../harnesses/durable-subject.ts";
 import { KEY, type Served, httpSubject, served } from "../../harnesses/http-subject.ts";
@@ -230,48 +230,6 @@ describe("the Agent API over HTTP", () => {
       await expect(badIter.next()).rejects.toMatchObject({ code: "invalid_request" });
     });
 
-    it.effect(
-      "expires and bounds ephemeral idempotency bindings without evicting named conversations via TestClock",
-      () =>
-        Effect.gen(function* () {
-          const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
-          const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
-          const sid = (id: string) => SessionId.make(id);
-
-          const mem = memoryConversationStoreEffect({ ephemeralTtlMs: 100, maxEphemeral: 2 });
-          yield* mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
-          yield* mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
-          yield* mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
-          yield* mem.set(idemKey("3"), sid("s-3"), { ephemeral: true });
-          expect(yield* mem.get(idemKey("1"))).toBeUndefined();
-          expect(yield* mem.get(idemKey("2"))).toBe("s-2");
-          expect(yield* mem.get(idemKey("3"))).toBe("s-3");
-          expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
-          yield* TestClock.adjust("200 millis");
-          expect(yield* mem.get(idemKey("2"))).toBeUndefined();
-          expect(yield* mem.get(idemKey("3"))).toBeUndefined();
-          expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
-
-          const dir = yield* Effect.acquireRelease(
-            Effect.sync(() => mkdtempSync(join(tmpdir(), "fa-conv-ttl-"))),
-            (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
-          );
-          const sql = yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              sqliteConversationStoreEffect(join(dir, "conversations.sqlite"), { ephemeralTtlMs: 100 }),
-            ),
-            (store) => Effect.ignore(store.close()),
-          );
-          yield* sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
-          yield* sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
-          yield* TestClock.adjust("200 millis");
-          yield* sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
-          expect(yield* sql.get(idemKey("old"))).toBeUndefined();
-          expect(yield* sql.get(idemKey("new"))).toBe("s-new");
-          expect(yield* sql.get(convKey("ops"))).toBe("s-ops");
-        }),
-    );
-
     it("honors AbortSignal in createInvoker and maps transient PG failures to unavailable", async () => {
       const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
       const invoker = createInvoker(agent, memoryConversationStore());
@@ -367,6 +325,46 @@ describe("refusals over HTTP", () => {
 });
 
 describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
+  it.effect(
+    "expires and bounds ephemeral idempotency bindings without evicting named conversations via TestClock",
+    () =>
+      Effect.gen(function* () {
+        const convKey = (name: string) => conversationStorageKey("", ConversationId.make(name));
+        const idemKey = (key: string) => idempotencyStorageKey("", IdempotencyKey.make(key));
+        const sid = (id: string) => SessionId.make(id);
+
+        const mem = memoryConversationStoreEffect({ ephemeralTtlMs: 100, maxEphemeral: 2 });
+        yield* mem.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+        yield* mem.set(idemKey("1"), sid("s-1"), { ephemeral: true });
+        yield* mem.set(idemKey("2"), sid("s-2"), { ephemeral: true });
+        yield* mem.set(idemKey("3"), sid("s-3"), { ephemeral: true });
+        expect(yield* mem.get(idemKey("1"))).toBeUndefined();
+        expect(yield* mem.get(idemKey("2"))).toBe("s-2");
+        expect(yield* mem.get(idemKey("3"))).toBe("s-3");
+        expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
+        yield* TestClock.adjust("200 millis");
+        expect(yield* mem.get(idemKey("2"))).toBeUndefined();
+        expect(yield* mem.get(idemKey("3"))).toBeUndefined();
+        expect(yield* mem.get(convKey("ops"))).toBe("s-ops");
+
+        const dir = yield* Effect.acquireRelease(
+          Effect.sync(() => mkdtempSync(join(tmpdir(), "fa-conv-ttl-"))),
+          (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
+        );
+        const sql = yield* Effect.acquireRelease(
+          Effect.sync(() => sqliteConversationStoreEffect(join(dir, "conversations.sqlite"), { ephemeralTtlMs: 100 })),
+          (store) => Effect.ignore(store.close()),
+        );
+        yield* sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+        yield* sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
+        yield* TestClock.adjust("200 millis");
+        yield* sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
+        expect(yield* sql.get(idemKey("old"))).toBeUndefined();
+        expect(yield* sql.get(idemKey("new"))).toBe("s-new");
+        expect(yield* sql.get(convKey("ops"))).toBe("s-ops");
+      }),
+  );
+
   it.effect("emits SSE keep-alive comments on virtual time and closes cleanly with stream_error on shutdown", () =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<SessionEvent>();
@@ -392,27 +390,31 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
     }),
   );
 
-  it.effect("drives exponential retry backoff and scoped resource cleanup deterministically with TestClock", () =>
-    Effect.gen(function* () {
-      const attempts = yield* Ref.make(0);
-      const released = yield* Ref.make(false);
-      const work = Effect.scoped(
-        Effect.gen(function* () {
-          yield* Effect.acquireRelease(Effect.void, () => Ref.set(released, true));
-          const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
-          if (attempt < 3) return yield* Effect.fail("transient" as const);
-          return attempt;
-        }),
-      );
-      const fiber = yield* Effect.forkChild(
-        Effect.retry(work, { schedule: Schedule.exponential("100 millis"), times: 2 }),
-      );
-      yield* TestClock.adjust("100 millis");
-      yield* TestClock.adjust("200 millis");
-      expect(yield* Fiber.join(fiber)).toBe(3);
-      expect(yield* Ref.get(attempts)).toBe(3);
-      expect(yield* Ref.get(released)).toBe(true);
-    }),
+  it.effect(
+    "interrupts abortThenJoin on TestClock timeout and joins settlement before releasing scoped resources",
+    () =>
+      Effect.gen(function* () {
+        const order: string[] = [];
+        const pending = Promise.withResolvers<string>();
+        const work = Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.acquireRelease(Effect.void, () => Effect.sync(() => void order.push("released")));
+            return yield* abortThenJoin(
+              "test-op",
+              () => pending.promise,
+              () => {
+                order.push("aborted");
+              },
+            );
+          }),
+        );
+        const fiber = yield* Effect.forkChild(work.pipe(Effect.timeoutOption("100 millis")));
+        yield* TestClock.adjust("100 millis");
+        expect(order).toEqual(["aborted"]);
+        pending.resolve("late");
+        expect((yield* Fiber.join(fiber))._tag).toBe("None");
+        expect(order).toEqual(["aborted", "released"]);
+      }),
   );
 
   it.prop(
