@@ -148,26 +148,32 @@ export function serviceOver(
       },
     );
     if (decision._tag === "join") return yield* Deferred.await(decision.closing);
-    // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
-    const steps: readonly (() => Promise<void>)[] = [
-      endStreams,
-      () => (decision.listener === undefined ? Promise.resolve() : decision.listener.close()),
-      shutdown,
-    ];
-    const failures: unknown[] = [];
-    for (const step of steps) {
-      const exit = yield* Effect.exit(fromPromise(step));
-      if (Exit.isFailure(exit)) failures.push(originalError(exit.cause));
-    }
-    const finalExit =
-      failures.length === 0
-        ? Exit.void
-        : Exit.fail(
-            new PromiseFailure(
-              failures.length === 1 ? failures[0] : new AggregateError(failures, "the service did not close cleanly"),
-            ),
-          );
-    yield* Deferred.done(decision.closing, finalExit);
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        // The server first, so nothing new reaches what stops after it; each step runs, and every failure is said.
+        const steps: readonly (() => Promise<void>)[] = [
+          endStreams,
+          () => (decision.listener === undefined ? Promise.resolve() : decision.listener.close()),
+          shutdown,
+        ];
+        const failures: unknown[] = [];
+        for (const step of steps) {
+          const exit = yield* Effect.exit(fromPromise(step));
+          if (Exit.isFailure(exit)) failures.push(originalError(exit.cause));
+        }
+        const finalExit =
+          failures.length === 0
+            ? Exit.void
+            : Exit.fail(
+                new PromiseFailure(
+                  failures.length === 1
+                    ? failures[0]
+                    : new AggregateError(failures, "the service did not close cleanly"),
+                ),
+              );
+        yield* Deferred.done(decision.closing, finalExit);
+      }),
+    );
     return yield* Deferred.await(decision.closing);
   });
 

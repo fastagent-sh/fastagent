@@ -55,7 +55,7 @@ export interface ConversationStore {
 export interface EffectConversationStore {
   get(key: ConversationKey): Effect.Effect<SessionId | undefined, AgentError>;
   set(key: ConversationKey, sessionId: SessionId, options?: ConversationSetOptions): Effect.Effect<void, AgentError>;
-  close(): Effect.Effect<void>;
+  close(): Effect.Effect<void, AgentError>;
 }
 
 interface ConversationStoreOptions {
@@ -217,7 +217,10 @@ export function sqliteConversationStoreEffect(
       }
     }),
     close: Effect.fn("conversations.sqlite.close")(function* () {
-      yield* Effect.promise(() => store.close());
+      yield* Effect.tryPromise({
+        try: () => store.close(),
+        catch: (error) => asAgentError("conversations.sqlite.close", error),
+      });
     }),
   };
 }
@@ -294,7 +297,10 @@ function postgresConversationStoreEffect(
       }
     }),
     close: Effect.fn("conversations.postgres.close")(function* () {
-      yield* Effect.promise(() => store.close());
+      yield* Effect.tryPromise({
+        try: () => store.close(),
+        catch: (error) => asAgentError("conversations.postgres.close", error),
+      });
     }),
   };
 }

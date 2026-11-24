@@ -64,7 +64,8 @@ interface Opened {
 type SlotState =
   | { readonly _tag: "empty" }
   | { readonly _tag: "opening"; readonly name: string; readonly ready: Deferred.Deferred<Opened, OpenFailure> }
-  | { readonly _tag: "open"; readonly name: string; readonly opened: Opened };
+  | { readonly _tag: "open"; readonly name: string; readonly opened: Opened }
+  | { readonly _tag: "closed"; readonly done: Deferred.Deferred<void, never> };
 
 class OpenFailure {
   readonly _tag = "OpenFailure";
@@ -181,11 +182,13 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
         (
           | { readonly _tag: "ready"; readonly opened: Opened }
           | { readonly _tag: "wrong"; readonly active: string }
+          | { readonly _tag: "closed" }
           | { readonly _tag: "wait"; readonly ready: Deferred.Deferred<Opened, OpenFailure> }
           | { readonly _tag: "leader"; readonly ready: Deferred.Deferred<Opened, OpenFailure> }
         ),
         SlotState,
       ] => {
+        if (current._tag === "closed") return [{ _tag: "closed" }, current];
         if (current._tag === "open") {
           return current.name === name
             ? [{ _tag: "ready", opened: current.opened }, current]
@@ -203,6 +206,9 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
         ];
       },
     );
+    if (decision._tag === "closed") {
+      return yield* Effect.fail(new OpenFailure(new Unavailable("the AgentCore runtime is closing")));
+    }
     if (decision._tag === "ready") return decision.opened;
     if (decision._tag === "wrong") return yield* Effect.fail(new WrongSessionFailure(decision.active));
     if (decision._tag === "wait") return yield* Deferred.await(decision.ready);
@@ -224,14 +230,39 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
   });
 
   const closeSlot = Effect.fn("agentcore.close")(function* () {
-    const current = yield* Ref.get(slot);
-    if (current._tag === "opening") {
-      yield* Effect.exit(Deferred.await(current.ready));
-    }
-    const previous = yield* Ref.getAndSet(slot, { _tag: "empty" });
-    if (previous._tag === "open") {
-      yield* closeScopeQuietly(previous.opened.scope, `closing "${previous.name}"`);
-    }
+    const decision = yield* Ref.modify(
+      slot,
+      (
+        current,
+      ): readonly [
+        (
+          | { readonly _tag: "join"; readonly done: Deferred.Deferred<void, never> }
+          | { readonly _tag: "lead"; readonly done: Deferred.Deferred<void, never>; readonly previous: SlotState }
+        ),
+        SlotState,
+      ] => {
+        if (current._tag === "closed") return [{ _tag: "join", done: current.done }, current];
+        const done = Deferred.makeUnsafe<void, never>();
+        return [
+          { _tag: "lead", done, previous: current },
+          { _tag: "closed", done },
+        ];
+      },
+    );
+    if (decision._tag === "join") return yield* Deferred.await(decision.done);
+    yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const { previous } = decision;
+        if (previous._tag === "open") {
+          yield* closeScopeQuietly(previous.opened.scope, `closing "${previous.name}"`);
+        } else if (previous._tag === "opening") {
+          const openedExit = yield* Effect.exit(Deferred.await(previous.ready));
+          if (Exit.isSuccess(openedExit)) {
+            yield* closeScopeQuietly(openedExit.value.scope, `closing "${previous.name}"`);
+          }
+        }
+      }).pipe(Effect.ensuring(Deferred.succeed(decision.done, undefined))),
+    );
   });
 
   const invocation = Effect.fn("agentcore.invocation")(function* (request: Request) {
