@@ -19,7 +19,7 @@ import {
 } from "@fastagent-sh/client/remotes";
 import { applyEnvValues } from "../env.ts";
 import { API_KEY_VARIABLE, apiKeysFrom } from "../http/server.ts";
-import { decodeRuntimeCliEnv, readProcessEnv } from "../process-env.ts";
+import { readApiKeyEnv, readProcessEnv } from "../process-env.ts";
 import { installProxyFetch } from "../proxy.ts";
 import { loadEnvValues, valueFileOf } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
@@ -48,7 +48,7 @@ function rejectPlacedInstance(instance: InstanceFlags | undefined, flagName: str
  * `--env-file` names laid under it). A deployment has no default file.
  */
 function deploymentKey(where: string): Redacted.Redacted<string> {
-  const [key] = apiKeysFrom(decodeRuntimeCliEnv().apiKey);
+  const [key] = apiKeysFrom(readApiKeyEnv());
   if (key === undefined) {
     failUsage(
       `no key to call ${where} with: pass --key, or set ${API_KEY_VARIABLE} in the environment of this command ` +

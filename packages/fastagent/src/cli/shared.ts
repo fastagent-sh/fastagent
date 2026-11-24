@@ -19,6 +19,7 @@ import {
 import type { OpenedServing } from "../harnesses/serving.ts";
 import { log } from "../log.ts";
 import { isDeployedWorkspace } from "../paths.ts";
+import { readProcessEnv } from "../process-env.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { formatAuthReport } from "./auth-view.ts";
 import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
@@ -45,7 +46,7 @@ async function enterAgentDirectory(
   const agentDir = agentDirOrExit(resolve(dirArg));
   const instance = enterInstance(agentDir, opts.instance);
   await before?.(agentDir, instance);
-  const { modelSpec, pickedModel } = await resolveFirstRunModel(agentDir, instance.env, opts, load);
+  const { modelSpec, pickedModel } = await resolveFirstRunModel(agentDir, instance.configEnv, opts, load);
   return {
     agentDir,
     instance,
@@ -126,11 +127,12 @@ async function resolveFirstRunModel(
   if (spec) return { modelSpec: spec };
   if (options.input === false) return {};
   if (!isInteractive()) return {};
+  const hostEnv = readProcessEnv();
   const providers =
     load === undefined
-      ? await definitionProviders(agentDir, env).catch(failStartup)
-      : buildDefinitionShape(definition, env).providers;
-  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(env) });
+      ? await definitionProviders(agentDir, hostEnv).catch(failStartup)
+      : buildDefinitionShape(definition, hostEnv).providers;
+  const environment = await modelEnvironment(agentDir, {}, providers, { environment: definedValues(hostEnv) });
   const chosen = await pickWithCredentials(environment.models, environment.auth?.path as string, providers);
   if (chosen === undefined) return {};
   console.error(

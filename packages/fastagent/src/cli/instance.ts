@@ -7,10 +7,13 @@ import { existsSync, mkdirSync, statSync } from "node:fs";
 import { baseEnv } from "../child-env.ts";
 import { redactValues } from "../declared-secrets.ts";
 import { enterAgentEnv } from "../env.ts";
-import { decodeRuntimeCliEnv, readProcessEnv } from "../process-env.ts";
+import * as Redacted from "effect/Redacted";
+import { HARNESS_ENV, SANDBOX_ENV } from "../harnesses/config.ts";
+import { decodeRuntimeCliEnv, readDatabaseUrlEnv, readProcessEnv } from "../process-env.ts";
 import type { OpenServingOptions } from "../harnesses/serving.ts";
 import {
   DATABASE_URL_ENV,
+  DEPLOYED_ENV,
   INSTANCE_ROOT_ENV,
   type InstanceMode,
   isDeployedWorkspace,
@@ -19,7 +22,7 @@ import {
   resolveWorkdir,
 } from "../paths.ts";
 import { INSTANCE_NAME_ENV, checkInstanceName, enteredInstanceName } from "../instance-name.ts";
-import { type RunsAs, servedByDev } from "../serving-command.ts";
+import { DEV_SERVE_ENV, type RunsAs, servedByDev } from "../serving-command.ts";
 import { useValueFile } from "../value-file.ts";
 import { failUsage } from "./fail.ts";
 import type { FlagSpec } from "./kernel.ts";
@@ -89,34 +92,32 @@ export function enterEnvFile(
  * Enter the agent's directory as a command runs it: the value file, whose values become this process's environment
  * and so the instance's secrets, then where the instance is.
  */
-/** Resolved instance placement and environment snapshot (without mutating `process.env`). */
+/** Resolved non-secret instance placement and control-plane config (without mutating `process.env`). */
 export interface EnteredInstance {
   readonly root?: string;
   readonly name?: string;
-  readonly env: Readonly<Record<string, string | undefined>>;
+  /** Non-secret control-plane variables (`FASTAGENT_ROOT`, `FASTAGENT_NAME`, `FASTAGENT_MODEL`, etc.). */
+  readonly configEnv: Readonly<Record<string, string | undefined>>;
 }
 
 export function enterInstance(agentDir: string, flags: InstanceFlags = {}): EnteredInstance {
   enterEnvFile(flags.envFile, { defaultFile: true });
   enterAgentEnv(agentDir);
-  return resolveInstanceLocation(flags, readProcessEnv());
+  return resolveInstanceLocation(flags);
 }
 
 /**
  * Settle the instance's location: a flag beats its environment variable, a relative path is resolved against the
  * directory the command was started in (here, once), and the directories named are made. Refuses a flag with no path.
  */
-function resolveInstanceLocation(
-  flags: InstanceFlags,
-  base: Readonly<Record<string, string | undefined>>,
-): EnteredInstance {
+function resolveInstanceLocation(flags: InstanceFlags): EnteredInstance {
   if (flags.root !== undefined && flags.root.trim() === "") failUsage("--root needs a path");
-  const cliEnv = decodeRuntimeCliEnv(base);
+  const cliEnv = decodeRuntimeCliEnv();
   const root = resolveOverridePath(flags.root ?? cliEnv.instanceRoot);
   if (root !== undefined) {
     makeDirectory(root, flags.root === undefined ? INSTANCE_ROOT_ENV : "--root");
   }
-  const name = flags.name ?? enteredInstanceName(base);
+  const name = flags.name ?? (cliEnv.instanceName || undefined);
   if (name !== undefined) {
     try {
       checkInstanceName(name);
@@ -124,15 +125,19 @@ function resolveInstanceLocation(
       failUsage(`${flags.name === undefined ? INSTANCE_NAME_ENV : "--name"}: ${(error as Error).message}`);
     }
   }
-  const env: Readonly<Record<string, string | undefined>> = {
-    ...base,
+  const configEnv: Readonly<Record<string, string | undefined>> = {
     ...(root === undefined ? {} : { [INSTANCE_ROOT_ENV]: root }),
     ...(name === undefined ? {} : { [INSTANCE_NAME_ENV]: name }),
+    ...(cliEnv.model === undefined ? {} : { FASTAGENT_MODEL: cliEnv.model }),
+    ...(cliEnv.harness === undefined ? {} : { [HARNESS_ENV]: cliEnv.harness }),
+    ...(cliEnv.sandbox === undefined ? {} : { [SANDBOX_ENV]: cliEnv.sandbox }),
+    ...(cliEnv.deployed === undefined ? {} : { [DEPLOYED_ENV]: cliEnv.deployed }),
+    ...(cliEnv.dev === undefined ? {} : { [DEV_SERVE_ENV]: cliEnv.dev }),
   };
   return {
     ...(root === undefined ? {} : { root }),
     ...(name === undefined ? {} : { name }),
-    env,
+    configEnv,
   };
 }
 
@@ -145,8 +150,11 @@ function runsAsIn(env: Readonly<Record<string, string | undefined>>): RunsAs {
 }
 
 /** An instance in a database is opened by the name it is given: a command that opens one without a name exits 2. */
-function refuseUnnamedDatabaseInstance(env: Readonly<Record<string, string | undefined>>): void {
-  if (decodeRuntimeCliEnv(env).databaseUrl && enteredInstanceName(env) === undefined) {
+function refuseUnnamedDatabaseInstance(
+  databaseUrl: Redacted.Redacted<string> | undefined,
+  name: string | undefined,
+): void {
+  if (databaseUrl !== undefined && Redacted.value(databaseUrl) !== "" && name === undefined) {
     failUsage(
       `${DATABASE_URL_ENV} keeps the sessions in a database that instances share by name: ` +
         `name this one with --name <name> or ${INSTANCE_NAME_ENV}`,
@@ -162,21 +170,23 @@ export function instanceInputs(
   agentDir: string,
   options: { mode?: InstanceMode; instance?: EnteredInstance } = {},
 ): Pick<OpenServingOptions, "projectDir" | "workdir" | "stateRoot" | "secrets" | "env" | "ownEnv" | "runsAs" | "name"> {
-  const resolvedEnv = options.instance?.env ?? readProcessEnv();
-  refuseUnnamedDatabaseInstance(resolvedEnv);
+  const hostEnv = readProcessEnv();
+  const configEnv = options.instance?.configEnv ?? hostEnv;
+  const name = options.instance?.name ?? enteredInstanceName(configEnv);
+  refuseUnnamedDatabaseInstance(readDatabaseUrlEnv(), name);
   const mode = options.mode ?? "dev";
-  const workdir = resolveWorkdir(agentDir, resolvedEnv, mode);
-  const name = options.instance?.name ?? enteredInstanceName(resolvedEnv);
+  const workdir = resolveWorkdir(agentDir, configEnv, mode);
   // A default one is the project's own `.fastagent/<mode>/`, which nothing has made yet.
   makeDirectory(workdir, "the working directory");
+  const ownEnv = options.instance === undefined ? hostEnv : { ...hostEnv, ...options.instance.configEnv };
   return {
     projectDir: agentDir,
     ...(name === undefined ? {} : { name }),
     workdir,
-    stateRoot: resolveStateRoot(agentDir, resolvedEnv, mode),
-    secrets: redactValues(resolvedEnv),
-    env: baseEnv(resolvedEnv),
-    ownEnv: resolvedEnv,
-    runsAs: runsAsIn(resolvedEnv),
+    stateRoot: resolveStateRoot(agentDir, configEnv, mode),
+    secrets: redactValues(hostEnv),
+    env: baseEnv(hostEnv),
+    ownEnv,
+    runsAs: runsAsIn(configEnv),
   };
 }

@@ -77,7 +77,7 @@ async function openStartService(dirArg: string, opts: StartOptions): Promise<Ser
           ...(opts.harness === undefined ? {} : { harness: opts.harness }),
           ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
         },
-        instance.env,
+        instance.configEnv,
       );
     } catch (error) {
       return failUsage(error instanceof Error ? error.message : String(error));

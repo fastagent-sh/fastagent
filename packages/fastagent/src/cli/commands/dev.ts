@@ -73,7 +73,7 @@ export async function runDev(dirArg: string, opts: DevOptions): Promise<void> {
           ...(opts.harness === undefined ? {} : { harness: opts.harness }),
           ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
         },
-        instance.env,
+        instance.configEnv,
       );
     } catch (error) {
       failUsage(error instanceof Error ? error.message : String(error));
@@ -106,7 +106,7 @@ async function serveOnce(
           ...(opts.harness === undefined ? {} : { harness: opts.harness }),
           ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
         },
-        instance.env,
+        instance.configEnv,
       );
       return openServing(definition, {
         model: modelSpec,

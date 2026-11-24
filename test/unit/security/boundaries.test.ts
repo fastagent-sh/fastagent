@@ -195,8 +195,8 @@ describe("declared secrets: the rule", () => {
       const entered = enterInstance(dir, { root: customRoot, name: "tenant_a" });
       expect(entered.root).toBe(customRoot);
       expect(entered.name).toBe("tenant_a");
-      expect(entered.env[INSTANCE_ROOT_ENV]).toBe(customRoot);
-      expect(entered.env[INSTANCE_NAME_ENV]).toBe("tenant_a");
+      expect(entered.configEnv[INSTANCE_ROOT_ENV]).toBe(customRoot);
+      expect(entered.configEnv[INSTANCE_NAME_ENV]).toBe("tenant_a");
       expect(process.env[INSTANCE_ROOT_ENV]).toBe(beforeRoot);
       expect(process.env[INSTANCE_NAME_ENV]).toBe(beforeName);
     } finally {

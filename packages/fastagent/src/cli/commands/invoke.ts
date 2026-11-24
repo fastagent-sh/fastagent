@@ -264,7 +264,7 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
     async (target, entered) => {
       // A running serve of this instance owns its storage and answers with its own model: the message goes through it
       // (owner.ts), before any model is asked for here.
-      const owner = await reachOwner(resolveStateRoot(target, entered.env)).catch(failStartup);
+      const owner = await reachOwner(resolveStateRoot(target, entered.configEnv)).catch(failStartup);
       if (owner === undefined) return;
       let settings: SessionSettings | undefined;
       try {
@@ -292,7 +292,7 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
           ...(opts.harness === undefined ? {} : { harness: opts.harness }),
           ...(opts.sandbox === undefined ? {} : { sandbox: opts.sandbox }),
         },
-        instance.env,
+        instance.configEnv,
       );
     } catch (error) {
       return failUsage(error instanceof Error ? error.message : String(error));
