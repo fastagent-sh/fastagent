@@ -10,8 +10,12 @@ export { MemoryDshEventStore } from "./persistence.ts";
 export {
   DshInstanceHeldError,
   openPostgresDshStore,
+  type DshPgCreateIndex,
   type DshPgDatabase,
   type DshPgExecutor,
+  type DshPgLease,
+  type DshPgLimits,
+  type DshPgStoreKit,
   type PostgresDshEventStore,
   type PostgresDshStoreOptions,
 } from "./postgres-store.ts";

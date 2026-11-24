@@ -79,6 +79,40 @@ await step("an app's agent answers on it, and refuses a message larger than a tr
   }
 });
 
+await step("an app's agent answers on DSH harness with a value past 1 MiB and reopens cleanly", async () => {
+  const dir = await fauxAgent("fa-dsql-dsh-");
+  const def = await loadSourceDefinition(dir);
+  const name = instance();
+  const payload = randomBytes(1_200_000).toString("base64");
+  const agent1 = await openAgent(def, { root: dir, name, database, harness: "dsh", sandbox: "off" });
+  let sessionId!: string;
+  try {
+    sessionId = (await agent1.sessions.create({ title: "DSH DSQL live" })).id;
+    const answered = await agent1.messages.send(
+      {
+        sessionId,
+        idempotencyKey: "dsql-dsh-1",
+        content: [
+          { type: "text", text: "hello dsh" },
+          { type: "image", mimeType: "image/png", data: payload },
+        ],
+      },
+      { wait: 120 },
+    );
+    assert.deepEqual([answered.status, answered.answer?.text], ["completed", "seen 1"]);
+  } finally {
+    await agent1.close();
+  }
+  const agent2 = await openAgent(def, { root: dir, name, database, harness: "dsh", sandbox: "off" });
+  try {
+    assert.equal((await agent2.sessions.get(sessionId)).title, "DSH DSQL live");
+    const byKey = await agent2.messages.get({ sessionId, idempotencyKey: "dsql-dsh-1" });
+    assert.equal(byKey.status, "completed");
+  } finally {
+    await agent2.close();
+  }
+});
+
 const assertions = {
   ok: (value: unknown, message?: string) => assert.ok(value, message ?? "expected a truthy value"),
   strictEqual: (actual: unknown, expected: unknown) => assert.strictEqual(actual, expected),

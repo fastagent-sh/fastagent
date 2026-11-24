@@ -12,7 +12,25 @@ import { createCloseSignal } from "../../close-signal.ts";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
-import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
+import {
+  type CreateIndex,
+  type PgDatabase,
+  type PostgresDatabase,
+  type PostgresLimits,
+  acquirePgDatabase,
+  describeDatabase,
+  isTransientPgError,
+  sharedHandleOf,
+} from "../../postgres.ts";
+import {
+  InstanceHeld,
+  type PgInstanceLease,
+  acquirePgInstanceLease,
+  isPgConflict,
+  migratePgSchema,
+  splitPgText,
+} from "../../postgres-kit.ts";
+import { Unavailable } from "../../unavailable.ts";
 import { assertNoMcpToolConflicts, resolveDefaultModel } from "../assembly.ts";
 import { OPTIONAL_HARNESS_PACKAGES, agentPresentation, resolveCodingTools } from "../config.ts";
 import { mcpTools } from "../mcp.ts";
@@ -48,16 +66,42 @@ export interface DshModule {
     options?: { readonly busyTimeoutMs?: number },
   ): DshStorageBackend & { close(): Promise<void> };
   openPostgresDshStore(
-    database: {
-      query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
-      transaction<T>(
-        work: (tx: {
-          query<U extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<U[]>;
-        }) => Promise<T>,
-      ): Promise<T>;
-    },
+    database: PgDatabase,
     instance: string,
-    options?: { readonly onLost?: (error: Error) => void },
+    options?: {
+      readonly onLost?: (error: Error) => void;
+      readonly createIndex?: CreateIndex;
+      readonly limits?: PostgresLimits;
+      readonly kit?: {
+        readonly migrate?: (
+          db: PgDatabase,
+          statements: readonly string[],
+          options: {
+            readonly createIndex?: CreateIndex;
+            readonly version?: { readonly table: string; readonly current: number };
+          },
+        ) => Promise<void>;
+        readonly acquireLease?: (
+          db: PgDatabase,
+          options: {
+            readonly table: string;
+            readonly instance: string;
+            readonly owner?: string;
+            readonly leaseMs?: number;
+            readonly waitMs?: number;
+            readonly onLost?: (error: Error) => void;
+            readonly formatHeldError?: (info: {
+              readonly instance: string;
+              readonly until: string;
+              readonly holder?: string;
+            }) => Error;
+            readonly formatLostError?: (instance: string) => Error;
+          },
+        ) => Promise<Pick<PgInstanceLease<void>, "owner" | "lost" | "assertInTx" | "lose" | "release">>;
+        readonly splitText?: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
+        readonly isConflict?: (error: unknown) => boolean;
+      };
+    },
   ): Promise<DshStorageBackend & { close(): Promise<void> }>;
   openDshAgent(options: {
     readonly name: string;
@@ -132,14 +176,64 @@ async function openInstanceDshStore(
         `an instance in a database is opened by its name, and none was given: set ${INSTANCE_NAME_ENV} (an app: openAgent's name)`,
       );
     }
+    const shared = sharedHandleOf(database);
     const acquired = acquirePgDatabase(database);
     const ownedPgClose = acquired.owned ? () => acquired.db.close() : undefined;
+    const kit = {
+      migrate: async (
+        db: PgDatabase,
+        statements: readonly string[],
+        opts: {
+          readonly createIndex?: CreateIndex;
+          readonly version?: { readonly table: string; readonly current: number };
+        },
+      ) => {
+        if (shared !== undefined) {
+          await shared.ensureMigrated("dsh", (sharedDb) => migratePgSchema(sharedDb, statements, opts));
+          return;
+        }
+        await migratePgSchema(db, statements, opts);
+      },
+      acquireLease: (
+        db: PgDatabase,
+        opts: {
+          readonly table: string;
+          readonly instance: string;
+          readonly owner?: string;
+          readonly leaseMs?: number;
+          readonly waitMs?: number;
+          readonly onLost?: (error: Error) => void;
+          readonly formatHeldError?: (info: {
+            readonly instance: string;
+            readonly until: string;
+            readonly holder?: string;
+          }) => Error;
+          readonly formatLostError?: (instance: string) => Error;
+        },
+      ) => acquirePgInstanceLease(db, opts),
+      splitText: splitPgText,
+      isConflict: isPgConflict,
+    };
     try {
-      const store = await dsh.openPostgresDshStore(acquired.db, place.name, onLost === undefined ? {} : { onLost });
+      const store = await dsh.openPostgresDshStore(acquired.db, place.name, {
+        ...(onLost === undefined ? {} : { onLost }),
+        ...(database.createIndex === undefined ? {} : { createIndex: database.createIndex }),
+        ...(database.limits === undefined ? {} : { limits: database.limits }),
+        kit,
+      });
+      if (shared?.isClosed()) {
+        await store.close().catch(() => {});
+        shared.assertOpen();
+      }
       return ownedPgClose === undefined ? { store } : { store, ownedPgClose };
     } catch (error) {
       await ownedPgClose?.().catch(() => {});
-      throw error;
+      if (error instanceof InstanceHeld || shared?.isClosed()) throw error;
+      if (error instanceof Error && error.name === "DshInstanceHeldError") {
+        throw new InstanceHeld(error.message, { cause: error });
+      }
+      const failed = isTransientPgError(error) ? Unavailable : Error;
+      throw new failed(`the database ${describeDatabase(database.url)}: ${(error as Error).message}`, { cause: error });
     }
   }
   return { store: openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite")) };

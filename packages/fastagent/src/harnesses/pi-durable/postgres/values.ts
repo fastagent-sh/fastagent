@@ -4,6 +4,7 @@
  * database that refuses a long value (Aurora DSQL: 1 MiB) takes any record this way. Every read assembles them.
  */
 import type { PgExecutor } from "../../../postgres.ts";
+export { splitPgText as splitText } from "../../../postgres-kit.ts";
 
 /** What a stored text belongs to: its table, and for a revision its seq beside its document's id. */
 export type ValueKind = "conversation" | "entry" | "task" | "submission" | "document" | "revision";
@@ -14,25 +15,6 @@ export interface StoredText {
   readonly seq?: number;
   readonly body: string;
   readonly parts: number | null;
-}
-
-/**
- * `text` in parts of at most `bytesPerValue` UTF-8 bytes, each as full as a character's edge lets it be, or `undefined`
- * when it fits whole. A part never ends inside a character (a UTF-8 continuation byte starts `10`).
- */
-export function splitText(text: string, bytesPerValue: number | undefined): string[] | undefined {
-  if (bytesPerValue === undefined) return undefined;
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= bytesPerValue) return undefined;
-  const parts: string[] = [];
-  for (let start = 0; start < bytes.length; ) {
-    let end = Math.min(start + bytesPerValue, bytes.length);
-    while (end < bytes.length && end > start && ((bytes[end] as number) & 0xc0) === 0x80) end--;
-    if (end === start) throw new Error(`a value of ${bytesPerValue} bytes cannot hold one character`);
-    parts.push(bytes.toString("utf8", start, end));
-    start = end;
-  }
-  return parts;
 }
 
 /** The whole texts of `rows`, in their order: the parted ones read in one statement. */

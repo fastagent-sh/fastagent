@@ -33,8 +33,8 @@ FastAgent 围绕这五项要求划分为清晰的分层架构：
 ┌───────────────────▼──────────────────┐ ┌───────────────▼───────────────────┐
 │ Harness: pi-durable (default)        │ │ Harness: @fastagent-sh/harness-dsh│
 │  Durable loop · src/extensions       │ │  @deepseek-ai/dsh · OS Sandbox    │
-│  SQLite (EXCLUSIVE) / PostgreSQL     │ │  SQLite / PostgreSQL (fenced      │
-│  & Aurora DSQL                       │ │  single-writer leases)            │
+│  SQLite (EXCLUSIVE) / PostgreSQL     │ │  SQLite / PostgreSQL & Aurora     │
+│  & Aurora DSQL                       │ │  DSQL (shared fenced leases)      │
 └──────────────────────────────────────┘ └───────────────────────────────────┘
 ```
 

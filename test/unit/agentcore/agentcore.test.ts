@@ -53,15 +53,22 @@ describe("Aurora DSQL as an instance's database", () => {
     },
   });
 
-  it("starts an index as a job and answers how to wait for it, and starts none for one that exists", async () => {
+  it("starts an index (including UNIQUE) as a job and answers how to wait for it, and starts none for one that exists", async () => {
     sent.length = 0;
     const job = await createIndexAsync(db([{ job_id: "j1" }]), "CREATE INDEX IF NOT EXISTS i ON t (a)");
     expect(sent).toEqual([["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"]]);
     await job?.();
+    const uniqueJob = await createIndexAsync(
+      db([{ job_id: "j-uniq" }]),
+      "CREATE UNIQUE INDEX IF NOT EXISTS u ON t (a)",
+    );
+    await uniqueJob?.();
     expect(await createIndexAsync(db([]), "CREATE INDEX IF NOT EXISTS i ON t (a)")).toBeUndefined();
     expect(sent).toEqual([
       ["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"],
       ["CALL sys.wait_for_job($1)", "j1"],
+      ["CREATE UNIQUE INDEX ASYNC IF NOT EXISTS u ON t (a)"],
+      ["CALL sys.wait_for_job($1)", "j-uniq"],
       ["CREATE INDEX ASYNC IF NOT EXISTS i ON t (a)"],
     ]);
   });
@@ -154,6 +161,85 @@ describe("an agent on AgentCore", () => {
     } finally {
       await aws.close();
       await handler.close();
+    }
+  });
+
+  it("runs harness: dsh on AgentCore with DSQL limits and async unique index migration, persisting across microVM reopen", async () => {
+    const fresh = await servedPostgres();
+    const indexCalls: string[] = [];
+    const dsqlLikeDb: PostgresDatabase = {
+      url: fresh.url,
+      limits: { rowsPerTransaction: 64, bytesPerTransaction: 128 * 1024, bytesPerValue: 256 },
+      createIndex: async (db, statement) => {
+        indexCalls.push(statement);
+        await db.query(statement);
+        return async () => {};
+      },
+    };
+    const dir = await fauxAgent("fa-agentcore-dsh-");
+    const definition = await loadSourceDefinition(dir);
+    const sessionId = freshInstance();
+    const handler1 = agentCoreHandler(definition, {
+      database: dsqlLikeDb,
+      root: dir,
+      secrets: process.env,
+      harness: "dsh",
+      sandbox: "off",
+    });
+    const aws1 = agentCore(handler1);
+    let createdSessionId!: string;
+    try {
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
+      expect((await agent.info()).name).toBe(sessionId);
+      expect(
+        indexCalls.some((sql) => sql.startsWith("CREATE UNIQUE INDEX IF NOT EXISTS dsh_messages_by_idempotency")),
+      ).toBe(true);
+      const created = await agent.sessions.create({ title: "DSH on AgentCore" });
+      createdSessionId = created.id;
+      const longText = "agentcore-dsh-".repeat(40);
+      const sent = await agent.messages.send(
+        {
+          sessionId: createdSessionId,
+          idempotencyKey: "ac-dsh-idem-1",
+          content: [
+            { type: "text", text: longText },
+            { type: "image", mimeType: "image/png", data: Buffer.alloc(600, 0x42).toString("base64") },
+          ],
+        },
+        { wait: 30 },
+      );
+      expect([sent.status, sent.answer?.text]).toEqual(["completed", "seen 1"]);
+      expect((await agent.messages.get({ sessionId: createdSessionId, idempotencyKey: "ac-dsh-idem-1" })).id).toBe(
+        sent.id,
+      );
+    } finally {
+      await aws1.close();
+      await handler1.close();
+    }
+
+    // Reopen on a fresh AgentCore microVM handler backed by the same database and verify full durability.
+    const handler2 = agentCoreHandler(definition, {
+      database: dsqlLikeDb,
+      root: dir,
+      secrets: process.env,
+      harness: "dsh",
+      sandbox: "off",
+    });
+    const aws2 = agentCore(handler2);
+    try {
+      const agent = connectAgentCore({ runtimeArn: RUNTIME, sessionId });
+      expect((await agent.sessions.get(createdSessionId)).title).toBe("DSH on AgentCore");
+      const entries = await agent.sessions.entries(createdSessionId);
+      expect(entries.data.length).toBeGreaterThanOrEqual(2);
+      const userData = entries.data[0]?.data as { content: Array<{ type: string; ref?: string }> };
+      const imgRef = userData.content[1]?.ref as string;
+      const att = await agent.sessions.attachment(createdSessionId, imgRef);
+      expect(att.mimeType).toBe("image/png");
+      expect(att.data.length).toBe(600);
+    } finally {
+      await aws2.close();
+      await handler2.close();
+      await fresh.close();
     }
   });
 

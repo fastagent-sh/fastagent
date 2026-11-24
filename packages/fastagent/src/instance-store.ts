@@ -7,8 +7,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { agentError } from "@fastagent-sh/client/agent-api";
 import { type PostgresDatabase, acquirePgDatabase, isTransientPgError } from "./postgres.ts";
-
-const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
+import { PG_CONCURRENT_DDL } from "./postgres-kit.ts";
 
 export interface SqliteStoreHandle {
   readonly db: DatabaseSync;
