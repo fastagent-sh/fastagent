@@ -331,21 +331,14 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
         ),
       );
     }
-    // Acquired before durableCreds and runtimeAgent so LIFO scope close releases in reverse:
+    // Register conversations cleanup before durableCreds/runtimeAgent while opening it only after runtimeAgent
+    // succeeds (so a locked/failing instance never creates or touches `conversations.sqlite`), preserving LIFO order:
     // auth -> runtimeAgent -> durableCreds -> conversations -> traces -> ownedSharedPg.
-    const conversations = yield* Effect.acquireRelease(
-      Effect.try({
-        try: () =>
-          chosen === "memory"
-            ? memoryConversationStore()
-            : chosen !== "instance"
-              ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
-              : database !== undefined
-                ? postgresConversationStore(database, place.name as string)
-                : sqliteConversationStore(join(stateRoot, "conversations.sqlite")),
-        catch: (cause) => new PromiseFailure(cause),
-      }),
-      (store) => release(() => store.close()),
+    const conversationsRef = yield* Ref.make<ReturnType<typeof memoryConversationStore> | undefined>(undefined);
+    yield* Effect.addFinalizer(() =>
+      Ref.get(conversationsRef).pipe(
+        Effect.flatMap((store) => (store === undefined ? Effect.void : release(() => store.close()))),
+      ),
     );
     const durableCreds: ManagedDurableCredentialStore | undefined =
       chosen === "instance"
@@ -397,6 +390,18 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       fromPromise(() => (dshModule !== undefined ? openDshRuntime(ctx, dshModule) : openPiDurableRuntime(ctx))),
       (agent) => release(() => agent.close()),
     );
+    const conversations = yield* Effect.try({
+      try: () =>
+        chosen === "memory"
+          ? memoryConversationStore()
+          : chosen !== "instance"
+            ? sqliteConversationStore(`${chosen.file}.conversations.sqlite`)
+            : database !== undefined
+              ? postgresConversationStore(database, place.name as string)
+              : sqliteConversationStore(join(stateRoot, "conversations.sqlite")),
+      catch: (cause) => new PromiseFailure(cause),
+    });
+    yield* Ref.set(conversationsRef, conversations);
     const auth: AuthManager | undefined =
       durableCreds !== undefined
         ? yield* Effect.acquireRelease(
