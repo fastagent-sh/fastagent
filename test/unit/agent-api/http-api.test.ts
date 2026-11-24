@@ -353,7 +353,7 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
         );
         const sql = yield* Effect.acquireRelease(
           Effect.sync(() => sqliteConversationStoreEffect(join(dir, "conversations.sqlite"), { ephemeralTtlMs: 100 })),
-          (store) => Effect.ignore(store.close()),
+          (store) => Effect.ignore(store.close),
         );
         yield* sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
         yield* sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
@@ -365,10 +365,10 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
       }),
   );
 
-  it.effect("emits SSE keep-alive comments on virtual time and closes cleanly with stream_error on shutdown", () =>
-    Effect.gen(function* () {
+  it.effect("emits SSE keep-alive comments on virtual time and closes cleanly with stream_error on shutdown", () => {
+    const closing = new AbortController();
+    return Effect.gen(function* () {
       const events = yield* Queue.unbounded<SessionEvent>();
-      const closing = new AbortController();
       const chunks = yield* Ref.make<string[]>([]);
       const stream = sseEventStream("sessions.events", SessionEventFrame, Stream.fromQueue(events), {
         keepAliveMs: 20_000,
@@ -387,8 +387,8 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
       expect(collected.filter((c) => c === ": open\n\n").length).toBeGreaterThanOrEqual(2);
       expect(collected.at(-1)).toContain("event: stream_error");
       expect(collected.at(-1)).toContain("the service is closing");
-    }),
-  );
+    });
+  });
 
   it.effect(
     "interrupts abortThenJoin on TestClock timeout and joins settlement before releasing scoped resources",
@@ -424,7 +424,7 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
       const check = <A, E>(schema: Schema.Codec<A, E>, value: A) => {
         const json = Schema.fromJsonString(schema);
         const encoded = Schema.encodeSync(json)(value);
-        const decoded = Schema.decodeUnknownSync(json)(encoded);
+        const decoded = Schema.decodeSync(json)(encoded);
         expect(Schema.encodeSync(json)(decoded)).toBe(encoded);
       };
       check(SendRequest, sendReq);

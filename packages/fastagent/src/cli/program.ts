@@ -86,9 +86,9 @@ const dev: CommandSpec = {
   examples: [{ cmd: "fastagent dev" }, { cmd: "fastagent dev --harness dsh", note: "run with DSH + OS sandbox" }],
   run: async (_args, f) =>
     (await import("./commands/dev.ts")).runDev(".", {
-      port: f.port as string | undefined,
-      bind: f.bind as string | undefined,
-      model: f.model as string | undefined,
+      ...(typeof f.port === "string" ? { port: f.port } : {}),
+      ...(typeof f.bind === "string" ? { bind: f.bind } : {}),
+      ...(typeof f.model === "string" ? { model: f.model } : {}),
       ...harnessOptions(f),
       watch: f.watch !== false,
       input: f.input !== false,
@@ -107,7 +107,7 @@ const info: CommandSpec = {
   run: async (_args, f) =>
     (await import("./commands/info.ts")).runInfo(".", {
       json: f.json === true,
-      model: f.model as string | undefined,
+      ...(typeof f.model === "string" ? { model: f.model } : {}),
       ...harnessOptions(f),
       instance: instanceFlags(f),
     }),
@@ -153,7 +153,7 @@ const invoke: CommandSpec = {
   ],
   run: async (args, f) =>
     (await import("./commands/invoke.ts")).runInvoke(args[0] as string | undefined, ".", {
-      model: f.model as string | undefined,
+      ...(typeof f.model === "string" ? { model: f.model } : {}),
       ...harnessOptions(f),
       input: f.input !== false,
       json: f.json === true,
@@ -189,9 +189,9 @@ const start: CommandSpec = {
   examples: [{ cmd: "fastagent start", note: "after fastagent build" }],
   run: async (_args, f) =>
     (await import("./commands/start.ts")).runStart(".", {
-      port: f.port as string | undefined,
-      bind: f.bind as string | undefined,
-      model: f.model as string | undefined,
+      ...(typeof f.port === "string" ? { port: f.port } : {}),
+      ...(typeof f.bind === "string" ? { bind: f.bind } : {}),
+      ...(typeof f.model === "string" ? { model: f.model } : {}),
       ...harnessOptions(f),
       input: f.input !== false,
       instance: instanceFlags(f),

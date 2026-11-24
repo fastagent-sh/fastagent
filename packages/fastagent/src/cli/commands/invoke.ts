@@ -177,10 +177,10 @@ async function invokeThrough(
   continueFlags?: (sessionId: string) => string,
 ): Promise<never> {
   const exitCode = await invokeOverApi(agent, where, message, {
-    session: opts.session,
-    conversation: opts.conversation,
-    settings,
-    json: opts.json,
+    ...(opts.session === undefined ? {} : { session: opts.session }),
+    ...(opts.conversation === undefined ? {} : { conversation: opts.conversation }),
+    ...(settings === undefined ? {} : { settings }),
+    ...(opts.json === undefined ? {} : { json: opts.json }),
     authHint,
     ...(continueFlags === undefined ? {} : { continueFlags }),
   }).catch(failStartup);
@@ -320,10 +320,10 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
   try {
     await reportAuth(models, modelSpec, agentDir);
     exitCode = await invokeOverApi(invokable, `${agentDir} (${modelSpec})`, message, {
-      session: opts.session,
-      conversation: opts.conversation,
+      ...(opts.session === undefined ? {} : { session: opts.session }),
+      ...(opts.conversation === undefined ? {} : { conversation: opts.conversation }),
       settings,
-      json: opts.json,
+      ...(opts.json === undefined ? {} : { json: opts.json }),
       authHint: LOCAL_AUTH_HINT,
     });
   } catch (error) {

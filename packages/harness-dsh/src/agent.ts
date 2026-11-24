@@ -177,7 +177,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
   ] as const;
 
   const ready = new Promise<void>((resolve) => {
-    ctx.inject(requiredServices as unknown as string[], () => {
+    ctx.inject([...requiredServices], () => {
       ctx.tools.setExecutor(new NativeToolExecutor(ctx));
       resolve();
     });
@@ -390,7 +390,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         const hasNext = start + slice.length < ordered.length;
         return {
           data,
-          ...(hasNext && data.at(-1) !== undefined ? { next: data.at(-1)?.id } : {}),
+          ...(hasNext && data.at(-1) !== undefined ? { next: (data.at(-1) as Session).id } : {}),
         };
       },
 

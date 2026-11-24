@@ -71,9 +71,8 @@ export function terminalLoginIO(): LoginIO {
       return isCancel(r) ? undefined : (r as string);
     },
     async prompt(message, opts) {
-      const r = opts?.hidden
-        ? await password({ message, signal: opts.signal })
-        : await clackText({ message, signal: opts?.signal });
+      const signalOpt = opts?.signal === undefined ? {} : { signal: opts.signal };
+      const r = opts?.hidden ? await password({ message, ...signalOpt }) : await clackText({ message, ...signalOpt });
       return isCancel(r) ? undefined : (r as string);
     },
     note: (message) => clackLog.info(message),

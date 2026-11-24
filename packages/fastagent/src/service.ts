@@ -228,6 +228,7 @@ const serveAgentEffect = Effect.fn("service.serveAgent")(function* (opened: Serv
   const runtimeClose = createCloseSignal();
   if (agent.ready?.() === false) runtimeClose.mark();
   const unsubscribeClose = agent.subscribeClose?.(runtimeClose.mark);
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const lifetime = yield* Scope.make();
   // Scope.close alone does not join concurrent closes or retain their failure. Every later call, the rollback a
   // close itself triggers included, awaits the first one's outcome.
@@ -248,7 +249,7 @@ const serveAgentEffect = Effect.fn("service.serveAgent")(function* (opened: Serv
     const isReady = () => !serviceClose.isClosing() && !runtimeClose.isClosing();
     const base = serviceOver(
       surface(api, isReady),
-      () => Effect.runPromise(shutdown),
+      () => runPromise(shutdown),
       async () => {
         serviceClose.mark();
         await api?.endStreams();

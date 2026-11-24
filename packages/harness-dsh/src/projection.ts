@@ -159,7 +159,7 @@ export function projectSessionEvent(
           id,
           timestamp,
           kind: "compaction",
-          data: { summary: msg.source.summary } as unknown as Json,
+          data: { summary: msg.source.summary },
         },
       };
     }
@@ -172,9 +172,9 @@ export function projectSessionEvent(
           timestamp,
           kind: "user",
           data: {
-            content: structuredClone(msg.source.displayContent),
+            content: msg.source.displayContent.map((part) => ({ ...part })),
             messageId: msg.source.messageId,
-          } as unknown as Json,
+          },
         },
       };
     }
@@ -185,7 +185,7 @@ export function projectSessionEvent(
         id,
         timestamp,
         kind: "user",
-        data: { content: [{ type: "text", text }] } as unknown as Json,
+        data: { content: [{ type: "text", text }] },
       },
     };
   }
@@ -324,10 +324,11 @@ export function paginateEntries(entries: readonly Entry[], rawOptions: EntriesOp
     const slice = entries.slice(start, start + limit);
     const hasPrev = start > 0 && slice.length > 0;
     const hasNext = start + slice.length < entries.length;
+    const lastAfter = slice.at(-1);
     return {
       data: slice,
       ...(hasPrev && slice[0] !== undefined ? { prev: slice[0].id } : {}),
-      ...(hasNext && slice.at(-1) !== undefined ? { next: slice.at(-1)?.id } : {}),
+      ...(hasNext && lastAfter !== undefined ? { next: lastAfter.id } : {}),
     };
   }
 
@@ -338,10 +339,11 @@ export function paginateEntries(entries: readonly Entry[], rawOptions: EntriesOp
     const slice = entries.slice(start, idx);
     const hasPrev = start > 0 && slice.length > 0;
     const hasNext = idx < entries.length && slice.length > 0;
+    const lastBefore = slice.at(-1);
     return {
       data: slice,
       ...(hasPrev && slice[0] !== undefined ? { prev: slice[0].id } : {}),
-      ...(hasNext && slice.at(-1) !== undefined ? { next: slice.at(-1)?.id } : {}),
+      ...(hasNext && lastBefore !== undefined ? { next: lastBefore.id } : {}),
     };
   }
 

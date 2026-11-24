@@ -118,7 +118,9 @@ export const AgentErrorData = Schema.Struct({
 export type AgentErrorData = typeof AgentErrorData.Type;
 
 /** What every operation rejects with. */
-export class AgentError extends Schema.Error<AgentError>("AgentError")(AgentErrorData) {}
+export class AgentError extends Schema.Error<AgentError, { readonly brand: unique symbol }>("AgentError")(
+  AgentErrorData,
+) {}
 
 /**
  * A session's settings. An object the Agent answers with leaves out what it does not name (`optionalKey`); what a Caller

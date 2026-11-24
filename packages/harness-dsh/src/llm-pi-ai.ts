@@ -304,13 +304,12 @@ export class PiAiModelsAdapter extends LlmAdapter {
 
     let streamError: unknown;
     try {
+      const reasoning = toPiReasoning(options.reasoningEffort);
       const eventStream = this.models.streamSimple(model, context, {
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
         ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
         ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-        ...(toPiReasoning(options.reasoningEffort) !== undefined
-          ? { reasoning: toPiReasoning(options.reasoningEffort) }
-          : {}),
+        ...(reasoning !== undefined ? { reasoning } : {}),
         ...(stepSpan !== undefined ? { telemetry: stepSpan as never } : {}),
       });
 

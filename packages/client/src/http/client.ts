@@ -375,7 +375,7 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
             if (response.status !== 200) {
               // A refusal fails here, decoded; a body this endpoint never answers a refusal with is said as such.
               yield* decodeAttachmentRefusal(response);
-              return yield* Effect.fail(agentError("internal", `the agent answered ${response.status} with an image`));
+              return yield* agentError("internal", `the agent answered ${response.status} with an image`);
             }
             const data = new Uint8Array(yield* response.arrayBuffer);
             return { mimeType: response.headers["content-type"] ?? "application/octet-stream", data };

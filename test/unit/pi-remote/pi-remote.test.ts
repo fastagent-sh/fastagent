@@ -915,7 +915,7 @@ describe("Pi extension host integration", () => {
       hasUI: true,
       ui: {
         notify(message: string, type?: string) {
-          notifications.push({ message, type });
+          notifications.push({ message, ...(type === undefined ? {} : { type }) });
         },
         input: async () => undefined,
         confirm: async () => true,

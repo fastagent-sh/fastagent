@@ -40,7 +40,7 @@ export class TerminalStatusReporter {
   private readonly write: (sequence: string) => void;
   private readonly notifyCmux: (state: ProgramStatus["state"], message?: string) => void;
   private readonly cmuxEnabled: boolean;
-  private lastKey?: string;
+  private lastKey?: string | undefined;
 
   constructor(options: TerminalStatusOptions = {}) {
     const env = options.env ?? hostEnv();

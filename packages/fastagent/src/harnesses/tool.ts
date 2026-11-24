@@ -34,11 +34,15 @@ export interface StandardJSONSchemaV1<TInput = unknown, TOutput = TInput> {
         readonly target: "draft-2020-12" | "draft-07" | "openapi-3.0" | (string & {});
       }) => Record<string, unknown>;
     };
-    readonly validate?: (value: unknown) => StandardValidateResult<TOutput> | Promise<StandardValidateResult<TOutput>>;
-    readonly types?: {
-      readonly input: TInput;
-      readonly output: TOutput;
-    };
+    readonly validate?:
+      | ((value: unknown) => StandardValidateResult<TOutput> | Promise<StandardValidateResult<TOutput>>)
+      | undefined;
+    readonly types?:
+      | {
+          readonly input: TInput;
+          readonly output: TOutput;
+        }
+      | undefined;
   };
 }
 

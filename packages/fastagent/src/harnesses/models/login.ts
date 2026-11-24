@@ -237,7 +237,11 @@ export async function loginOver(request: LoginRequest, internals: LoginInternals
   }
 
   for (;;) {
-    const credential = await runFlow((io) => flow(io, { getDeviceId }), interaction, signal);
+    const credential = await runFlow(
+      (io) => flow(io, getDeviceId === undefined ? {} : { getDeviceId }),
+      interaction,
+      signal,
+    );
     let verified: SignInResult["verified"] = "n/a";
     if (models) {
       await trial.modify(provider.id, async () => credential);

@@ -43,19 +43,19 @@ type ConnectionStatus = "disconnected" | "connecting" | "connected" | "reconnect
 
 export interface RemoteViewState {
   status: ConnectionStatus;
-  remoteName?: string;
-  agentInfo?: AgentInfo;
-  session?: Session;
-  liveReply?: LiveReply;
+  remoteName?: string | undefined;
+  agentInfo?: AgentInfo | undefined;
+  session?: Session | undefined;
+  liveReply?: LiveReply | undefined;
   activeTools: readonly ActiveTool[];
   queuedMessages: readonly QueuedMessage[];
   queuedPreviews: Readonly<Record<string, string>>;
   sending: boolean;
   canceling: boolean;
   compacting: boolean;
-  retrying?: RetryNotice;
-  lastEntryId?: string;
-  lastError?: string;
+  retrying?: RetryNotice | undefined;
+  lastEntryId?: string | undefined;
+  lastError?: string | undefined;
 }
 
 export interface RemoteControllerCallbacks {
@@ -106,13 +106,13 @@ export class RemoteController {
   private readonly baseReconnectMs: number;
   private readonly maxReconnectMs: number;
 
-  private agent?: Agent;
-  private streamAbort?: AbortController;
+  private agent?: Agent | undefined;
+  private streamAbort?: AbortController | undefined;
   private generation = 0;
   private eventSeq = 0;
   private seenEntryIds = new Set<string>();
   private toolCallArgs = new Map<string, Json>();
-  private lastAssistantText?: string;
+  private lastAssistantText?: string | undefined;
   private autoTitleAttempted = false;
   private inFlightSends = 0;
   private state: RemoteViewState = {

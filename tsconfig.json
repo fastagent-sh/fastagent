@@ -8,11 +8,14 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
     "plugins": [
       {
         "name": "@effect/language-service",
         "includeSuggestionsInTsc": false,
+        // Schema.Opaque in agent-api.ts intentionally models structural JSON DTOs; keep nominal brand checks on classes & errors.
+        "brandedSchemaClasses": ["Class", "TaggedClass", "Error", "TaggedError"],
         "allowedUnstableApis": [
           "@effect/platform-node/NodeHttpServer",
           "effect/ByteSize",

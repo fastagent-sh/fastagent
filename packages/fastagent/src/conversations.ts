@@ -55,7 +55,7 @@ export interface ConversationStore {
 export interface EffectConversationStore {
   get(key: ConversationKey): Effect.Effect<SessionId | undefined, AgentError>;
   set(key: ConversationKey, sessionId: SessionId, options?: ConversationSetOptions): Effect.Effect<void, AgentError>;
-  close(): Effect.Effect<void, AgentError>;
+  readonly close: Effect.Effect<void, AgentError>;
 }
 
 interface ConversationStoreOptions {
@@ -102,7 +102,7 @@ function toPromiseStore(store: EffectConversationStore, clock?: Clock.Clock): Co
   return {
     get: (key) => run(store.get(key)),
     set: (key, sessionId, options) => run(store.set(key, sessionId, options)),
-    close: () => run(store.close()),
+    close: () => run(store.close),
   };
 }
 
@@ -151,7 +151,7 @@ export function memoryConversationStoreEffect(options: ConversationStoreOptions 
       ephemeral.delete(key);
       named.set(key, sessionId);
     }),
-    close: () => Effect.void,
+    close: Effect.void,
   };
 }
 
@@ -216,12 +216,10 @@ export function sqliteConversationStoreEffect(
         );
       }
     }),
-    close: Effect.fn("conversations.sqlite.close")(function* () {
-      yield* Effect.tryPromise({
-        try: () => store.close(),
-        catch: (error) => asAgentError("conversations.sqlite.close", error),
-      });
-    }),
+    close: Effect.tryPromise({
+      try: () => store.close(),
+      catch: (error) => asAgentError("conversations.sqlite.close", error),
+    }).pipe(Effect.withSpan("conversations.sqlite.close")),
   };
 }
 
@@ -296,12 +294,10 @@ function postgresConversationStoreEffect(
         );
       }
     }),
-    close: Effect.fn("conversations.postgres.close")(function* () {
-      yield* Effect.tryPromise({
-        try: () => store.close(),
-        catch: (error) => asAgentError("conversations.postgres.close", error),
-      });
-    }),
+    close: Effect.tryPromise({
+      try: () => store.close(),
+      catch: (error) => asAgentError("conversations.postgres.close", error),
+    }).pipe(Effect.withSpan("conversations.postgres.close")),
   };
 }
 

@@ -176,7 +176,12 @@ export async function providerAuthStatuses(models: Models): Promise<Map<string, 
     const login = interactiveLoginKind(provider);
     try {
       const auth = await models.getAuth(probe);
-      statuses.set(provider.id, auth ? { state: "ready", source: auth.source } : { state: "unconfigured", login });
+      statuses.set(
+        provider.id,
+        auth
+          ? { state: "ready", ...(auth.source === undefined ? {} : { source: auth.source }) }
+          : { state: "unconfigured", login },
+      );
     } catch (error) {
       statuses.set(provider.id, { state: "broken", message: (error as Error).message, login });
     }

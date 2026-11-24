@@ -3,7 +3,7 @@ export type McpErrorCode = "configuration" | "authorization_required" | "connect
 
 export class McpError extends Error {
   readonly code: McpErrorCode;
-  readonly server?: string;
+  readonly server?: string | undefined;
   constructor(code: McpErrorCode, message: string, server?: string) {
     super(server ? `${server}: ${message}` : message);
     this.name = "McpError";
