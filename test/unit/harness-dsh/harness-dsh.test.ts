@@ -816,6 +816,25 @@ export default defineTool({
       expect(passingConfine).toHaveBeenCalledTimes(1);
       expect(passingConfine).toHaveBeenCalledWith(["true"], expect.objectContaining({ mode: "workspace-write" }));
 
+      // Real openDshAgent entry must fail fast (and dispose Cordis) when the host has no usable OS sandbox.
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "freebsd", configurable: true });
+      try {
+        await expect(
+          openDshAgent({
+            name: "unsupported-sandbox-host",
+            workdir,
+            sandbox: "read-only",
+            codingTools: ["read", "bash"],
+          }),
+        ).rejects.toMatchObject({
+          code: "unavailable",
+          message: expect.stringMatching(/OS sandbox \(read-only\) is unavailable for bash tools/),
+        });
+      } finally {
+        if (originalPlatform !== undefined) Object.defineProperty(process, "platform", originalPlatform);
+      }
+
       // Without bash or with sandbox: "off", openDshAgent boots without requiring an OS subprocess sandbox.
       const readOnlyNoBash = await openDshAgent({
         name: "no-bash",

@@ -153,7 +153,11 @@ async function gatherFacts(
           `the container fails at start. Run \`npm install ${requiredHarnessPkg}\` and commit the lockfile.`,
       );
     }
-    if (harnessSelection.sandbox !== "off" && resolveCodingTools(config.codingTools).includes("bash")) {
+    if (
+      kept === undefined &&
+      harnessSelection.sandbox !== "off" &&
+      resolveCodingTools(config.codingTools).includes("bash")
+    ) {
       report.note(
         `harness "${harnessSelection.harness}" (${harnessSelection.sandbox} sandbox): the generated Linux image runs ` +
           `shell commands through built-in Landlock (verified at startup; requires Linux kernel Landlock support). ` +

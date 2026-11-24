@@ -31,16 +31,15 @@ export function unsupportedRuntime(versions: { node: string; bun?: string } = pr
     : undefined;
 }
 
-/** Whether a manifest declares `name` in dependencies, devDependencies, or optionalDependencies. */
+/** Whether a manifest declares `name` in dependencies or devDependencies. */
 export function listsPackage(
   pkg: {
     dependencies?: Record<string, unknown>;
     devDependencies?: Record<string, unknown>;
-    optionalDependencies?: Record<string, unknown>;
   },
   name: string,
 ): boolean {
-  return name in { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+  return name in { ...pkg.dependencies, ...pkg.devDependencies };
 }
 
 /**
@@ -50,7 +49,6 @@ export function listsPackage(
 export function listsFastagent(pkg: {
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
-  optionalDependencies?: Record<string, unknown>;
 }): boolean {
   return listsPackage(pkg, "@fastagent-sh/fastagent");
 }
