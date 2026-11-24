@@ -188,7 +188,7 @@ console.log(reply.status, reply.answer?.text);
 | 规模与负载场景 | 传统方案的典型瓶颈 | FastAgent 架构模式 | 量化架构效果 |
 | --- | --- | --- | --- |
 | **1–20 个后台 Agent**<br>（PR 审查、AI SRE、每日简报） | 常驻容器 95% 以上时间空转 | **空闲休眠（Sleep when idle）**：Fly.io（`suspend`）或 Railway（App Sleeping）配合 `POST /v1/invoke` 按需唤醒 | 相比 24/7 常驻容器**减少约 98% 闲置算力消耗**（每天 20 次 × 1 分钟 ≈ 每月 10 活跃小时 vs 720 常驻小时） |
-| **100–1,000+ SaaS 租户**<br>（产品内嵌 Copilot） | 每租户独立微服务、1,000 个连接池或高频租约心跳压垮 Postgres | **嵌入现有后端**：`openAgent()` + 共享 `openPostgresDatabase({ url }, { max: 20 })`（`codingTools: false`） | **0 额外微服务**；**1 个固定 20 连接池**，**全池每周期合并为 1 条批量续约 SQL**，多副本滚动发版自动协作让渡空闲租户 |
+| **100–1,000+ SaaS 租户**<br>（产品内嵌 Copilot） | 每租户独立微服务、1,000 个连接池或高频租约心跳压垮 Postgres | **嵌入现有后端**：`openAgent()` + 共享 `openPostgresDatabase({ url }, { max: 20 })`（`codingTools: false`） | **0 额外微服务**；**1 个固定 20 连接池**，**按每批最多 500 租户批量续约**，多副本滚动发版自动协作让渡空闲租户 |
 | **100–10,000+ 独立隔离用户**<br>（每用户可跑代码/命令的助手） | 维护上百台常驻 VM，闲置成本与运维失控 | **每用户独立 AWS MicroVM**（Bedrock AgentCore）+ **1 个共享的无服务器 Aurora DSQL 集群**（支持 `pi-durable` 与 `dsh`） | **0 常驻服务器运维**；按需分配独立 MicroVM、空闲自动回收并从同一个共享 DSQL 集群恢复（高吞吐时改 `FASTAGENT_DATABASE_URL` 即可零代码切至包月 PG） |
 | **本地优先桌面应用**<br>（Electron、本地研发/数据工具） | 桌面端难以随包携带 Python 环境，或被迫走云端中转本地文件 | **本地嵌入式**：`openAgent()` + 内置 `node:sqlite` + 可选 `dsh` OS 沙箱 | **0 云端服务依赖**、**0 原生 C++ 编译**；离线持久会话配合 `agent.info().models` 动态模型选择器 |
 
