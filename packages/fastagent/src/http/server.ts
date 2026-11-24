@@ -86,16 +86,14 @@ function refusal(operation: string) {
 }
 
 /** An Agent operation, told to let go if its request does (a Caller that left). */
-function call<A>(operation: string, run: (signal: AbortSignal) => Promise<A>): Effect.Effect<A, AgentError> {
-  return Effect.suspend(() => {
-    const controller = new AbortController();
-    return abortThenJoin(
-      operation,
-      () => run(controller.signal),
-      () => controller.abort(),
-    );
-  }).pipe(Effect.mapError(refusal(operation)));
-}
+const call = Effect.fn("http.api.call")(function* <A>(operation: string, run: (signal: AbortSignal) => Promise<A>) {
+  const controller = new AbortController();
+  return yield* abortThenJoin(
+    operation,
+    () => run(controller.signal),
+    () => controller.abort(),
+  ).pipe(Effect.mapError(refusal(operation)));
+});
 
 const json = (status: number, error: AgentError) =>
   HttpServerResponse.jsonUnsafe({ error: errorData(error) }, { status });
@@ -164,59 +162,58 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
    * `messages.stream` are; then its events as server-sent, with a comment while it is quiet. A service that closes
    * ends it with `stream_error`.
    */
-  const serverSent = <E extends { readonly type: string }>(
+  const serverSent = Effect.fn("http.api.stream")(function* <E extends { readonly type: string }>(
     operation: string,
     frame: Schema.Codec<
       { readonly type: string },
       { readonly id?: string | undefined; readonly event: string; readonly data: string }
     >,
     open: () => AsyncIterable<E>,
-  ) =>
-    Effect.gen(function* () {
-      const iterator = open()[Symbol.asyncIterator]();
-      const first = yield* fromPromise(() => iterator.next()).pipe(
-        Effect.onInterrupt(() => Effect.promise(async () => iterator.return?.())),
-        Effect.mapError(refusal(operation)),
+  ) {
+    const iterator = open()[Symbol.asyncIterator]();
+    const first = yield* fromPromise(() => iterator.next()).pipe(
+      Effect.onInterrupt(() => Effect.promise(async () => iterator.return?.())),
+      Effect.mapError(refusal(operation)),
+    );
+    const rest = Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => iterator }, (error) => error);
+    const written = (event: { readonly type: string }) =>
+      Schema.encodeEffect(frame)(event).pipe(
+        Effect.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
       );
-      const rest = Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => iterator }, (error) => error);
-      const written = (event: { readonly type: string }) =>
-        Schema.encodeEffect(frame)(event).pipe(
-          Effect.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
-        );
-      const endedWith = (error: AgentError) =>
-        Stream.fromEffect(Effect.orDie(written({ type: "stream_error", error: errorData(error) } as SessionEvent)));
-      const events = (first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest)).pipe(
-        // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
-        Stream.mapEffect(written),
-        Stream.catchCause((cause) => endedWith(refusal(operation)(new PromiseFailure(Cause.squash(cause))))),
-        Stream.interruptWhen(closed),
-        Stream.concat(
-          Stream.suspend(() =>
-            closing.signal.aborted ? endedWith(agentError("unavailable", "the service is closing")) : Stream.empty,
-          ),
+    const endedWith = (error: AgentError) =>
+      Stream.fromEffect(Effect.orDie(written({ type: "stream_error", error: errorData(error) } as SessionEvent)));
+    const events = (first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest)).pipe(
+      // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
+      Stream.mapEffect(written),
+      Stream.catchCause((cause) => endedWith(refusal(operation)(new PromiseFailure(Cause.squash(cause))))),
+      Stream.interruptWhen(closed),
+      Stream.concat(
+        Stream.suspend(() =>
+          closing.signal.aborted ? endedWith(agentError("unavailable", "the service is closing")) : Stream.empty,
         ),
-      );
-      let ended!: () => void;
-      const done = new Promise<void>((resolve) => {
-        ended = resolve;
-      });
-      const body = Stream.merge(events, Stream.tick(`${keepAlive} millis`).pipe(Stream.map(() => ": open\n\n")), {
-        haltStrategy: "left",
-      }).pipe(
-        Stream.encodeText,
-        Stream.onStart(Effect.sync(() => streaming.add(done))),
-        Stream.ensuring(
-          Effect.sync(() => {
-            streaming.delete(done);
-            ended();
-          }),
-        ),
-      );
-      return HttpServerResponse.stream(body, {
-        contentType: "text/event-stream",
-        headers: { "cache-control": "no-store" },
-      });
+      ),
+    );
+    let ended!: () => void;
+    const done = new Promise<void>((resolve) => {
+      ended = resolve;
     });
+    const body = Stream.merge(events, Stream.tick(`${keepAlive} millis`).pipe(Stream.map(() => ": open\n\n")), {
+      haltStrategy: "left",
+    }).pipe(
+      Stream.encodeText,
+      Stream.onStart(Effect.sync(() => streaming.add(done))),
+      Stream.ensuring(
+        Effect.sync(() => {
+          streaming.delete(done);
+          ended();
+        }),
+      ),
+    );
+    return HttpServerResponse.stream(body, {
+      contentType: "text/event-stream",
+      headers: { "cache-control": "no-store" },
+    });
+  });
 
   const openapi = OpenApi.fromApi(AgentHttpApi);
 

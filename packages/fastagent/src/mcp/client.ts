@@ -64,9 +64,13 @@ export async function openMcpClients(
   const tools: McpTool[] = [];
   const names = new Set<string>();
   let closing: Promise<void> | undefined;
+  const runEffect = Effect.fn("mcp.callTool")(function* <A>(work: Effect.Effect<A, unknown>) {
+    const fiber = yield* Effect.forkIn(work, lifetime);
+    return yield* Fiber.join(fiber);
+  });
   const run = async <A>(work: Effect.Effect<A, unknown>): Promise<A> => {
     if (closing) throw new McpError("connection", "MCP clients are closed");
-    const result = await Effect.runPromiseExit(Effect.forkIn(work, lifetime).pipe(Effect.flatMap(Fiber.join)));
+    const result = await Effect.runPromiseExit(runEffect(work));
     if (Exit.isFailure(result)) throw originalError(result.cause);
     return result.value;
   };

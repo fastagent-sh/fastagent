@@ -325,16 +325,13 @@ function durableAgent(
       ),
     );
 
-  const conversationOf = (sessionId: string): Effect.Effect<Conversation, AgentError | PromiseFailure> =>
-    reads
-      .conversation(sessionId)
-      .pipe(
-        Effect.flatMap((conversation) =>
-          conversation === undefined
-            ? Effect.fail(agentError("not_found", `No session ${sessionId}`))
-            : Effect.succeed(conversation),
-        ),
-      );
+  const conversationOf = Effect.fn("pi-durable.conversationOf")(function* (sessionId: string) {
+    const conversation = yield* reads.conversation(sessionId);
+    if (conversation === undefined) {
+      return yield* Effect.fail(agentError("not_found", `No session ${sessionId}`));
+    }
+    return conversation;
+  });
 
   /** The agent's tools by name: the registry's, read for each use, so a tool the definition gains is offered at once. */
   const toolsByName = (): Map<string, ToolRegistration> => {
@@ -344,29 +341,28 @@ function durableAgent(
   };
 
   /** What pi-durable stores for `changes`: tools by their registrations, which it stores by name. */
-  const changeOf = (changes: SessionChanges): Effect.Effect<AgentChange, AgentError> =>
-    Effect.suspend(() => {
-      const { model, thinkingLevel, instructions, tools } = changes;
-      let registrations: ToolRegistration[] | null | undefined;
-      if (tools !== undefined && tools !== null) {
-        const known = toolsByName();
-        const unknown = tools.filter((name) => !known.has(name));
-        if (unknown.length > 0) {
-          return Effect.fail(
-            agentError("invalid_request", `This agent has no tool named ${unknown.join(", ")}`, { tools: unknown }),
-          );
-        }
-        registrations = tools.map((name) => known.get(name) as ToolRegistration);
-      } else registrations = tools;
-      return Effect.succeed({
-        ...(model === undefined
-          ? {}
-          : { model: model === null ? null : { provider: model.provider, modelId: model.modelId } }),
-        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        ...(instructions === undefined ? {} : { instructions }),
-        ...(registrations === undefined ? {} : { tools: registrations }),
-      });
-    });
+  const changeOf = Effect.fn("pi-durable.changeOf")(function* (changes: SessionChanges) {
+    const { model, thinkingLevel, instructions, tools } = changes;
+    let registrations: ToolRegistration[] | null | undefined;
+    if (tools !== undefined && tools !== null) {
+      const known = toolsByName();
+      const unknown = tools.filter((name) => !known.has(name));
+      if (unknown.length > 0) {
+        return yield* Effect.fail(
+          agentError("invalid_request", `This agent has no tool named ${unknown.join(", ")}`, { tools: unknown }),
+        );
+      }
+      registrations = tools.map((name) => known.get(name) as ToolRegistration);
+    } else registrations = tools;
+    return {
+      ...(model === undefined
+        ? {}
+        : { model: model === null ? null : { provider: model.provider, modelId: model.modelId } }),
+      ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+      ...(instructions === undefined ? {} : { instructions }),
+      ...(registrations === undefined ? {} : { tools: registrations }),
+    } satisfies AgentChange;
+  });
 
   const presented = options.agent ?? {};
   const info = (): Promise<AgentInfo> =>
