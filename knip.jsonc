@@ -13,7 +13,6 @@
         "@earendil-works/.+",
         // Plugin name in tsconfig.json, provided by @effect/tsgo.
         "@effect/language-service",
-        "effect",
         "ignore"
       ]
     },

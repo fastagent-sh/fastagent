@@ -33,6 +33,7 @@
     "@aws-sdk/client-bedrock-agentcore": "^3.1170.0",
     "@biomejs/biome": "^2.6.4",
     "@effect/tsgo": "^0.73.4",
+    "@effect/vitest": "^4.1.5",
     "@earendil-works/pi-coding-agent": "1.6.0",
     "@earendil-works/pi-tui": "1.6.0",
     "@electric-sql/pglite": "^0.5.16",

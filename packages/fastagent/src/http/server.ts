@@ -150,12 +150,6 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
   const closing = new AbortController();
   /** The event streams being written, each until it has ended. */
   const streaming = new Set<Promise<void>>();
-  const closed = Effect.callback<void>((resume) => {
-    if (closing.signal.aborted) return resume(Effect.void);
-    const onAbort = () => resume(Effect.void);
-    closing.signal.addEventListener("abort", onAbort, { once: true });
-    return Effect.sync(() => closing.signal.removeEventListener("abort", onAbort));
-  });
 
   /**
    * An event stream: refused on its first read with that read's error and status, as `sessions.events` and
@@ -176,29 +170,14 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
       Effect.mapError(refusal(operation)),
     );
     const rest = Stream.fromAsyncIterable({ [Symbol.asyncIterator]: () => iterator }, (error) => error);
-    const written = (event: { readonly type: string }) =>
-      Schema.encodeEffect(frame)(event).pipe(
-        Effect.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
-      );
-    const endedWith = (error: AgentError) =>
-      Stream.fromEffect(Effect.orDie(written({ type: "stream_error", error: errorData(error) } as SessionEvent)));
-    const events = (first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest)).pipe(
-      // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
-      Stream.mapEffect(written),
-      Stream.catchCause((cause) => endedWith(refusal(operation)(new PromiseFailure(Cause.squash(cause))))),
-      Stream.interruptWhen(closed),
-      Stream.concat(
-        Stream.suspend(() =>
-          closing.signal.aborted ? endedWith(agentError("unavailable", "the service is closing")) : Stream.empty,
-        ),
-      ),
-    );
+    const source = first.done ? Stream.empty : Stream.concat(Stream.make(first.value), rest);
     let ended!: () => void;
     const done = new Promise<void>((resolve) => {
       ended = resolve;
     });
-    const body = Stream.merge(events, Stream.tick(`${keepAlive} millis`).pipe(Stream.map(() => ": open\n\n")), {
-      haltStrategy: "left",
+    const body = sseEventStream(operation, frame, source, {
+      keepAliveMs: keepAlive,
+      closing: closing.signal,
     }).pipe(
       Stream.encodeText,
       Stream.onStart(Effect.sync(() => streaming.add(done))),
@@ -346,6 +325,49 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
     },
     dispose,
   };
+}
+
+/**
+ * Encode an event stream into SSE frames with periodic `: open\n\n` keep-alive comments and a graceful
+ * `stream_error` trailer when `closing` aborts. Uses Effect `Clock` so keep-alive and shutdown are testable
+ * deterministically via `TestClock`.
+ */
+export function sseEventStream<E extends { readonly type: string }>(
+  operation: string,
+  frame: Schema.Codec<
+    { readonly type: string },
+    { readonly id?: string | undefined; readonly event: string; readonly data: string }
+  >,
+  source: Stream.Stream<E, unknown>,
+  options: { readonly keepAliveMs: number; readonly closing: AbortSignal },
+): Stream.Stream<string> {
+  const { keepAliveMs, closing } = options;
+  const closed = Effect.callback<void>((resume) => {
+    if (closing.aborted) return resume(Effect.void);
+    const onAbort = () => resume(Effect.void);
+    closing.addEventListener("abort", onAbort, { once: true });
+    return Effect.sync(() => closing.removeEventListener("abort", onAbort));
+  });
+  const written = (event: { readonly type: string }) =>
+    Schema.encodeEffect(frame)(event).pipe(
+      Effect.map(({ id, event, data }) => Sse.encoder.write({ _tag: "Event", id, event, data })),
+    );
+  const endedWith = (error: AgentError) =>
+    Stream.fromEffect(Effect.orDie(written({ type: "stream_error", error: errorData(error) } as SessionEvent)));
+  const events = source.pipe(
+    // Written before a failure is caught, so an event the API cannot send ends the stream as what it is.
+    Stream.mapEffect(written),
+    Stream.catchCause((cause) => endedWith(refusal(operation)(new PromiseFailure(Cause.squash(cause))))),
+    Stream.interruptWhen(closed),
+    Stream.concat(
+      Stream.suspend(() =>
+        closing.aborted ? endedWith(agentError("unavailable", "the service is closing")) : Stream.empty,
+      ),
+    ),
+  );
+  return Stream.merge(events, Stream.tick(`${keepAliveMs} millis`).pipe(Stream.map(() => ": open\n\n")), {
+    haltStrategy: "left",
+  });
 }
 
 /** Whether `path` is the Agent API's. */

@@ -58,9 +58,16 @@ that API from outside the runtime: channels are not part of it.
 - **Fail visibly.** A message that cannot be answered ends `failed`, and its `error` says why. A refused operation
   rejects with an `AgentError`. A stream is refused on its first read. Once it has delivered anything, a failure ends
   it with a `stream_error` event, never a rejection.
-- **Effect first, learned from its source.** Write with Effect rather than hand-rolled async plumbing. Read
-  `node_modules/effect/AGENTS.md` and the module under `node_modules/effect/src/` before using an API. Never edit it or
-  import from inside it.
+- **Pure functional core, Effect v4 boundaries.** Keep domain transforms, config validation, secret grouping, and
+  deploy artifact generation as plain synchronous pure functions over `readonly` inputs using `ES2025` non-mutating
+  APIs (`Map.groupBy`, `toSorted`, `Set`, `Iterator`) — never wrap trivial synchronous calculations in `Effect`.
+  Isolate I/O, lifecycles (`Scope`, `Deferred`, `Ref`, `Effect.acquireRelease`), operation spans (`Effect.fn`),
+  time (`Clock`), secrets (`Redacted<string>`), and env decoding (`packages/fastagent/src/process-env.ts` `Config`)
+  in Effect v4. Keep public SDK and runtime entrypoints (`@fastagent-sh/client`, `openAgent`, `serveAgent`) returning
+  standard `Promise` / `AsyncIterable` and accepting plain `string` inputs while enforcing `Schema.brand` domain IDs
+  (`SessionId`, `ConversationId`, `ConversationKey`, `MessageId`, `IdempotencyKey`) and `Redacted<string>` internally.
+  Read `node_modules/effect/AGENTS.md` and `node_modules/effect/src/` before using an API; never edit it or import
+  from inside it. `npm run typecheck` runs `@effect/tsgo` with `floatingEffect: "error"`.
 - **A finalizer does not fail.** Since effect 4.0.6, a defect in a combined cause turns every typed failure into a
   defect, so a finalizer that dies hides the body's failure. A finalizer logs its own failure, or leaves it to an
   explicit call in the body.
@@ -104,7 +111,8 @@ See [`test/README.md`](test/README.md) for the double inventory and suite index.
 - **Append before creating:** When adding fewer than ~8 tests in an existing domain, append to that domain's test file instead of opening a new `.test.ts` file (each file in `pool: "forks"` pays a cold-import cost).
 - **Canonical seams only:** Use `runInProcess` for CLI tests (never spy on `process.cwd`/`console.log`), `git-double.ts`, `tsc-double.ts`, `storage-no-wait.ts`, and `scripted-agent.ts`.
 - **Hermetic isolation (`test/setup.ts`, `test/unit-setup.ts`):** Every file gets an empty `HOME`, stripped proxy env vars, non-loopback network refusal (inherited by Node children via `NODE_OPTIONS`), and child-process refusal in unit tests. Unit tests run shuffled (`--sequence.seed=<n>` repeats an order).
-- **Hygiene guards (`test/guards/suite-hygiene.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds, shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`), ghost file references, missing double parity, missing CLI command tests, and CLI seam bypasses are rejected.
+- **Deterministic Effect & property tests:** Prefer `@effect/vitest` (`it.effect` with `TestClock` from `effect/testing`) for TTL, keep-alive, retry/backoff, and scoped lifecycle tests, and `it.prop` / `it.effect.prop` (`effect/Arbitrary`) for Schema codec round-trips and state invariants.
+- **Hygiene guards (`test/guards/suite-hygiene.test.ts`):** Bare `.toThrow()`, elapsed-time upper bounds, shared temp parent paths (`join(dir, "..", name)` instead of `besideAgent(dir, name)`), ghost file references, missing double parity, missing CLI command tests, CLI seam bypasses, unauthorized `process.env` access outside approved boundary files, and silent empty `catch {}` blocks are rejected.
 - **Process CLI tests (`run`):** Spawn the binary in `test/integration/` only for pipes, signals, or processes that outlive the caller (`cli-run-parity.integration.test.ts` pins parity with `runInProcess`).
 - **Paired fixtures:** A subject tested in both Unit and Integration shares `test/fixtures/<name>-fixtures.ts`.
 

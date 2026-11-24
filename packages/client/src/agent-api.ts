@@ -35,11 +35,11 @@ export type ThinkingLevel = typeof ThinkingLevel.Type;
 
 export class Tokens extends Schema.Opaque<Tokens>()(
   Schema.Struct({
-    inputTokens: Schema.Number,
-    outputTokens: Schema.Number,
-    cacheReadTokens: Schema.optionalKey(Schema.Number),
-    cacheWriteTokens: Schema.optionalKey(Schema.Number),
-    cost: Schema.optionalKey(Schema.Number),
+    inputTokens: Schema.Finite,
+    outputTokens: Schema.Finite,
+    cacheReadTokens: Schema.optionalKey(Schema.Finite),
+    cacheWriteTokens: Schema.optionalKey(Schema.Finite),
+    cost: Schema.optionalKey(Schema.Finite),
   }),
 ) {}
 
@@ -84,7 +84,7 @@ export class AgentInfo extends Schema.Opaque<AgentInfo>()(
         provider: Schema.String,
         modelId: Schema.String,
         name: Schema.optionalKey(Schema.String),
-        contextWindow: Schema.optionalKey(Schema.Number),
+        contextWindow: Schema.optionalKey(Schema.Finite),
         thinkingLevels: Schema.Array(ThinkingLevel),
       }),
     ),
@@ -166,8 +166,8 @@ export type QueuedMessage = typeof QueuedMessage.Type;
 
 /** Current context-window occupancy of the session's active branch (clears after compaction until the next answer). */
 export const ContextUsage = Schema.Struct({
-  tokens: Schema.Number,
-  contextWindow: Schema.optionalKey(Schema.Number),
+  tokens: Schema.Finite,
+  contextWindow: Schema.optionalKey(Schema.Finite),
 });
 export type ContextUsage = typeof ContextUsage.Type;
 
@@ -176,8 +176,8 @@ export class Session extends Schema.Opaque<Session>()(
     id: SessionId,
     status: open(SessionStatus),
     title: Schema.optionalKey(Schema.String),
-    createdAt: Schema.optionalKey(Schema.Number),
-    updatedAt: Schema.optionalKey(Schema.Number),
+    createdAt: Schema.optionalKey(Schema.Finite),
+    updatedAt: Schema.optionalKey(Schema.Finite),
     ...settingsFields(Schema.optionalKey),
     /** The agent's reply being written, as written so far: present only while one is. */
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
@@ -242,7 +242,7 @@ export const hasEnded = (message: Pick<Message, "status">): boolean => ENDS.has(
  * - `compaction`: `{ summary }`
  */
 export class Entry extends Schema.Opaque<Entry>()(
-  Schema.Struct({ id: Schema.String, timestamp: Schema.Number, kind: Schema.String, data: Schema.Json }),
+  Schema.Struct({ id: Schema.String, timestamp: Schema.Finite, kind: Schema.String, data: Schema.Json }),
 ) {}
 
 export interface Page<T> {
@@ -269,9 +269,9 @@ export const SessionEvent = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("retrying"),
-    attempt: Schema.Number,
-    maxAttempts: Schema.Number,
-    delayMs: Schema.Number,
+    attempt: Schema.Finite,
+    maxAttempts: Schema.Finite,
+    delayMs: Schema.Finite,
     reason: Schema.String,
   }),
   Schema.Struct({
@@ -294,7 +294,7 @@ export const MessageStreamEvent = Schema.Union([
 export type MessageStreamEvent = typeof MessageStreamEvent.Type;
 
 const Limit = (max: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: max }));
-const Seconds = Schema.Number.check(Schema.isGreaterThanOrEqualTo(0));
+const Seconds = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
 export const SessionSettings = Schema.Struct(settingsFields(Schema.optional));
 export type SessionSettings = typeof SessionSettings.Type;
@@ -465,8 +465,8 @@ export class AuthFlowState extends Schema.Opaque<AuthFlowState>()(
       Schema.Struct({
         userCode: Schema.String,
         verificationUri: Schema.String,
-        intervalSeconds: Schema.optionalKey(Schema.Number),
-        expiresInSeconds: Schema.optionalKey(Schema.Number),
+        intervalSeconds: Schema.optionalKey(Schema.Finite),
+        expiresInSeconds: Schema.optionalKey(Schema.Finite),
       }),
     ),
     prompt: Schema.optionalKey(AuthPromptInfo),
