@@ -48,6 +48,11 @@
       "types": "./dist/platform.d.ts",
       "default": "./dist/platform.js"
     },
+    "./internal": {
+      "@fastagent-sh/source": "./src/internal.ts",
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {

@@ -234,11 +234,13 @@ describe("public entries", () => {
     }
   });
 
-  it("platform-only Postgres adapter types stay on @fastagent-sh/fastagent/platform, not the root entry", () => {
+  it("platform-only Postgres adapter types and build-only defineDefinition stay off the fastagent root entry", () => {
     const rootEntry = readFileSync(resolve(srcOf("fastagent"), "index.ts"), "utf8");
-    for (const symbol of ["PostgresLimits", "CreateIndex", "PgExecutor"]) {
+    for (const symbol of ["PostgresLimits", "CreateIndex", "PgExecutor", "defineDefinition"]) {
       expect(rootEntry).not.toMatch(new RegExp(`\\b${symbol}\\b`));
     }
+    const internalEntry = readFileSync(resolve(srcOf("fastagent"), "internal.ts"), "utf8");
+    expect(internalEntry).toMatch(/\bdefineDefinition\b/);
     const platformEntry = readFileSync(resolve(srcOf("fastagent"), "platform.ts"), "utf8");
     for (const symbol of ["PostgresDatabase", "PostgresLimits", "CreateIndex", "PgExecutor"]) {
       expect(platformEntry).toMatch(new RegExp(`\\b${symbol}\\b`));
