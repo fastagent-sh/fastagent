@@ -59,7 +59,17 @@ my-agent/
 | **本地开发** | `fastagent dev`、`fastagent invoke` | 本地 SQLite（`.fastagent/dev/.state/`） |
 | **应用内嵌入** | `openAgent(definition, { root, secrets, env })` | 本地 SQLite 或 PostgreSQL（独占或通过 `openPostgresDatabase` 共享连接池） |
 | **容器自托管 / 托管云** | `fastagent deploy init docker\|compose\|fly\|railway` | 挂载卷 `/data` 或 `FASTAGENT_DATABASE_URL`（PostgreSQL） |
-| **Amazon Bedrock AgentCore** | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | 每个 AgentCore 会话独立 MicroVM + Aurora DSQL + Secrets Manager |
+| **Amazon Bedrock AgentCore** | `npm i @fastagent-sh/agentcore && fastagent deploy init agentcore` | 每个 AgentCore 会话独立 MicroVM + 1 个共享 Aurora DSQL 集群（或 `FASTAGENT_DATABASE_URL`）+ Secrets Manager |
+
+### 场景选型速查
+
+| 产品场景 | 推荐拓扑 | 核心匹配原因 |
+| --- | --- | --- |
+| **B2B SaaS 侧边栏助手**（无需用户跑 `bash`） | 嵌入式 `openAgent()` + 共享 `openPostgresDatabase()`（`codingTools: false`） | 复用现有鉴权与 Postgres 连接池，自带池级批量续约与多副本空闲协作让渡 |
+| **每用户云端工作站 / AI 员工**（需执行代码与 `bash`） | AWS AgentCore 独立 MicroVM + 1 个共享 Aurora DSQL 集群 | 强 VM 级用户隔离且零闲置算力费；高吞吐时改 `FASTAGENT_DATABASE_URL` 即可零代码切至包月 Postgres |
+| **低频后台自动化员工**（PR 审查、AI SRE、每日简报） | Fly.io / Railway 空闲休眠容器 + `POST /v1/invoke` + 可选 `dsh` 沙箱 | Webhook/定时触发间隙自动休眠到零、幂等防重试、内核级限制 shell 权限 |
+| **本地优先桌面应用**（Electron、本地研发/数据工具） | 本地嵌入 `openAgent()` + 内置 `node:sqlite` + 可选 `dsh` OS 沙箱 | 零云端中转、零外部数据库安装、离线持久会话与动态模型选择器 |
+| **企业多团队 Agent 平台** | 各团队用 `fastagent build` 发布版本化 npm 包，平台团队在单一 Node 宿主统一托管 | 通过 `peerDependencies` 共享运行时、统一鉴权与追踪、标准 SemVer 秒级回滚 |
 
 ## FastAgent 刻意留给外部应用的职责
 
@@ -72,7 +82,7 @@ my-agent/
 
 ## 当前边界
 
-- **单实例单写者：** 同一时刻只有一个进程拥有某个实例的存储写权限（通过 SQLite `EXCLUSIVE` 锁或 PostgreSQL/DSQL 租约强制保障）。水平扩展应跨实例进行（例如按用户或租户拆分实例），而非让多个写进程同时挂载同一实例。
+- **单实例单写者：** 同一时刻只有一个进程拥有某个实例的存储写权限（通过 SQLite `EXCLUSIVE` 锁或 PostgreSQL/DSQL 租约强制保障）。水平扩展应跨实例进行（例如按用户或租户拆分实例），而非让多个写进程同时挂载同一实例。在 PostgreSQL/DSQL 下，滚动发版或流量漂移时，空闲实例会自动协作让渡租约给等待中的新副本，且绝不打断正在执行的对话步骤。
 - **实验性 DSH Harness：** `@fastagent-sh/harness-dsh` 提供完整的 Agent API 契约一致性与内核级 OS 沙箱，当前锁定上游预发布版本的 `@deepseek-ai/dsh`。
 
 ## 下一步

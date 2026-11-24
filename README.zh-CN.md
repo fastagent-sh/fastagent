@@ -116,7 +116,7 @@ npm exec -- fastagent deploy check --json   # 拦截 .secrets/、.env* 或 .stat
 npm publish ./dist --access restricted
 ```
 
-跨应用升级或回滚一个 Agent，就是一次标准的 SemVer 版本变更（`npm i @acme/saas-copilot@1.4.2`）。详见[打包、分发与 CI/CD](./docs/zh-CN/packaging-and-ci.md)。
+跨应用升级或回滚一个 Agent，就是一次标准的 SemVer 版本变更（`npm i @acme/saas-copilot@1.4.2`）；平台团队也可以在同一个 Node.js 宿主里集中安装并托管多个业务团队发布的 npm Agent 包，统一鉴权、可观测与版本治理。详见[打包、分发与 CI/CD](./docs/zh-CN/packaging-and-ci.md)。
 
 ## 嵌入应用、自托管或通过 HTTP 调用
 
@@ -188,8 +188,9 @@ console.log(reply.status, reply.answer?.text);
 | 规模与负载场景 | 传统方案的典型瓶颈 | FastAgent 架构模式 | 量化架构效果 |
 | --- | --- | --- | --- |
 | **1–20 个后台 Agent**<br>（PR 审查、AI SRE、每日简报） | 常驻容器 95% 以上时间空转 | **空闲休眠（Sleep when idle）**：Fly.io（`suspend`）或 Railway（App Sleeping）配合 `POST /v1/invoke` 按需唤醒 | 相比 24/7 常驻容器**减少约 98% 闲置算力消耗**（每天 20 次 × 1 分钟 ≈ 每月 10 活跃小时 vs 720 常驻小时） |
-| **100–1,000+ SaaS 租户**<br>（产品内嵌 Copilot） | 每租户独立微服务或 1,000 个连接池打爆 Postgres 连接上限 | **嵌入现有后端**：`openAgent()` + 共享 `openPostgresDatabase({ url }, { max: 20 })`（`codingTools: false`） | **0 额外微服务**；**1 个固定 20 连接的 Postgres 连接池**服务 1,000 个按 `name` 分区的租户，Schema 仅迁移 1 次 |
-| **100–10,000+ 独立隔离用户**<br>（每用户独立沙箱助手） | 维护上百台常驻 VM，闲置成本与运维失控 | **每用户 AWS MicroVM**：Bedrock AgentCore + 无服务器 Aurora DSQL | **0 常驻服务器运维**；按需分配独立 MicroVM，空闲自动回收并从 DSQL 无缝续接 |
+| **100–1,000+ SaaS 租户**<br>（产品内嵌 Copilot） | 每租户独立微服务、1,000 个连接池或高频租约心跳压垮 Postgres | **嵌入现有后端**：`openAgent()` + 共享 `openPostgresDatabase({ url }, { max: 20 })`（`codingTools: false`） | **0 额外微服务**；**1 个固定 20 连接池**，**按每批最多 500 租户批量续约**，多副本滚动发版自动协作让渡空闲租户 |
+| **100–10,000+ 独立隔离用户**<br>（每用户可跑代码/命令的助手） | 维护上百台常驻 VM，闲置成本与运维失控 | **每用户独立 AWS MicroVM**（Bedrock AgentCore）+ **1 个共享的无服务器 Aurora DSQL 集群**（支持 `pi-durable` 与 `dsh`） | **0 常驻服务器运维**；按需分配独立 MicroVM、空闲自动回收并从同一个共享 DSQL 集群恢复（高吞吐时改 `FASTAGENT_DATABASE_URL` 即可零代码切至包月 PG） |
+| **本地优先桌面应用**<br>（Electron、本地研发/数据工具） | 桌面端难以随包携带 Python 环境，或被迫走云端中转本地文件 | **本地嵌入式**：`openAgent()` + 内置 `node:sqlite` + 可选 `dsh` OS 沙箱 | **0 云端服务依赖**、**0 原生 C++ 编译**；离线持久会话配合 `agent.info().models` 动态模型选择器 |
 
 <sub>单写者租约隔离确保同一实例同一时刻只有一个活跃写进程（默认上限：`inFlightPerProcess: 100`、`queuedPerSession: 20`）。通过多实例或 AgentCore 自动按用户分片实现水平扩展。</sub>
 
