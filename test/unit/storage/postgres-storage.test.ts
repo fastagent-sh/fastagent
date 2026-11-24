@@ -590,16 +590,22 @@ describe("postgres-kit shared storage primitives", () => {
       const name = freshInstance();
       let busy = true;
       let lostError: Error | undefined;
+      let handedOff = false;
       let holder!: Awaited<ReturnType<typeof acquirePgInstanceLease>>;
       holder = await acquirePgInstanceLease(db, {
         table: "kit_handoff_leases",
         instance: name,
         leaseMs: 1_200,
         waitMs: 0,
-        canYield: () => !busy,
+        handoff: {
+          canYield: () => !busy,
+          onHandoff: () => {
+            handedOff = true;
+            void holder.release();
+          },
+        },
         onLost: (err) => {
           lostError = err;
-          void holder.release();
         },
       });
 
@@ -631,12 +637,15 @@ describe("postgres-kit shared storage primitives", () => {
         { timeout: 3_000 },
       );
       await new Promise((resolve) => setTimeout(resolve, 450));
+      expect(handedOff).toBe(false);
       expect(lostError).toBeUndefined();
 
-      // Once idle (busy = false), the holder yields on its next renewal tick and the contender takes over cleanly.
+      // Once idle (busy = false), the holder yields via onHandoff (never onLost) and fences local writes.
       busy = false;
       const successor = await contender;
-      expect(lostError?.message).toMatch(/handed off while idle/);
+      expect(handedOff).toBe(true);
+      expect(lostError).toBeUndefined();
+      expect(holder.lost?.message).toMatch(/handed off while idle/);
       await successor.release();
       await holder.release();
     } finally {

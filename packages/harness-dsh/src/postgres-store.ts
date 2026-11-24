@@ -37,6 +37,12 @@ export interface DshPgLimits {
   readonly bytesPerValue?: number;
 }
 
+/** Cooperative idle handoff hooks for single-writer PostgreSQL leases. */
+export interface DshPgLeaseHandoff {
+  readonly canYield: () => boolean;
+  readonly onHandoff: () => void;
+}
+
 /** Single-writer instance lease handle injected by `@fastagent-sh/fastagent` or created by the built-in fallback. */
 export interface DshPgLease {
   readonly owner: string;
@@ -63,7 +69,7 @@ export interface DshPgStoreKit {
       readonly owner?: string;
       readonly leaseMs?: number;
       readonly waitMs?: number;
-      readonly canYield?: () => boolean;
+      readonly handoff?: DshPgLeaseHandoff;
       readonly onLost?: (error: Error) => void;
       readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
       readonly formatHeldError?: (info: {
@@ -85,9 +91,9 @@ export interface PostgresDshStoreOptions {
   readonly waitMs?: number;
   /** Custom owner identifier for diagnostics. Default: random UUID. */
   readonly owner?: string;
-  /** Optional predicate reporting whether this instance is idle and safe to yield on cooperative handoff. */
-  readonly canYield?: () => boolean;
-  /** Invoked once if the single-writer lease is lost or fails renewal before expiry. */
+  /** Optional cooperative idle handoff hooks (never invokes `onLost`). */
+  readonly handoff?: DshPgLeaseHandoff;
+  /** Invoked once if the single-writer lease is lost unexpectedly or fails renewal before expiry. */
   readonly onLost?: (error: Error) => void;
   /** Index builder for databases requiring async index creation (Aurora DSQL). */
   readonly createIndex?: DshPgCreateIndex;
@@ -279,7 +285,7 @@ async function defaultAcquireLease(
     readonly owner?: string;
     readonly leaseMs?: number;
     readonly waitMs?: number;
-    readonly canYield?: () => boolean;
+    readonly handoff?: DshPgLeaseHandoff;
     readonly onLost?: (error: Error) => void;
     readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
     readonly formatHeldError?: (info: {
@@ -351,9 +357,11 @@ async function defaultAcquireLease(
   let released = false;
   let renewedAt = Date.now();
   let onLost = options.onLost;
+  let onHandoff = options.handoff?.onHandoff;
 
   const lose = (why?: Error, notify = false): Error => {
     clearInterval(timer);
+    onHandoff = undefined;
     lost ??= why ?? options.formatLostError?.(instance) ?? new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
     if (notify) {
       const cb = onLost;
@@ -361,6 +369,16 @@ async function defaultAcquireLease(
       cb?.(lost);
     }
     return lost;
+  };
+
+  const triggerHandoff = (): void => {
+    if (released || lost !== undefined) return;
+    clearInterval(timer);
+    onLost = undefined;
+    lost = new Error(`PostgreSQL DSH lease for "${instance}" was handed off while idle to another process`);
+    const cb = onHandoff;
+    onHandoff = undefined;
+    cb?.();
   };
 
   const timer = setInterval(
@@ -386,11 +404,8 @@ async function defaultAcquireLease(
               return;
             }
             renewedAt = Date.now();
-            if (kept.handoff_requested_at !== null && options.canYield?.() === true) {
-              lose(
-                new Error(`PostgreSQL DSH lease for "${instance}" was handed off while idle to another process`),
-                true,
-              );
+            if (kept.handoff_requested_at !== null && options.handoff?.canYield() === true) {
+              triggerHandoff();
             }
           },
           (error: unknown) => {
@@ -420,6 +435,7 @@ async function defaultAcquireLease(
       if (released) return;
       released = true;
       onLost = undefined;
+      onHandoff = undefined;
       clearInterval(timer);
       await db.query(
         `UPDATE ${table} SET owner = NULL, lease_until = NULL, handoff_requested_at = NULL
@@ -557,7 +573,7 @@ export async function openPostgresDshStore(
     owner,
     leaseMs,
     waitMs,
-    ...(options.canYield === undefined ? {} : { canYield: options.canYield }),
+    ...(options.handoff === undefined ? {} : { handoff: options.handoff }),
     ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
     onTake: async (tx, newOwner) => {
       await tx.query("UPDATE dsh_metadata SET owner = $2 WHERE instance = $1", [instance, newOwner]);

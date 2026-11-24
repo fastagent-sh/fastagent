@@ -11,6 +11,7 @@ import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent, ServingStorage } from "../serving.ts";
 import type { PostgresDatabase } from "../../postgres.ts";
+import type { PgLeaseHandoff } from "../../postgres-kit.ts";
 import type { DurableAgent } from "./agent.ts";
 import { mcpTools } from "../mcp.ts";
 import { assembleAgent } from "./open.ts";
@@ -26,7 +27,7 @@ function openInstanceStorage(
   place: InstancePlace,
   database: PostgresDatabase | undefined,
   onLost?: (error: Error) => void,
-  canYield?: () => boolean,
+  handoff?: PgLeaseHandoff,
 ): Promise<Storage> {
   if (database !== undefined) {
     if (place.name === undefined) {
@@ -41,7 +42,7 @@ function openInstanceStorage(
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
       ...(onLost === undefined ? {} : { onLost }),
-      ...(canYield === undefined ? {} : { canYield }),
+      ...(handoff === undefined ? {} : { handoff }),
     });
   }
   return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
@@ -52,10 +53,10 @@ function openStorage(
   database: PostgresDatabase | undefined,
   storage: ServingStorage,
   onLost: (error: Error) => void,
-  canYield: () => boolean,
+  handoff: PgLeaseHandoff,
 ): Promise<Storage> | Storage {
   if (storage === "memory") return new MemoryStorage();
-  if (storage === "instance") return openInstanceStorage(place, database, onLost, canYield);
+  if (storage === "instance") return openInstanceStorage(place, database, onLost, handoff);
   return openLockedStorage(storage.file, storage.holders);
 }
 
@@ -78,14 +79,12 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
   } = ctx;
 
   let stopRuns: ((error: Error) => void) | undefined;
+  let handoffRuns: (() => void) | undefined;
   let isIdle: (() => boolean) | undefined;
-  const storage = await openStorage(
-    place,
-    database,
-    chosen,
-    (error) => stopRuns?.(error),
-    () => isIdle?.() === true,
-  );
+  const storage = await openStorage(place, database, chosen, (error) => stopRuns?.(error), {
+    canYield: () => isIdle?.() === true,
+    onHandoff: () => handoffRuns?.(),
+  });
   if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
 
   let mcp: McpClients | undefined;
@@ -123,6 +122,13 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
   }
 
   isIdle = () => work.active() === 0;
+
+  handoffRuns = () => {
+    log.info(`[fastagent] handing off idle instance "${name}" to another process`);
+    agent.harness
+      .close(BACKGROUND_CONTEXT)
+      .catch((cause: unknown) => log.warn(`[fastagent] handing off instance "${name}" failed: ${String(cause)}`));
+  };
 
   stopRuns = (error) => {
     log.error(`[fastagent] ${error.message}: stopping its runs`);

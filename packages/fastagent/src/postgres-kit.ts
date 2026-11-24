@@ -134,13 +134,19 @@ const GIVE_UP_AFTER = 2 / 3;
 /** Maximum instances renewed in a single batch SQL statement (safely below Aurora DSQL's 3,000-row transaction cap). */
 const RENEW_BATCH_SIZE = 500;
 
+export interface PgLeaseHandoff {
+  readonly canYield: () => boolean;
+  readonly onHandoff: () => void;
+}
+
 interface LeaseRenewalEntry {
   readonly instance: string;
   readonly owner: string;
   readonly leaseMs: number;
-  readonly canYield: (() => boolean) | undefined;
+  readonly handoff: PgLeaseHandoff | undefined;
   readonly isActive: () => boolean;
   readonly lose: (why?: Error, notify?: boolean) => Error;
+  readonly triggerHandoff: () => void;
   renewedAt: number;
 }
 
@@ -190,9 +196,8 @@ async function renewLeaseBatch(
         }
         entry.renewedAt = now;
         const requestedAt = keptByInstance.get(entry.instance);
-        if (requestedAt !== null && requestedAt !== undefined && entry.canYield?.() === true) {
-          log.info(`[fastagent] handing off idle instance "${entry.instance}" to another process`);
-          entry.lose(new Error(`the instance "${entry.instance}" was handed off while idle to another process`), true);
+        if (requestedAt !== null && requestedAt !== undefined && entry.handoff?.canYield() === true) {
+          entry.triggerHandoff();
         }
       }
     } catch (error) {
@@ -290,13 +295,13 @@ export interface PgLeaseOptions<TTake = void> {
   /** Optional shared pool handle to coalesce lease renewals across all instances on the same pool. */
   readonly pool?: SharedPostgresHandle;
   /**
-   * Optional predicate reporting whether this instance is currently idle and safe to yield to a waiting process
-   * when a cooperative handoff is requested. Never yields when unset or returning `false`.
+   * Optional cooperative idle handoff hooks: when another process is waiting to open this instance and `canYield()`
+   * returns `true`, the lease stops renewing, fences further writes, and invokes `onHandoff()` (never `onLost`).
    */
-  readonly canYield?: () => boolean;
+  readonly handoff?: PgLeaseHandoff;
   /** Human-readable description of what else opens the instance, included in the default `InstanceHeld` error. */
   readonly holders?: string;
-  /** Invoked once if the lease is lost (taken over, handed off while idle, or unreachable past `2/3` of `leaseMs`). */
+  /** Invoked once if the lease is lost unexpectedly (taken over or unreachable past `2/3` of `leaseMs`). */
   readonly onLost?: (error: Error) => void;
   /**
    * Optional work executed inside the lease-acquisition transaction right after the lease row is claimed.
@@ -420,10 +425,12 @@ export async function acquirePgInstanceLease<TTake = void>(
   let lost: Error | undefined;
   let released = false;
   let onLost = options.onLost;
+  let onHandoff = options.handoff?.onHandoff;
   let unregister = () => {};
 
   const lose = (why?: Error, notify = false): Error => {
     unregister();
+    onHandoff = undefined;
     lost ??=
       why ??
       options.formatLostError?.(instance) ??
@@ -436,13 +443,24 @@ export async function acquirePgInstanceLease<TTake = void>(
     return lost;
   };
 
+  const triggerHandoff = (): void => {
+    if (released || lost !== undefined) return;
+    unregister();
+    onLost = undefined;
+    lost = new Error(`the instance "${instance}" was handed off while idle to another process`);
+    const cb = onHandoff;
+    onHandoff = undefined;
+    cb?.();
+  };
+
   const entry: LeaseRenewalEntry = {
     instance,
     owner,
     leaseMs,
-    canYield: options.canYield,
+    handoff: options.handoff,
     isActive: () => !released && lost === undefined,
     lose,
+    triggerHandoff,
     renewedAt: Date.now(),
   };
 
@@ -472,6 +490,7 @@ export async function acquirePgInstanceLease<TTake = void>(
       if (released) return;
       released = true;
       onLost = undefined;
+      onHandoff = undefined;
       unregister();
       await db.query(
         `UPDATE ${table} SET owner = NULL, lease_until = NULL, handoff_requested_at = NULL

@@ -27,6 +27,7 @@ import {
   DEFAULT_LEASE_WAIT_MS,
   InstanceHeld,
   type PgInstanceLease,
+  type PgLeaseHandoff,
   acquirePgInstanceLease,
   isPgConflict,
   migratePgSchema,
@@ -72,7 +73,7 @@ export interface DshModule {
     instance: string,
     options?: {
       readonly waitMs?: number;
-      readonly canYield?: () => boolean;
+      readonly handoff?: PgLeaseHandoff;
       readonly onLost?: (error: Error) => void;
       readonly createIndex?: CreateIndex;
       readonly limits?: PostgresLimits;
@@ -93,7 +94,7 @@ export interface DshModule {
             readonly owner?: string;
             readonly leaseMs?: number;
             readonly waitMs?: number;
-            readonly canYield?: () => boolean;
+            readonly handoff?: PgLeaseHandoff;
             readonly onLost?: (error: Error) => void;
             readonly onTake?: (tx: PgExecutor, owner: string) => Promise<void>;
             readonly formatHeldError?: (info: {
@@ -175,7 +176,7 @@ async function openInstanceDshStore(
   place: InstancePlace,
   database: PostgresDatabase | undefined,
   onLost?: (error: Error) => void,
-  canYield?: () => boolean,
+  handoff?: PgLeaseHandoff,
 ): Promise<{ store: DshStorageBackend & { close(): Promise<void> }; ownedPgClose?: () => Promise<void> }> {
   if (database !== undefined) {
     if (place.name === undefined) {
@@ -209,7 +210,7 @@ async function openInstanceDshStore(
           readonly owner?: string;
           readonly leaseMs?: number;
           readonly waitMs?: number;
-          readonly canYield?: () => boolean;
+          readonly handoff?: PgLeaseHandoff;
           readonly onLost?: (error: Error) => void;
           readonly onTake?: (tx: PgExecutor, owner: string) => Promise<void>;
           readonly formatHeldError?: (info: {
@@ -226,7 +227,7 @@ async function openInstanceDshStore(
     try {
       const store = await dsh.openPostgresDshStore(acquired.db, place.name, {
         waitMs: DEFAULT_LEASE_WAIT_MS,
-        ...(canYield === undefined ? {} : { canYield }),
+        ...(handoff === undefined ? {} : { handoff }),
         ...(onLost === undefined ? {} : { onLost }),
         ...(database.createIndex === undefined ? {} : { createIndex: database.createIndex }),
         ...(database.limits === undefined ? {} : { limits: database.limits }),
@@ -289,6 +290,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
   );
 
   let stopRuns: ((error: Error) => void) | undefined;
+  let handoffRuns: (() => void) | undefined;
   let isIdle: (() => boolean) | undefined;
   let store: DshStorageBackend;
   let ownedPgClose: (() => Promise<void>) | undefined;
@@ -297,13 +299,10 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
   } else if (chosen !== "instance") {
     store = openSqliteWithHelpfulLockError(dsh, chosen.file);
   } else {
-    const opened = await openInstanceDshStore(
-      dsh,
-      place,
-      database,
-      (error) => stopRuns?.(error),
-      () => isIdle?.() === true,
-    );
+    const opened = await openInstanceDshStore(dsh, place, database, (error) => stopRuns?.(error), {
+      canYield: () => isIdle?.() === true,
+      onHandoff: () => handoffRuns?.(),
+    });
     store = opened.store;
     ownedPgClose = opened.ownedPgClose;
     if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
@@ -378,6 +377,11 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
   };
 
   isIdle = () => !dshAgent.busy() && work.active() === 0;
+
+  handoffRuns = () => {
+    log.info(`[fastagent] handing off idle instance "${name}" to another process`);
+    close().catch((cause: unknown) => log.warn(`[fastagent] handing off instance "${name}" failed: ${String(cause)}`));
+  };
 
   stopRuns = (error) => {
     log.error(`[fastagent] ${error.message}: stopping its runs`);

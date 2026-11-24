@@ -77,6 +77,7 @@ import {
   DEFAULT_LEASE_WAIT_MS,
   InstanceHeld,
   type PgInstanceLease,
+  type PgLeaseHandoff,
   acquirePgInstanceLease,
   isPgConflict,
 } from "../../../postgres-kit.ts";
@@ -159,7 +160,7 @@ export interface OpenOptions {
   lease?: LeaseOptions;
   limits?: PostgresLimits;
   pool?: SharedPostgresHandle;
-  canYield?: () => boolean;
+  handoff?: PgLeaseHandoff;
   onLost?: (error: Error) => void;
 }
 
@@ -200,7 +201,7 @@ export class PostgresStorage implements Storage {
       leaseMs: leaseOpts.leaseMs,
       waitMs: leaseOpts.waitMs,
       ...(options.pool === undefined ? {} : { pool: options.pool }),
-      ...(options.canYield === undefined ? {} : { canYield: options.canYield }),
+      ...(options.handoff === undefined ? {} : { handoff: options.handoff }),
       ...(options.holders === undefined ? {} : { holders: options.holders }),
       ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
       onTake: async (tx, owner) => {
