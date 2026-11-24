@@ -41,7 +41,6 @@ export interface DshPgLimits {
 export interface DshPgLease {
   readonly owner: string;
   readonly lost: Error | undefined;
-  assertInTx(tx: DshPgExecutor): Promise<void>;
   lose(why?: Error, notify?: boolean): Error;
   release(): Promise<void>;
 }
@@ -65,6 +64,7 @@ export interface DshPgStoreKit {
       readonly leaseMs?: number;
       readonly waitMs?: number;
       readonly onLost?: (error: Error) => void;
+      readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
       readonly formatHeldError?: (info: {
         readonly instance: string;
         readonly until: string;
@@ -118,6 +118,10 @@ const DSH_LEASE_TABLE = "dsh_leases";
 const DSH_SCHEMA_TABLE = "dsh_schema";
 
 const MIGRATION_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS dsh_metadata (
+    instance TEXT PRIMARY KEY,
+    owner    TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS dsh_leases (
     instance    TEXT PRIMARY KEY,
     owner       TEXT,
@@ -272,6 +276,7 @@ async function defaultAcquireLease(
     readonly leaseMs?: number;
     readonly waitMs?: number;
     readonly onLost?: (error: Error) => void;
+    readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
     readonly formatHeldError?: (info: {
       readonly instance: string;
       readonly until: string;
@@ -296,7 +301,9 @@ async function defaultAcquireLease(
             WHERE instance = $1 AND (owner IS NULL OR lease_until < now()) RETURNING instance`,
           [instance, owner, leaseMs],
         );
-        return leased !== undefined;
+        if (leased === undefined) return false;
+        await options.onTake?.(tx, owner);
+        return true;
       })
       .catch((error: unknown) => {
         if (defaultIsConflict(error)) return false;
@@ -315,7 +322,8 @@ async function defaultAcquireLease(
         new DshInstanceHeldError(instance, holder ?? "unknown")
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(5, deadline - Date.now()))));
+    const remaining = Math.max(5, deadline - Date.now());
+    await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, leaseMs / 3, remaining)));
   }
 
   let lost: Error | undefined;
@@ -369,16 +377,6 @@ async function defaultAcquireLease(
     owner,
     get lost() {
       return lost;
-    },
-    async assertInTx(tx: DshPgExecutor) {
-      if (lost !== undefined) throw lost;
-      const [kept] = await tx.query(
-        `UPDATE ${table} SET lease_until = now() + make_interval(secs => $3::double precision / 1000)
-          WHERE instance = $1 AND owner = $2 AND lease_until > now() RETURNING instance`,
-        [instance, owner, leaseMs],
-      );
-      if (kept === undefined) throw lose(undefined, true);
-      renewedAt = Date.now();
     },
     lose,
     async release() {
@@ -513,6 +511,8 @@ export async function openPostgresDshStore(
     version: { table: DSH_SCHEMA_TABLE, current: DSH_SCHEMA_VERSION },
   });
 
+  await database.query("INSERT INTO dsh_metadata (instance) VALUES ($1) ON CONFLICT (instance) DO NOTHING", [instance]);
+
   const lease = await acquireLease(database, {
     table: DSH_LEASE_TABLE,
     instance,
@@ -520,6 +520,9 @@ export async function openPostgresDshStore(
     leaseMs,
     waitMs,
     ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
+    onTake: async (tx, newOwner) => {
+      await tx.query("UPDATE dsh_metadata SET owner = $2 WHERE instance = $1", [instance, newOwner]);
+    },
     formatHeldError: ({ instance: name, holder }) => new DshInstanceHeldError(name, holder ?? "unknown"),
     formatLostError: (name) => new Error(`PostgreSQL DSH lease for "${name}" was lost`),
   });
@@ -532,18 +535,38 @@ export async function openPostgresDshStore(
     if (lease.lost !== undefined) throw lease.lost;
   };
 
-  const runFencedWrite = async <T>(work: (tx: DshPgExecutor) => Promise<T>): Promise<T> => {
-    assertStoreOpen();
-    try {
-      return await database.transaction(async (tx) => {
-        await lease.assertInTx(tx);
-        return work(tx);
-      });
-    } catch (error) {
-      if (isConflict(error)) throw lease.lose(undefined, true);
-      throw error;
-    }
+  // Serialize in-process writes for this instance and fence against `dsh_metadata` (separate from `dsh_leases`)
+  // so background lease renewal and concurrent sessions in this process never trigger self-inflicted 40001/OC000.
+  let writeChain: Promise<void> = Promise.resolve();
+  const runFencedWrite = <T>(work: (tx: DshPgExecutor) => Promise<T>): Promise<T> => {
+    const run = async (): Promise<T> => {
+      assertStoreOpen();
+      try {
+        return await database.transaction(async (tx) => {
+          const [fenced] = await tx.query(
+            "UPDATE dsh_metadata SET owner = $2 WHERE instance = $1 AND owner = $2 RETURNING instance",
+            [instance, lease.owner],
+          );
+          if (fenced === undefined) throw lease.lose(undefined, true);
+          return work(tx);
+        });
+      } catch (error) {
+        if (isConflict(error)) throw lease.lose(undefined, true);
+        throw error;
+      }
+    };
+    const next = writeChain.then(run, run);
+    writeChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   };
+
+  // When `bytesPerValue` chunking is active, read parent rows and `dsh_values` in one REPEATABLE READ snapshot
+  // so concurrent updates to mutable records (messages, session metadata) can never produce torn reads.
+  const runConsistentRead = <T>(work: (exec: DshPgExecutor) => Promise<T>): Promise<T> =>
+    bytesPerValue === undefined ? work(database) : database.transaction(work);
 
   const makeHandle = (
     id: string,
@@ -573,27 +596,29 @@ export async function openPostgresDshStore(
         if (length !== undefined && (!Number.isInteger(length) || length < 0)) {
           throw new Error(`DSH read length must be a non-negative integer, got ${String(length)}`);
         }
-        const rows =
-          length === undefined
-            ? await database.query<{ seq: number; event_json: string; event_parts: number | null }>(
-                "SELECT seq, event_json, event_parts FROM dsh_events WHERE instance = $1 AND session_id = $2 AND seq >= $3 ORDER BY seq ASC",
-                [instance, id, offset],
-              )
-            : await database.query<{ seq: number; event_json: string; event_parts: number | null }>(
-                "SELECT seq, event_json, event_parts FROM dsh_events WHERE instance = $1 AND session_id = $2 AND seq >= $3 ORDER BY seq ASC LIMIT $4",
-                [instance, id, offset, length],
-              );
-        const texts = await readValues(
-          database,
-          instance,
-          "event",
-          rows.map((row) => ({
-            sessionId: id,
-            itemKey: String(row.seq),
-            body: row.event_json,
-            parts: row.event_parts,
-          })),
-        );
+        const texts = await runConsistentRead(async (exec) => {
+          const rows =
+            length === undefined
+              ? await exec.query<{ seq: number; event_json: string; event_parts: number | null }>(
+                  "SELECT seq, event_json, event_parts FROM dsh_events WHERE instance = $1 AND session_id = $2 AND seq >= $3 ORDER BY seq ASC",
+                  [instance, id, offset],
+                )
+              : await exec.query<{ seq: number; event_json: string; event_parts: number | null }>(
+                  "SELECT seq, event_json, event_parts FROM dsh_events WHERE instance = $1 AND session_id = $2 AND seq >= $3 ORDER BY seq ASC LIMIT $4",
+                  [instance, id, offset, length],
+                );
+          return readValues(
+            exec,
+            instance,
+            "event",
+            rows.map((row) => ({
+              sessionId: id,
+              itemKey: String(row.seq),
+              body: row.event_json,
+              parts: row.event_parts,
+            })),
+          );
+        });
         return {
           events: texts.map((text) => JSON.parse(text) as DshSessionEvent),
           eventState: "detached" as const,
@@ -731,27 +756,28 @@ export async function openPostgresDshStore(
         writers.add(id);
       }
       try {
-        const rows = await database.query<{
-          header_json: string;
-          header_parts: number | null;
-          inherited_event_count: number;
-        }>(
-          "SELECT header_json, header_parts, inherited_event_count FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
-          [instance, id],
-        );
-        const row = rows[0];
-        if (row === undefined) {
-          throw new Error(`DSH session "${id}" does not exist`);
-        }
-        const [headerText] = await readValues(database, instance, "header", [
-          { sessionId: id, itemKey: "header", body: row.header_json, parts: row.header_parts },
-        ]);
-        return makeHandle(
-          id,
-          access,
-          JSON.parse(headerText as string) as DshSessionHeader,
-          Number(row.inherited_event_count),
-        );
+        const loaded = await runConsistentRead(async (exec) => {
+          const rows = await exec.query<{
+            header_json: string;
+            header_parts: number | null;
+            inherited_event_count: number;
+          }>(
+            "SELECT header_json, header_parts, inherited_event_count FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
+            [instance, id],
+          );
+          const row = rows[0];
+          if (row === undefined) {
+            throw new Error(`DSH session "${id}" does not exist`);
+          }
+          const [headerText] = await readValues(exec, instance, "header", [
+            { sessionId: id, itemKey: "header", body: row.header_json, parts: row.header_parts },
+          ]);
+          return {
+            header: JSON.parse(headerText as string) as DshSessionHeader,
+            inheritedEventCount: Number(row.inherited_event_count),
+          };
+        });
+        return makeHandle(id, access, loaded.header, loaded.inheritedEventCount);
       } catch (error) {
         if (access === "write") writers.delete(id);
         throw error;
@@ -764,87 +790,93 @@ export async function openPostgresDshStore(
 
     async stat(id) {
       assertStoreOpen();
-      const rows = await database.query<{
-        header_json: string;
-        header_parts: number | null;
-        event_count: string | number;
-      }>(
-        `SELECT s.header_json, s.header_parts, COALESCE(e.cnt, 0) AS event_count
-         FROM dsh_sessions s
-         LEFT JOIN (
-           SELECT session_id, COUNT(*) AS cnt
-           FROM dsh_events
-           WHERE instance = $1 AND session_id = $2
-           GROUP BY session_id
-         ) e ON e.session_id = s.session_id
-         WHERE s.instance = $1 AND s.session_id = $2`,
-        [instance, id],
-      );
-      const row = rows[0];
-      if (row === undefined) return undefined;
-      const [headerText] = await readValues(database, instance, "header", [
-        { sessionId: id, itemKey: "header", body: row.header_json, parts: row.header_parts },
-      ]);
-      const count = Number(row.event_count);
-      return {
-        header: JSON.parse(headerText as string) as DshSessionHeader,
-        revision: String(count),
-        eventCount: count,
-      };
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{
+          header_json: string;
+          header_parts: number | null;
+          event_count: string | number;
+        }>(
+          `SELECT s.header_json, s.header_parts, COALESCE(e.cnt, 0) AS event_count
+           FROM dsh_sessions s
+           LEFT JOIN (
+             SELECT session_id, COUNT(*) AS cnt
+             FROM dsh_events
+             WHERE instance = $1 AND session_id = $2
+             GROUP BY session_id
+           ) e ON e.session_id = s.session_id
+           WHERE s.instance = $1 AND s.session_id = $2`,
+          [instance, id],
+        );
+        const row = rows[0];
+        if (row === undefined) return undefined;
+        const [headerText] = await readValues(exec, instance, "header", [
+          { sessionId: id, itemKey: "header", body: row.header_json, parts: row.header_parts },
+        ]);
+        const count = Number(row.event_count);
+        return {
+          header: JSON.parse(headerText as string) as DshSessionHeader,
+          revision: String(count),
+          eventCount: count,
+        };
+      });
     },
 
     async list() {
       assertStoreOpen();
-      const rows = await database.query<{
-        session_id: string;
-        header_json: string;
-        header_parts: number | null;
-        event_count: string | number;
-      }>(
-        `SELECT s.session_id, s.header_json, s.header_parts, COALESCE(e.cnt, 0) AS event_count
-         FROM dsh_sessions s
-         LEFT JOIN (
-           SELECT session_id, COUNT(*) AS cnt
-           FROM dsh_events
-           WHERE instance = $1
-           GROUP BY session_id
-         ) e ON e.session_id = s.session_id
-         WHERE s.instance = $1`,
-        [instance],
-      );
-      const headers = await readValues(
-        database,
-        instance,
-        "header",
-        rows.map((row) => ({
-          sessionId: row.session_id,
-          itemKey: "header",
-          body: row.header_json,
-          parts: row.header_parts,
-        })),
-      );
-      return rows.map((row, idx) => {
-        const count = Number(row.event_count);
-        return {
-          header: JSON.parse(headers[idx] as string) as DshSessionHeader,
-          revision: String(count),
-          eventCount: count,
-        } satisfies DshSessionSnapshot;
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{
+          session_id: string;
+          header_json: string;
+          header_parts: number | null;
+          event_count: string | number;
+        }>(
+          `SELECT s.session_id, s.header_json, s.header_parts, COALESCE(e.cnt, 0) AS event_count
+           FROM dsh_sessions s
+           LEFT JOIN (
+             SELECT session_id, COUNT(*) AS cnt
+             FROM dsh_events
+             WHERE instance = $1
+             GROUP BY session_id
+           ) e ON e.session_id = s.session_id
+           WHERE s.instance = $1`,
+          [instance],
+        );
+        const headers = await readValues(
+          exec,
+          instance,
+          "header",
+          rows.map((row) => ({
+            sessionId: row.session_id,
+            itemKey: "header",
+            body: row.header_json,
+            parts: row.header_parts,
+          })),
+        );
+        return rows.map((row, idx) => {
+          const count = Number(row.event_count);
+          return {
+            header: JSON.parse(headers[idx] as string) as DshSessionHeader,
+            revision: String(count),
+            eventCount: count,
+          } satisfies DshSessionSnapshot;
+        });
       });
     },
 
     async getSessionMeta(id) {
       assertStoreOpen();
-      const rows = await database.query<{ meta_json: string | null; meta_parts: number | null }>(
-        "SELECT meta_json, meta_parts FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
-        [instance, id],
-      );
-      const row = rows[0];
-      if (row === undefined || row.meta_json === null) return undefined;
-      const [metaText] = await readValues(database, instance, "meta", [
-        { sessionId: id, itemKey: "meta", body: row.meta_json, parts: row.meta_parts },
-      ]);
-      return JSON.parse(metaText as string) as DshStoredSession;
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{ meta_json: string | null; meta_parts: number | null }>(
+          "SELECT meta_json, meta_parts FROM dsh_sessions WHERE instance = $1 AND session_id = $2",
+          [instance, id],
+        );
+        const row = rows[0];
+        if (row === undefined || row.meta_json === null) return undefined;
+        const [metaText] = await readValues(exec, instance, "meta", [
+          { sessionId: id, itemKey: "meta", body: row.meta_json, parts: row.meta_parts },
+        ]);
+        return JSON.parse(metaText as string) as DshStoredSession;
+      });
     },
 
     async putSessionMeta(session) {
@@ -883,53 +915,59 @@ export async function openPostgresDshStore(
 
     async listSessionMetas() {
       assertStoreOpen();
-      const rows = await database.query<{ session_id: string; meta_json: string | null; meta_parts: number | null }>(
-        "SELECT session_id, meta_json, meta_parts FROM dsh_sessions WHERE instance = $1 AND meta_json IS NOT NULL",
-        [instance],
-      );
-      const present = rows.filter(
-        (row): row is { session_id: string; meta_json: string; meta_parts: number | null } => row.meta_json !== null,
-      );
-      const texts = await readValues(
-        database,
-        instance,
-        "meta",
-        present.map((row) => ({
-          sessionId: row.session_id,
-          itemKey: "meta",
-          body: row.meta_json,
-          parts: row.meta_parts,
-        })),
-      );
-      return texts.map((text) => JSON.parse(text) as DshStoredSession);
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{ session_id: string; meta_json: string | null; meta_parts: number | null }>(
+          "SELECT session_id, meta_json, meta_parts FROM dsh_sessions WHERE instance = $1 AND meta_json IS NOT NULL",
+          [instance],
+        );
+        const present = rows.filter(
+          (row): row is { session_id: string; meta_json: string; meta_parts: number | null } => row.meta_json !== null,
+        );
+        const texts = await readValues(
+          exec,
+          instance,
+          "meta",
+          present.map((row) => ({
+            sessionId: row.session_id,
+            itemKey: "meta",
+            body: row.meta_json,
+            parts: row.meta_parts,
+          })),
+        );
+        return texts.map((text) => JSON.parse(text) as DshStoredSession);
+      });
     },
 
     async getMessage(sessionId, messageId) {
       assertStoreOpen();
-      const rows = await database.query<{ message_json: string; message_parts: number | null }>(
-        "SELECT message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2 AND message_id = $3",
-        [instance, sessionId, messageId],
-      );
-      const row = rows[0];
-      if (row === undefined) return undefined;
-      const [text] = await readValues(database, instance, "message", [
-        { sessionId, itemKey: messageId, body: row.message_json, parts: row.message_parts },
-      ]);
-      return JSON.parse(text as string) as DshStoredMessage;
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{ message_json: string; message_parts: number | null }>(
+          "SELECT message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2 AND message_id = $3",
+          [instance, sessionId, messageId],
+        );
+        const row = rows[0];
+        if (row === undefined) return undefined;
+        const [text] = await readValues(exec, instance, "message", [
+          { sessionId, itemKey: messageId, body: row.message_json, parts: row.message_parts },
+        ]);
+        return JSON.parse(text as string) as DshStoredMessage;
+      });
     },
 
     async getMessageByKey(sessionId, idempotencyKey) {
       assertStoreOpen();
-      const rows = await database.query<{ message_id: string; message_json: string; message_parts: number | null }>(
-        "SELECT message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2 AND idempotency_key = $3",
-        [instance, sessionId, idempotencyKey],
-      );
-      const row = rows[0];
-      if (row === undefined) return undefined;
-      const [text] = await readValues(database, instance, "message", [
-        { sessionId, itemKey: row.message_id, body: row.message_json, parts: row.message_parts },
-      ]);
-      return JSON.parse(text as string) as DshStoredMessage;
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{ message_id: string; message_json: string; message_parts: number | null }>(
+          "SELECT message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2 AND idempotency_key = $3",
+          [instance, sessionId, idempotencyKey],
+        );
+        const row = rows[0];
+        if (row === undefined) return undefined;
+        const [text] = await readValues(exec, instance, "message", [
+          { sessionId, itemKey: row.message_id, body: row.message_json, parts: row.message_parts },
+        ]);
+        return JSON.parse(text as string) as DshStoredMessage;
+      });
     },
 
     async putMessage(message) {
@@ -952,37 +990,39 @@ export async function openPostgresDshStore(
 
     async listMessages(sessionId) {
       assertStoreOpen();
-      const rows =
-        sessionId !== undefined
-          ? await database.query<{
-              session_id: string;
-              message_id: string;
-              message_json: string;
-              message_parts: number | null;
-            }>(
-              "SELECT session_id, message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2",
-              [instance, sessionId],
-            )
-          : await database.query<{
-              session_id: string;
-              message_id: string;
-              message_json: string;
-              message_parts: number | null;
-            }>("SELECT session_id, message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1", [
-              instance,
-            ]);
-      const texts = await readValues(
-        database,
-        instance,
-        "message",
-        rows.map((row) => ({
-          sessionId: row.session_id,
-          itemKey: row.message_id,
-          body: row.message_json,
-          parts: row.message_parts,
-        })),
-      );
-      return texts.map((text) => JSON.parse(text) as DshStoredMessage);
+      return runConsistentRead(async (exec) => {
+        const rows =
+          sessionId !== undefined
+            ? await exec.query<{
+                session_id: string;
+                message_id: string;
+                message_json: string;
+                message_parts: number | null;
+              }>(
+                "SELECT session_id, message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1 AND session_id = $2",
+                [instance, sessionId],
+              )
+            : await exec.query<{
+                session_id: string;
+                message_id: string;
+                message_json: string;
+                message_parts: number | null;
+              }>("SELECT session_id, message_id, message_json, message_parts FROM dsh_messages WHERE instance = $1", [
+                instance,
+              ]);
+        const texts = await readValues(
+          exec,
+          instance,
+          "message",
+          rows.map((row) => ({
+            sessionId: row.session_id,
+            itemKey: row.message_id,
+            body: row.message_json,
+            parts: row.message_parts,
+          })),
+        );
+        return texts.map((text) => JSON.parse(text) as DshStoredMessage);
+      });
     },
 
     async putAttachment(attachment) {
@@ -1006,21 +1046,23 @@ export async function openPostgresDshStore(
 
     async getAttachment(sessionId, ref) {
       assertStoreOpen();
-      const rows = await database.query<{ mime_type: string; data_b64: string; data_parts: number | null }>(
-        "SELECT mime_type, data_b64, data_parts FROM dsh_attachments WHERE instance = $1 AND session_id = $2 AND ref = $3",
-        [instance, sessionId, ref],
-      );
-      const row = rows[0];
-      if (row === undefined) return undefined;
-      const [b64] = await readValues(database, instance, "attachment", [
-        { sessionId, itemKey: ref, body: row.data_b64, parts: row.data_parts },
-      ]);
-      return {
-        ref,
-        sessionId,
-        mimeType: row.mime_type,
-        data: new Uint8Array(Buffer.from(b64 as string, "base64")),
-      } satisfies DshStoredAttachment;
+      return runConsistentRead(async (exec) => {
+        const rows = await exec.query<{ mime_type: string; data_b64: string; data_parts: number | null }>(
+          "SELECT mime_type, data_b64, data_parts FROM dsh_attachments WHERE instance = $1 AND session_id = $2 AND ref = $3",
+          [instance, sessionId, ref],
+        );
+        const row = rows[0];
+        if (row === undefined) return undefined;
+        const [b64] = await readValues(exec, instance, "attachment", [
+          { sessionId, itemKey: ref, body: row.data_b64, parts: row.data_parts },
+        ]);
+        return {
+          ref,
+          sessionId,
+          mimeType: row.mime_type,
+          data: new Uint8Array(Buffer.from(b64 as string, "base64")),
+        } satisfies DshStoredAttachment;
+      });
     },
 
     async close() {

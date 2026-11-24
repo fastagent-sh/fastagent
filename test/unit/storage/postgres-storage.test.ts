@@ -5,6 +5,7 @@ import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type PgDatabase, openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
+import { acquirePgInstanceLease, migratePgSchema, splitPgText } from "../../../packages/fastagent/src/postgres-kit.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
   InstanceHeld,
@@ -463,5 +464,84 @@ describe("openPostgresDatabase: shared connection pool across multiple instances
     expect(() => openPostgresDatabase({ url: postgres.url }, { idleTimeoutMillis: -1 })).toThrow(
       /idleTimeoutMillis must be a non-negative number/,
     );
+  });
+});
+
+describe("postgres-kit shared storage primitives", () => {
+  it("migrates tables + UNIQUE indexes via createIndex, tolerates concurrent DDL codes, and rejects newer schema versions", async () => {
+    const executed: string[] = [];
+    const indexed: string[] = [];
+    let version = 0;
+    const db = {
+      query: async <T extends object>(text: string) => {
+        executed.push(text);
+        if (text.startsWith("SELECT max(version)")) return [{ version }] as T[];
+        if (text.includes("table_race")) throw Object.assign(new Error("duplicate"), { code: "42P07" });
+        if (text.startsWith("INSERT INTO kit_schema")) version = 1;
+        return [] as T[];
+      },
+    };
+    await migratePgSchema(
+      db,
+      [
+        "CREATE TABLE IF NOT EXISTS table_race (id INT PRIMARY KEY)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_u ON table_race (id)",
+      ],
+      {
+        createIndex: async (_exec, stmt) => {
+          indexed.push(stmt);
+          return async () => {};
+        },
+        version: { table: "kit_schema", current: 1 },
+      },
+    );
+    expect(indexed).toEqual(["CREATE UNIQUE INDEX IF NOT EXISTS idx_u ON table_race (id)"]);
+
+    version = 2;
+    await expect(migratePgSchema(db, [], { version: { table: "kit_schema", current: 1 } })).rejects.toThrow(
+      /holds storage of version 2, newer than this FastAgent's 1/,
+    );
+  });
+
+  it("splits multibyte UTF-8 text on character boundaries and rejects caps smaller than one character", () => {
+    const text = "中文🚀边界".repeat(10);
+    const parts = splitPgText(text, 10);
+    expect(parts).toBeDefined();
+    expect(parts?.every((p) => Buffer.byteLength(p, "utf8") <= 10)).toBe(true);
+    expect(parts?.join("")).toBe(text);
+    expect(splitPgText("ascii", 10)).toBeUndefined();
+    expect(() => splitPgText("🚀", 2)).toThrow(/cannot hold one character/);
+  });
+
+  it("rolls back the lease row when onTake throws and leaves the instance immediately claimable", async () => {
+    const db = openPgDatabase(postgres.url);
+    try {
+      await migratePgSchema(db, [
+        "CREATE TABLE IF NOT EXISTS kit_test_leases (instance TEXT PRIMARY KEY, owner TEXT, lease_until TIMESTAMPTZ)",
+      ]);
+      const name = freshInstance();
+      await expect(
+        acquirePgInstanceLease(db, {
+          table: "kit_test_leases",
+          instance: name,
+          waitMs: 0,
+          onTake: async () => {
+            throw new Error("rejected by onTake");
+          },
+        }),
+      ).rejects.toThrow("rejected by onTake");
+
+      const claimed = await acquirePgInstanceLease(db, {
+        table: "kit_test_leases",
+        instance: name,
+        waitMs: 0,
+      });
+      await expect(
+        acquirePgInstanceLease(db, { table: "kit_test_leases", instance: name, waitMs: 0 }),
+      ).rejects.toBeInstanceOf(InstanceHeld);
+      await claimed.release();
+    } finally {
+      await db.close();
+    }
   });
 });

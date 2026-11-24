@@ -15,6 +15,7 @@ import type { McpClients } from "../../mcp/client.ts";
 import {
   type CreateIndex,
   type PgDatabase,
+  type PgExecutor,
   type PostgresDatabase,
   type PostgresLimits,
   acquirePgDatabase,
@@ -23,6 +24,7 @@ import {
   sharedHandleOf,
 } from "../../postgres.ts";
 import {
+  DEFAULT_LEASE_WAIT_MS,
   InstanceHeld,
   type PgInstanceLease,
   acquirePgInstanceLease,
@@ -69,6 +71,7 @@ export interface DshModule {
     database: PgDatabase,
     instance: string,
     options?: {
+      readonly waitMs?: number;
       readonly onLost?: (error: Error) => void;
       readonly createIndex?: CreateIndex;
       readonly limits?: PostgresLimits;
@@ -90,6 +93,7 @@ export interface DshModule {
             readonly leaseMs?: number;
             readonly waitMs?: number;
             readonly onLost?: (error: Error) => void;
+            readonly onTake?: (tx: PgExecutor, owner: string) => Promise<void>;
             readonly formatHeldError?: (info: {
               readonly instance: string;
               readonly until: string;
@@ -97,7 +101,7 @@ export interface DshModule {
             }) => Error;
             readonly formatLostError?: (instance: string) => Error;
           },
-        ) => Promise<Pick<PgInstanceLease<void>, "owner" | "lost" | "assertInTx" | "lose" | "release">>;
+        ) => Promise<Pick<PgInstanceLease<void>, "owner" | "lost" | "lose" | "release">>;
         readonly splitText?: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
         readonly isConflict?: (error: unknown) => boolean;
       };
@@ -203,6 +207,7 @@ async function openInstanceDshStore(
           readonly leaseMs?: number;
           readonly waitMs?: number;
           readonly onLost?: (error: Error) => void;
+          readonly onTake?: (tx: PgExecutor, owner: string) => Promise<void>;
           readonly formatHeldError?: (info: {
             readonly instance: string;
             readonly until: string;
@@ -216,6 +221,7 @@ async function openInstanceDshStore(
     };
     try {
       const store = await dsh.openPostgresDshStore(acquired.db, place.name, {
+        waitMs: DEFAULT_LEASE_WAIT_MS,
         ...(onLost === undefined ? {} : { onLost }),
         ...(database.createIndex === undefined ? {} : { createIndex: database.createIndex }),
         ...(database.limits === undefined ? {} : { limits: database.limits }),

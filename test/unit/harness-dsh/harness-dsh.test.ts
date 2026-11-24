@@ -18,6 +18,12 @@ import {
 } from "../../../packages/harness-dsh/src/sandbox.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
+import {
+  acquirePgInstanceLease,
+  isPgConflict,
+  migratePgSchema,
+  splitPgText,
+} from "../../../packages/fastagent/src/postgres-kit.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
@@ -657,11 +663,45 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       await a.close();
       await b.close();
 
-      // Direct store test under tight limits: chunked header/meta/message/attachment/events + multi-tx append.
+      // Direct store test under tight limits using the shared postgres-kit: chunked header/meta/message/attachment/events + multi-tx append.
       const db = openPgDatabase(fresh.url);
       try {
         const instance = freshInstance();
-        const store = await openPostgresDshStore(db, instance, { createIndex, limits: tightLimits });
+        const txQueries: string[] = [];
+        let readTxCount = 0;
+        const instrumentedDb = {
+          query: db.query.bind(db),
+          transaction: async <T>(work: Parameters<typeof db.transaction<T>>[0]) => {
+            let sawWrite = false;
+            const result = await db.transaction(async (tx) =>
+              work({
+                query: async <U extends object>(text: string, params?: readonly unknown[]) => {
+                  txQueries.push(text);
+                  if (/^\s*(?:INSERT|UPDATE|DELETE)\b/i.test(text)) sawWrite = true;
+                  return tx.query<U>(text, params);
+                },
+              }),
+            );
+            if (!sawWrite) readTxCount += 1;
+            return result;
+          },
+        };
+        let unexpectedLost: Error | undefined;
+        const store = await openPostgresDshStore(instrumentedDb, instance, {
+          createIndex,
+          limits: tightLimits,
+          onLost: (err) => {
+            unexpectedLost = err;
+          },
+          kit: {
+            migrate: migratePgSchema,
+            acquireLease: acquirePgInstanceLease,
+            splitText: splitPgText,
+            isConflict: isPgConflict,
+          },
+        });
+        txQueries.length = 0;
+        readTxCount = 0;
         const longHeaderNote = "头信息🚀".repeat(60);
         const header = {
           version: 4,
@@ -738,8 +778,63 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         );
         expect(Number(partRows[0]?.count ?? 0)).toBeGreaterThan(0);
 
+        // P0 regression: write transactions fence via dsh_metadata and never UPDATE dsh_leases, and concurrent writes
+        // alongside lease renewal never self-conflict or trigger onLost.
+        expect(txQueries.some((sql) => sql.includes("UPDATE dsh_leases"))).toBe(false);
+        expect(txQueries.some((sql) => sql.includes("UPDATE dsh_metadata"))).toBe(true);
+        // P1 regression: chunked reads run inside a single REPEATABLE READ transaction snapshot to prevent torn reads.
+        expect(readTxCount).toBeGreaterThan(0);
+
+        await Promise.all([
+          ...Array.from({ length: 6 }, (_, idx) =>
+            store.putMessage?.({
+              id: "m-concurrent",
+              sessionId: "s-chunked",
+              whenBusy: "queue",
+              status: idx % 2 === 0 ? "running" : "completed",
+              displayContent: [{ type: "text", text: `版本-${idx}-`.repeat(50) }],
+              modelContent: [{ type: "text", text: `版本-${idx}-`.repeat(50) }],
+              createdAt: 1,
+              updatedAt: 10 + idx,
+            }),
+          ),
+          ...Array.from({ length: 6 }, () => store.getMessage?.("s-chunked", "m-concurrent")),
+          db.query(
+            "UPDATE dsh_leases SET lease_until = now() + interval '30 seconds' WHERE instance = $1 AND owner = $2",
+            [instance, store.owner],
+          ),
+        ]);
+        expect(unexpectedLost).toBeUndefined();
+        const finalConcurrent = await store.getMessage?.("s-chunked", "m-concurrent");
+        expect(finalConcurrent?.id).toBe("m-concurrent");
+
         await handle.close();
         await store.close();
+
+        // P1 regression: openAgent({ harness: "dsh", database }) waits for a briefly held lease to release instead of
+        // failing immediately with waitMs = 0.
+        const handoffInstance = freshInstance();
+        const priorHolder = await openPostgresDshStore(db, handoffInstance, {
+          leaseMs: 5_000,
+          waitMs: 0,
+          owner: "prior-holder",
+        });
+        const releaseTimer = setTimeout(() => {
+          void priorHolder.close();
+        }, 120);
+        try {
+          const handedOff = await openAgent(def, {
+            root: dir,
+            name: handoffInstance,
+            harness: "dsh",
+            sandbox: "off",
+            database: shared,
+          });
+          await handedOff.close();
+        } finally {
+          clearTimeout(releaseTimer);
+          await priorHolder.close();
+        }
       } finally {
         await db.close();
       }

@@ -162,8 +162,6 @@ export interface PgInstanceLease<TTake = void> {
   readonly owner: string;
   readonly taken: TTake;
   readonly lost: Error | undefined;
-  /** Refresh and fence the lease inside an active write transaction; triggers `onLost` and throws if lost. */
-  assertInTx(tx: PgExecutor): Promise<void>;
   /** Mark the lease lost, stop renewal, and optionally notify `onLost` once. */
   lose(why?: Error, notify?: boolean): Error;
   /** Stop renewal and release the lease row in the database. */
@@ -175,7 +173,7 @@ export interface PgInstanceLease<TTake = void> {
  * Uses `timestamptz` and `now() + make_interval(...)` semantics verified on both standard PostgreSQL and Aurora DSQL.
  */
 export async function acquirePgInstanceLease<TTake = void>(
-  db: PgDatabase,
+  db: Pick<PgDatabase, "query" | "transaction">,
   options: PgLeaseOptions<TTake>,
 ): Promise<PgInstanceLease<TTake>> {
   const { table, instance } = options;
@@ -296,16 +294,6 @@ export async function acquirePgInstanceLease<TTake = void>(
     taken: takenValue,
     get lost() {
       return lost;
-    },
-    async assertInTx(tx: PgExecutor) {
-      if (lost !== undefined) throw lost;
-      const [kept] = await tx.query(
-        `UPDATE ${table} SET lease_until = now() + make_interval(secs => $3::double precision / 1000)
-          WHERE instance = $1 AND owner = $2 AND lease_until > now() RETURNING instance`,
-        [instance, owner, leaseMs],
-      );
-      if (kept === undefined) throw lose(undefined, true);
-      renewedAt = Date.now();
     },
     lose,
     async release() {
