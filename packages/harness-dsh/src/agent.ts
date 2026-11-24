@@ -62,7 +62,7 @@ import {
   toPublicMessage,
 } from "./projection.ts";
 import { restoreAndRecoverSessions } from "./recovery.ts";
-import { buildDshSandboxPolicy } from "./sandbox.ts";
+import { buildDshSandboxPolicy, verifyBashSandbox } from "./sandbox.ts";
 import {
   type DshRuntimeState,
   type LiveSession,
@@ -183,6 +183,15 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     });
   });
   await ready;
+
+  if (sandboxMode !== "off" && codingToolNames.has("bash")) {
+    try {
+      await verifyBashSandbox(ctx.get("sandbox"), { workdir: options.workdir, mode: sandboxMode });
+    } catch (error) {
+      await ctx.fiber.dispose().catch(() => {});
+      throw error;
+    }
+  }
 
   const builtInCodingTools = buildCodingTools(enabledCodingTools, {
     workdir: options.workdir,

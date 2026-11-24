@@ -14,6 +14,7 @@ import { readPackageJson } from "../runtime.ts";
 import { HARNESS_PACKAGES } from "../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
 import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
+import { OPTIONAL_HARNESS_PACKAGES } from "./config.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
@@ -172,7 +173,7 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
     license?: string;
     dependencies?: Record<string, string>;
   };
-  const peers = new Set([FASTAGENT_PACKAGE, ...HARNESS_PACKAGES]);
+  const peers = new Set([FASTAGENT_PACKAGE, ...HARNESS_PACKAGES, ...Object.values(OPTIONAL_HARNESS_PACKAGES)]);
   const dependencies: Record<string, string> = {};
   const peerDependencies: Record<string, string> = {};
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {

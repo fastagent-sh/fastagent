@@ -7,11 +7,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { loadSourceDefinition } from "../harnesses/assembly.ts";
+import { harnessPackage, resolveCodingTools, resolveHarnessSelection } from "../harnesses/config.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
-import { hasLockfile as lockfileIn, listsFastagent, readPackageJson } from "../runtime.ts";
+import { hasLockfile as lockfileIn, listsFastagent, listsPackage, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } from "./build-context.ts";
 import { type ContainerInput, type ContainerTarget, DOCKER_TARGET, isGeneratedDockerfile } from "./container.ts";
@@ -142,6 +143,27 @@ async function gatherFacts(
       `package.json does not list @fastagent-sh/fastagent — the image has no local fastagent to run, so the ` +
         "container fails at start. Add it to dependencies and re-run `npm install`.",
     );
+  }
+  const harnessSelection = resolveHarnessSelection(config, {}, {});
+  const requiredHarnessPkg = harnessPackage(harnessSelection.harness);
+  if (requiredHarnessPkg !== undefined) {
+    if (!listsPackage(pkg, requiredHarnessPkg)) {
+      report.warn(
+        `fastagent.config.ts sets harness: "${harnessSelection.harness}", but package.json does not list ${requiredHarnessPkg} — ` +
+          `the container fails at start. Run \`npm install ${requiredHarnessPkg}\` and commit the lockfile.`,
+      );
+    }
+    if (
+      kept === undefined &&
+      harnessSelection.sandbox !== "off" &&
+      resolveCodingTools(config.codingTools).includes("bash")
+    ) {
+      report.note(
+        `harness "${harnessSelection.harness}" (${harnessSelection.sandbox} sandbox): the generated Linux image runs ` +
+          `shell commands through built-in Landlock (verified at startup; requires Linux kernel Landlock support). ` +
+          `For bwrap mount/PID isolation, install bubblewrap in a custom Dockerfile with user-namespace support.`,
+      );
+    }
   }
   const paths = await buildContextPaths(agentDir, resolveAuthPath(agentDir));
   await checkKeptIgnoreFiles({ agentDir, force, paths }, report);

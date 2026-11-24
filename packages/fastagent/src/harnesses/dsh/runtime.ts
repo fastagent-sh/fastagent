@@ -14,12 +14,12 @@ import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import { type PostgresDatabase, acquirePgDatabase } from "../../postgres.ts";
 import { assertNoMcpToolConflicts, resolveDefaultModel } from "../assembly.ts";
-import { agentPresentation, resolveCodingTools } from "../config.ts";
+import { OPTIONAL_HARNESS_PACKAGES, agentPresentation, resolveCodingTools } from "../config.ts";
 import { mcpTools } from "../mcp.ts";
 import { readCommands, renderDefinitionPrompt } from "../text.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent } from "../serving.ts";
 
-const DSH_PACKAGE_NAME = ["@fastagent-sh", "harness-dsh"].join("/");
+const DSH_PACKAGE_NAME = OPTIONAL_HARNESS_PACKAGES.dsh;
 
 /** Adapt pi-durable ToolRegistration for DSH: fail visibly if a tool returns a pi-durable-only park (sleep/wait). */
 function adaptToolForDsh(tool: ToolRegistration): ToolRegistration {

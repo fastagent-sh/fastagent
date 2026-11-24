@@ -31,6 +31,17 @@ export function unsupportedRuntime(versions: { node: string; bun?: string } = pr
     : undefined;
 }
 
+/** Whether a manifest declares `name` in dependencies or devDependencies. */
+export function listsPackage(
+  pkg: {
+    dependencies?: Record<string, unknown>;
+    devDependencies?: Record<string, unknown>;
+  },
+  name: string,
+): boolean {
+  return name in { ...pkg.dependencies, ...pkg.devDependencies };
+}
+
 /**
  * Whether a manifest lists FastAgent, which the image of an agent with a `package.json` runs from its own
  * `node_modules`: without it, the container cannot start.
@@ -39,7 +50,7 @@ export function listsFastagent(pkg: {
   dependencies?: Record<string, unknown>;
   devDependencies?: Record<string, unknown>;
 }): boolean {
-  return "@fastagent-sh/fastagent" in { ...pkg.dependencies, ...pkg.devDependencies };
+  return listsPackage(pkg, "@fastagent-sh/fastagent");
 }
 
 /**
