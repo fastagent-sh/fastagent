@@ -101,11 +101,12 @@ const call = Effect.fn("http.api.call")(function* <A>(operation: string, run: (s
           : Effect.void,
       );
       const signal = yield* Effect.abortSignal;
-      const issued = yield* Effect.try({
-        try: () => ({ promise: run(signal) }),
-        catch: (cause) => new PromiseFailure(cause),
-      });
-      yield* Ref.set(pending, issued);
+      const issued = yield* Effect.uninterruptible(
+        Effect.try({
+          try: () => ({ promise: run(signal) }),
+          catch: (cause) => new PromiseFailure(cause),
+        }).pipe(Effect.tap((handle) => Ref.set(pending, handle))),
+      );
       return yield* fromPromise(() => issued.promise);
     }),
   ).pipe(Effect.mapError(refusal(operation)));
