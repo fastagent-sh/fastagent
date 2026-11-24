@@ -187,7 +187,10 @@ describe("init: scaffoldAgent", () => {
     const npmEnv: NodeJS.ProcessEnv = {
       ...withIdentity,
       npm_config_registry: registry.url,
+      npm_config_userconfig: join(base, ".npmrc-empty"),
+      npm_config_globalconfig: join(base, ".npmrc-global-empty"),
       npm_config_cache: cacheDir,
+      npm_config_fetch_retries: "0",
       npm_config_audit: "false",
       npm_config_fund: "false",
       npm_config_update_notifier: "false",
