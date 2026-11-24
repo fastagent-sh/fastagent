@@ -244,6 +244,35 @@ describe("public entries", () => {
       expect(platformEntry).toMatch(new RegExp(`\\b${symbol}\\b`));
     }
   });
+
+  it("client, client-agentcore, and fastagent re-export the exact same Agent API type set", () => {
+    const extractAgentApiTypes = (pkg: "client" | "client-agentcore" | "fastagent"): string[] => {
+      const text = readFileSync(resolve(srcOf(pkg), "index.ts"), "utf8");
+      const match =
+        /export\s+type\s*\{([^}]+)\}\s*from\s*["'](?:\.\/agent-api\.ts|@fastagent-sh\/client\/agent-api)["']/.exec(
+          text,
+        );
+      expect(match, `missing Agent API type re-export in ${pkg}/src/index.ts`).not.toBeNull();
+      return (match?.[1] ?? "")
+        .split(",")
+        .map((name) => name.trim())
+        .filter(Boolean)
+        .toSorted();
+    };
+    const clientTypes = extractAgentApiTypes("client");
+    expect(extractAgentApiTypes("client-agentcore")).toEqual(clientTypes);
+    expect(extractAgentApiTypes("fastagent")).toEqual(clientTypes);
+  });
+
+  it("agentcore and harness-dsh root entries stay minimal without leaking internal adapter symbols", () => {
+    const agentcoreRoot = readFileSync(resolve(srcOf("agentcore"), "index.ts"), "utf8");
+    for (const leaked of ["DSQL_LIMITS", "createIndexAsync"]) {
+      expect(agentcoreRoot).not.toMatch(new RegExp(`\\b${leaked}\\b`));
+    }
+    const dshRoot = readFileSync(resolve(srcOf("harness-dsh"), "index.ts"), "utf8");
+    expect(dshRoot).not.toMatch(/\bDshPg\w+\b/);
+    expect(dshRoot).not.toMatch(/\bFastAgentTool\w+\b/);
+  });
 });
 
 describe("the contracts depend on nothing", () => {

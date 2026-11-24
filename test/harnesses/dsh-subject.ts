@@ -17,14 +17,13 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import {
-  type DshAgent,
-  type DshEventStoreBackend,
-  type FastAgentToolApi,
-  type FastAgentToolLike,
-  openDshAgent,
-  openSqliteDshStore,
-} from "@fastagent-sh/harness-dsh";
+import { openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
+import type {
+  DshAgent,
+  DshEventStoreBackend,
+  FastAgentToolApi,
+  FastAgentToolLike,
+} from "../../packages/harness-dsh/src/types.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
