@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/pi-remote",
-  "version": "0.35.2",
+  "version": "0.36.0",
   "description": "Pi extension for connecting directly to deployed FastAgent instances over HTTP or installed cloud transport extensions.",
   "keywords": [
     "pi-package",
@@ -54,7 +54,7 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "@fastagent-sh/client": "0.35.2"
+    "@fastagent-sh/client": "0.36.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
