@@ -77,6 +77,7 @@ my-agent/
 | --- | --- |
 | **聊天平台接入器** | Slack、Telegram、Discord 与 Web UI 属于 Agent API 的外部调用方，而非运行时插件。 |
 | **终端用户鉴权与计费** | 一个 API Key 控制整个实例；你的业务应用完整保留用户登录、多租户与路由控制权。 |
+| **多租户实例缓存与路由** | FastAgent 聚焦单实例数据面，提供 `openPostgresDatabase()`、池级批量续约、协作式空闲让渡与 `ready()` / `busy()` / `closed` 信号；宿主应用掌握租户密钥解析、粘性路由、活跃流计数与缓存驱逐策略（见[嵌入应用](embedding.md#在单进程中通过一个-postgresql-连接池托管多租户实例)）。 |
 | **静态 DAG 工作流与定时调度器** | 由 Agent 自主决定工具调用步骤；定时任务与事件驱动工作通过外部调度器单次调用 `POST /v1/invoke` 触发（GitHub Actions、Cloud Scheduler、EventBridge、Webhook）。 |
 | **固定形态的 UI** | 终端交互可使用 [`@fastagent-sh/pi-remote`](remotes.md#4-从终端实时交互fastagent-shpi-remote)，Web/App 端可基于 `sessions.events` 与 `messages.stream` 自由构建任何界面。 |
 

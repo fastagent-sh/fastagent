@@ -77,10 +77,18 @@ await tenantA.close();
 await db.close();
 ```
 
+#### Responsibility boundary (why there is no built-in `AgentPool`)
+
+FastAgent is intentionally a **single-instance data plane**: `openPostgresDatabase()` and `openAgent()` own the hard distributed storage primitives (shared pooling, one-time migration, batched lease renewals, single-writer fencing, cooperative idle handoff, and `ready()` / `busy()` / `closed` lifecycle signals), while your host owns multi-tenant orchestration (tenant-to-secret resolution, sticky routing across replicas, active SSE/WebSocket tracking, and memory/MCP eviction budgets). Keeping orchestration in your host avoids forcing a generic tenancy or secret-resolver abstraction onto your backend.
+
 Operational notes for multi-tenant pools:
-- **Coalesced lease heartbeats:** Instances sharing an `openPostgresDatabase()` handle automatically batch their PostgreSQL lease renewals into one query per tick instead of one query per tenant.
-- **Cooperative idle handoff:** During rolling deploys or multi-replica traffic shifts, if another process requests an instance whose current holder is idle (`!agent.busy()`), the idle holder yields cleanly on its next renewal tick (`agent.closed` resolves so your host cache can evict the handle) instead of blocking until lease expiry. Active turns (`agent.busy() === true`) are never interrupted.
-- **Evict idle handles & route stickily:** Close long-idle tenants (`!agent.busy()` with no open SSE streams) to bound in-process memory and MCP clients (see [`examples/saas-copilot/server.ts`](../examples/saas-copilot/server.ts)), and prefer sticky routing by tenant ID across replicas so hot tenants stay local during active turns.
+- **Coalesced lease heartbeats:** Instances sharing an `openPostgresDatabase()` handle automatically batch their PostgreSQL lease renewals into one query per tick (up to 500 instances per query) instead of one query per tenant.
+- **Cooperative idle handoff & passive SSE streams:** During rolling deploys or multi-replica traffic shifts, if another process requests an instance whose current holder is idle (`!agent.busy()`), the idle holder yields cleanly on its next renewal tick instead of blocking until lease expiry. Active turns and remote auth flows (`agent.busy() === true`) are never interrupted. Note that handoff checks only `agent.busy()`, not passive `sessions.events()` subscribers: if a browser holds an idle SSE stream when its tenant moves to another replica, that stream ends and the client should reconnect with `?after=<entryId>` / `Last-Event-ID`.
+- **Host cache checklist** (reference implementation in [`examples/saas-copilot/server.ts`](../examples/saas-copilot/server.ts)):
+  1. **Deduplicate concurrent opens** per tenant by caching the in-flight `openAgent()` promise.
+  2. **Check `agent.ready()` on cache hits and await prior close:** `ready()` flips to `false` synchronously as soon as `close()` or cooperative handoff starts, before `agent.closed` resolves asynchronously; evict `!agent.ready()` handles and wait for `agent.closed` (or your in-flight `close()`) before reopening the same instance so reopening does not race against SQLite lock or PostgreSQL lease release.
+  3. **Evict on `agent.closed`:** remove the cache entry when `agent.closed` settles (covers both cooperative handoff and unexpected lease loss).
+  4. **Bound memory & MCP clients:** evict long-idle handles (`!agent.busy()` and no active host streams) via TTL/LRU, prefer sticky routing by tenant ID across replicas, and close all cached agents before `db.close()` on shutdown.
 
 ## 2. Call the Agent API
 

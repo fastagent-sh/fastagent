@@ -141,6 +141,10 @@ jobs:
       - name: End to end on the packed packages
         run: node test/smoke/e2e/packed.ts "$RUNNER_TEMP"/tarballs/*.tgz
 
+      # Every production example builds, passes `deploy check`, and type-checks against the packed packages.
+      - name: Verify production examples against packed packages
+        run: node test/smoke/e2e/examples.ts "$RUNNER_TEMP"/tarballs/*.tgz
+
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
   # versions never requires editing branch protection. ("Core" = the essential
