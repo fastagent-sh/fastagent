@@ -86,7 +86,7 @@ FastAgent 有意保持为**单实例数据面**：`openPostgresDatabase()` 与 `
 - **协作式空闲让渡与纯订阅 SSE：** 在滚动发布或多副本流量漂移时，若新副本请求打开某个已被旧副本持有但当前空闲（`!agent.busy()`）的实例，旧副本会在下一次续约周期主动释放租约并干净关闭，而不会阻塞至租约过期；活跃消息轮次与远程认证流程（`agent.busy() === true`）绝不会被中途打断。注意让渡判定仅看 `agent.busy()`，不感知纯订阅状态的 `sessions.events()` 流：当无在途消息但浏览器挂着空闲 SSE 的租户被迁移到新副本时，旧流会结束，前端需凭 `?after=<entryId>` / `Last-Event-ID` 自动断点重连。
 - **宿主缓存 4 条实现契约**（完整参考见 [`examples/saas-copilot/server.ts`](../../examples/saas-copilot/server.ts)）：
   1. **并发打开去重：** 按租户缓存进行中的 `openAgent()` Promise，防止高并发冷启动重复打开。
-  2. **命中时检查 `agent.ready()`：** 当 `close()` 或协作让渡开始时，`ready()` 会同步切换为 `false`（早于异步 resolve 的 `agent.closed`）；命中到 `!agent.ready()` 的条目时应立即摘除并重新打开。
+  2. **命中时检查 `agent.ready()` 并等待旧句柄关闭完成：** 当 `close()` 或协作让渡开始时，`ready()` 会同步切换为 `false`（早于异步 resolve 的 `agent.closed`）；命中到 `!agent.ready()` 的条目时应摘除，并等待 `agent.closed`（或正在进行的 `close()`）完成后再重新打开同一实例，避免与尚未释放的 SQLite 锁或 PostgreSQL 租约产生竞态。
   3. **监听 `agent.closed` 自动摘除：** 在 `agent.closed` settle 后清理缓存条目（同时覆盖协作让渡与异常失租）。
   4. **控制内存与 MCP 预算：** 通过 TTL/LRU 回收长期空闲（`!agent.busy()` 且无活跃宿主 SSE 流）的实例，多副本下按租户 ID 做粘性路由，并在进程退出时先关闭所有缓存实例再调用 `db.close()`。
 

@@ -56,6 +56,64 @@ function findPackageDirs(root: string): string[] {
   return found.toSorted();
 }
 
+/** Extract the npm package name from an ESM bare specifier (returns undefined for relative or `node:` imports). */
+function packageNameFromSpecifier(specifier: string): string | undefined {
+  if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("node:")) return undefined;
+  if (specifier.startsWith("@")) {
+    const [scope, pkg] = specifier.split("/");
+    return scope && pkg ? `${scope}/${pkg}` : undefined;
+  }
+  return specifier.split("/")[0] || undefined;
+}
+
+/**
+ * Verify every static external import in an example package is declared in its own `package.json`,
+ * so shared workspace hoisting in the smoke harness cannot mask missing example dependencies.
+ */
+function assertDeclaredImports(pkgDir: string, allPackageDirs: ReadonlySet<string>, labelRoot: string): void {
+  const manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")) as Record<string, unknown>;
+  const declared = new Set<string>();
+  for (const section of ["dependencies", "devDependencies", "optionalDependencies"] as const) {
+    const deps = manifest[section];
+    if (typeof deps === "object" && deps !== null) {
+      for (const name of Object.keys(deps as Record<string, unknown>)) declared.add(name);
+    }
+  }
+
+  const tsFiles: string[] = [];
+  const collect = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name) || allPackageDirs.has(full)) continue;
+        collect(full);
+      } else if (entry.isFile() && entry.name.endsWith(".ts")) {
+        tsFiles.push(full);
+      }
+    }
+  };
+  collect(pkgDir);
+
+  const importFrom = /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
+  const missing: string[] = [];
+  for (const file of tsFiles) {
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(importFrom)) {
+      const specifier = match[1];
+      if (specifier === undefined) continue;
+      const pkgName = packageNameFromSpecifier(specifier);
+      if (pkgName !== undefined && !declared.has(pkgName)) {
+        missing.push(
+          `${relative(labelRoot, file)} imports "${pkgName}" (not declared in ${relative(labelRoot, join(pkgDir, "package.json"))})`,
+        );
+      }
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`undeclared example dependencies:\n  ${missing.join("\n  ")}`);
+  }
+}
+
 /** Rewrite `@fastagent-sh/*` references in a copied example manifest to local tarballs. */
 function rewriteManifestToTarballs(pkgPath: string, tarballsByName: ReadonlyMap<string, string>): void {
   const manifest = JSON.parse(readFileSync(pkgPath, "utf8")) as Record<string, unknown>;
@@ -89,7 +147,9 @@ try {
     throw new Error(`no example package.json found under ${copiedExamples}`);
   }
 
+  const packageDirSet = new Set(packageDirs);
   for (const dir of packageDirs) {
+    assertDeclaredImports(dir, packageDirSet, copiedExamples);
     rewriteManifestToTarballs(join(dir, "package.json"), tarballsByName);
   }
 
@@ -107,7 +167,7 @@ try {
         type: "module",
         workspaces: packageDirs.map((dir) => relative(work, dir)),
         devDependencies: {
-          "@types/node": "^26.0.0",
+          "@types/node": "^24.0.0",
         },
         overrides,
       },
@@ -144,8 +204,16 @@ try {
     sh(fastagentBin, ["deploy", "init", "docker"], agentDir);
 
     const checkOut = sh(fastagentBin, ["deploy", "check", "--json"], agentDir);
-    const check = JSON.parse(checkOut) as { ok?: unknown; leaks?: unknown[]; gate?: unknown };
-    if (check.ok !== true || (Array.isArray(check.leaks) && check.leaks.length > 0) || check.gate !== undefined) {
+    const check = JSON.parse(checkOut) as { ok?: unknown; leaks?: unknown[]; gate?: unknown; warnings?: unknown[] };
+    const missingDepWarnings = (Array.isArray(check.warnings) ? check.warnings : []).filter(
+      (warning): warning is string => typeof warning === "string" && warning.includes("does not list "),
+    );
+    if (
+      check.ok !== true ||
+      (Array.isArray(check.leaks) && check.leaks.length > 0) ||
+      check.gate !== undefined ||
+      missingDepWarnings.length > 0
+    ) {
       throw new Error(`${label}: fastagent deploy check failed: ${checkOut}`);
     }
   }
