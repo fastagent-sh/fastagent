@@ -2,6 +2,7 @@
  * `fastagent info [--json]`: print what the directory builds into, WITHOUT opening or serving the agent: it
  * reads the directory and the environment, never the instance's storage, so it answers beside a running serve.
  */
+import { parseModelRef } from "@fastagent-sh/client/agent-api";
 import { definedValues } from "../../declared-secrets.ts";
 import { resolve } from "node:path";
 import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
@@ -73,11 +74,14 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const models = await modelEnvironment(agentDir, {}, code?.providers ?? [], {
     environment: definedValues(hostEnv),
   });
-  const slash = modelSpec?.indexOf("/") ?? -1;
+  const parsedModel = modelSpec === undefined ? undefined : parseModelRef(modelSpec);
   const modelError =
-    modelSpec === undefined || models.models.getModel(modelSpec.slice(0, slash), modelSpec.slice(slash + 1))
+    modelSpec === undefined ||
+    (parsedModel !== undefined && models.models.getModel(parsedModel.provider, parsedModel.modelId) !== undefined)
       ? undefined
-      : `no provider "${modelSpec.slice(0, Math.max(slash, 0))}" offers "${modelSpec.slice(slash + 1)}"`;
+      : parsedModel === undefined
+        ? `invalid model "${modelSpec}": expected "provider/modelId"`
+        : `no provider "${parsedModel.provider}" offers "${parsedModel.modelId}"`;
   const stateRoot = resolveStateRoot(agentDir, configEnv);
   const databaseUrl = readDatabaseUrlEnv();
   const storageEnv: Readonly<Record<string, string | undefined>> =

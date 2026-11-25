@@ -213,6 +213,10 @@ export function sharedHandleOf(database: PostgresDatabase): SharedPostgresHandle
   return (database as Partial<SharedPostgresInternal>)[SHARED_DB];
 }
 
+export function isSharedPostgresDatabase(database: PostgresDatabase): database is SharedPostgresDatabase {
+  return sharedHandleOf(database) !== undefined;
+}
+
 /** Borrow a shared `PgDatabase` pool or open a dedicated one for a caller-managed harness store. */
 export function acquirePgDatabase(database: PostgresDatabase): { readonly db: PgDatabase; readonly owned: boolean } {
   const shared = sharedHandleOf(database);

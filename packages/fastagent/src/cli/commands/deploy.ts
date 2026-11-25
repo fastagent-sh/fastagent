@@ -5,8 +5,17 @@
  */
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { type ContainerTarget, DOCKER_TARGET, STORAGE_DIR } from "../../deploy/container.ts";
+import { STORAGE_DIR } from "../../deploy/container.ts";
 import { checkDeploy } from "../../deploy/preflight.ts";
+import {
+  BUILTIN_DEPLOY_TARGETS,
+  type BuiltinDeployTarget,
+  composeFileContent,
+  dockerImageName,
+  flyAppName,
+  flyConfigContent,
+  targetContainerSpec,
+} from "../../deploy/targets.ts";
 import { exists } from "../../paths.ts";
 import { writeContainer } from "../../platform.ts";
 import { fastagentVersion } from "../../version.ts";
@@ -23,91 +32,7 @@ export interface DeployCheckOptions {
   json?: boolean;
 }
 
-const BUILTIN_TARGETS = ["docker", "compose", "fly", "railway"] as const;
-type BuiltinTarget = (typeof BUILTIN_TARGETS)[number];
 const EXTENSION_NAME = /^[a-z][a-z0-9-]*$/;
-
-const COMPOSE_TARGET: ContainerTarget = {
-  ...DOCKER_TARGET,
-  writtenBy: "fastagent deploy init compose",
-  ignore: ["compose.yml"],
-};
-
-const FLY_TARGET: ContainerTarget = {
-  ...DOCKER_TARGET,
-  writtenBy: "fastagent deploy init fly",
-  ignore: ["fly.toml"],
-};
-
-const RAILWAY_TARGET: ContainerTarget = {
-  ...DOCKER_TARGET,
-  writtenBy: "fastagent deploy init railway",
-};
-
-function imageName(agentName: string): string {
-  // Docker refuses an image reference with an uppercase letter or a leading separator; container and volume names do not.
-  return agentName.toLowerCase().replace(/^[_-]+/, "") || "agent";
-}
-
-function flyAppName(agentName: string): string {
-  return (
-    agentName
-      .toLowerCase()
-      .replace(/[^a-z0-9-]+/g, "-")
-      .replace(/^-+/, "")
-      .slice(0, 63)
-      .replace(/-+$/, "") || "fastagent"
-  );
-}
-
-function composeFile(port: number): string {
-  return `services:
-  agent:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "${port}:${port}"
-    env_file:
-      - path: prod.env
-        required: false
-    volumes:
-      - agent_data:${STORAGE_DIR}
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:${port}/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-
-volumes:
-  agent_data:
-`;
-}
-
-function flyConfig(app: string, port: number): string {
-  return `app = "${app}"
-
-[[mounts]]
-  source = "data"
-  destination = "${STORAGE_DIR}"
-
-[http_service]
-  internal_port = ${port}
-  force_https = true
-  # Suspend to zero when idle and resume on demand (keep requests open via stream/wait while turns run, or set
-  # min_machines_running = 1 for fire-and-forget background turns); keep one machine (--ha=false) for ${STORAGE_DIR}.
-  auto_stop_machines = "suspend"
-  auto_start_machines = true
-  min_machines_running = 0
-
-  [[http_service.checks]]
-    grace_period = "10s"
-    interval = "30s"
-    method = "GET"
-    timeout = "5s"
-    path = "/health"
-`;
-}
 
 /** Write a user-owned platform file once: kept forever once it exists, even under `--force`. */
 async function writeOnce(agentDir: string, filename: string, content: string): Promise<void> {
@@ -120,21 +45,13 @@ async function writeOnce(agentDir: string, filename: string, content: string): P
   console.error(`[fastagent] wrote ${filename} (yours from now on)`);
 }
 
-async function runBuiltinInit(agentDir: string, target: BuiltinTarget, force: boolean): Promise<void> {
-  const spec =
-    target === "compose"
-      ? COMPOSE_TARGET
-      : target === "fly"
-        ? FLY_TARGET
-        : target === "railway"
-          ? RAILWAY_TARGET
-          : DOCKER_TARGET;
-  const written = await writeContainer(agentDir, spec, { force }).catch(failStartup);
+async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, force: boolean): Promise<void> {
+  const written = await writeContainer(agentDir, targetContainerSpec(target), { force }).catch(failStartup);
   if (!written.ok) failStartup(new Error(`deploy init ${target} stopped: ${written.gate}`));
   const { name, port } = written;
 
   if (target === "docker") {
-    const image = imageName(name);
+    const image = dockerImageName(name);
     console.log(
       [
         `# Build the image, then run it with a volume at ${STORAGE_DIR} and the agent's values (its model key,`,
@@ -148,7 +65,7 @@ async function runBuiltinInit(agentDir: string, target: BuiltinTarget, force: bo
   }
 
   if (target === "compose") {
-    await writeOnce(agentDir, "compose.yml", composeFile(port));
+    await writeOnce(agentDir, "compose.yml", composeFileContent(port));
     console.log(
       [
         "# Put the agent's values (its model key, FASTAGENT_API_KEY for the Agent API, declared secrets) in prod.env",
@@ -160,7 +77,7 @@ async function runBuiltinInit(agentDir: string, target: BuiltinTarget, force: bo
   }
 
   if (target === "fly") {
-    await writeOnce(agentDir, "fly.toml", flyConfig(flyAppName(name), port));
+    await writeOnce(agentDir, "fly.toml", flyConfigContent(flyAppName(name), port));
     console.log(
       [
         `# Create the Fly app (single machine: --ha=false avoids a second machine contending for ${STORAGE_DIR}),`,
@@ -188,12 +105,12 @@ async function runBuiltinInit(agentDir: string, target: BuiltinTarget, force: bo
 
 export async function runDeployInit(target: string, opts: DeployInitOptions): Promise<void> {
   const agentDir = agentDirOrExit(resolve("."));
-  if ((BUILTIN_TARGETS as readonly string[]).includes(target)) {
-    return runBuiltinInit(agentDir, target as BuiltinTarget, opts.force === true);
+  if ((BUILTIN_DEPLOY_TARGETS as readonly string[]).includes(target)) {
+    return runBuiltinInit(agentDir, target as BuiltinDeployTarget, opts.force === true);
   }
   if (!EXTENSION_NAME.test(target)) {
     failUsage(
-      `unknown deploy target "${target}" (built-in: ${BUILTIN_TARGETS.join(", ")}; or install @fastagent-sh/<target>)`,
+      `unknown deploy target "${target}" (built-in: ${BUILTIN_DEPLOY_TARGETS.join(", ")}; or install @fastagent-sh/<target>)`,
     );
   }
   const entry = extensionEntry(agentDir, target);

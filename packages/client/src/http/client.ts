@@ -289,12 +289,6 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
 
   const keyedInvoke = (invokeRequest: InvokeRequest, what: string) => {
     const { idempotencyKey, ...body } = checked(InvokeRequest, invokeRequest, what);
-    if (body.conversation !== undefined && body.sessionId !== undefined) {
-      throw agentError("invalid_request", `${what}: pass either conversation or sessionId, not both`);
-    }
-    if (body.conversation !== undefined && body.conversation.trim() === "") {
-      throw agentError("invalid_request", `${what}: conversation must not be blank`);
-    }
     return {
       stage: {
         ...(body.sessionId === undefined ? {} : { sessionId: body.sessionId }),

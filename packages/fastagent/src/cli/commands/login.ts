@@ -4,18 +4,17 @@
  * storage). Interactive in a terminal; non-interactive runs (`--no-input`, `--json`, or no TTY) never block and
  * return structured `need_choice`/`need_user_action` (exit 2).
  */
-import { definedValues } from "../../declared-secrets.ts";
 import type { Provider } from "@earendil-works/pi-ai";
-import { enterAgentEnv } from "../../env.ts";
-import { readProcessEnv } from "../../process-env.ts";
-import { dotEnvPath } from "../../value-file.ts";
 import {
   type FastagentCredentialStore,
   GLOBAL_AUTH_PATH,
   resolveAuthPath,
 } from "../../harnesses/models/credentials.ts";
+import { definedValues } from "../../declared-secrets.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
 import { globalHome } from "../../paths.ts";
+import { readProcessEnv } from "../../process-env.ts";
+import { dotEnvPath } from "../../value-file.ts";
 import {
   LoginRefused,
   PI_DEFAULT_MODELS,
@@ -25,12 +24,13 @@ import {
   loginOptionsOver,
 } from "../../harnesses/models/login.ts";
 import { environmentAuth, keyVariables, loginProviders } from "../../harnesses/models/models.ts";
-import { definitionProviders, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
+import { loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
 import type { RemoteTargetFlags } from "../deployment.ts";
-import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import { failStartup, failUsage } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";
 import { chooseLogin, isInteractive, loginFlow, printReport, reportNeedChoice, terminalLoginIO } from "../login-ui.ts";
 import { resolveRemoteAuthTarget, runRemoteLogin } from "../remote-login.ts";
+import { enterCliAgentEnv } from "../shared.ts";
 
 export interface LoginOptions extends RemoteTargetFlags {
   /** `-g`: store in the user-global file, which an agent reads for a provider it has no other credential for. */
@@ -61,27 +61,17 @@ export async function runLogin(provider: string | undefined, opts: LoginOptions)
     });
     return;
   }
-  // "Outside an agent" must mean exactly that: inside one is refused (findAgentDir), never a global login.
-  const agentDir = optionalAgentDirOrExit(process.cwd());
-  // Outside any agent the target is the user-global machinery home — handed over explicitly, so the path resolvers
-  // need no "is this $HOME?" special case to infer it.
+  const { agentDir, ownAgent, shellEnv, providers } = await enterCliAgentEnv({
+    ...(opts.global === undefined ? {} : { global: opts.global }),
+    keepAgentEnv: true,
+    noAgentEnv: "global",
+  });
   const loginDir = agentDir ?? globalHome();
-  // A proxy may be configured in the project .env, and the OAuth token exchange must go through it (region-locked
-  // providers).
-  // Before the agent's `.env` joins it: the shadowing check below is about what EVERY agent sees, and that is the
-  // environment the shell hands down, not one agent's value file.
-  const shellEnv = readProcessEnv();
-  enterAgentEnv(loginDir);
   // `-g` names the global file outright. Otherwise the agent's own file — the one owner. The
   // store built here is deliberately UNLAYERED: reading falls back to the global file, but writing must land
   // exactly where the operator said, or a second `login` for a provider they already have globally would silently
   // rewrite the global credential instead of creating the project-level override they asked for.
   const authPath = opts.global ? GLOBAL_AUTH_PATH : resolveAuthPath(loginDir);
-  const ownAgent = opts.global ? undefined : agentDir;
-  // The definition's providers too: a gateway's key is verified against the gateway, not a built-in's endpoint. Not for
-  // `-g`: the global file serves every agent on this machine, so no one agent's providers decide what it holds.
-  const providersOf = () => (ownAgent ? definitionProviders(ownAgent, readProcessEnv()) : Promise.resolve([]));
-  const providers = await providersOf().catch(failStartup);
   // Announce when the FALLBACK is what decided the target: outside an agent with no explicit path, the credential
   // lands somewhere no agent will read.
   if (!agentDir && !opts.global) {

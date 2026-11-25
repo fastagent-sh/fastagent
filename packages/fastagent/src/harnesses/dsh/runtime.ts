@@ -16,9 +16,8 @@ import {
   type CreateIndex,
   type PgDatabase,
   type PgExecutor,
-  type PostgresDatabase,
   type PostgresLimits,
-  acquirePgDatabase,
+  type SharedPostgresDatabase,
   describeDatabase,
   isTransientPgError,
   sharedHandleOf,
@@ -71,14 +70,14 @@ export interface DshModule {
   openPostgresDshStore(
     database: PgDatabase,
     instance: string,
-    options?: {
+    options: {
       readonly waitMs?: number;
       readonly handoff?: PgLeaseHandoff;
       readonly onLost?: (error: Error) => void;
       readonly createIndex?: CreateIndex;
       readonly limits?: PostgresLimits;
-      readonly kit?: {
-        readonly migrate?: (
+      readonly kit: {
+        readonly migrate: (
           db: PgDatabase,
           statements: readonly string[],
           options: {
@@ -86,7 +85,7 @@ export interface DshModule {
             readonly version?: { readonly table: string; readonly current: number };
           },
         ) => Promise<void>;
-        readonly acquireLease?: (
+        readonly acquireLease: (
           db: PgDatabase,
           options: {
             readonly table: string;
@@ -105,8 +104,8 @@ export interface DshModule {
             readonly formatLostError?: (instance: string) => Error;
           },
         ) => Promise<Pick<PgInstanceLease<void>, "owner" | "lost" | "lose" | "release">>;
-        readonly splitText?: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
-        readonly isConflict?: (error: unknown) => boolean;
+        readonly splitText: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
+        readonly isConflict: (error: unknown) => boolean;
       };
     },
   ): Promise<DshStorageBackend & { close(): Promise<void> }>;
@@ -139,7 +138,11 @@ export interface DshModule {
 
 export async function loadDshModule(): Promise<DshModule> {
   try {
-    return (await import(DSH_PACKAGE_NAME)) as unknown as DshModule;
+    const [root, internal] = await Promise.all([
+      import(DSH_PACKAGE_NAME) as Promise<Omit<DshModule, "openPostgresDshStore">>,
+      import(`${DSH_PACKAGE_NAME}/internal`) as Promise<Pick<DshModule, "openPostgresDshStore">>,
+    ]);
+    return { ...root, openPostgresDshStore: internal.openPostgresDshStore };
   } catch (error) {
     const code = (error as { code?: unknown }).code;
     if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
@@ -174,10 +177,10 @@ function openSqliteWithHelpfulLockError(
 async function openInstanceDshStore(
   dsh: DshModule,
   place: InstancePlace,
-  database: PostgresDatabase | undefined,
+  database: SharedPostgresDatabase | undefined,
   onLost?: (error: Error) => void,
   handoff?: PgLeaseHandoff,
-): Promise<{ store: DshStorageBackend & { close(): Promise<void> }; ownedPgClose?: () => Promise<void> }> {
+): Promise<DshStorageBackend & { close(): Promise<void> }> {
   if (database !== undefined) {
     if (place.name === undefined) {
       throw new Error(
@@ -185,22 +188,20 @@ async function openInstanceDshStore(
       );
     }
     const shared = sharedHandleOf(database);
-    const acquired = acquirePgDatabase(database);
-    const ownedPgClose = acquired.owned ? () => acquired.db.close() : undefined;
+    if (shared === undefined) {
+      throw new Error("DSH PostgreSQL storage requires a SharedPostgresDatabase handle");
+    }
+    shared.assertOpen();
     const kit = {
       migrate: async (
-        db: PgDatabase,
+        _db: PgDatabase,
         statements: readonly string[],
         opts: {
           readonly createIndex?: CreateIndex;
           readonly version?: { readonly table: string; readonly current: number };
         },
       ) => {
-        if (shared !== undefined) {
-          await shared.ensureMigrated("dsh", (sharedDb) => migratePgSchema(sharedDb, statements, opts));
-          return;
-        }
-        await migratePgSchema(db, statements, opts);
+        await shared.ensureMigrated("dsh", (sharedDb) => migratePgSchema(sharedDb, statements, opts));
       },
       acquireLease: (
         db: PgDatabase,
@@ -220,12 +221,12 @@ async function openInstanceDshStore(
           }) => Error;
           readonly formatLostError?: (instance: string) => Error;
         },
-      ) => acquirePgInstanceLease(db, { ...opts, ...(shared === undefined ? {} : { pool: shared }) }),
+      ) => acquirePgInstanceLease(db, { ...opts, pool: shared }),
       splitText: splitPgText,
       isConflict: isPgConflict,
     };
     try {
-      const store = await dsh.openPostgresDshStore(acquired.db, place.name, {
+      const store = await dsh.openPostgresDshStore(shared.borrowed, place.name, {
         waitMs: DEFAULT_LEASE_WAIT_MS,
         ...(handoff === undefined ? {} : { handoff }),
         ...(onLost === undefined ? {} : { onLost }),
@@ -233,14 +234,13 @@ async function openInstanceDshStore(
         ...(database.limits === undefined ? {} : { limits: database.limits }),
         kit,
       });
-      if (shared?.isClosed()) {
+      if (shared.isClosed()) {
         await store.close().catch(() => {});
         shared.assertOpen();
       }
-      return ownedPgClose === undefined ? { store } : { store, ownedPgClose };
+      return store;
     } catch (error) {
-      await ownedPgClose?.().catch(() => {});
-      if (error instanceof InstanceHeld || shared?.isClosed()) throw error;
+      if (error instanceof InstanceHeld || shared.isClosed()) throw error;
       if (error instanceof Error && error.name === "DshInstanceHeldError") {
         throw new InstanceHeld(error.message, { cause: error });
       }
@@ -248,7 +248,7 @@ async function openInstanceDshStore(
       throw new failed(`the database ${describeDatabase(database.url)}: ${(error as Error).message}`, { cause: error });
     }
   }
-  return { store: openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite")) };
+  return openSqliteWithHelpfulLockError(dsh, join(place.stateRoot, "agent.sqlite"));
 }
 
 export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshModule): Promise<ServingAgent> {
@@ -268,7 +268,7 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     processEnv,
     code,
     models,
-    traces,
+    telemetry,
     work,
   } = ctx;
   const { dir, config } = definition;
@@ -293,18 +293,15 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
   let handoffRuns: (() => void) | undefined;
   let isIdle: (() => boolean) | undefined;
   let store: DshStorageBackend;
-  let ownedPgClose: (() => Promise<void>) | undefined;
   if (chosen === "memory") {
     store = new dsh.MemoryDshEventStore();
   } else if (chosen !== "instance") {
     store = openSqliteWithHelpfulLockError(dsh, chosen.file);
   } else {
-    const opened = await openInstanceDshStore(dsh, place, database, (error) => stopRuns?.(error), {
+    store = await openInstanceDshStore(dsh, place, database, (error) => stopRuns?.(error), {
       canYield: () => isIdle?.() === true,
       onHandoff: () => handoffRuns?.(),
     });
-    store = opened.store;
-    ownedPgClose = opened.ownedPgClose;
     if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
   }
 
@@ -338,15 +335,13 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
       sandbox: selection.sandbox ?? "workspace",
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
       ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
-      ...(traces === undefined ? {} : { telemetry: traces.context }),
+      ...(telemetry === undefined ? {} : { telemetry }),
       storage: store,
     });
   } catch (error) {
     const failures: unknown[] = [error];
     if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
     await store.close?.().catch((cleanup: unknown) => failures.push(cleanup));
-    await ownedPgClose?.().catch((cleanup: unknown) => failures.push(cleanup));
-    await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "DSH agent open and cleanup failed");
   }
 
@@ -362,12 +357,9 @@ export async function openDshRuntime(ctx: HarnessOpenContext, preloaded?: DshMod
     closing ??= (async () => {
       const failures: unknown[] = [];
       try {
-        ctx.closeAuth();
         await dshAgent.close().catch((error: unknown) => failures.push(error));
         await mcp?.close().catch((error: unknown) => failures.push(error));
         await store.close?.().catch((error: unknown) => failures.push(error));
-        await ownedPgClose?.().catch((error: unknown) => failures.push(error));
-        await traces?.close();
       } finally {
         markClosed();
       }

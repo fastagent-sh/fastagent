@@ -4,6 +4,7 @@
 import { type ExtensionCommandContext, type ExtensionContext, copyToClipboard } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import type { ModelRef, ThinkingLevel } from "@fastagent-sh/client";
+import { parseModelRef } from "@fastagent-sh/client/agent-api";
 import type { RemoteController } from "./controller.ts";
 import {
   type HttpRemoteConfig,
@@ -53,12 +54,6 @@ const RESERVED_SUBCOMMANDS = new Set([
 ]);
 
 const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-function parseModelSpec(spec: string): ModelRef | undefined {
-  const slash = spec.indexOf("/");
-  if (slash <= 0 || slash === spec.length - 1) return undefined;
-  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
-}
 
 export interface CommandHost {
   readonly controller: RemoteController;
@@ -411,7 +406,7 @@ export function createCommandDispatcher(host: CommandHost) {
     const info = controller.getState().agentInfo;
     let target: ModelRef | undefined;
     if (rest[0]) {
-      target = parseModelSpec(rest[0]);
+      target = parseModelRef(rest[0]);
       if (!target) {
         ctx.ui.notify('Expected "provider/modelId"', "error");
         return;

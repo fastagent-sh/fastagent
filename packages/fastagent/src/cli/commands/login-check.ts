@@ -3,18 +3,13 @@
  * remote instance (`--url` / `--remote`): prints `ready`, `not_ready`, or `invalid` (or JSON with `--json`) and exits
  * 0, 1, or 2.
  */
-import { definedValues } from "../../declared-secrets.ts";
-import type { Provider } from "@earendil-works/pi-ai";
-import { enterAgentEnv } from "../../env.ts";
-import { readProcessEnv } from "../../process-env.ts";
-import { type ModelEnvironment, modelEnvironment } from "../../harnesses/models/environment.ts";
+import type { ModelEnvironment } from "../../harnesses/models/environment.ts";
 import { providerOf } from "../../harnesses/models/models.ts";
-import { definitionProviders } from "../../harnesses/assembly.ts";
-import { installProxyFetch } from "../../proxy.ts";
 import type { RemoteTargetFlags } from "../deployment.ts";
-import { failStartup, failUsage, optionalAgentDirOrExit } from "../fail.ts";
+import { failUsage } from "../fail.ts";
 import type { InstanceFlags } from "../instance.ts";
 import { resolveRemoteAuthTarget, runRemoteLoginCheck } from "../remote-login.ts";
+import { enterCliModelContext } from "../shared.ts";
 
 type AuthCheck =
   | { status: "ready"; provider: string; authType: "oauth" | "api_key"; source: string; path?: string }
@@ -42,16 +37,9 @@ export async function runLoginCheck(
     return;
   }
   if (target === undefined) failUsage("login --check needs a provider id, or a provider/modelId");
-  const agentDir = opts.global ? undefined : optionalAgentDirOrExit(process.cwd());
-  let providers: Provider[] = [];
-  if (agentDir) {
-    enterAgentEnv(agentDir);
-    providers = await definitionProviders(agentDir, readProcessEnv()).catch(failStartup);
-  } else {
-    installProxyFetch();
-  }
-  const environment = await modelEnvironment(agentDir, {}, providers, {
-    environment: definedValues(readProcessEnv()),
+  const { environment } = await enterCliModelContext({
+    ...(opts.global === undefined ? {} : { global: opts.global }),
+    noAgentEnv: "proxy",
   });
   let provider = target;
   let modelId: string | undefined;

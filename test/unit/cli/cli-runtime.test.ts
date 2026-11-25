@@ -1,9 +1,12 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { reachOwner } from "../../../packages/fastagent/src/cli/owner.ts";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
 import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
@@ -77,6 +80,29 @@ describe("cli: invoke", () => {
       expect([sent.code, sent.stdout.trim()], sent.stderr).toEqual([0, "seen 1"]);
       expect(sent.stderr).not.toContain("through its serve");
     });
+  });
+
+  it("warns on unexpected owner probe timeout while remaining silent on dead ECONNREFUSED ports", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-owner-probe-"));
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+    const hanging = createServer(() => {});
+    try {
+      await new Promise<void>((resolve) => hanging.listen(0, "127.0.0.1", resolve));
+      const { port } = hanging.address() as AddressInfo;
+      const hangUrl = `http://127.0.0.1:${port}`;
+      await writeFile(join(dir, "owner.json"), JSON.stringify({ url: hangUrl, key: "k" }));
+      expect(await reachOwner(dir, { timeoutMs: 25 })).toBeUndefined();
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`could not reach local owner at ${hangUrl}`));
+
+      stderr.mockClear();
+      await new Promise<void>((resolve) => hanging.close(() => resolve()));
+      expect(await reachOwner(dir, { timeoutMs: 25 })).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+      if (hanging.listening) await new Promise<void>((resolve) => hanging.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("without --session, each run starts a session of its own", async () => {

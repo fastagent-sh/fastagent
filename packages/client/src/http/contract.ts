@@ -30,7 +30,7 @@ import {
   Entry,
   EntriesOptions,
   IdempotencyKey,
-  InvokeRequest,
+  InvokeRequestFields,
   ListOptions,
   Message,
   MessageId,
@@ -43,6 +43,7 @@ import {
   Usage,
   Wait,
   errorData,
+  invokeTargetingFilter,
 } from "../agent-api.ts";
 
 export const API_PREFIX = "/v1";
@@ -175,7 +176,7 @@ const SendBody = Schema.Struct({
   stream: Schema.optional(Schema.Boolean),
 });
 
-const { idempotencyKey: ___, ...invokeBody } = InvokeRequest.fields;
+const { idempotencyKey: ___, ...invokeBody } = InvokeRequestFields;
 
 /** `POST /v1/invoke`: single-call send without its key (`Idempotency-Key`). */
 const InvokeBody = Schema.Struct({
@@ -183,7 +184,7 @@ const InvokeBody = Schema.Struct({
   wait: Schema.optional(Wait),
   /** `invokeStream`: the answer is the message's events. */
   stream: Schema.optional(Schema.Boolean),
-});
+}).check(invokeTargetingFilter);
 
 /**
  * A key as a header carries it: percent-encoded, as in the `by-key` path, since a header holds only Latin-1 and loses

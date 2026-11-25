@@ -13,6 +13,7 @@ import {
 } from "@fastagent-sh/client/agent-api";
 import { modelRefOf } from "../../model-ref.ts";
 import { connectAgent } from "@fastagent-sh/client";
+import { log } from "../../log.ts";
 import { resolveStateRoot } from "../../paths.ts";
 import { runInvokeJson, runInvokeStream } from "../invoke-stream.ts";
 import { reachOwner } from "../owner.ts";
@@ -42,11 +43,11 @@ export interface InvokeOptions {
 const refusal = (error: unknown) =>
   error instanceof AgentError ? new Error(`${error.code}: ${error.message}`) : error;
 
-/** Print the message's answer as it is written, then exit with what it ended as: 0 only for `completed`. */
 /** What to do about a model with no credential, where the answer came from. */
 const LOCAL_AUTH_HINT = "sign in with `fastagent login`, or set the provider's API key in .secrets/.env";
 const DEPLOYED_AUTH_HINT = "set the provider's API key in the deployment's environment";
 
+/** Print the message's answer as it is written, then exit with what it ended as: 0 only for `completed`. */
 async function answer(
   events: AsyncIterable<MessageStreamEvent>,
   json: boolean | undefined,
@@ -327,7 +328,9 @@ export async function runInvoke(given: string | undefined, dirArg: string, opts:
       authHint: LOCAL_AUTH_HINT,
     });
   } catch (error) {
-    await agent.close().catch(() => undefined);
+    await agent.close().catch((closeError: unknown) => {
+      log.warn(`[fastagent] closing agent after invoke failure failed: ${String(closeError)}`);
+    });
     failStartup(error);
   }
   await agent.close();
