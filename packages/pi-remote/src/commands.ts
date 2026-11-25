@@ -369,6 +369,7 @@ export function createCommandDispatcher(host: CommandHost) {
       currentRemote.apiKey?.startsWith("$")
         ? `Current: ${currentRemote.apiKey} — enter new $ENV_VAR or raw key`
         : "$FASTAGENT_API_KEY or raw API key",
+      { blockedKind: "auth" },
     );
     if (entered === undefined) return;
     const nextKey = entered.trim();

@@ -30,6 +30,7 @@ import type {
   ToolCall as PiToolCall,
   ToolResultMessage as PiToolResultMessage,
 } from "@earendil-works/pi-ai";
+import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import type { DshStoredAttachment, DshTelemetryContext, DshTelemetrySpan } from "./types.ts";
 
 /** Inline image marker embedded in DSH user messages so adapters can supply raw bytes to pi-ai. */
@@ -58,23 +59,35 @@ function toPiReasoning(effort: string | undefined): PiThinkingLevel | undefined 
   return VALID_REASONING.has(effort) ? (effort as PiThinkingLevel) : undefined;
 }
 
-function classifyPiError(message: string): { code: "AUTH" | "RATE_LIMIT" | "SERVER" | "PI_AI_ERROR"; status?: number } {
+/** Classify a failed pi-ai assistant turn using HTTP status (when available) and pi-ai's retry rules. */
+export function classifyPiError(
+  error: PiAssistantMessage,
+  status?: number,
+): { code: "AUTH" | "RATE_LIMIT" | "SERVER" | "PI_AI_ERROR"; status?: number } {
+  const message = error.errorMessage || "Model call failed";
   const lower = message.toLowerCase();
   if (
-    lower.includes("401") ||
-    lower.includes("unauthorized") ||
-    lower.includes("credential") ||
-    lower.includes("api key")
+    status === 401 ||
+    (status === undefined &&
+      (lower.includes("401") ||
+        lower.includes("unauthorized") ||
+        lower.includes("credential") ||
+        lower.includes("api key")))
   ) {
     return { code: "AUTH", status: 401 };
   }
-  if (lower.includes("429") || lower.includes("rate limit")) {
-    return { code: "RATE_LIMIT", status: 429 };
+  const retryProbe =
+    status !== undefined && !message.includes(String(status))
+      ? { ...error, errorMessage: `${status} ${message}` }
+      : error;
+  const retryable = isRetryableAssistantError(retryProbe);
+  if (status === 429 || lower.includes("429") || lower.includes("rate limit")) {
+    return retryable ? { code: "RATE_LIMIT", status: 429 } : { code: "PI_AI_ERROR", status: 429 };
   }
-  if (lower.includes("503") || lower.includes("overload") || lower.includes("temporarily unavailable")) {
-    return { code: "SERVER", status: 503 };
+  if (retryable || (status !== undefined && status >= 500)) {
+    return { code: "SERVER", status: status !== undefined && status >= 500 ? status : 503 };
   }
-  return { code: "PI_AI_ERROR" };
+  return { code: "PI_AI_ERROR", ...(status !== undefined ? { status } : {}) };
 }
 
 function extractText(content: string | readonly ContentBlock[]): string {
@@ -303,6 +316,7 @@ export class PiAiModelsAdapter extends LlmAdapter {
     }
 
     let streamError: unknown;
+    let responseStatus: number | undefined;
     try {
       const reasoning = toPiReasoning(options.reasoningEffort);
       const eventStream = this.models.streamSimple(model, context, {
@@ -311,6 +325,9 @@ export class PiAiModelsAdapter extends LlmAdapter {
         ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
         ...(reasoning !== undefined ? { reasoning } : {}),
         ...(stepSpan !== undefined ? { telemetry: stepSpan as never } : {}),
+        onResponse: (response) => {
+          responseStatus = response.status;
+        },
       });
 
       const toolCallIds = new Map<number, { id: ReturnType<typeof ToolCallId>; name: string }>();
@@ -416,11 +433,11 @@ export class PiAiModelsAdapter extends LlmAdapter {
               };
               return;
             }
-            const classified = classifyPiError(errMessage);
+            const classified = classifyPiError(event.error, responseStatus);
             throw new LlmError(
               errMessage,
               classified.code,
-              classified.status ? { status: classified.status } : undefined,
+              classified.status !== undefined ? { status: classified.status } : undefined,
             );
           }
         }

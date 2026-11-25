@@ -47,12 +47,15 @@ await step("many records in one commit, past a transaction's 3,000 rows, and a v
       } as unknown as StorageWrite);
     }
     const batches = writes.map((write) => [write]);
-    assert.deepEqual(await storage.commit(batches, () => {}, BACKGROUND_CONTEXT), { stored: batches.length });
+    assert.deepEqual(await storage.commit(batches, () => {}, BACKGROUND_CONTEXT), {
+      kind: "stored",
+      stored: batches.length,
+    });
     // Random, so nothing compresses it below DSQL's 1 MiB a value.
     const text = randomBytes(2_400_000).toString("base64");
     const big = await storage.mintId();
     const write = { type: "conversation", value: { id: big, text } } as unknown as StorageWrite;
-    assert.deepEqual(await storage.commit([[write]], () => {}, BACKGROUND_CONTEXT), { stored: 1 });
+    assert.deepEqual(await storage.commit([[write]], () => {}, BACKGROUND_CONTEXT), { kind: "stored", stored: 1 });
     assert.deepEqual(await storage.conversation(big as never, BACKGROUND_CONTEXT), { id: big, text });
   } finally {
     await storage.close(BACKGROUND_CONTEXT);

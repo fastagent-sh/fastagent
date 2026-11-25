@@ -370,6 +370,17 @@ export function toPublicMessage(stored: DshStoredMessage): Message {
   };
 }
 
+/** Whether a DSH `LlmFailure` represents a transient failure eligible for retry. */
+export function isRetryableLlmFailure(failure: LlmFailure): boolean {
+  if (failure.code === "PI_AI_ERROR") return false;
+  return (
+    failure.code === "RATE_LIMIT" ||
+    failure.code === "SERVER" ||
+    failure.status === 429 ||
+    (failure.status !== undefined && failure.status >= 500)
+  );
+}
+
 /** Classify a DSH `LlmFailure` into FastAgent's `AgentErrorData`. */
 export function classifyLlmFailure(failure: LlmFailure): AgentErrorData {
   if (failure.code === "AUTH") {
@@ -378,11 +389,9 @@ export function classifyLlmFailure(failure: LlmFailure): AgentErrorData {
   if (failure.code === "UNKNOWN_MODEL") {
     return { code: "missing_model", message: failure.message, retryable: false };
   }
-  const retryable =
-    failure.code === "RATE_LIMIT" || failure.code === "SERVER" || failure.status === 429 || failure.status === 503;
   return {
     code: "model_error",
     message: failure.message,
-    retryable,
+    retryable: isRetryableLlmFailure(failure),
   };
 }

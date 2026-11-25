@@ -123,7 +123,10 @@ describe("a database that caps transactions and values", () => {
     const storage = await openPostgresStorage(postgres.url, instance, { limits: { rowsPerTransaction: 10 } });
     const batches = await conversationWrites(storage, 30);
     const seqs: number[] = [];
-    expect(await storage.commit(batches, (_, seq) => seqs.push(seq), BACKGROUND_CONTEXT)).toEqual({ stored: 30 });
+    expect(await storage.commit(batches, (_, seq) => seqs.push(seq), BACKGROUND_CONTEXT)).toEqual({
+      kind: "stored",
+      stored: 30,
+    });
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
     expect((await storage.scanConversations({}, 100, undefined, BACKGROUND_CONTEXT)).items).toHaveLength(30);
     const transactions = await perTransaction(instance);
@@ -139,6 +142,7 @@ describe("a database that caps transactions and values", () => {
     expect(
       await storage.commit(await conversationWrites(storage, 10, "x".repeat(900)), () => {}, BACKGROUND_CONTEXT),
     ).toEqual({
+      kind: "stored",
       stored: 10,
     });
     const transactions = await perTransaction(instance);
@@ -154,6 +158,19 @@ describe("a database that caps transactions and values", () => {
       storage.commit([[...(first as StorageWrite[]), ...(second as StorageWrite[])]], () => {}, BACKGROUND_CONTEXT),
     ).rejects.toThrow("a batch of 4 rows and ");
     expect((await storage.scanConversations({}, 10, undefined, BACKGROUND_CONTEXT)).items).toEqual([]);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
+  it("returns tagged refused CommitResult after storing earlier valid batches", async () => {
+    const storage = await openPostgresStorage(postgres.url, freshInstance());
+    const [validBatch] = await conversationWrites(storage, 1);
+    const missingDocId = await storage.mintId();
+    const invalidBatch: StorageWrite[] = [
+      { type: "document.change", id: missingDocId, content: { version: 1, kind: "base", value: {} } } as StorageWrite,
+    ];
+    const result = await storage.commit([validBatch as StorageWrite[], invalidBatch], () => {}, BACKGROUND_CONTEXT);
+    expect(result).toMatchObject({ kind: "refused", stored: 1 });
+    if (result.kind === "refused") expect(result.refused).toBeInstanceOf(Error);
     await storage.close(BACKGROUND_CONTEXT);
   });
 
