@@ -221,7 +221,7 @@ export function createPiDurableMessages(deps: MessageApiDeps): Agent["messages"]
             const refused = await admitSettings(tx, conversation.id, defaults, has);
             if (refused !== undefined) return { kind: "refused", refused } as const;
             submitting = true;
-            const id = await conversation.submit(tx, {
+            const id = await conversation.admit(tx, {
               type: "input",
               content,
               requestId,

@@ -123,7 +123,10 @@ describe("a database that caps transactions and values", () => {
     const storage = await openPostgresStorage(postgres.url, instance, { limits: { rowsPerTransaction: 10 } });
     const batches = await conversationWrites(storage, 30);
     const seqs: number[] = [];
-    expect(await storage.commit(batches, (_, seq) => seqs.push(seq), BACKGROUND_CONTEXT)).toEqual({ stored: 30 });
+    expect(await storage.commit(batches, (_, seq) => seqs.push(seq), BACKGROUND_CONTEXT)).toEqual({
+      kind: "stored",
+      stored: 30,
+    });
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
     expect((await storage.scanConversations({}, 100, undefined, BACKGROUND_CONTEXT)).items).toHaveLength(30);
     const transactions = await perTransaction(instance);
@@ -139,6 +142,7 @@ describe("a database that caps transactions and values", () => {
     expect(
       await storage.commit(await conversationWrites(storage, 10, "x".repeat(900)), () => {}, BACKGROUND_CONTEXT),
     ).toEqual({
+      kind: "stored",
       stored: 10,
     });
     const transactions = await perTransaction(instance);

@@ -333,6 +333,7 @@ export function registerFastAgentRemoteExtension(pi: ExtensionAPI): void {
       const entered = await ctx.ui.input(
         "API key for remote FastAgent",
         "$FASTAGENT_API_KEY or raw key (leave empty if set in env)",
+        { blockedKind: "auth" },
       );
       if (entered === undefined) return;
       apiKey = entered.trim() || undefined;

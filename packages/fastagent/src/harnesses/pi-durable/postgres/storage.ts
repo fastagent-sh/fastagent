@@ -252,7 +252,9 @@ export class PostgresStorage implements Storage {
     }
     for (const [index, seq] of seqs.entries()) receive(index, seq);
     await this.collectGarbage(garbage);
-    return refused === undefined ? { stored: seqs.length } : { stored: seqs.length, refused: refused.error };
+    return refused === undefined
+      ? { kind: "stored", stored: seqs.length }
+      : { kind: "refused", stored: seqs.length, refused: refused.error };
   }
 
   /** The first of `batches` that fit one transaction's limits (at least one), committed together. */

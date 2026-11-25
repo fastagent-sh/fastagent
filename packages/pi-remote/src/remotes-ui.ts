@@ -42,6 +42,7 @@ export async function addRemoteFlow(
     const entered = await ctx.ui.input(
       `API key for "${name}" (optional)`,
       "$FASTAGENT_API_KEY, raw key, or leave empty to use env FASTAGENT_API_KEY",
+      { blockedKind: "auth" },
     );
     if (entered === undefined) return undefined;
     apiKey = entered.trim() || undefined;
