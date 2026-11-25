@@ -1,6 +1,6 @@
 {
   "name": "@fastagent-sh/client",
-  "version": "0.36.0",
+  "version": "0.36.1",
   "description": "The FastAgent Agent API and its client: talk to any FastAgent service over HTTP or pluggable cloud transports.",
   "keywords": [
     "ai-agent",
