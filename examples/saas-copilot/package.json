@@ -8,7 +8,7 @@
     "start": "node server.ts"
   },
   "dependencies": {
-    "@fastagent-sh/fastagent": "^0.35.2",
+    "@fastagent-sh/fastagent": "^0.36.0",
     "@hono/node-server": "^1.14.0",
     "hono": "^4.13.20"
   },
