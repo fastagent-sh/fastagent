@@ -76,10 +76,15 @@ export function classifyPiError(
   ) {
     return { code: "AUTH", status: 401 };
   }
+  const retryProbe =
+    status !== undefined && !message.includes(String(status))
+      ? { ...error, errorMessage: `${status} ${message}` }
+      : error;
+  const retryable = isRetryableAssistantError(retryProbe);
   if (status === 429 || lower.includes("429") || lower.includes("rate limit")) {
-    return { code: "RATE_LIMIT", status: 429 };
+    return retryable ? { code: "RATE_LIMIT", status: 429 } : { code: "PI_AI_ERROR", status: 429 };
   }
-  if ((status !== undefined && status >= 500) || isRetryableAssistantError(error)) {
+  if (retryable || (status !== undefined && status >= 500)) {
     return { code: "SERVER", status: status !== undefined && status >= 500 ? status : 503 };
   }
   return { code: "PI_AI_ERROR", ...(status !== undefined ? { status } : {}) };

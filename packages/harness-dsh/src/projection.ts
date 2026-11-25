@@ -372,6 +372,7 @@ export function toPublicMessage(stored: DshStoredMessage): Message {
 
 /** Whether a DSH `LlmFailure` represents a transient failure eligible for retry. */
 export function isRetryableLlmFailure(failure: LlmFailure): boolean {
+  if (failure.code === "PI_AI_ERROR") return false;
   return (
     failure.code === "RATE_LIMIT" ||
     failure.code === "SERVER" ||

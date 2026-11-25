@@ -1150,9 +1150,22 @@ export default defineTool({
       status: 400,
     });
     expect(classifyPiError(errMsg("Forbidden"), 401)).toEqual({ code: "AUTH", status: 401 });
+    expect(classifyPiError(errMsg("Too many requests"), 429)).toEqual({ code: "RATE_LIMIT", status: 429 });
+    expect(classifyPiError(errMsg("You exceeded your current quota (insufficient_quota)"), 429)).toEqual({
+      code: "PI_AI_ERROR",
+      status: 429,
+    });
     expect(classifyPiError(errMsg("Cloudflare SSL handshake failed"), 525)).toEqual({ code: "SERVER", status: 525 });
     expect(classifyPiError(errMsg("request rate increased too quickly"))).toEqual({ code: "SERVER", status: 503 });
     expect(classifyPiError(errMsg("Provider returned an empty response"))).toEqual({ code: "SERVER", status: 503 });
+
+    const quotaExhausted = { message: "insufficient_quota", code: "PI_AI_ERROR", status: 429 };
+    expect(isRetryableLlmFailure(quotaExhausted)).toBe(false);
+    expect(classifyLlmFailure(quotaExhausted)).toEqual({
+      code: "model_error",
+      message: "insufficient_quota",
+      retryable: false,
+    });
 
     const transient = { message: "upstream 525", code: "SERVER", status: 525 };
     expect(isRetryableLlmFailure(transient)).toBe(true);
