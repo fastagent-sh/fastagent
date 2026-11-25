@@ -11,6 +11,8 @@ import {
   resolveConfinedPath,
   verifyBashSandbox,
 } from "../../../packages/harness-dsh/src/sandbox.ts";
+import { classifyPiError } from "../../../packages/harness-dsh/src/llm-pi-ai.ts";
+import { classifyLlmFailure, isRetryableLlmFailure } from "../../../packages/harness-dsh/src/projection.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import {
@@ -1138,6 +1140,27 @@ export default defineTool({
     } finally {
       rmSync(workdir, { recursive: true, force: true });
     }
+  });
+
+  it("classifies pi-ai errors via HTTP status and pi-ai retry rules without misclassifying 400s as auth", () => {
+    const errMsg = (errorMessage: string) => ({ stopReason: "error", errorMessage }) as never;
+
+    expect(classifyPiError(errMsg("Bad request mentioning api key field"), 400)).toEqual({
+      code: "PI_AI_ERROR",
+      status: 400,
+    });
+    expect(classifyPiError(errMsg("Forbidden"), 401)).toEqual({ code: "AUTH", status: 401 });
+    expect(classifyPiError(errMsg("Cloudflare SSL handshake failed"), 525)).toEqual({ code: "SERVER", status: 525 });
+    expect(classifyPiError(errMsg("request rate increased too quickly"))).toEqual({ code: "SERVER", status: 503 });
+    expect(classifyPiError(errMsg("Provider returned an empty response"))).toEqual({ code: "SERVER", status: 503 });
+
+    const transient = { message: "upstream 525", code: "SERVER", status: 525 };
+    expect(isRetryableLlmFailure(transient)).toBe(true);
+    expect(classifyLlmFailure(transient)).toEqual({
+      code: "model_error",
+      message: "upstream 525",
+      retryable: true,
+    });
   });
 });
 

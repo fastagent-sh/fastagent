@@ -6,7 +6,13 @@ import type { Agent as DshLoopAgent, AssistantStreamFrame } from "@deepseek-ai/d
 import type { ReasoningEffortId } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
 import { type SessionEvent, hasEnded } from "@fastagent-sh/client/agent-api";
-import { addTokens, classifyLlmFailure, projectSessionEvent, toPublicMessage } from "./projection.ts";
+import {
+  addTokens,
+  classifyLlmFailure,
+  isRetryableLlmFailure,
+  projectSessionEvent,
+  toPublicMessage,
+} from "./projection.ts";
 import {
   type DshRuntimeState,
   type LiveSession,
@@ -70,12 +76,7 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
   }
 
   agentCtx.on("agent/request-error", async (payload, next) => {
-    const retryable =
-      payload.failure.code === "SERVER" ||
-      payload.failure.code === "RATE_LIMIT" ||
-      payload.failure.status === 503 ||
-      payload.failure.status === 429;
-    if (!retryable || state.maxRetries <= 0) return next();
+    if (!isRetryableLlmFailure(payload.failure) || state.maxRetries <= 0) return next();
     const key = `${payload.turn}:${payload.step}`;
     const prev = live.retryCounts.get(key) ?? 0;
     if (prev >= state.maxRetries) return next();
@@ -91,15 +92,15 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
     });
     await new Promise<void>((resolve) => {
       if (payload.signal.aborted) return resolve();
-      const timer = setTimeout(resolve, delayMs);
-      payload.signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        payload.signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, delayMs);
+      payload.signal.addEventListener("abort", onAbort, { once: true });
     });
     if (payload.signal.aborted) return next();
     return { kind: "retry" as const };
