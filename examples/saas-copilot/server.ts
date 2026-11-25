@@ -35,7 +35,7 @@ interface TenantEntry {
 const tenants = new Map<string, TenantEntry>();
 
 function isTenantIdle(entry: TenantEntry): boolean {
-  return entry.agent !== undefined && entry.activeStreams === 0 && !entry.agent.busy();
+  return entry.agent !== undefined && entry.agent.ready() && entry.activeStreams === 0 && !entry.agent.busy();
 }
 
 function evictOverflowTenants(): void {
@@ -65,9 +65,13 @@ function getTenantEntry(tenantId: string): TenantEntry {
     throw new Error(`Invalid tenant id "${tenantId}"`);
   }
   let entry = tenants.get(tenantId);
+  // Skip handles already shutting down (ready() flips to false synchronously before agent.closed settles).
   if (entry !== undefined) {
-    entry.lastUsedAt = Date.now();
-    return entry;
+    if (entry.agent === undefined || entry.agent.ready()) {
+      entry.lastUsedAt = Date.now();
+      return entry;
+    }
+    tenants.delete(tenantId);
   }
   const pending = openAgent(definition, {
     root: resolve(process.env.TENANTS_ROOT ?? "./.tenants", tenantId),
@@ -85,7 +89,11 @@ function getTenantEntry(tenantId: string): TenantEntry {
   })
     .then((agent) => {
       if (tenants.get(tenantId)?.pending === pending) {
-        entry!.agent = agent;
+        if (agent.ready()) {
+          entry!.agent = agent;
+        } else {
+          tenants.delete(tenantId);
+        }
       }
       void agent.closed?.then(() => {
         if (tenants.get(tenantId)?.pending === pending) tenants.delete(tenantId);

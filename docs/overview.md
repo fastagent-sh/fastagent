@@ -77,6 +77,7 @@ my-agent/
 | --- | --- |
 | **Chat platform connectors** | Slack, Telegram, Discord, and web UIs are external callers of the Agent API, not runtime plugins. |
 | **End-user auth & billing** | One API key controls a whole instance. Your application keeps user authentication, tenancy, and routing. |
+| **Multi-tenant instance cache & routing** | FastAgent is a single-instance data plane: it gives you `openPostgresDatabase()`, coalesced lease renewals, cooperative idle handoff, and `ready()` / `busy()` / `closed` signals, while your host owns tenant secret resolution, sticky routing, active stream tracking, and cache eviction ([Embedding](embedding.md#hosting-multiple-instances-on-one-postgresql-pool)). |
 | **Fixed DAG workflows & cron schedulers** | The agent decides its own tool steps. Drive scheduled or event-driven work externally with single-call `POST /v1/invoke` (GitHub Actions, Cloud Scheduler, EventBridge, webhooks). |
 | **Opinionated UI** | Use [`@fastagent-sh/pi-remote`](remotes.md#4-chat-interactively-from-your-terminal-fastagent-shpi-remote) for interactive terminal access, or build any UI over `sessions.events` and `messages.stream`. |
 
