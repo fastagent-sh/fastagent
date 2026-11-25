@@ -94,12 +94,13 @@ function assertDeclaredImports(pkgDir: string, allPackageDirs: ReadonlySet<strin
   };
   collect(pkgDir);
 
-  const importFrom = /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g;
+  const importFrom =
+    /(?:^|\n)\s*(?:import\s+["']([^"']+)["']|(?:import|export)\s+(?:type\s+)?(?:\*(?:\s+as\s+[A-Za-z_$][\w$]*)?|\{[^};]*\}|[A-Za-z_$][\w$]*(?:\s*,\s*(?:\*\s+as\s+[A-Za-z_$][\w$]*|\{[^};]*\}))?)\s+from\s+["']([^"']+)["'])/g;
   const missing: string[] = [];
   for (const file of tsFiles) {
     const source = readFileSync(file, "utf8");
     for (const match of source.matchAll(importFrom)) {
-      const specifier = match[1];
+      const specifier = match[1] ?? match[2];
       if (specifier === undefined) continue;
       const pkgName = packageNameFromSpecifier(specifier);
       if (pkgName !== undefined && !declared.has(pkgName)) {
