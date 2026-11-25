@@ -11,6 +11,7 @@ import {
   fauxAssistantMessage,
   fauxProvider,
 } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
 import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
@@ -30,6 +31,7 @@ import { openSource } from "../../harnesses/open-source.ts";
 import { type IoOption, type LoginIO, chooseLogin, loginFlow } from "../../../packages/fastagent/src/cli/login-ui.ts";
 import {
   LoginRefused,
+  PI_DEFAULT_MODELS,
   SignInCancelled,
   loginOptionsOver,
   loginOver,
@@ -584,5 +586,13 @@ export default { model: "remote-keyed/m1", providers: [provider] };
     } finally {
       abort.abort();
     }
+  });
+
+  it("every PI_DEFAULT_MODELS entry exists in the built-in pi-ai catalog", () => {
+    const models = builtinModels();
+    const missing = Object.entries(PI_DEFAULT_MODELS)
+      .filter(([provider, modelId]) => models.getModel(provider, modelId) === undefined)
+      .map(([provider, modelId]) => `${provider}/${modelId}`);
+    expect(missing).toEqual([]);
   });
 });

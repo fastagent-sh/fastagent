@@ -161,6 +161,19 @@ describe("a database that caps transactions and values", () => {
     await storage.close(BACKGROUND_CONTEXT);
   });
 
+  it("returns tagged refused CommitResult after storing earlier valid batches", async () => {
+    const storage = await openPostgresStorage(postgres.url, freshInstance());
+    const [validBatch] = await conversationWrites(storage, 1);
+    const missingDocId = await storage.mintId();
+    const invalidBatch: StorageWrite[] = [
+      { type: "document.change", id: missingDocId, content: { version: 1, kind: "base", value: {} } } as StorageWrite,
+    ];
+    const result = await storage.commit([validBatch as StorageWrite[], invalidBatch], () => {}, BACKGROUND_CONTEXT);
+    expect(result).toMatchObject({ kind: "refused", stored: 1 });
+    if (result.kind === "refused") expect(result.refused).toBeInstanceOf(Error);
+    await storage.close(BACKGROUND_CONTEXT);
+  });
+
   it("keeps a record longer than a value in parts, none over, and reads it back whole", async () => {
     const instance = freshInstance();
     const storage = await openPostgresStorage(postgres.url, instance, { limits: { bytesPerValue: 100 } });
