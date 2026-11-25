@@ -11,6 +11,7 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
 import type { Harness } from "@earendil-works/pi-durable";
+import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
 import { createCloseSignal } from "../close-signal.ts";
@@ -53,16 +54,22 @@ import {
   type PostgresDatabase,
   type SharedPostgresDatabase,
   describeDatabase,
+  isSharedPostgresDatabase,
   messageBytesFor,
   openPostgresDatabase,
-  sharedHandleOf,
 } from "../postgres.ts";
-import { type Traces, otlpTraces } from "./telemetry/otlp.ts";
+import { otlpTraces } from "./telemetry/otlp.ts";
 import { log } from "../log.ts";
 
 export interface OpenServingOptions {
-  /** Override the credentials file, or `null` to read no credentials file at all. */
-  authPath?: string | null;
+  /**
+   * Where the instance keeps its fallback file credentials when no durable store owns the provider:
+   * - `"secrets"` (default): `<projectDir>/.secrets/auth.json` layered over global credentials (the CLI's).
+   * - `"state"`: `<stateRoot>/auth.json` only (an embedded app's).
+   * - `"none"`: no credentials file at all (environment variables only).
+   * - `{ file }`: an explicit credentials file path.
+   */
+  auth?: "secrets" | "state" | "none" | { readonly file: string };
   /** The instance's name. Default: the definition's, as one segment. */
   name?: string;
   /**
@@ -110,12 +117,6 @@ export interface OpenServingOptions {
   projectDir?: string;
   /** The instance's state root. Default: the project directory's own (`resolveStateRoot`). */
   stateRoot?: string;
-  /**
-   * Where the instance keeps its model credentials when it is given no store: `"secrets"`, the project's `.secrets/`
-   * over the machine's own credentials (the CLI's), or `"state"`, `auth.json` in the state root and nothing else (an
-   * app's). Default `"secrets"`.
-   */
-  keeps?: "secrets" | "state";
   /** The PostgreSQL database the instance's storage is in, over the one `FASTAGENT_DATABASE_URL` names. */
   database?: PostgresDatabase;
 }
@@ -187,7 +188,7 @@ export interface HarnessOpenContext {
   readonly stateRoot: string;
   readonly chosen: ServingStorage;
   readonly place: InstancePlace;
-  readonly database: PostgresDatabase | undefined;
+  readonly database: SharedPostgresDatabase | undefined;
   readonly maxMessageBytes: number | undefined;
   readonly storageDescription: string;
   readonly secrets: RedactedSecrets;
@@ -195,10 +196,9 @@ export interface HarnessOpenContext {
   readonly processEnv: Readonly<Record<string, string>>;
   readonly code: BuiltDefinition;
   readonly models: ModelEnvironment;
-  readonly traces: Traces | undefined;
+  readonly telemetry: TelemetryContext | undefined;
   readonly work: WorkTracker;
   openMcp(): Promise<McpClients>;
-  closeAuth(): void;
 }
 
 /** The database the instance's storage is in: the one given, or the one `FASTAGENT_DATABASE_URL` names, or none. */
@@ -267,12 +267,14 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
     dirname(workdir),
   );
   const stateRoot = options.stateRoot ?? resolveStateRoot(projectDir, env);
-  const authPath =
-    options.authPath !== undefined
-      ? options.authPath
-      : options.keeps === "state"
+  const authPath: string | null | undefined =
+    options.auth === undefined || options.auth === "secrets"
+      ? undefined
+      : options.auth === "state"
         ? join(stateRoot, "auth.json")
-        : undefined;
+        : options.auth === "none"
+          ? null
+          : options.auth.file;
   const chosen = options.storage ?? "instance";
   const place: InstancePlace = {
     stateRoot,
@@ -302,17 +304,19 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
     );
 
   return yield* Effect.gen(function* () {
-    const ownedSharedPg: SharedPostgresDatabase | undefined =
-      rawDatabase !== undefined && sharedHandleOf(rawDatabase) === undefined
-        ? yield* Effect.acquireRelease(
-            Effect.try({
-              try: () => openPostgresDatabase(rawDatabase),
-              catch: (cause) => new PromiseFailure(cause),
-            }),
-            (pg) => release(() => pg.close()),
-          )
-        : undefined;
-    const database: PostgresDatabase | undefined = ownedSharedPg ?? rawDatabase;
+    const sharedDatabase: SharedPostgresDatabase | undefined =
+      rawDatabase === undefined
+        ? undefined
+        : isSharedPostgresDatabase(rawDatabase)
+          ? rawDatabase
+          : yield* Effect.acquireRelease(
+              Effect.try({
+                try: () => openPostgresDatabase(rawDatabase),
+                catch: (cause) => new PromiseFailure(cause),
+              }),
+              (pg) => release(() => pg.close()),
+            );
+    const database = sharedDatabase;
     // Fail fast on invalid OTLP settings before opening credentials or harness storage.
     const traces = yield* Effect.acquireRelease(
       Effect.try({
@@ -362,7 +366,6 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       }),
     );
     const work = createWorkTracker();
-    const authRef = yield* Ref.make<AuthManager | undefined>(undefined);
     const ctx: HarnessOpenContext = {
       definition,
       options,
@@ -381,10 +384,9 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       processEnv,
       code,
       models,
-      traces,
+      telemetry: traces?.context,
       work,
       openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
-      closeAuth: () => Ref.getUnsafe(authRef)?.close(),
     };
     const runtimeAgent = yield* Effect.acquireRelease(
       fromPromise(() => (dshModule !== undefined ? openDshRuntime(ctx, dshModule) : openPiDurableRuntime(ctx))),
@@ -419,10 +421,12 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
             (manager) => release(() => manager.close()),
           )
         : undefined;
-    yield* Ref.set(authRef, auth);
 
     const closeSignal = createCloseSignal();
     runtimeAgent.subscribeClose?.(closeSignal.mark);
+    if (auth !== undefined) {
+      closeSignal.subscribe(() => auth.close());
+    }
     const closedGate = Promise.withResolvers<void>();
     const closeOutcome = Ref.makeUnsafe<Deferred.Deferred<void, PromiseFailure> | undefined>(undefined);
     const closeAgentEffect = Effect.fn("serving.closeAgent")(function* () {
@@ -591,7 +595,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ownEnv: options.env ?? {},
     runsAs: NOT_HOSTED,
     ...(options.name === undefined ? {} : { name: options.name }),
-    keeps: "state",
+    auth: "state",
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.harness === undefined ? {} : { harness: options.harness }),
     ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),

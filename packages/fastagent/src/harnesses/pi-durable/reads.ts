@@ -19,7 +19,17 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import type { ContextUsage, Entry, Message, Session } from "@fastagent-sh/client/agent-api";
+import {
+  type ContextUsage,
+  type Entry,
+  type EntriesOptions,
+  LIMITS,
+  type Message,
+  type Page,
+  type Session,
+  agentError,
+  type AgentError,
+} from "@fastagent-sh/client/agent-api";
 import { type PromiseFailure, fromPromise } from "../../promise-bridge.ts";
 import { isPublished, publishEntry, requestIdOf } from "./entries.ts";
 import type { Ids } from "./ids.ts";
@@ -181,4 +191,72 @@ export function durableReads(
     session,
     sessionsOf,
   };
+}
+
+/** One page of a session's published entries: after a cursor, before one, or the newest. */
+export function readEntryPage(
+  reads: Reads,
+  conversation: Conversation,
+  sessionId: string,
+  { after, before, limit = LIMITS.pageDefault }: EntriesOptions,
+): Effect.Effect<Page<Entry>, AgentError | PromiseFailure> {
+  return Effect.gen(function* () {
+    const cursor = after ?? before;
+    const at = cursor === undefined ? undefined : yield* reads.visibleEntry(conversation, cursor);
+    if (cursor !== undefined && at === undefined) {
+      return yield* agentError("not_found", `No entry ${cursor} in session ${sessionId}`);
+    }
+    const bound = (id: number) => id as EntryRecord["id"];
+    const take = (query: Parameters<Reads["published"]>[1]) =>
+      reads.published(conversation, query).pipe(Stream.take(limit + 1), Stream.runCollect);
+
+    if (after !== undefined && at !== undefined) {
+      const records = yield* take({ order: "ascending", minEntryId: bound(at.id + 1) });
+      const page = records.slice(0, limit);
+      const first = page[0];
+      if (first === undefined) return { data: [] };
+      const earlier = yield* reads.newestPublished(conversation, first.id - 1);
+      const data = withinEntryBudget(yield* reads.publish(page), "oldest");
+      return {
+        data,
+        ...(earlier === undefined ? {} : { prev: (data[0] as Entry).id }),
+        ...(records.length > limit || data.length < page.length ? { next: (data.at(-1) as Entry).id } : {}),
+      };
+    }
+
+    const records = yield* take({
+      order: "descending",
+      ...(at === undefined ? {} : { maxEntryId: bound(at.id - 1) }),
+    });
+    const page = records.slice(0, limit).reverse();
+    if (page.length === 0) return { data: [] };
+    const older = records[limit];
+    const published = yield* reads.publish(page);
+    const data = withinEntryBudget(published, "newest");
+    const newer =
+      at === undefined
+        ? undefined
+        : yield* reads
+            .published(conversation, { order: "ascending", minEntryId: bound(at.id) })
+            .pipe(Stream.take(1), Stream.runHead);
+    return {
+      data,
+      ...(older !== undefined || data.length < published.length ? { prev: (data[0] as Entry).id } : {}),
+      ...(newer !== undefined && newer._tag === "Some" ? { next: (data.at(-1) as Entry).id } : {}),
+    };
+  });
+}
+
+/** A page stops at the byte budget, keeping at least one entry: the end nearest its cursor. */
+function withinEntryBudget(entries: Entry[], keep: "oldest" | "newest"): Entry[] {
+  const ordered = keep === "oldest" ? entries : [...entries].reverse();
+  const kept: Entry[] = [];
+  let bytes = 0;
+  for (const entry of ordered) {
+    const size = Buffer.byteLength(JSON.stringify(entry));
+    if (kept.length > 0 && bytes + size > LIMITS.pageBytes) break;
+    kept.push(entry);
+    bytes += size;
+  }
+  return keep === "oldest" ? kept : kept.reverse();
 }

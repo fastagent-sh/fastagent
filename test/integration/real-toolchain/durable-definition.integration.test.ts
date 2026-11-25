@@ -35,7 +35,7 @@ describe("two agents in one process", () => {
           ownEnv: process.env,
           runsAs: NOT_HOSTED,
           storage: "memory",
-          authPath: null,
+          auth: "none",
         }),
       );
     }

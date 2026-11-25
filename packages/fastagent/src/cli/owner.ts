@@ -10,8 +10,23 @@ import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { classifyBind } from "../bind.ts";
+import { log } from "../log.ts";
 
 const OWNER_FILE = "owner.json";
+const EXPECTED_STALE_CODES = new Set(["ECONNREFUSED", "ECONNRESET"]);
+
+function errorCodesOf(error: unknown): string[] {
+  const codes: string[] = [];
+  for (
+    let current: unknown = error;
+    current !== null && typeof current === "object";
+    current = (current as { cause?: unknown }).cause
+  ) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") codes.push(code);
+  }
+  return codes;
+}
 
 export interface Owner {
   /** The base URL of its Agent API. */
@@ -32,7 +47,10 @@ export function announceOwner(stateRoot: string, host: string | undefined, port:
 }
 
 /** The process serving the instance in `stateRoot`, when one answers. */
-export async function reachOwner(stateRoot: string): Promise<Owner | undefined> {
+export async function reachOwner(
+  stateRoot: string,
+  options: { readonly timeoutMs?: number } = {},
+): Promise<Owner | undefined> {
   let text: string;
   try {
     text = readFileSync(join(stateRoot, OWNER_FILE), "utf8");
@@ -45,12 +63,23 @@ export async function reachOwner(stateRoot: string): Promise<Owner | undefined> 
     throw new Error(`${join(stateRoot, OWNER_FILE)} is not an owner's: remove it, then run the command again`);
   }
   // Asked with its key: another serve on the port a killed owner left (dev's default is one port) answers /health too.
-  const answered = await fetch(new URL("/v1/agent", owner.url), {
-    headers: { authorization: `Bearer ${owner.key}` },
-    signal: AbortSignal.timeout(2_000),
-  }).then(
-    (response) => response.ok,
-    () => false,
-  );
-  return answered ? { url: owner.url, key: owner.key } : undefined;
+  try {
+    const response = await fetch(new URL("/v1/agent", owner.url), {
+      headers: { authorization: `Bearer ${owner.key}` },
+      signal: AbortSignal.timeout(options.timeoutMs ?? 2_000),
+    });
+    return response.ok ? { url: owner.url, key: owner.key } : undefined;
+  } catch (error) {
+    const codes = errorCodesOf(error);
+    if (!codes.some((code) => EXPECTED_STALE_CODES.has(code))) {
+      const detail =
+        error instanceof Error
+          ? error.cause instanceof Error
+            ? `${error.message}: ${error.cause.message}`
+            : error.message
+          : String(error);
+      log.warn(`[fastagent] could not reach local owner at ${owner.url}: ${detail}`);
+    }
+    return undefined;
+  }
 }

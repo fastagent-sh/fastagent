@@ -10,7 +10,7 @@ import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
 import type { McpClients } from "../../mcp/client.ts";
 import type { HarnessOpenContext, InstancePlace, ServingAgent, ServingStorage } from "../serving.ts";
-import type { PostgresDatabase } from "../../postgres.ts";
+import type { SharedPostgresDatabase } from "../../postgres.ts";
 import type { PgLeaseHandoff } from "../../postgres-kit.ts";
 import type { DurableAgent } from "./agent.ts";
 import { mcpTools } from "../mcp.ts";
@@ -25,7 +25,7 @@ const NAMED_INSTANCE_HOLDERS =
 
 function openInstanceStorage(
   place: InstancePlace,
-  database: PostgresDatabase | undefined,
+  database: SharedPostgresDatabase | undefined,
   onLost?: (error: Error) => void,
   handoff?: PgLeaseHandoff,
 ): Promise<Storage> {
@@ -50,7 +50,7 @@ function openInstanceStorage(
 
 function openStorage(
   place: InstancePlace,
-  database: PostgresDatabase | undefined,
+  database: SharedPostgresDatabase | undefined,
   storage: ServingStorage,
   onLost: (error: Error) => void,
   handoff: PgLeaseHandoff,
@@ -74,7 +74,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     processEnv,
     code,
     models,
-    traces,
+    telemetry,
     work,
   } = ctx;
 
@@ -102,7 +102,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
       models: models.models,
       ...(options.model === undefined ? {} : { model: options.model }),
       ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-      ...(traces === undefined ? {} : { telemetry: traces.context }),
+      ...(telemetry === undefined ? {} : { telemetry }),
       ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
       work,
     });
@@ -110,7 +110,6 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
     const failures: unknown[] = [error];
     if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
     await storage.close(BACKGROUND_CONTEXT).catch((cleanup: unknown) => failures.push(cleanup));
-    await traces?.close();
     throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
   }
 
@@ -138,14 +137,7 @@ export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<Ser
   };
 
   let resourcesClosed: Promise<void> | undefined;
-  const closeResources = (): Promise<void> =>
-    (resourcesClosed ??= (async () => {
-      ctx.closeAuth();
-      const failures: unknown[] = [];
-      await mcp.close().catch((error: unknown) => failures.push(error));
-      await traces?.close();
-      if (failures.length > 0) throw failures[0];
-    })());
+  const closeResources = (): Promise<void> => (resourcesClosed ??= mcp.close());
   void agent.harness.closed.then(closeResources).catch((error: unknown) => {
     log.warn(`[fastagent] cleanup after harness shutdown failed: ${String(error)}`);
   });

@@ -30,6 +30,13 @@ export type IdempotencyKey = typeof IdempotencyKey.Type;
 export const ModelRef = Schema.Struct({ provider: Schema.String, modelId: Schema.String });
 export type ModelRef = typeof ModelRef.Type;
 
+/** Parse `"provider/modelId"` into a {@link ModelRef}, or `undefined` when malformed. */
+export function parseModelRef(spec: string): ModelRef | undefined {
+  const slash = typeof spec === "string" ? spec.indexOf("/") : -1;
+  if (slash < 1 || slash === spec.length - 1) return undefined;
+  return { provider: spec.slice(0, slash), modelId: spec.slice(slash + 1) };
+}
+
 export const ThinkingLevel = Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 export type ThinkingLevel = typeof ThinkingLevel.Type;
 
@@ -357,7 +364,24 @@ export const MessageKey = Schema.Union([
 export type MessageKey = typeof MessageKey.Encoded;
 export type DecodedMessageKey = typeof MessageKey.Type;
 
-export const InvokeRequest = Schema.Struct({
+/**
+ * Cross-field invariants shared by `InvokeRequest` and HTTP `InvokeBody`.
+ * @internal
+ */
+export const invokeTargetingFilter = Schema.makeFilter<{
+  readonly conversation?: string | undefined;
+  readonly sessionId?: string | undefined;
+}>((request) => [
+  ...(request.conversation !== undefined && request.sessionId !== undefined
+    ? [{ path: ["conversation"], issue: "pass either conversation or sessionId, not both" }]
+    : []),
+  ...(request.conversation !== undefined && request.conversation.trim() === ""
+    ? [{ path: ["conversation"], issue: "conversation must not be blank" }]
+    : []),
+]);
+
+/** @internal */
+export const InvokeRequestFields = {
   /** Text or content parts; supports `/<command>` templates from `prompts/` and `skills/`. */
   content: SendRequest.fields.content,
   /**
@@ -374,7 +398,9 @@ export const InvokeRequest = Schema.Struct({
   metadata: Schema.optional(Metadata),
   /** What the message is when the session is busy with another. Default: "queue". */
   whenBusy: Schema.optional(Schema.Literals(["queue", "steer", "reject"])),
-});
+};
+
+export const InvokeRequest = Schema.Struct(InvokeRequestFields).check(invokeTargetingFilter);
 export type InvokeRequest = typeof InvokeRequest.Encoded;
 export type DecodedInvokeRequest = typeof InvokeRequest.Type;
 

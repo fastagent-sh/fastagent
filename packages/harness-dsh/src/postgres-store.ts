@@ -43,7 +43,7 @@ interface DshPgLeaseHandoff {
   readonly onHandoff: () => void;
 }
 
-/** Single-writer instance lease handle injected by `@fastagent-sh/fastagent` or created by the built-in fallback. */
+/** Single-writer instance lease handle injected via `kit.acquireLease`. */
 interface DshPgLease {
   readonly owner: string;
   readonly lost: Error | undefined;
@@ -51,9 +51,9 @@ interface DshPgLease {
   release(): Promise<void>;
 }
 
-/** Optional shared PostgreSQL/DSQL primitives injected by `@fastagent-sh/fastagent` (`postgres-kit.ts`). */
+/** Shared PostgreSQL/DSQL primitives injected by `@fastagent-sh/fastagent` (`postgres-kit.ts`). */
 interface DshPgStoreKit {
-  readonly migrate?: (
+  readonly migrate: (
     db: DshPgDatabase,
     statements: readonly string[],
     options: {
@@ -61,7 +61,7 @@ interface DshPgStoreKit {
       readonly version?: { readonly table: string; readonly current: number };
     },
   ) => Promise<void>;
-  readonly acquireLease?: (
+  readonly acquireLease: (
     db: DshPgDatabase,
     options: {
       readonly table: string;
@@ -80,11 +80,13 @@ interface DshPgStoreKit {
       readonly formatLostError?: (instance: string) => Error;
     },
   ) => Promise<DshPgLease>;
-  readonly splitText?: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
-  readonly isConflict?: (error: unknown) => boolean;
+  readonly splitText: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
+  readonly isConflict: (error: unknown) => boolean;
 }
 
 export interface PostgresDshStoreOptions {
+  /** Shared PostgreSQL primitives (`migrate`, `acquireLease`, `splitText`, `isConflict`), e.g. from `postgres-kit.ts`. */
+  readonly kit: DshPgStoreKit;
   /** Lease duration in milliseconds for single-writer instance ownership. Default: 30_000. */
   readonly leaseMs?: number;
   /** Maximum milliseconds to wait for an existing holder's lease to expire on open. Default: 0 (fail fast). */
@@ -99,8 +101,6 @@ export interface PostgresDshStoreOptions {
   readonly createIndex?: DshPgCreateIndex;
   /** Transaction and per-value caps (e.g. `DSQL_LIMITS`). */
   readonly limits?: DshPgLimits;
-  /** Shared PostgreSQL primitives injected by `@fastagent-sh/fastagent` to avoid duplicating migration/lease logic. */
-  readonly kit?: DshPgStoreKit;
 }
 
 export interface PostgresDshEventStore extends DshEventStoreBackend {
@@ -208,244 +208,6 @@ interface StoredValueRow {
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-const DEFAULT_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
-const DEFAULT_CONFLICT_CODES = new Set(["40001", "OC000"]);
-const INDEX_STATEMENT = /^CREATE (?:UNIQUE )?INDEX /;
-
-const defaultIsConflict = (error: unknown): boolean => {
-  const code = (error as { code?: unknown } | null | undefined)?.code;
-  return typeof code === "string" && DEFAULT_CONFLICT_CODES.has(code);
-};
-
-function defaultSplitText(text: string, bytesPerValue: number | undefined): string[] | undefined {
-  if (bytesPerValue === undefined) return undefined;
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= bytesPerValue) return undefined;
-  const parts: string[] = [];
-  for (let start = 0; start < bytes.length; ) {
-    let end = Math.min(start + bytesPerValue, bytes.length);
-    while (end < bytes.length && end > start && ((bytes[end] as number) & 0xc0) === 0x80) end--;
-    if (end === start) throw new Error(`a value of ${bytesPerValue} bytes cannot hold one character`);
-    parts.push(bytes.toString("utf8", start, end));
-    start = end;
-  }
-  return parts;
-}
-
-async function defaultMigrateSchema(
-  db: DshPgDatabase,
-  statements: readonly string[],
-  options: {
-    readonly createIndex?: DshPgCreateIndex;
-    readonly version?: { readonly table: string; readonly current: number };
-  },
-): Promise<void> {
-  const { createIndex, version } = options;
-  if (version !== undefined) {
-    const existing = await db
-      .query<{ version: number }>(`SELECT max(version) AS version FROM ${version.table}`)
-      .then(([row]) => row?.version ?? 0)
-      .catch((error: { code?: string }) => {
-        if (error.code === "42P01") return 0;
-        throw error;
-      });
-    if (existing > version.current) {
-      throw new Error(`the database holds DSH storage of version ${existing}, newer than ${version.current}`);
-    }
-    if (existing === version.current) return;
-  }
-  const ignoreConcurrent = <T>(promise: Promise<T>): Promise<T | undefined> =>
-    promise.catch((error: { code?: string }) => {
-      if (!DEFAULT_CONCURRENT_DDL.has(error.code ?? "")) throw error;
-      return undefined;
-    });
-  for (const sql of statements.filter((s) => !INDEX_STATEMENT.test(s))) {
-    await ignoreConcurrent(db.query(sql));
-  }
-  const jobs: (() => Promise<void>)[] = [];
-  for (const sql of statements.filter((s) => INDEX_STATEMENT.test(s))) {
-    const job = await ignoreConcurrent(createIndex ? createIndex(db, sql) : db.query(sql).then(() => undefined));
-    if (job !== undefined) jobs.push(job);
-  }
-  const built = await Promise.allSettled(jobs.map((job) => job()));
-  const failed = built.find((result): result is PromiseRejectedResult => result.status === "rejected");
-  if (failed !== undefined) throw failed.reason;
-  if (version !== undefined) {
-    await db.query(`INSERT INTO ${version.table} (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, [
-      version.current,
-    ]);
-  }
-}
-
-async function defaultAcquireLease(
-  db: DshPgDatabase,
-  options: {
-    readonly table: string;
-    readonly instance: string;
-    readonly owner?: string;
-    readonly leaseMs?: number;
-    readonly waitMs?: number;
-    readonly handoff?: DshPgLeaseHandoff;
-    readonly onLost?: (error: Error) => void;
-    readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
-    readonly formatHeldError?: (info: {
-      readonly instance: string;
-      readonly until: string;
-      readonly holder?: string;
-    }) => Error;
-    readonly formatLostError?: (instance: string) => Error;
-  },
-): Promise<DshPgLease> {
-  const { table, instance } = options;
-  const leaseMs = options.leaseMs ?? 30_000;
-  const waitMs = options.waitMs ?? 0;
-  const owner = options.owner ?? randomUUID();
-
-  await db.query(`INSERT INTO ${table} (instance) VALUES ($1) ON CONFLICT (instance) DO NOTHING`, [instance]);
-
-  const deadline = Date.now() + waitMs;
-  for (;;) {
-    const acquired = await db
-      .transaction(async (tx) => {
-        const [leased] = await tx.query(
-          `UPDATE ${table}
-            SET owner = $2,
-                lease_until = now() + make_interval(secs => $3::double precision / 1000),
-                handoff_requested_at = NULL
-            WHERE instance = $1 AND (owner IS NULL OR lease_until < now())
-            RETURNING instance`,
-          [instance, owner, leaseMs],
-        );
-        if (leased === undefined) return false;
-        await options.onTake?.(tx, owner);
-        return true;
-      })
-      .catch((error: unknown) => {
-        if (defaultIsConflict(error)) return false;
-        throw error;
-      });
-    if (acquired) break;
-    const [held] = await db.query<{
-      owner: string | null;
-      lease_until: Date | null;
-      handoff_requested_at: Date | null;
-    }>(`SELECT owner, lease_until, handoff_requested_at FROM ${table} WHERE instance = $1`, [instance]);
-    const holder = held?.owner ?? undefined;
-    const until = held?.lease_until?.toISOString() ?? "now";
-    if (Date.now() >= deadline) {
-      throw (
-        options.formatHeldError?.({ instance, until, ...(holder === undefined ? {} : { holder }) }) ??
-        new DshInstanceHeldError(instance, holder ?? "unknown")
-      );
-    }
-    if (held?.handoff_requested_at === null && holder !== undefined) {
-      await db
-        .query(
-          `UPDATE ${table} SET handoff_requested_at = now()
-            WHERE instance = $1 AND owner IS NOT NULL AND owner <> $2 AND handoff_requested_at IS NULL`,
-          [instance, owner],
-        )
-        .catch((error: unknown) => {
-          if (!defaultIsConflict(error)) throw error;
-        });
-    }
-    const remaining = Math.max(5, deadline - Date.now());
-    await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, leaseMs / 3, remaining)));
-  }
-
-  let lost: Error | undefined;
-  let released = false;
-  let renewedAt = Date.now();
-  let onLost = options.onLost;
-  let onHandoff = options.handoff?.onHandoff;
-
-  const lose = (why?: Error, notify = false): Error => {
-    clearInterval(timer);
-    onHandoff = undefined;
-    lost ??= why ?? options.formatLostError?.(instance) ?? new Error(`PostgreSQL DSH lease for "${instance}" was lost`);
-    if (notify) {
-      const cb = onLost;
-      onLost = undefined;
-      cb?.(lost);
-    }
-    return lost;
-  };
-
-  const triggerHandoff = (): void => {
-    if (released || lost !== undefined) return;
-    clearInterval(timer);
-    onLost = undefined;
-    lost = new Error(`PostgreSQL DSH lease for "${instance}" was handed off while idle to another process`);
-    const cb = onHandoff;
-    onHandoff = undefined;
-    cb?.();
-  };
-
-  const timer = setInterval(
-    () => {
-      if (released || lost !== undefined) return;
-      void db
-        .query<{ instance: string; handoff_requested_at: Date | null }>(
-          `UPDATE ${table}
-            SET lease_until = now() + make_interval(secs => $3::double precision / 1000),
-                handoff_requested_at = CASE
-                  WHEN handoff_requested_at < now() - make_interval(secs => $3::double precision / 1000)
-                    THEN NULL
-                  ELSE handoff_requested_at
-                END
-            WHERE instance = $1 AND owner = $2
-            RETURNING instance, handoff_requested_at`,
-          [instance, owner, leaseMs],
-        )
-        .then(
-          ([kept]) => {
-            if (kept === undefined) {
-              lose(undefined, true);
-              return;
-            }
-            renewedAt = Date.now();
-            if (kept.handoff_requested_at !== null && options.handoff?.canYield() === true) {
-              triggerHandoff();
-            }
-          },
-          (error: unknown) => {
-            const unrenewedMs = Date.now() - renewedAt;
-            if (unrenewedMs >= leaseMs * (2 / 3)) {
-              lose(
-                new Error(
-                  `PostgreSQL DSH lease for "${instance}" went ${Math.round(unrenewedMs / 1000)}s without renewal (${String(error)})`,
-                ),
-                true,
-              );
-            }
-          },
-        );
-    },
-    Math.max(100, Math.floor(leaseMs / 4)),
-  );
-  timer.unref?.();
-
-  return {
-    owner,
-    get lost() {
-      return lost;
-    },
-    lose,
-    async release() {
-      if (released) return;
-      released = true;
-      onLost = undefined;
-      onHandoff = undefined;
-      clearInterval(timer);
-      await db.query(
-        `UPDATE ${table} SET owner = NULL, lease_until = NULL, handoff_requested_at = NULL
-          WHERE instance = $1 AND owner = $2`,
-        [instance, owner],
-      );
-    },
-  };
-}
-
 function prepareValue(
   text: string,
   bytesPerValue: number | undefined,
@@ -538,10 +300,13 @@ function assertFitsTransaction(label: string, rows: number, bytes: number, limit
 export async function openPostgresDshStore(
   database: DshPgDatabase,
   instance: string,
-  options: PostgresDshStoreOptions = {},
+  options: PostgresDshStoreOptions,
 ): Promise<PostgresDshEventStore> {
   if (!instance || instance.trim() === "") {
     throw new Error("DSH PostgreSQL instance name must be non-empty");
+  }
+  if (options?.kit === undefined) {
+    throw new Error("openPostgresDshStore requires options.kit");
   }
   const leaseMs = options.leaseMs ?? 30_000;
   const waitMs = options.waitMs ?? 0;
@@ -555,10 +320,7 @@ export async function openPostgresDshStore(
 
   const limits = options.limits;
   const bytesPerValue = limits?.bytesPerValue;
-  const migrate = options.kit?.migrate ?? defaultMigrateSchema;
-  const acquireLease = options.kit?.acquireLease ?? defaultAcquireLease;
-  const splitText = options.kit?.splitText ?? defaultSplitText;
-  const isConflict = options.kit?.isConflict ?? defaultIsConflict;
+  const { migrate, acquireLease, splitText, isConflict } = options.kit;
 
   await migrate(database, MIGRATION_STATEMENTS, {
     ...(options.createIndex === undefined ? {} : { createIndex: options.createIndex }),

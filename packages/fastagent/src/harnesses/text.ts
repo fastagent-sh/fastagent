@@ -6,7 +6,9 @@
  */
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { type PromptSection, section } from "@earendil-works/pi-durable";
+import type { SendRequest } from "@fastagent-sh/client/agent-api";
 import { parse as parseYaml } from "yaml";
 import { log } from "../log.ts";
 import type { RunsAs } from "../serving-command.ts";
@@ -195,6 +197,26 @@ function loadedSkill(skill: Skill, args: string): string {
   const { body } = frontmatter(readFileSync(skill.filePath, "utf8"), skill.filePath);
   const block = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body.trim()}\n</skill>`;
   return args.trim() === "" ? block : `${block}\n\n${args.trim()}`;
+}
+
+const SLASH_COMMAND = /^\/([^\s]+)(?:\s+([\s\S]*))?$/;
+
+/** Expand a leading `/<command>` in user message content, returning model-facing parts and the raw command text. */
+export function expandPromptCommand(
+  content: SendRequest["content"],
+  commands: readonly AgentCommand[],
+): { content: (TextContent | ImageContent)[]; sent?: string } {
+  const parts = (typeof content === "string" ? [{ type: "text" as const, text: content }] : content).map(
+    (part): TextContent | ImageContent =>
+      part.type === "text"
+        ? { type: "text", text: part.text }
+        : { type: "image", mimeType: part.mimeType, data: part.data },
+  );
+  const first = parts[0];
+  const match = first?.type === "text" ? SLASH_COMMAND.exec(first.text) : null;
+  const command = match === null ? undefined : commands.find(({ name }) => name === match[1]);
+  if (first?.type !== "text" || match === null || command === undefined) return { content: parts };
+  return { content: [{ type: "text", text: command.expand(match[2] ?? "") }, ...parts.slice(1)], sent: first.text };
 }
 
 /** What a Caller may offer as `/<name>`: the prompt templates, then `skill:<name>` for each skill. */

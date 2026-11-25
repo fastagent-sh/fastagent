@@ -4,13 +4,8 @@ import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineTool } from "@fastagent-sh/fastagent";
-import {
-  DshInstanceHeldError,
-  MemoryDshEventStore,
-  openDshAgent,
-  openPostgresDshStore,
-  openSqliteDshStore,
-} from "@fastagent-sh/harness-dsh";
+import { MemoryDshEventStore, openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
+import { DshInstanceHeldError, openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
 import {
   buildDshSandboxPolicy,
   resolveConfinedPath,
@@ -433,6 +428,12 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
 });
 
 describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
+  const pgKit = {
+    migrate: migratePgSchema,
+    acquireLease: acquirePgInstanceLease,
+    splitText: splitPgText,
+    isConflict: isPgConflict,
+  } as const;
   let postgres: ServedPostgres;
   beforeAll(async () => {
     postgres = await servedPostgres();
@@ -445,13 +446,13 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
     const instanceB = freshInstance();
     try {
       // Single-writer lease fencing: second live holder refused, close releases immediately, expired lease taken over.
-      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, owner: "holder-1" });
+      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, owner: "holder-1", kit: pgKit });
       await expect(
-        openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2" }),
+        openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2", kit: pgKit }),
       ).rejects.toThrow(DshInstanceHeldError);
 
       // Multi-instance isolation on the same database.
-      const other = await openPostgresDshStore(db, instanceB, { leaseMs: 5_000, owner: "holder-b" });
+      const other = await openPostgresDshStore(db, instanceB, { leaseMs: 5_000, owner: "holder-b", kit: pgKit });
       const hA = await held.create({ version: 4, id: "shared-id", createdAt: 1, isSeeded: false });
       const hB = await other.create({ version: 4, id: "shared-id", createdAt: 2, isSeeded: false });
       await hA.append([{ seq: 0, type: "turn/start", data: { turn: 1 } }]);
@@ -468,7 +469,12 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       await db.query("UPDATE dsh_leases SET lease_until = now() - interval '1 second' WHERE instance = $1", [
         instanceA,
       ]);
-      const successor = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2" });
+      const successor = await openPostgresDshStore(db, instanceA, {
+        leaseMs: 5_000,
+        waitMs: 0,
+        owner: "holder-2",
+        kit: pgKit,
+      });
       await expect(hA.append([{ seq: 1, type: "turn/end", data: { turn: 1 } }])).rejects.toThrow(/lease.*lost/);
       await expect(
         held.putMessage?.({
@@ -491,6 +497,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         leaseMs: 5_000,
         waitMs: 0,
         owner: "holder-watched",
+        kit: pgKit,
         onLost: (error) => {
           lostReason = error;
         },
@@ -502,6 +509,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         leaseMs: 5_000,
         waitMs: 0,
         owner: "holder-takeover",
+        kit: pgKit,
       });
       const hWatched = await watchedHolder
         .create({ version: 4, id: "lost-id", createdAt: 1, isSeeded: false })
@@ -544,7 +552,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         return { models, model: { provider: "pg", modelId: core.getModel().id } };
       };
 
-      const store1 = await openPostgresDshStore(db, freshInstance());
+      const store1 = await openPostgresDshStore(db, freshInstance(), { kit: pgKit });
       const { models: m1, model } = makeModels();
       const agent1 = await openDshAgent({
         name: "pg-agent",
@@ -577,7 +585,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       await store1.close();
 
       // Reopen a fresh store + fresh DSH agent on the same Postgres instance.
-      const store2 = await openPostgresDshStore(db, pgInstanceName);
+      const store2 = await openPostgresDshStore(db, pgInstanceName, { kit: pgKit });
       const { models: m2 } = makeModels();
       const agent2 = await openDshAgent({
         name: "pg-agent",
@@ -616,7 +624,12 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         await db.query("UPDATE dsh_leases SET lease_until = now() - interval '1 second' WHERE instance = $1", [
           leaseInstance,
         ]);
-        const thief = await openPostgresDshStore(db, leaseInstance, { leaseMs: 5_000, waitMs: 0, owner: "thief" });
+        const thief = await openPostgresDshStore(db, leaseInstance, {
+          leaseMs: 5_000,
+          waitMs: 0,
+          owner: "thief",
+          kit: pgKit,
+        });
         await expect(openedPg.sessions.create()).rejects.toThrow(/lease.*lost/);
         await thief.close();
         await vi.waitFor(() => {
@@ -818,6 +831,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           leaseMs: 5_000,
           waitMs: 0,
           owner: "prior-holder",
+          kit: pgKit,
         });
         const releaseTimer = setTimeout(() => {
           void priorHolder.close();

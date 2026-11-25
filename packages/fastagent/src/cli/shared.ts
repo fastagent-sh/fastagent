@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { autocomplete, isCancel } from "@clack/prompts";
 import type { Models, Provider } from "@earendil-works/pi-ai";
 import { definedValues } from "../declared-secrets.ts";
+import { enterAgentEnv } from "../env.ts";
 import { type ModelEnvironment, modelEnvironment } from "../harnesses/models/environment.ts";
 import { SignInCancelled } from "../harnesses/models/login.ts";
 import { listModels, providerAuthStatuses, providerOf } from "../harnesses/models/models.ts";
@@ -18,14 +19,70 @@ import {
 } from "../harnesses/assembly.ts";
 import type { OpenedServing } from "../harnesses/serving.ts";
 import { log } from "../log.ts";
-import { isDeployedWorkspace } from "../paths.ts";
+import { globalHome, isDeployedWorkspace } from "../paths.ts";
 import { readProcessEnv } from "../process-env.ts";
+import { installProxyFetch } from "../proxy.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { formatAuthReport } from "./auth-view.ts";
-import { agentDirOrExit, failStartup, failUsage } from "./fail.ts";
+import { agentDirOrExit, failStartup, failUsage, optionalAgentDirOrExit } from "./fail.ts";
 import { type EnteredInstance, type InstanceFlags, enterInstance } from "./instance.ts";
 import { isInteractive, loginFlow, terminalLoginIO } from "./login-ui.ts";
 import { buildModelPickerOptions } from "./models-view.ts";
+
+/**
+ * Shared environment/provider entry for CLI commands inspecting or modifying model auth/catalog (`login`, `logout`,
+ * `login --check`, `models`).
+ */
+export async function enterCliAgentEnv(options: {
+  readonly global?: boolean;
+  /** Keep resolving `agentDir` for `.secrets/.env` proxy settings even when `global` skips project providers/auth. */
+  readonly keepAgentEnv?: boolean;
+  /** How to treat `.env` when outside an agent (`"global"` loads `~/.fastagent/.secrets/.env`; `"proxy"` installs ambient proxy only). */
+  readonly noAgentEnv?: "global" | "proxy";
+}): Promise<{
+  readonly agentDir: string | undefined;
+  readonly ownAgent: string | undefined;
+  readonly shellEnv: NodeJS.ProcessEnv;
+  readonly providers: Provider[];
+}> {
+  const detectedAgentDir = options.global && !options.keepAgentEnv ? undefined : optionalAgentDirOrExit(process.cwd());
+  const ownAgent = options.global ? undefined : detectedAgentDir;
+  const shellEnv = readProcessEnv();
+  if (detectedAgentDir !== undefined) {
+    enterAgentEnv(detectedAgentDir);
+  } else if (options.noAgentEnv === "global") {
+    enterAgentEnv(globalHome());
+  } else {
+    installProxyFetch();
+  }
+  const providers =
+    ownAgent !== undefined ? await definitionProviders(ownAgent, readProcessEnv()).catch(failStartup) : [];
+  return { agentDir: detectedAgentDir, ownAgent, shellEnv, providers };
+}
+
+/**
+ * Shared setup for CLI commands that also need an opened {@link ModelEnvironment} (`login --check`, `models`).
+ */
+export async function enterCliModelContext(options: {
+  readonly global?: boolean;
+  readonly keepAgentEnv?: boolean;
+  readonly noAgentEnv?: "global" | "proxy";
+  /** When `false` and not inside an agent, open `modelEnvironment` with `authPath: null` (env vars only). */
+  readonly readGlobalAuth?: boolean;
+}): Promise<{
+  readonly agentDir: string | undefined;
+  readonly ownAgent: string | undefined;
+  readonly shellEnv: NodeJS.ProcessEnv;
+  readonly providers: Provider[];
+  readonly environment: ModelEnvironment;
+}> {
+  const entered = await enterCliAgentEnv(options);
+  const authSource = entered.ownAgent === undefined && options.readGlobalAuth === false ? { authPath: null } : {};
+  const environment = await modelEnvironment(entered.ownAgent, authSource, entered.providers, {
+    environment: definedValues(readProcessEnv()),
+  });
+  return { ...entered, environment };
+}
 
 /** The definition a command runs, when it is not the source one (`start` runs the build). */
 type LoadDefinition = (agentDir: string) => Promise<AgentDefinition>;

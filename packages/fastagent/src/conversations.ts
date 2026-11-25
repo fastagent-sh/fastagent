@@ -23,6 +23,7 @@ import {
   type SessionSettings,
   type WaitOptions,
   agentError,
+  decodeRequest,
 } from "@fastagent-sh/client/agent-api";
 import { openPostgresStore, openSqliteStore } from "./instance-store.ts";
 import { log } from "./log.ts";
@@ -309,24 +310,6 @@ export function postgresConversationStore(
   return toPromiseStore(postgresConversationStoreEffect(database, instance, options), options.clock);
 }
 
-const decodeInvokeRequest = Schema.decodeUnknownSync(InvokeRequest);
-
-function validateInvokeRequest(raw: InvokeRequest): DecodedInvokeRequest {
-  let request: DecodedInvokeRequest;
-  try {
-    request = decodeInvokeRequest(raw);
-  } catch (error) {
-    throw agentError("invalid_request", `invoke: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (request.conversation !== undefined && request.sessionId !== undefined) {
-    throw agentError("invalid_request", "invoke: pass either conversation or sessionId, not both");
-  }
-  if (request.conversation !== undefined && request.conversation.trim() === "") {
-    throw agentError("invalid_request", "invoke: conversation must not be blank");
-  }
-  return request;
-}
-
 function sendPayload(sessionId: SessionId, request: DecodedInvokeRequest): SendRequest {
   return {
     sessionId,
@@ -432,7 +415,7 @@ export function createInvoker(
   return {
     async invoke(raw: InvokeRequest, options?: WaitOptions): Promise<Message> {
       checkSignal(options?.signal);
-      const request = validateInvokeRequest(raw);
+      const request = decodeRequest(InvokeRequest, raw, "invoke");
       const sessionId = await resolveSessionId(request, options?.signal);
       checkSignal(options?.signal);
       return agent.messages.send(sendPayload(sessionId, request), options);
@@ -440,7 +423,7 @@ export function createInvoker(
     invokeStream(raw: InvokeRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent> {
       async function* stream(): AsyncGenerator<MessageStreamEvent> {
         checkSignal(options?.signal);
-        const request = validateInvokeRequest(raw);
+        const request = decodeRequest(InvokeRequest, raw, "invoke");
         const sessionId = await resolveSessionId(request, options?.signal);
         checkSignal(options?.signal);
         yield* agent.messages.stream(sendPayload(sessionId, request), options);

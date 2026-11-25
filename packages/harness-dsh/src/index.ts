@@ -8,6 +8,4 @@ export { openDshAgent } from "./agent.ts";
 /** @public */
 export { MemoryDshEventStore } from "./persistence.ts";
 /** @public */
-export { DshInstanceHeldError, openPostgresDshStore } from "./postgres-store.ts";
-/** @public */
 export { openSqliteDshStore } from "./sqlite-store.ts";
