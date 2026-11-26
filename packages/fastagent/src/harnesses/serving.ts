@@ -3,8 +3,9 @@
  * model environment, MCP clients, and remote auth manager once, then delegates runtime construction to the
  * selected harness (`pi-durable` or `dsh`).
  */
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -181,6 +182,8 @@ export interface OpenedServing {
   workdir: string;
   /** Where the instance's state is stored. */
   stateRoot: string;
+  /** Canonical in-process storage lock/lease key used to serialize close -> reopen handoffs. */
+  readonly storageKey?: string;
 }
 
 /** What decides where an instance's storage is: its state root, or a database several instances share. */
@@ -200,6 +203,74 @@ function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
   if (place.database !== undefined) return place.database;
   const url = place.env[DATABASE_URL_ENV];
   return url ? { url } : undefined;
+}
+
+/**
+ * In-process tracker of active `close()` / rollback teardowns keyed by canonical storage target.
+ * Lets a same-process `openAgent()` wait for a just-evicted or handing-off handle to finish releasing its SQLite
+ * lock or PostgreSQL lease instead of racing against itself.
+ */
+const inFlightCloses = new Map<string, Set<Promise<void>>>();
+
+function canonicalPath(target: string): string {
+  let current = resolve(target);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return missing.length === 0 ? real : join(real, ...missing.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return resolve(target);
+      const parent = dirname(current);
+      if (parent === current) return resolve(target);
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function storageKeyOf(
+  chosen: ServingStorage,
+  place: InstancePlace,
+  rawDatabase: PostgresDatabase | undefined,
+): string | undefined {
+  if (chosen === "memory") return undefined;
+  if (chosen !== "instance") return `sqlite:${canonicalPath(chosen.file)}`;
+  if (rawDatabase !== undefined) {
+    if (place.name === undefined) return undefined;
+    return `pg:${describeDatabase(rawDatabase.url)}:${place.name}`;
+  }
+  return `sqlite:${canonicalPath(join(place.stateRoot, "agent.sqlite"))}`;
+}
+
+function trackInFlightClose(key: string | undefined, closing: Promise<void>): void {
+  if (key === undefined) return;
+  let active = inFlightCloses.get(key);
+  if (active === undefined) {
+    active = new Set();
+    inFlightCloses.set(key, active);
+  }
+  const settled = closing.then(
+    () => undefined,
+    () => undefined,
+  );
+  active.add(settled);
+  void settled.finally(() => {
+    active.delete(settled);
+    if (active.size === 0 && inFlightCloses.get(key) === active) {
+      inFlightCloses.delete(key);
+    }
+  });
+}
+
+async function awaitInFlightCloses(key: string | undefined): Promise<void> {
+  if (key === undefined) return;
+  for (;;) {
+    const active = inFlightCloses.get(key);
+    if (active === undefined || active.size === 0) return;
+    await Promise.all([...active]);
+  }
 }
 
 /** Resolve the built-in `pi-durable` provider or dynamically load `@fastagent-sh/harness-<name>/provider`. */
@@ -322,6 +393,7 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
     ...(options.database === undefined ? {} : { database: options.database }),
   };
   const rawDatabase = chosen === "instance" ? databaseOf(place) : undefined;
+  const storageKey = storageKeyOf(chosen, place, rawDatabase);
   const storageDescription = describeInstanceStorage(place);
   const serviceVersion = yield* fromPromise(() => fastagentVersion());
 
@@ -373,6 +445,7 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
         ),
       );
     }
+    yield* fromPromise(() => awaitInFlightCloses(storageKey));
     // Register conversations cleanup before durableCreds/runtimeAgent while opening it only after runtimeAgent
     // succeeds (so a locked/failing instance never creates or touches `conversations.sqlite`), preserving LIFO order:
     // auth -> runtimeAgent -> durableCreds -> conversations -> traces -> ownedSharedPg.
@@ -536,11 +609,12 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
           )
         : undefined;
 
+    const closedGate = Promise.withResolvers<void>();
     runtimeAgent.subscribeClose?.(closeSignal.mark);
+    closeSignal.subscribe(() => trackInFlightClose(storageKey, closedGate.promise));
     if (auth !== undefined) {
       closeSignal.subscribe(() => auth.close());
     }
-    const closedGate = Promise.withResolvers<void>();
     const closeOutcome = Ref.makeUnsafe<Deferred.Deferred<void, PromiseFailure> | undefined>(undefined);
     const closeAgentEffect = Effect.fn("serving.closeAgent")(function* () {
       const decision = yield* Ref.modify(
@@ -579,6 +653,7 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       return yield* Deferred.await(decision.deferred);
     });
 
+    let wrappedClose: Promise<void> | undefined;
     const wrappedAgent: ServingAgent = {
       ...runtimeAgent,
       closed: closedGate.promise,
@@ -586,7 +661,11 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       subscribeClose: closeSignal.subscribe,
       close: () => {
         closeSignal.mark();
-        return runServingPromise(closeAgentEffect());
+        if (wrappedClose === undefined) {
+          wrappedClose = runServingPromise(closeAgentEffect());
+          trackInFlightClose(storageKey, wrappedClose);
+        }
+        return wrappedClose;
       },
     };
     currentRuntime = runtimeAgent;
@@ -622,10 +701,15 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       agentDir: projectDir,
       workdir,
       stateRoot,
+      ...(storageKey === undefined ? {} : { storageKey }),
     } satisfies OpenedServing;
   }).pipe(
     Scope.provide(lifetime),
-    Effect.onError(() => Scope.close(lifetime, Exit.void)),
+    Effect.onError(() => {
+      const rollbackGate = Promise.withResolvers<void>();
+      trackInFlightClose(storageKey, rollbackGate.promise);
+      return Scope.close(lifetime, Exit.void).pipe(Effect.ensuring(Effect.sync(() => rollbackGate.resolve())));
+    }),
   );
 });
 
@@ -820,6 +904,7 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     return yield* Deferred.await(decision.done);
   });
 
+  let localClose: Promise<void> | undefined;
   return {
     info: agent.info,
     usage: agent.usage,
@@ -831,6 +916,12 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ready: () => Ref.getUnsafe(state)._tag !== "closed" && (agent.ready?.() ?? true),
     busy: () => opened.busy(),
     serve: (serveOptions = {}) => runServingPromise(serveEffect(serveOptions)),
-    close: () => runServingPromise(closeEffect()),
+    close: () => {
+      if (localClose === undefined) {
+        localClose = runServingPromise(closeEffect());
+        trackInFlightClose(opened.storageKey, localClose);
+      }
+      return localClose;
+    },
   };
 }

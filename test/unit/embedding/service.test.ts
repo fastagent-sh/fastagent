@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -276,6 +276,85 @@ describe("openAgent: an agent directory opened in an app", () => {
     } finally {
       releaseLocalCleanup();
       await localAgent.close();
+    }
+  });
+
+  it("serializes same-process close() -> openAgent() handoff on SQLite (even via symlink alias) without blocking unrelated instances", async () => {
+    const dir = await agentDir();
+    const base = await mkdtemp(join(tmpdir(), "fa-reopen-handoff-"));
+    const root = join(base, "real");
+    const rootLink = join(base, "link");
+    const otherRoot = join(base, "other");
+    await mkdir(root);
+    await mkdir(otherRoot);
+    await symlink(root, rootLink);
+    let markStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const holdCleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const holdTool = defineTool({
+      name: "hold_reopen",
+      description: "Holds close open until released.",
+      parameters: obj({}),
+      execute: async () => {
+        markStarted();
+        await holdCleanup;
+        return { output: [{ type: "text", text: "done" }] };
+      },
+    });
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses([
+      () => fauxAssistantMessage([fauxToolCall("hold_reopen", {})], { stopReason: "toolUse" }),
+      () => fauxAssistantMessage("done"),
+      () => fauxAssistantMessage("reopened ok"),
+    ]);
+    const definition = defineDefinition({
+      format: DEFINITION_FORMAT,
+      builtWith: "0.0.0",
+      name: "reopen-handoff-test",
+      version: "0.0.0",
+      dir,
+      config: { model: "gw/m1", providers: [faux.provider] },
+      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }], extensions: [] },
+    });
+
+    const first = await openAgent(definition, { root });
+    let reopened: Awaited<ReturnType<typeof openAgent>> | undefined;
+    let unrelated: Awaited<ReturnType<typeof openAgent>> | undefined;
+    try {
+      const session = await first.sessions.create({ title: "persisted" });
+      void first.messages.send({ sessionId: session.id, content: "hold" });
+      await toolStarted;
+
+      // Start close() without awaiting, then immediately reopen the same instance through a symlink alias.
+      const closing = first.close();
+      expect(first.ready()).toBe(false);
+
+      let reopenedSettled = false;
+      const reopening = openAgent(definition, { root: rootLink }).then((agent) => {
+        reopenedSettled = true;
+        return agent;
+      });
+
+      // An unrelated instance opens immediately while `root` waits for its in-flight close().
+      unrelated = await openAgent(definition, { root: otherRoot });
+      expect(unrelated.ready()).toBe(true);
+      expect(reopenedSettled).toBe(false);
+
+      releaseCleanup();
+      await closing;
+      reopened = await reopening;
+      expect(reopened.ready()).toBe(true);
+      expect((await reopened.sessions.get(session.id)).title).toBe("persisted");
+    } finally {
+      releaseCleanup();
+      await unrelated?.close();
+      await reopened?.close();
+      await first.close();
     }
   });
 
