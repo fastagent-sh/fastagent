@@ -1,6 +1,6 @@
 /** The program's `fastagent.config.ts`, checked: the one place an agent's settings are written. */
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
+import { type Schema, arr, compile, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
 import { isNeeds } from "../needs.ts";
@@ -29,7 +29,17 @@ const THINKING_LEVELS = [
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
-const KEYS = ["model", "thinkingLevel", "harness", "sandbox", "codingTools", "starters", "providers", "mcpServers"];
+const KEYS = [
+  "model",
+  "thinkingLevel",
+  "harness",
+  "sandbox",
+  "codingTools",
+  "maxSteps",
+  "starters",
+  "providers",
+  "mcpServers",
+];
 const KEY_SET = new Set<string>(KEYS);
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
 const HARNESS_SET = new Set<string>(HARNESS_NAMES);
@@ -156,6 +166,7 @@ function checkCodingTools(value: unknown, file: string): void {
 const DATA: Schema = obj({
   model: opt(str({ description: 'The default model, "provider/modelId"', minLength: 3 })),
   thinkingLevel: opt(oneOf(THINKING_LEVELS)),
+  maxSteps: opt(int({ description: "Maximum model steps per turn", minimum: 1 })),
   starters: opt(
     arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
       description: "Example first messages a client may offer as drafts",
@@ -180,10 +191,10 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${unknownKey}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, harness, sandbox, codingTools, starters, providers, mcpServers } =
+  const { model, thinkingLevel, harness, sandbox, codingTools, maxSteps, starters, providers, mcpServers } =
     config as AgentConfig;
   const validator = compile(DATA);
-  const data = { model, thinkingLevel, starters };
+  const data = { model, thinkingLevel, maxSteps, starters };
   if (!validator.check(data)) {
     const problems = validator
       .errors(data)

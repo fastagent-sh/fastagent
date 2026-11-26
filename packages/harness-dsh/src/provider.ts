@@ -109,6 +109,7 @@ export const harnessProvider: HarnessProvider<DshStorageHandle> = {
       ...(ctx.model === undefined ? {} : { model: ctx.model }),
       ...(ctx.unusableDefault === undefined ? {} : { unusableDefault: ctx.unusableDefault }),
       ...(config.thinkingLevel === undefined ? {} : { thinkingLevel: config.thinkingLevel }),
+      ...(config.maxSteps === undefined ? {} : { maxSteps: config.maxSteps }),
       tools: [...ctx.code.tools, ...ctx.mcpTools].map(adaptToolRejectingPark),
       codingTools: ctx.codingTools,
       protectedPaths: [ctx.stateRoot],

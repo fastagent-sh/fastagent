@@ -81,6 +81,8 @@ export interface DurableAgentOptions {
   /** The configured default model this agent lacks (`info().unusableDefault`): no `model` then. */
   unusableDefault?: NonNullable<AgentInfo["unusableDefault"]>;
   thinkingLevel?: ModelThinkingLevel;
+  /** Default maximum model steps per message turn when a session names none. */
+  maxSteps?: number;
   /** What becomes of the messages an earlier process accepted and did not end ({@link Unfinished}). */
   unfinished?: Unfinished;
   /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
@@ -278,7 +280,7 @@ function durableAgent(
 
   /** What pi-durable stores for `changes`: tools by their registrations, which it stores by name. */
   const changeOf = Effect.fn("pi-durable.changeOf")(function* (changes: SessionChanges) {
-    const { model, thinkingLevel, instructions, tools } = changes;
+    const { model, thinkingLevel, instructions, tools, maxSteps } = changes;
     let registrations: ToolRegistration[] | null | undefined;
     if (tools !== undefined && tools !== null) {
       const known = toolsByName();
@@ -297,6 +299,7 @@ function durableAgent(
       ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
       ...(instructions === undefined ? {} : { instructions }),
       ...(registrations === undefined ? {} : { tools: registrations }),
+      ...(maxSteps === undefined ? {} : { maxTurns: maxSteps }),
     } satisfies AgentChange;
   });
 
@@ -337,6 +340,7 @@ function durableAgent(
   const defaults: Defaults = {
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.thinkingLevel === undefined ? {} : { thinkingLevel: options.thinkingLevel }),
+    ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
   };
 
   const create = (createOptions?: CreateSessionOptions): Promise<Session> =>
@@ -409,7 +413,7 @@ function durableAgent(
         if (Object.values(decoded).every((value) => value === undefined)) {
           return yield* agentError(
             "invalid_request",
-            "Nothing to update: give a title, a model, a thinking level, instructions or tools",
+            "Nothing to update: give a title, a model, a thinking level, instructions, tools or maxSteps",
           );
         }
         const conversation = yield* conversationOf(sessionId);

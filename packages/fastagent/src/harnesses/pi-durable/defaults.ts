@@ -9,6 +9,7 @@ import { AgentDoc, type ConversationId, type ModelRef, type Tx, configure } from
 export interface Defaults {
   model?: ModelRef;
   thinkingLevel?: ModelThinkingLevel;
+  maxSteps?: number;
 }
 
 /** Why a session's settings cannot answer a message: a model the agent lacks, or tools it no longer has. */
@@ -40,6 +41,7 @@ export async function admitSettings(
     ...(agent.thinkingLevel === undefined && defaults.thinkingLevel !== undefined
       ? { thinkingLevel: defaults.thinkingLevel }
       : {}),
+    ...(agent.maxTurns === undefined && defaults.maxSteps !== undefined ? { maxTurns: defaults.maxSteps } : {}),
   });
   return undefined;
 }

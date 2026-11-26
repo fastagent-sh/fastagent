@@ -41,6 +41,8 @@ All fields are optional; unknown keys fail startup immediately.
 | `harness` | `"pi-durable"` | Runtime harness: `"pi-durable"` or `"dsh"` (experimental; requires `@fastagent-sh/harness-dsh`) |
 | `sandbox` | `"workspace"` (on `dsh`) | OS sandbox mode when `harness: "dsh"`: `"workspace"`, `"read-only"`, or `"off"` |
 | `codingTools` | `true` | Built-in `read`, `write`, `edit`, `bash`: `true`, `false`, or an explicit subset such as `["read"]` |
+| `maxSteps` | unlimited | Maximum model steps (tool rounds) per message turn before stopping `incomplete` (positive integer; overridable per session) |
+| `maxSteps` | unlimited | Maximum model steps (tool rounds) per message turn before stopping `incomplete` (positive integer; overridable per session) |
 | `starters` | none | Up to 6 example first messages exposed in `info().starters` |
 | `providers` | `[]` | Custom model providers or gateways (`createProvider`, optionally wrapped in `needs()`) |
 | `mcpServers` | none | [MCP tool servers](mcp.md) available to the agent |

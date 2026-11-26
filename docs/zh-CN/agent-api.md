@@ -51,7 +51,7 @@ console.log(reply.status, reply.answer?.text);
 | 对象 | 含义 |
 | --- | --- |
 | **Agent** | 一个运行中的实例（一个信任域）。`info()` 返回可用模型、工具、命令与示例开场白；`usage()` 返回累计用量。 |
-| **Session** | 一段持久化对话，包含历史条目、`status`（`idle` / `running`）、`title`、时间戳、会话配置（`model`、`thinkingLevel`、`instructions`、`tools`）、当前 `contextUsage`、累计 `usage` 与实时活动状态（`reply`、`activeTools`、`queuedMessages`、`compacting`）。 |
+| **Session** | 一段持久化对话，包含历史条目、`status`（`idle` / `running`）、`title`、时间戳、会话配置（`model`、`thinkingLevel`、`instructions`、`tools`、`maxSteps`）、当前 `contextUsage`、累计 `usage` 与实时活动状态（`reply`、`activeTools`、`queuedMessages`、`compacting`）。 |
 | **Message** | 提交到会话的一条请求，追踪其 `status`、`entryId`、`answer`、`error`、`idempotencyKey` 与调用方 `metadata`。 |
 | **Entry** | 会话历史中的一条不可变记录：`user`、`assistant`、`tool_result` 或 `compaction`。分叉会话共享分叉点之前的历史条目（保留原 ID）。 |
 
@@ -91,7 +91,7 @@ const msg = await agent.invoke(
 | 操作 | 用途 |
 | --- | --- |
 | `info()`、`usage()` | 查询能力清单（模型、工具、命令、starters）与累计模型/工具用量 |
-| `sessions.create({ title?, model?, thinkingLevel?, instructions?, tools?, forkFrom? })` | 创建新会话，或从已有会话的 `forkFrom.entryId` 分叉 |
+| `sessions.create({ title?, model?, thinkingLevel?, instructions?, tools?, maxSteps?, forkFrom? })` | 创建新会话，或从已有会话的 `forkFrom.entryId` 分叉 |
 | `sessions.get`、`sessions.list` | 查询单个会话，或按最近活跃度分页列出（`limit`、`after`） |
 | `sessions.update` | 更新标题或后续轮次配置；传入 `null` 恢复默认值 |
 | `sessions.delete` | 中止活跃任务并永久删除会话 |
@@ -121,7 +121,7 @@ const msg = await agent.invoke(
 | `queued` | 否 | — | 已接收，排队等待执行 |
 | `running` | 否 | — | 正在执行 |
 | `completed` | 是 | 最终 `assistant` 条目 | 正常回答完成 |
-| `incomplete` | 是 | 部分 `assistant` 条目 | 触及模型输出 Token 上限 |
+| `incomplete` | 是 | 部分 `assistant` 条目（Token 上限）或缺失（`maxSteps`） | 触及模型输出 Token 上限或 `maxSteps` 单轮步数上限 |
 | `failed` | 是 | — | 执行失败；`message.error` 说明原因（`missing_model`、`auth_required`、`model_error`、`internal`） |
 | `canceled` | 是 | — | 被 `sessions.cancel` 终止或从队列撤回 |
 

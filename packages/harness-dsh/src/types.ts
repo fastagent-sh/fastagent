@@ -87,6 +87,7 @@ export interface DshStoredSession {
   readonly thinkingLevel?: ThinkingLevel;
   readonly instructions?: string;
   readonly tools?: readonly string[];
+  readonly maxSteps?: number;
   readonly inheritedEntryCount: number;
   readonly inheritedContextUsage?: { readonly tokens: number; readonly contextWindow?: number };
   readonly usage: Usage;
@@ -176,6 +177,8 @@ export interface DshHarnessOptions {
   /** Configured default model that cannot be resolved (`info().unusableDefault`). */
   readonly unusableDefault?: { readonly spec: string; readonly reason: string };
   readonly thinkingLevel?: ThinkingLevel;
+  /** Default maximum model steps (tool rounds) per message turn when a session names none. */
+  readonly maxSteps?: number;
   /** Portable FastAgent tools to bridge into DSH's `ToolsService`. */
   readonly tools?: readonly AuthoredTool[];
   /** Built-in sandboxed coding tools (`read`, `write`, `edit`, `bash`). Default: `false`. */

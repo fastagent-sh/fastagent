@@ -129,6 +129,8 @@ export class AgentError extends Schema.Error<AgentError, { readonly brand: uniqu
   AgentErrorData,
 ) {}
 
+const MaxSteps = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
+
 /**
  * A session's settings. An object the Agent answers with leaves out what it does not name (`optionalKey`); what a Caller
  * sends may also give a field as `undefined`, which is the same as leaving it out (`optional`), as a TypeScript Caller
@@ -141,6 +143,8 @@ const settingsFields = <O extends typeof Schema.optionalKey | typeof Schema.opti
   instructions: optional(Schema.String),
   /** The tools the session enables, each among `info().tools`. */
   tools: optional(Schema.Array(Schema.String)),
+  /** Maximum model steps (tool rounds) per message turn; reaching it ends the message `incomplete`. */
+  maxSteps: optional(MaxSteps),
 });
 
 /**
@@ -230,7 +234,7 @@ export class Message extends Schema.Opaque<Message>()(
     status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
     entryId: Schema.optionalKey(Schema.String),
-    /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete`. */
+    /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete` on token limit. */
     answer: Schema.optionalKey(Schema.Struct({ entryId: Schema.String, text: Schema.String })),
     /** Why it `failed`. */
     error: Schema.optionalKey(AgentErrorData),
@@ -322,6 +326,7 @@ export const SessionChanges = Schema.Struct({
   thinkingLevel: Schema.optional(Schema.NullOr(ThinkingLevel)),
   instructions: Schema.optional(Schema.NullOr(Schema.String)),
   tools: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  maxSteps: Schema.optional(Schema.NullOr(MaxSteps)),
 });
 export type SessionChanges = typeof SessionChanges.Type;
 
