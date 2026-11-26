@@ -104,16 +104,30 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
         const nested = (await api.executeTool("inner_sid", {}, ctx)) as {
           readonly output?: ReadonlyArray<{ readonly text?: string }>;
         };
-        api.output("l1\nl2\nl3");
-        api.output(`\n${nested.output?.[0]?.text ?? "missing"}`);
+        api.output("l1\nl2\nl3\n");
+        api.output(`${nested.output?.[0]?.text ?? "missing"}\n`);
+        return {};
+      },
+    });
+    const headStreamTool = defineTool({
+      name: "head_stream",
+      description: "Head maxLines output retention across chunks",
+      parameters: { type: "object", properties: {} } as const,
+      outputLimits: { maxLines: 2, retain: "head" },
+      execute: async (_args, api) => {
+        api.output("h1\nh2\n");
+        api.output("h3\n");
+        api.output("h4\n");
         return {};
       },
     });
     const toolsByName = new Map([
       [innerTool.name, innerTool],
       [outerTool.name, outerTool],
+      [headStreamTool.name, headStreamTool],
     ]);
     const bridgedOuter = bridgeDshRuntimeTool(outerTool, { toolsByName, onProgress: () => {} });
+    const bridgedHead = bridgeDshRuntimeTool(headStreamTool, { toolsByName, onProgress: () => {} });
     const nestedExecCtx = {
       callId: "tc-2",
       agent: { id: "dsh-sess-9" },
@@ -121,6 +135,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
       concludeTurn: () => {},
     } as never;
     expect(await bridgedOuter.execute({}, nestedExecCtx)).toEqual({ text: "l3\nsid=dsh-sess-9" });
+    expect(await bridgedHead.execute({}, nestedExecCtx)).toEqual({ text: "h1\nh2" });
   });
 
   it("buildDshSandboxPolicy produces fail-closed policies for workspace, read-only, and off modes", () => {

@@ -94,10 +94,24 @@ export function bindSessionResolverRegistry(registry: RegistryReader): RegistryR
   };
 
   const bindExtension = (extension: Extension): Extension => {
-    if (extension.tools === undefined || extension.tools.length === 0) return extension;
+    const rawTools = extension.tools;
+    const rawWraps = extension.wraps;
+    const hasTools = rawTools !== undefined && rawTools.length > 0;
+    const hasToolWraps = rawWraps?.some((w) => w.kind === "tool") === true;
+    if (!hasTools && !hasToolWraps) return extension;
     const cached = boundExtensions.get(extension);
     if (cached !== undefined) return cached;
-    const wrapped: Extension = { ...extension, tools: extension.tools.map(bindTool) };
+    const wrapped: Extension = {
+      ...extension,
+      ...(rawTools !== undefined && hasTools ? { tools: rawTools.map(bindTool) } : {}),
+      ...(rawWraps !== undefined && hasToolWraps
+        ? {
+            wraps: rawWraps.map((w) =>
+              w.kind === "tool" ? { ...w, wrap: (base: ToolRegistration) => bindTool(w.wrap(base)) } : w,
+            ),
+          }
+        : {}),
+    };
     boundExtensions.set(extension, wrapped);
     return wrapped;
   };

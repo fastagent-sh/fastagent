@@ -36,9 +36,14 @@ function retainOutput(
 ): string {
   let out = buffer;
   if (limits?.maxLines !== undefined && limits.maxLines > 0) {
-    const lines = out.split("\n");
+    const trailingNewline = out.endsWith("\n");
+    const body = trailingNewline ? out.slice(0, -1) : out;
+    const lines = body === "" ? [] : body.split("\n");
     if (lines.length > limits.maxLines) {
-      out = (limits.retain === "head" ? lines.slice(0, limits.maxLines) : lines.slice(-limits.maxLines)).join("\n");
+      out =
+        limits.retain === "head"
+          ? `${lines.slice(0, limits.maxLines).join("\n")}\n`
+          : `${lines.slice(-limits.maxLines).join("\n")}${trailingNewline ? "\n" : ""}`;
     }
   }
   if (limits?.maxBytes === undefined || limits.maxBytes <= 0) return out;

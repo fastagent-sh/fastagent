@@ -17,7 +17,7 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import * as EffectSchema from "effect/Schema";
-import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
+import { MemoryStorage, createRegistry, defineTask, defineTool, wrapTool } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
 import {
   type ToolExecutionApi,
@@ -707,7 +707,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     );
   });
 
-  it("binds sessionIdOf and preserves live api getters on direct openDurableAgent registries", async () => {
+  it("binds sessionIdOf and preserves live api getters on direct openDurableAgent registries and wrapTool wrappers", async () => {
     const inspectTool = defineTool({
       name: "inspect_direct",
       description: "Read sessionIdOf and live api.models on direct openDurableAgent",
@@ -720,6 +720,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
         };
       },
     });
+    let wrapperSid: string | undefined;
     const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
     faux.setResponses([
       fauxAssistantMessage([fauxToolCall("inspect_direct", {})], { stopReason: "toolUse" }),
@@ -727,6 +728,18 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     ]);
     const registry = createRegistry();
     registry.install({ name: "direct", tools: [inspectTool] });
+    registry.install({
+      name: "wrapper",
+      wraps: [
+        wrapTool(inspectTool, (base) => ({
+          ...base,
+          execute: async (args, api, context) => {
+            wrapperSid = await sessionIdOf(api, context);
+            return base.execute(args, api, context);
+          },
+        })),
+      ],
+    });
     const agent = await openDurableAgent({
       storage: new MemoryStorage(),
       models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
@@ -738,6 +751,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
       const session = await agent.sessions.create();
       const msg = await agent.messages.send({ sessionId: session.id, content: "check" }, { wait: 15 });
       expect(msg.answer?.text).toBe(`${session.id}:live-getter`);
+      expect(wrapperSid).toBe(session.id);
     } finally {
       await agent.close();
     }
