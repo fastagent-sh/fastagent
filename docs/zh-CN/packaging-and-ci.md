@@ -41,7 +41,7 @@ dist/
 - **完整 TypeScript 类型检查：** 使用项目自身的 `tsc` 编译 `fastagent.config.ts` 以及 `src/tools/` 和 `src/extensions/` 下的所有模块（仅当你已单独运行过 `tsc --noEmit` 时才传 `--no-check`）。
 - **禁止跨目录越界导入：** 拒绝引用 Agent 目录之外的源码文件，防止产出的 `dist/` 缺失依赖。
 - **绝不夹带本机状态或密钥：** 永不拷贝 `.secrets/`、`.env*`、`.state/`、`node_modules/`、`.git/`，也不会读取本机 `~/.pi/agent` 中的任何内容。
-- **MCP 命令与明文凭证检查：** 验证相对路径的本地 stdio MCP 命令确实存在于 `dist/` 中；如果 `mcpServers` 中出现明文硬编码凭证（而非 `${VAR}` 占位符），会发出构建警告。
+- **MCP 与 Harness 兼容性检查：** 验证相对路径的本地 stdio MCP 命令确实存在于 `dist/` 中；若 `mcpServers` 出现明文硬编码凭证（而非 `${VAR}` 占位符），或 `fastagent.config.ts` 选择了跳过 `pi-durable` 专有 `src/extensions/*` 的 Harness（如 `dsh`），会发出构建警告。
 - **通过 `peerDependencies` 共享运行时：** `dist/package.json` 会将 `@fastagent-sh/fastagent` 以及内置 `pi-*` 包（`@earendil-works/pi-durable`、`@earendil-works/pi-ai`、`@earendil-works/pi-schema`）移入 `peerDependencies`。当宿主应用同时嵌入多个 Agent 包时，Node 只会安装一份共享运行时，不会重复膨胀。
 
 ## 2. 作为标准 npm 包分发与版本管理

@@ -49,7 +49,13 @@ import {
   buildDefinition,
   resolveDefaultModel,
 } from "./assembly.ts";
-import { agentPresentation, harnessPackage, resolveCodingTools, resolveHarnessSelection } from "./config.ts";
+import {
+  agentPresentation,
+  diagnoseHarnessCompatibility,
+  harnessPackage,
+  resolveCodingTools,
+  resolveHarnessSelection,
+} from "./config.ts";
 import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
 import { mcpTools } from "./mcp.ts";
 import { overlayCredentialStore } from "./models/credentials.ts";
@@ -405,11 +411,11 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       try: () => resolveDefaultModel(modelSpec, options.model !== undefined, models.models),
       catch: (cause) => new PromiseFailure(cause),
     });
-    if (!provider.supportsExtensions && code.extensions.length > 0) {
-      const skipped = code.extensions.map((ext) => ext.name).join(", ");
-      log.warn(
-        `[fastagent] skipping pi-durable extensions on harness "${selection.harness}": ${skipped} (portable tools belong in src/tools/)`,
-      );
+    for (const warning of diagnoseHarnessCompatibility(definition, selection, {
+      extensions: code.extensions,
+      supportsExtensions: provider.supportsExtensions === true,
+    })) {
+      log.warn(`[fastagent] ${warning}`);
     }
 
     const closeSignal = createCloseSignal();

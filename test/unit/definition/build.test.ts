@@ -137,4 +137,16 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
       warnings: [],
     });
   });
+
+  it("warns on build when fastagent.config.ts selects harness: dsh alongside src/extensions/*", async () => {
+    const dir = project({
+      ...FILES,
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
+      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
+    });
+    const { warnings } = await buildProject(dir);
+    expect(warnings).toContain(
+      'skipping pi-durable extensions on harness "dsh": legacy-ext (portable tools belong in src/tools/)',
+    );
+  });
 });

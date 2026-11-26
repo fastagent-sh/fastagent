@@ -14,7 +14,7 @@ import { readPackageJson } from "../runtime.ts";
 import { HARNESS_PACKAGES } from "../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
 import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
-import { OPTIONAL_HARNESS_PACKAGES } from "./config.ts";
+import { OPTIONAL_HARNESS_PACKAGES, diagnoseHarnessCompatibility, resolveHarnessSelection } from "./config.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
@@ -60,7 +60,11 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
-  return { dist, definition, warnings: literalMcpCredentials(dir, definition.config.mcpServers) };
+  const warnings = [
+    ...literalMcpCredentials(dir, definition.config.mcpServers),
+    ...diagnoseHarnessCompatibility(definition, resolveHarnessSelection(definition.config, {}, {})),
+  ];
+  return { dist, definition, warnings };
 }
 
 /** The compiler reads a `.ts` file as CommonJS without a package that says otherwise, and refuses its `import`s. */

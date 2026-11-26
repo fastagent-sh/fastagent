@@ -99,6 +99,45 @@ describe("cli: info's MCP servers", () => {
     });
     const fromCfg = await runInProcess(["-C", configured, "info", "--json"]);
     expect(fromCfg.code, fromCfg.stderr).toBe(0);
-    expect(JSON.parse(fromCfg.stdout)).toMatchObject({ harness: "dsh", sandbox: "off" });
+    expect(JSON.parse(fromCfg.stdout)).toMatchObject({ harness: "dsh", sandbox: "off", warnings: [] });
+  });
+
+  it("info surfaces pi-durable extension compatibility warnings on harness: dsh (with and without secrets)", async () => {
+    const dir = await agentWorkspace("fa-info-ext-compat-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
+      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
+      "src/extensions/secret-ext.ts":
+        'import { needs } from "@fastagent-sh/fastagent";\nexport default needs(["AUDIT_KEY"], () => ({ name: "audit-ext", tools: [] }));\n',
+    });
+
+    // Without AUDIT_KEY, info cannot build factories yet still warns statically (runtime name for plain, file path for needs()).
+    const envWithoutSecret = withoutModel();
+    delete envWithoutSecret.AUDIT_KEY;
+    const unbuiltJson = await runInProcess(["-C", dir, "info", "--json"], undefined, envWithoutSecret);
+    expect(unbuiltJson.code, unbuiltJson.stderr).toBe(0);
+    expect(JSON.parse(unbuiltJson.stdout).warnings).toEqual([
+      'skipping pi-durable extensions on harness "dsh": legacy-ext, src/extensions/secret-ext.ts (portable tools belong in src/tools/)',
+    ]);
+
+    const unbuiltText = await runInProcess(["-C", dir, "info"], undefined, envWithoutSecret);
+    expect(unbuiltText.code, unbuiltText.stderr).toBe(0);
+    expect(unbuiltText.stdout).toMatch(/⚠ skipping pi-durable extensions on harness "dsh": legacy-ext/);
+
+    // With AUDIT_KEY set, info reports exact built extension names; switching to pi-durable clears warnings.
+    const builtJson = await runInProcess(["-C", dir, "info", "--json"], undefined, {
+      ...envWithoutSecret,
+      AUDIT_KEY: "secret",
+    });
+    expect(builtJson.code, builtJson.stderr).toBe(0);
+    expect(JSON.parse(builtJson.stdout).warnings).toEqual([
+      'skipping pi-durable extensions on harness "dsh": legacy-ext, audit-ext (portable tools belong in src/tools/)',
+    ]);
+
+    const onPi = await runInProcess(["-C", dir, "info", "--harness", "pi-durable", "--json"], undefined, {
+      ...envWithoutSecret,
+      AUDIT_KEY: "secret",
+    });
+    expect(onPi.code, onPi.stderr).toBe(0);
+    expect(JSON.parse(onPi.stdout).warnings).toEqual([]);
   });
 });

@@ -41,7 +41,7 @@ Every build enforces strict artifact boundaries before anything is written to `d
 - **Full TypeScript verification:** Compiles `fastagent.config.ts` and every module in `src/tools/` and `src/extensions/` with the project's `tsc` (pass `--no-check` only when you already ran `tsc --noEmit`).
 - **No out-of-tree imports:** Refuses source imports from outside the agent directory that `dist/` cannot carry.
 - **No machine state or secrets:** Never copies `.secrets/`, `.env*`, `.state/`, `node_modules/`, `.git/`, or anything from `~/.pi/agent`.
-- **MCP command & credential checks:** Verifies relative stdio MCP commands exist inside `dist/` and emits warnings if `mcpServers` contains literal credentials instead of `${VAR}` references.
+- **MCP & harness compatibility checks:** Verifies relative stdio MCP commands exist inside `dist/`, warns if `mcpServers` contains literal credentials instead of `${VAR}` references, and warns when `fastagent.config.ts` selects a harness (such as `dsh`) that skips `pi-durable`-only `src/extensions/*` modules.
 - **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent` and the built-in `pi-*` packages (`@earendil-works/pi-durable`, `@earendil-works/pi-ai`, `@earendil-works/pi-schema`) into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
 
 ## 2. Distribute & version as an npm package

@@ -3,6 +3,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { type Schema, arr, compile, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
+import { isNeeds } from "../needs.ts";
 import { decodeRuntimeCliEnv } from "../process-env.ts";
 import {
   CODING_TOOL_NAMES,
@@ -52,6 +53,18 @@ export interface HarnessSelection {
   readonly sandbox?: SandboxMode;
 }
 
+interface HarnessCapabilities {
+  readonly extensions: boolean;
+  readonly sandbox: boolean;
+}
+
+const HARNESS_CAPABILITIES: Record<HarnessName, HarnessCapabilities> = {
+  "pi-durable": { extensions: true, sandbox: false },
+  dsh: { extensions: false, sandbox: true },
+};
+
+const SANDBOX_HARNESSES = HARNESS_NAMES.filter((name) => HARNESS_CAPABILITIES[name].sandbox);
+
 /**
  * Resolve the effective harness and sandbox posture with precedence:
  * explicit override (CLI flag / openAgent option) > environment (`FASTAGENT_HARNESS` / `FASTAGENT_SANDBOX`) >
@@ -73,13 +86,46 @@ export function resolveHarnessSelection(
   if (rawSandbox !== undefined && !SANDBOX_SET.has(rawSandbox)) {
     throw new Error(`unknown sandbox mode ${JSON.stringify(rawSandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }
-  if (harness === "pi-durable") {
+  if (!HARNESS_CAPABILITIES[harness].sandbox) {
     if (rawSandbox !== undefined) {
-      throw new Error(`sandbox (${JSON.stringify(rawSandbox)}) requires harness: "dsh"`);
+      throw new Error(
+        `sandbox (${JSON.stringify(rawSandbox)}) requires harness: ${SANDBOX_HARNESSES.map((name) => JSON.stringify(name)).join(" or ")}`,
+      );
     }
     return { harness };
   }
   return { harness, sandbox: (rawSandbox as SandboxMode | undefined) ?? "workspace" };
+}
+
+/**
+ * Pure harness compatibility diagnostics shared across runtime startup (`serving.ts`), read-only inspection
+ * (`fastagent info`), builds (`fastagent build`), and deploy preflight (`fastagent deploy check`).
+ */
+export function diagnoseHarnessCompatibility(
+  definition: Pick<AgentDefinition, "registry">,
+  selection: HarnessSelection,
+  options?: {
+    /** Built extensions when available (exact runtime names, including `needs(...)` factories). */
+    readonly extensions?: readonly { readonly name: string }[];
+    /** Override capability from a dynamically loaded `HarnessProvider.supportsExtensions`. */
+    readonly supportsExtensions?: boolean;
+  },
+): readonly string[] {
+  const supportsExtensions = options?.supportsExtensions ?? HARNESS_CAPABILITIES[selection.harness].extensions;
+  if (supportsExtensions) return [];
+  const names =
+    options?.extensions !== undefined
+      ? options.extensions.map((ext) => ext.name)
+      : definition.registry.extensions.map((entry) => {
+          if (!isNeeds(entry.value) && typeof (entry.value as { name?: unknown } | null)?.name === "string") {
+            return (entry.value as { name: string }).name;
+          }
+          return entry.file;
+        });
+  if (names.length === 0) return [];
+  return [
+    `skipping pi-durable extensions on harness "${selection.harness}": ${names.join(", ")} (portable tools belong in src/tools/)`,
+  ];
 }
 
 /** Resolve `codingTools` from config into the concrete list of built-in coding tools to install. */
@@ -150,8 +196,10 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   if (sandbox !== undefined && (typeof sandbox !== "string" || !SANDBOX_SET.has(sandbox))) {
     throw new Error(`${file}: unknown sandbox mode ${JSON.stringify(sandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }
-  if (sandbox !== undefined && (harness ?? "pi-durable") === "pi-durable") {
-    throw new Error(`${file}: "sandbox" requires harness: "dsh"`);
+  if (sandbox !== undefined && !HARNESS_CAPABILITIES[harness ?? "pi-durable"].sandbox) {
+    throw new Error(
+      `${file}: "sandbox" requires harness: ${SANDBOX_HARNESSES.map((name) => JSON.stringify(name)).join(" or ")}`,
+    );
   }
   checkCodingTools(codingTools, file);
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
