@@ -1,9 +1,16 @@
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import type { Storage, StorageWrite } from "@earendil-works/pi-durable";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
+import { obj } from "@earendil-works/pi-schema";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
+import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
+import { defineTool } from "../../../packages/fastagent/src/harnesses/tool.ts";
 import {
   type PgDatabase,
   openPgDatabase,
@@ -719,23 +726,88 @@ describe("postgres-kit shared storage primitives", () => {
 
   it("serializes same-process close() -> openAgent() handoff on a shared PostgreSQL pool", async () => {
     const shared = openPostgresDatabase({ url: postgres.url }, { max: 4 });
-    let first: Awaited<ReturnType<typeof openSource>> | undefined;
-    let second: Awaited<ReturnType<typeof openSource>> | undefined;
+    const dir = await fauxAgent("fa-pg-reopen-");
+    const rootA = await mkdtemp(join(tmpdir(), "fa-pg-reopen-a-"));
+    const rootB = await mkdtemp(join(tmpdir(), "fa-pg-reopen-b-"));
+    const rootOther = await mkdtemp(join(tmpdir(), "fa-pg-reopen-other-"));
+    let markStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const holdCleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const holdTool = defineTool({
+      name: "hold_pg_reopen",
+      description: "Holds close open until released.",
+      parameters: obj({}),
+      execute: async () => {
+        markStarted();
+        await holdCleanup;
+        return { output: [{ type: "text", text: "done" }] };
+      },
+    });
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses([
+      () => fauxAssistantMessage([fauxToolCall("hold_pg_reopen", {})], { stopReason: "toolUse" }),
+      () => fauxAssistantMessage("done"),
+    ]);
+    const definition = defineDefinition({
+      format: DEFINITION_FORMAT,
+      builtWith: "0.0.0",
+      name: "pg-reopen-test",
+      version: "0.0.0",
+      dir,
+      config: { model: "gw/m1", providers: [faux.provider] },
+      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }], extensions: [] },
+    });
+
+    const name = freshInstance();
+    const otherName = freshInstance();
+    let first: Awaited<ReturnType<typeof openAgent>> | undefined;
+    let second: Awaited<ReturnType<typeof openAgent>> | undefined;
+    let unrelated: Awaited<ReturnType<typeof openAgent>> | undefined;
     try {
-      const dir = await fauxAgent("fa-pg-reopen-");
-      const name = freshInstance();
-      first = await openSource(dir, { name, database: shared });
+      first = await openAgent(definition, { root: rootA, name, database: shared });
       const session = await first.sessions.create({ title: "before-close" });
+      void first.messages.send({ sessionId: session.id, content: "hold" });
+      await toolStarted;
 
       // Start closing without awaiting, then reopen immediately on the same shared pool and instance name.
       const closing = first.close();
       expect(first.ready()).toBe(false);
-      second = await openSource(dir, { name, database: shared });
+
+      let reopenedSettled = false;
+      const reopening = openAgent(definition, { root: rootB, name, database: shared }).then((agent) => {
+        reopenedSettled = true;
+        return agent;
+      });
+
+      // Unrelated instance opens immediately; same-instance reopen waits in-process without spinning on durable_leases.
+      unrelated = await openAgent(definition, { root: rootOther, name: otherName, database: shared });
+      expect(unrelated.ready()).toBe(true);
+      expect(reopenedSettled).toBe(false);
+      const db = openPgDatabase(postgres.url);
+      try {
+        const [row] = await db.query<{ handoff_requested_at: Date | null }>(
+          "SELECT handoff_requested_at FROM durable_leases WHERE instance = $1",
+          [name],
+        );
+        expect(row?.handoff_requested_at).toBeNull();
+      } finally {
+        await db.close();
+      }
+
+      releaseCleanup();
       await closing;
+      second = await reopening;
 
       expect(second.ready()).toBe(true);
       expect((await second.sessions.get(session.id)).title).toBe("before-close");
     } finally {
+      releaseCleanup();
+      await unrelated?.close();
       await second?.close();
       await first?.close();
       await shared.close();

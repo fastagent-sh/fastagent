@@ -609,11 +609,12 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
           )
         : undefined;
 
+    const closedGate = Promise.withResolvers<void>();
     runtimeAgent.subscribeClose?.(closeSignal.mark);
+    closeSignal.subscribe(() => trackInFlightClose(storageKey, closedGate.promise));
     if (auth !== undefined) {
       closeSignal.subscribe(() => auth.close());
     }
-    const closedGate = Promise.withResolvers<void>();
     const closeOutcome = Ref.makeUnsafe<Deferred.Deferred<void, PromiseFailure> | undefined>(undefined);
     const closeAgentEffect = Effect.fn("serving.closeAgent")(function* () {
       const decision = yield* Ref.modify(
