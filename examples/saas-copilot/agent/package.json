@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@fastagent-sh/fastagent": "^0.36.2"
+    "@fastagent-sh/fastagent": "^0.37.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
