@@ -275,6 +275,27 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
   };
 }
 
+/** Apply `ToolOutputLimits` (`maxLines` then `maxBytes`, `head` or `tail`) to streamed tool text. */
+export function retainToolOutput(buffer: string, limits?: ToolOutputLimits): string {
+  let out = buffer;
+  if (limits?.maxLines !== undefined && limits.maxLines > 0) {
+    const trailingNewline = out.endsWith("\n");
+    const body = trailingNewline ? out.slice(0, -1) : out;
+    const lines = body === "" ? [] : body.split("\n");
+    if (lines.length > limits.maxLines) {
+      out =
+        limits.retain === "head"
+          ? `${lines.slice(0, limits.maxLines).join("\n")}\n`
+          : `${lines.slice(-limits.maxLines).join("\n")}${trailingNewline ? "\n" : ""}`;
+    }
+  }
+  if (limits?.maxBytes === undefined || limits.maxBytes <= 0) return out;
+  const bytes = Buffer.from(out, "utf8");
+  if (bytes.byteLength <= limits.maxBytes) return out;
+  if (limits.retain === "head") return bytes.subarray(0, limits.maxBytes).toString("utf8");
+  return bytes.subarray(bytes.byteLength - limits.maxBytes).toString("utf8");
+}
+
 interface SessionToolApi {
   readonly output?: unknown;
   readonly commit?: unknown;

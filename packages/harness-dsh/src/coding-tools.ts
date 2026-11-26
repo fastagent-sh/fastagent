@@ -14,8 +14,9 @@ import {
   matchesSignature,
 } from "@deepseek-ai/dsh-sandbox";
 import { SessionId } from "@deepseek-ai/dsh-session";
+import type { AuthoredTool } from "@fastagent-sh/fastagent/harness";
 import { resolveConfinedPath, toRuntimeSandboxPolicy } from "./sandbox.ts";
-import type { DshCodingToolName, DshSandboxMode, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
+import type { DshCodingToolName, DshSandboxMode, FastAgentToolApi } from "./types.ts";
 
 const ALL_CODING_TOOLS: readonly DshCodingToolName[] = ["read", "write", "edit", "bash"];
 const CODING_TOOL_SET: ReadonlySet<string> = new Set(ALL_CODING_TOOLS);
@@ -69,7 +70,7 @@ function isProtectedPath(resolvedPath: string, protectedPaths: readonly string[]
   return false;
 }
 
-function makeReadTool(workdir: string): FastAgentToolLike {
+function makeReadTool(workdir: string): AuthoredTool {
   return {
     name: "read",
     description: "Read a UTF-8 text file inside the workspace.",
@@ -106,15 +107,11 @@ function makeReadTool(workdir: string): FastAgentToolLike {
           output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
         };
       }
-    }) as FastAgentToolLike["execute"],
+    }) as AuthoredTool["execute"],
   };
 }
 
-function makeWriteTool(
-  workdir: string,
-  sandbox: DshSandboxMode,
-  protectedPaths?: readonly string[],
-): FastAgentToolLike {
+function makeWriteTool(workdir: string, sandbox: DshSandboxMode, protectedPaths?: readonly string[]): AuthoredTool {
   return {
     name: "write",
     description: "Create or overwrite a UTF-8 text file inside the workspace.",
@@ -150,11 +147,11 @@ function makeWriteTool(
           output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
         };
       }
-    }) as FastAgentToolLike["execute"],
+    }) as AuthoredTool["execute"],
   };
 }
 
-function makeEditTool(workdir: string, sandbox: DshSandboxMode, protectedPaths?: readonly string[]): FastAgentToolLike {
+function makeEditTool(workdir: string, sandbox: DshSandboxMode, protectedPaths?: readonly string[]): AuthoredTool {
   return {
     name: "edit",
     description: "Replace an exact unique substring in a file inside the workspace.",
@@ -202,11 +199,11 @@ function makeEditTool(workdir: string, sandbox: DshSandboxMode, protectedPaths?:
           output: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
         };
       }
-    }) as FastAgentToolLike["execute"],
+    }) as AuthoredTool["execute"],
   };
 }
 
-function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
+function makeBashTool(ctx: CodingToolsContext): AuthoredTool {
   return {
     name: "bash",
     description: "Execute a shell command confined to the workspace sandbox.",
@@ -377,15 +374,15 @@ function makeBashTool(ctx: CodingToolsContext): FastAgentToolLike {
           });
         });
       });
-    }) as FastAgentToolLike["execute"],
+    }) as AuthoredTool["execute"],
   };
 }
 
 /**
  * Build the enabled subset of built-in sandboxed coding tools.
  */
-export function buildCodingTools(enabled: readonly DshCodingToolName[], ctx: CodingToolsContext): FastAgentToolLike[] {
-  const tools: FastAgentToolLike[] = [];
+export function buildCodingTools(enabled: readonly DshCodingToolName[], ctx: CodingToolsContext): AuthoredTool[] {
+  const tools: AuthoredTool[] = [];
   for (const name of enabled) {
     if (name === "read") tools.push(makeReadTool(ctx.workdir));
     else if (name === "write") tools.push(makeWriteTool(ctx.workdir, ctx.sandbox, ctx.protectedPaths));

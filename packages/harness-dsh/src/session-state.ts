@@ -15,24 +15,16 @@ import {
   SessionId,
   agentError,
 } from "@fastagent-sh/client/agent-api";
+import type { AuthoredTool, EventChannelWatcher } from "@fastagent-sh/fastagent/harness";
 import { deriveContextUsage } from "./projection.ts";
-import type {
-  DshEventStoreBackend,
-  DshHarnessOptions,
-  DshStoredMessage,
-  DshStoredSession,
-  FastAgentToolLike,
-} from "./types.ts";
+import type { DshEventStoreBackend, DshHarnessOptions, DshStoredMessage, DshStoredSession } from "./types.ts";
 
 export interface SequencedEvent {
   readonly seq: number;
   readonly event: SessionEvent;
 }
 
-export interface Watcher {
-  push(item: SequencedEvent): void;
-  end(): void;
-}
+type Watcher = EventChannelWatcher<SequencedEvent>;
 
 export interface Waiter {
   resolve(message: Message): void;
@@ -71,7 +63,7 @@ export interface DshRuntimeState {
   readonly options: DshHarnessOptions;
   readonly ctx: Context;
   readonly store: DshEventStoreBackend;
-  readonly toolsByName: Map<string, FastAgentToolLike>;
+  readonly toolsByName: Map<string, AuthoredTool>;
   readonly maxRetries: number;
   readonly baseDelayMs: number;
   readonly liveSessions: Map<string, LiveSession>;
@@ -101,62 +93,6 @@ export function createLiveSession(meta: DshStoredSession, dshHandle?: AgentHandl
     cancelRequested: false,
     compacting: false,
     admitChain: Promise.resolve(),
-  };
-}
-
-export function createEventChannel(onClose: () => void): {
-  readonly watcher: Watcher;
-  readonly iterable: AsyncIterable<SequencedEvent>;
-} {
-  const queue: SequencedEvent[] = [];
-  let closed = false;
-  let waiting: ((result: IteratorResult<SequencedEvent>) => void) | undefined;
-
-  const watcher: Watcher = {
-    push(item) {
-      if (closed) return;
-      if (waiting !== undefined) {
-        const resolve = waiting;
-        waiting = undefined;
-        resolve({ done: false, value: item });
-      } else {
-        queue.push(item);
-      }
-    },
-    end() {
-      if (closed) return;
-      closed = true;
-      if (waiting !== undefined) {
-        const resolve = waiting;
-        waiting = undefined;
-        resolve({ done: true, value: undefined });
-      }
-    },
-  };
-
-  async function* generate(): AsyncGenerator<SequencedEvent> {
-    try {
-      for (;;) {
-        if (queue.length > 0) {
-          yield queue.shift() as SequencedEvent;
-          continue;
-        }
-        if (closed) return;
-        const next = await new Promise<IteratorResult<SequencedEvent>>((resolve) => {
-          waiting = resolve;
-        });
-        if (next.done) return;
-        yield next.value;
-      }
-    } finally {
-      closed = true;
-      onClose();
-    }
-  }
-
-  return {
-    watcher,
-    iterable: { [Symbol.asyncIterator]: () => generate() },
   };
 }
 

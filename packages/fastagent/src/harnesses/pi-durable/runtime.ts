@@ -1,19 +1,22 @@
 /**
- * `pi-durable` runtime adapter plugged into `harnesses/serving.ts`: owns pi-durable storage opening,
- * `assembleAgent`, OTLP trace wiring, and lease-loss shutdown.
+ * Built-in `pi-durable` `HarnessProvider` implementation: opens SQLite/PostgreSQL/memory storage in phase 1 and
+ * assembles a `DurableAgent` in phase 2 while `harnesses/serving.ts` owns MCP, conflict checks, and shutdown.
  */
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { MemoryStorage, type Storage } from "@earendil-works/pi-durable";
-import { createCloseSignal } from "../../close-signal.ts";
-import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
-import { log } from "../../log.ts";
-import type { McpClients } from "../../mcp/client.ts";
-import type { HarnessOpenContext, InstancePlace, ServingAgent, ServingStorage } from "../serving.ts";
-import type { SharedPostgresDatabase } from "../../postgres.ts";
-import type { PgLeaseHandoff } from "../../postgres-kit.ts";
-import type { DurableAgent } from "./agent.ts";
-import { mcpTools } from "../mcp.ts";
+import type { TelemetryContext } from "@earendil-works/pi-telemetry";
+import {
+  INSTANCE_NAME_ENV,
+  type HarnessAgentOpenContext,
+  type HarnessInstancePlace,
+  type HarnessProvider,
+  type HarnessRuntimeAgent,
+  type HarnessStorageHandle,
+  type HarnessStorageOpenContext,
+  type SharedPostgresDatabase,
+  type PgLeaseHandoff,
+} from "../../harness.ts";
 import { assembleAgent } from "./open.ts";
 import { openPostgresStorage } from "./postgres/storage.ts";
 import { openLockedStorage } from "./storage.ts";
@@ -23,11 +26,15 @@ const INSTANCE_HOLDERS =
 const NAMED_INSTANCE_HOLDERS =
   "another `fastagent dev` or `start` command of an instance of this name, on this machine or another";
 
+interface PiDurableStorageHandle extends HarnessStorageHandle {
+  readonly raw: Storage;
+}
+
 function openInstanceStorage(
-  place: InstancePlace,
+  place: HarnessInstancePlace,
   database: SharedPostgresDatabase | undefined,
-  onLost?: (error: Error) => void,
-  handoff?: PgLeaseHandoff,
+  onLost: (error: Error) => void,
+  handoff: PgLeaseHandoff,
 ): Promise<Storage> {
   if (database !== undefined) {
     if (place.name === undefined) {
@@ -41,125 +48,66 @@ function openInstanceStorage(
     return openPostgresStorage(database, place.name, {
       holders: NAMED_INSTANCE_HOLDERS,
       ...(place.agent === undefined ? {} : { agent: place.agent }),
-      ...(onLost === undefined ? {} : { onLost }),
-      ...(handoff === undefined ? {} : { handoff }),
+      onLost,
+      handoff,
     });
   }
   return openLockedStorage(join(place.stateRoot, "agent.sqlite"), INSTANCE_HOLDERS);
 }
 
-function openStorage(
-  place: InstancePlace,
-  database: SharedPostgresDatabase | undefined,
-  storage: ServingStorage,
-  onLost: (error: Error) => void,
-  handoff: PgLeaseHandoff,
-): Promise<Storage> | Storage {
-  if (storage === "memory") return new MemoryStorage();
-  if (storage === "instance") return openInstanceStorage(place, database, onLost, handoff);
-  return openLockedStorage(storage.file, storage.holders);
-}
+export const piDurableProvider: HarnessProvider<PiDurableStorageHandle> = {
+  name: "pi-durable",
+  supportsExtensions: true,
 
-export async function openPiDurableRuntime(ctx: HarnessOpenContext): Promise<ServingAgent> {
-  const {
-    definition,
-    options,
-    name,
-    workdir,
-    chosen,
-    place,
-    database,
-    maxMessageBytes,
-    storageDescription,
-    processEnv,
-    code,
-    models,
-    telemetry,
-    work,
-  } = ctx;
+  async openStorage(ctx: HarnessStorageOpenContext): Promise<PiDurableStorageHandle> {
+    const raw: Storage =
+      ctx.chosen === "memory"
+        ? new MemoryStorage()
+        : ctx.chosen === "instance"
+          ? await openInstanceStorage(ctx.place, ctx.database, ctx.onLost, ctx.handoff)
+          : await openLockedStorage(ctx.chosen.file, ctx.chosen.holders);
+    return {
+      raw,
+      close: () => raw.close(BACKGROUND_CONTEXT),
+    };
+  },
 
-  let stopRuns: ((error: Error) => void) | undefined;
-  let handoffRuns: (() => void) | undefined;
-  let isIdle: (() => boolean) | undefined;
-  const storage = await openStorage(place, database, chosen, (error) => stopRuns?.(error), {
-    canYield: () => isIdle?.() === true,
-    onHandoff: () => handoffRuns?.(),
-  });
-  if (database !== undefined) log.info(`[fastagent] storage: ${storageDescription}`);
-
-  let mcp: McpClients | undefined;
-  let agent: DurableAgent;
-  try {
-    mcp = await ctx.openMcp();
-    agent = await assembleAgent(definition, {
-      name,
-      mcpTools: mcpTools(mcp.tools),
-      runsAs: options.runsAs,
-      storage,
-      code,
-      workdir,
-      processEnv,
-      models: models.models,
-      ...(options.model === undefined ? {} : { model: options.model }),
-      ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-      ...(telemetry === undefined ? {} : { telemetry }),
-      ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
-      work,
+  async openAgent(ctx: HarnessAgentOpenContext<PiDurableStorageHandle>): Promise<HarnessRuntimeAgent> {
+    const agent = await assembleAgent(ctx.definition, {
+      name: ctx.name,
+      mcpTools: ctx.mcpTools,
+      runsAs: ctx.runsAs,
+      storage: ctx.storage.raw,
+      code: ctx.code,
+      workdir: ctx.workdir,
+      processEnv: ctx.processEnv,
+      models: ctx.models,
+      resolvedModel: {
+        ...(ctx.model === undefined ? {} : { model: ctx.model }),
+        ...(ctx.unusableDefault === undefined ? {} : { unusableDefault: ctx.unusableDefault }),
+      },
+      ...(ctx.unfinished === undefined ? {} : { unfinished: ctx.unfinished }),
+      ...(ctx.telemetry === undefined ? {} : { telemetry: ctx.telemetry as TelemetryContext }),
+      ...(ctx.maxMessageBytes === undefined ? {} : { maxMessageBytes: ctx.maxMessageBytes }),
+      work: ctx.work,
     });
-  } catch (error) {
-    const failures: unknown[] = [error];
-    if (mcp) await mcp.close().catch((cleanup: unknown) => failures.push(cleanup));
-    await storage.close(BACKGROUND_CONTEXT).catch((cleanup: unknown) => failures.push(cleanup));
-    throw failures.length === 1 ? error : new AggregateError(failures, "Agent open and cleanup failed");
-  }
 
-  const closeSignal = createCloseSignal();
-  try {
-    agent.harness.subscribeClose(closeSignal.mark);
-  } catch {
-    closeSignal.mark();
-  }
-
-  isIdle = () => work.active() === 0;
-
-  handoffRuns = () => {
-    log.info(`[fastagent] handing off idle instance "${name}" to another process`);
-    agent.harness
-      .close(BACKGROUND_CONTEXT)
-      .catch((cause: unknown) => log.warn(`[fastagent] handing off instance "${name}" failed: ${String(cause)}`));
-  };
-
-  stopRuns = (error) => {
-    log.error(`[fastagent] ${error.message}: stopping its runs`);
-    agent.harness
-      .close(BACKGROUND_CONTEXT)
-      .catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
-  };
-
-  let resourcesClosed: Promise<void> | undefined;
-  const closeResources = (): Promise<void> => (resourcesClosed ??= mcp.close());
-  void agent.harness.closed.then(closeResources).catch((error: unknown) => {
-    log.warn(`[fastagent] cleanup after harness shutdown failed: ${String(error)}`);
-  });
-
-  const closeAgent = agent.close.bind(agent);
-  let closing: Promise<void> | undefined;
-  const managedAgent: ServingAgent = {
-    ...agent,
-    closed: agent.harness.closed.then(() => undefined),
-    ready: () => !closeSignal.isClosing(),
-    subscribeClose: closeSignal.subscribe,
-    close: () => {
-      closeSignal.mark();
-      closing ??= (async () => {
-        const failures: unknown[] = [];
-        await closeAgent().catch((error: unknown) => failures.push(error));
-        await closeResources().catch((error: unknown) => failures.push(error));
-        if (failures.length) throw new AggregateError(failures, "Agent close failed");
-      })();
-      return closing;
-    },
-  };
-
-  return managedAgent;
-}
+    return {
+      info: agent.info,
+      usage: agent.usage,
+      sessions: agent.sessions,
+      messages: agent.messages,
+      busy: () => agent.busy(),
+      close: () => agent.close(),
+      closed: agent.harness.closed.then(() => undefined),
+      subscribeClose(listener) {
+        try {
+          return agent.harness.subscribeClose(listener);
+        } catch {
+          listener();
+          return () => {};
+        }
+      },
+    };
+  },
+};

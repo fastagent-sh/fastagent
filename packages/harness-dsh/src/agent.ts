@@ -47,6 +47,7 @@ import {
   decodeRequest,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
+import { type AuthoredTool, createEventChannel } from "@fastagent-sh/fastagent/harness";
 import { buildCodingTools, resolveEnabledCodingTools } from "./coding-tools.ts";
 import { applyScopedSettings, bindDshAgentEvents, ensureDshAgent } from "./event-bridge.ts";
 import { PiAiModelsAdapter } from "./llm-pi-ai.ts";
@@ -66,10 +67,10 @@ import { buildDshSandboxPolicy, verifyBashSandbox } from "./sandbox.ts";
 import {
   type DshRuntimeState,
   type LiveSession,
+  type SequencedEvent,
   broadcast,
   buildSessionSnapshot,
   buildSessionSnapshotFromEvents,
-  createEventChannel,
   createLiveSession,
   failSessionWatchersAndWaiters,
   getStoredMessage,
@@ -82,14 +83,7 @@ import {
 } from "./session-state.ts";
 import { leavableIterator, messageStream } from "@fastagent-sh/client/stream";
 import { bridgeDshRuntimeTool, validateFastAgentTool } from "./tools.ts";
-import type {
-  DshAgent,
-  DshEventStoreBackend,
-  DshHarnessOptions,
-  DshStoredMessage,
-  DshStoredSession,
-  FastAgentToolLike,
-} from "./types.ts";
+import type { DshAgent, DshEventStoreBackend, DshHarnessOptions, DshStoredMessage, DshStoredSession } from "./types.ts";
 import { DEFAULT_THINKING_LEVELS, makeAgentOptions } from "./validation.ts";
 
 /**
@@ -139,7 +133,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     options,
     ctx,
     store,
-    toolsByName: new Map<string, FastAgentToolLike>(),
+    toolsByName: new Map<string, AuthoredTool>(),
     maxRetries: options.retry?.maxRetries ?? 1,
     baseDelayMs: options.retry?.baseDelayMs ?? 1,
     liveSessions: new Map<string, LiveSession>(),
@@ -200,7 +194,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     ...(options.protectedPaths !== undefined ? { protectedPaths: options.protectedPaths } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
   });
-  const toolsList: FastAgentToolLike[] = [...builtInCodingTools, ...userTools];
+  const toolsList: AuthoredTool[] = [...builtInCodingTools, ...userTools];
   for (const tool of toolsList) state.toolsByName.set(tool.name, tool);
 
   if (options.systemPrompt !== undefined) {
@@ -599,7 +593,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         let cleanup = () => {};
         async function* stream(): AsyncGenerator<SessionEvent> {
           const live = requireSession(state, sessionId);
-          const { watcher, iterable } = createEventChannel(() => {
+          const { watcher, iterable } = createEventChannel<SequencedEvent>(() => {
             live.watchers.delete(watcher);
           });
           live.watchers.add(watcher);

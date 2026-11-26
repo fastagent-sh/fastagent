@@ -24,7 +24,8 @@ import {
   persistSessionMeta,
   requireSession,
 } from "./session-state.ts";
-import type { DshCommand, DshStoredMessage } from "./types.ts";
+import type { AgentCommand } from "@fastagent-sh/fastagent/harness";
+import type { DshStoredMessage } from "./types.ts";
 import { normalizeSendContent, toDshBlocks } from "./validation.ts";
 
 export async function waitForMessage(
@@ -82,7 +83,7 @@ export async function waitForMessage(
 export async function admitMessage(
   state: DshRuntimeState,
   rawRequest: SendRequest,
-  commands: readonly DshCommand[],
+  commands: readonly AgentCommand[],
 ): Promise<{ message: Message; replayed: boolean }> {
   const request = decodeRequest(SendRequest, rawRequest, "messages.send");
   const live = requireSession(state, request.sessionId);

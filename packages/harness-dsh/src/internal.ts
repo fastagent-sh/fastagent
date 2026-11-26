@@ -1,2 +1,2 @@
-/** Internal PostgreSQL adapter wired by `@fastagent-sh/fastagent` with its shared `postgres-kit`. */
-export { DshInstanceHeldError, openPostgresDshStore } from "./postgres-store.ts";
+/** Internal PostgreSQL event store entry used by direct persistence tests. */
+export { openPostgresDshStore } from "./postgres-store.ts";

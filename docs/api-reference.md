@@ -35,6 +35,7 @@ FastAgent publishes six version-locked npm packages so you install only what you
 
 | Entry point | Purpose | Key exports |
 | --- | --- | --- |
+| **`@fastagent-sh/fastagent/harness`** | Building pluggable runtime harness adapters (`@fastagent-sh/harness-<name>/provider`) | `HarnessProvider`, `HarnessStorageOpenContext`, `HarnessAgentOpenContext`, `adaptToolRejectingPark`, `retainToolOutput`, `createEventChannel`, `classifyPiAiError`, `toPiThinkingLevel`, `migratePgSchema`, `acquirePgInstanceLease`, `InstanceHeld`, `splitPgText`, `isPgConflict` |
 | **`@fastagent-sh/fastagent/platform`** | Building custom `fastagent deploy init <target>` & runtime CLI extensions | `ExtensionCli`, `ContainerTarget`, `agentFacts`, `writeContainer`, `buildContextLeaks`, `loadAgentBuild`, `invokeOverApi`, `readInvokeMessage`, `modelRefOf`, `DATABASE_URL_ENV`, `Unavailable`, `PostgresDatabase`, `PostgresLimits`, `CreateIndex`, `PgExecutor` |
 | **`@fastagent-sh/client/remotes`** | Building pluggable `remotes.json` transport packages (`@fastagent-sh/client-<type>`) | `RemotesFile`, `RemoteConfig`, `HttpRemoteConfig`, `ExtensionRemoteConfig`, `RemoteConnection`, `resolveRemotesPath`, `parseRemotesJson`, `upsertRemoteConfig`, `removeRemoteConfig`, `setDefaultRemoteConfig`, `expandRemoteEnvRef`, `connectExtensionRemote` |
 | **`@fastagent-sh/client/agent-api`** | Validating or composing Agent API Effect Schemas directly | Effect Schemas for every Agent API type, event, auth flow, `AgentError`, `LIMITS`, `hasEnded`, `decodeRequest` |
