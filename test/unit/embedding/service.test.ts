@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
@@ -279,10 +279,15 @@ describe("openAgent: an agent directory opened in an app", () => {
     }
   });
 
-  it("serializes same-process close() -> openAgent() handoff on SQLite without blocking unrelated instances", async () => {
+  it("serializes same-process close() -> openAgent() handoff on SQLite (even via symlink alias) without blocking unrelated instances", async () => {
     const dir = await agentDir();
-    const root = await mkdtemp(join(tmpdir(), "fa-reopen-handoff-"));
-    const otherRoot = await mkdtemp(join(tmpdir(), "fa-reopen-other-"));
+    const base = await mkdtemp(join(tmpdir(), "fa-reopen-handoff-"));
+    const root = join(base, "real");
+    const rootLink = join(base, "link");
+    const otherRoot = join(base, "other");
+    await mkdir(root);
+    await mkdir(otherRoot);
+    await symlink(root, rootLink);
     let markStarted!: () => void;
     const toolStarted = new Promise<void>((resolve) => {
       markStarted = resolve;
@@ -325,12 +330,12 @@ describe("openAgent: an agent directory opened in an app", () => {
       void first.messages.send({ sessionId: session.id, content: "hold" });
       await toolStarted;
 
-      // Start close() without awaiting, then immediately reopen the same root.
+      // Start close() without awaiting, then immediately reopen the same instance through a symlink alias.
       const closing = first.close();
       expect(first.ready()).toBe(false);
 
       let reopenedSettled = false;
-      const reopening = openAgent(definition, { root }).then((agent) => {
+      const reopening = openAgent(definition, { root: rootLink }).then((agent) => {
         reopenedSettled = true;
         return agent;
       });

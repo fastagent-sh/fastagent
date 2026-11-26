@@ -3,8 +3,9 @@
  * model environment, MCP clients, and remote auth manager once, then delegates runtime construction to the
  * selected harness (`pi-durable` or `dsh`).
  */
+import { realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -211,18 +212,36 @@ function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
  */
 const inFlightCloses = new Map<string, Set<Promise<void>>>();
 
+function canonicalPath(target: string): string {
+  let current = resolve(target);
+  const missing: string[] = [];
+  for (;;) {
+    try {
+      const real = realpathSync(current);
+      return missing.length === 0 ? real : join(real, ...missing.reverse());
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return resolve(target);
+      const parent = dirname(current);
+      if (parent === current) return resolve(target);
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
 function storageKeyOf(
   chosen: ServingStorage,
   place: InstancePlace,
   rawDatabase: PostgresDatabase | undefined,
 ): string | undefined {
   if (chosen === "memory") return undefined;
-  if (chosen !== "instance") return `sqlite:${resolve(chosen.file)}`;
+  if (chosen !== "instance") return `sqlite:${canonicalPath(chosen.file)}`;
   if (rawDatabase !== undefined) {
     if (place.name === undefined) return undefined;
     return `pg:${describeDatabase(rawDatabase.url)}:${place.name}`;
   }
-  return `sqlite:${resolve(place.stateRoot, "agent.sqlite")}`;
+  return `sqlite:${canonicalPath(join(place.stateRoot, "agent.sqlite"))}`;
 }
 
 function trackInFlightClose(key: string | undefined, closing: Promise<void>): void {
