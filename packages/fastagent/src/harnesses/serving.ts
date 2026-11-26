@@ -3,7 +3,9 @@
  * model environment, MCP clients, and remote auth manager once, then delegates runtime construction to the
  * selected harness (`pi-durable` or `dsh`).
  */
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -195,24 +197,45 @@ function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
 }
 
 /** Resolve the built-in `pi-durable` provider or dynamically load `@fastagent-sh/harness-<name>/provider`. */
-async function resolveHarnessProvider(harness: HarnessName): Promise<HarnessProvider> {
+export async function resolveHarnessProvider(
+  harness: HarnessName,
+  projectDir: string,
+  resolveFromSelf: (specifier: string) => string = (specifier) => import.meta.resolve(specifier),
+): Promise<HarnessProvider> {
   if (harness === "pi-durable") return piDurableProvider as HarnessProvider;
   const pkgName = harnessPackage(harness);
   if (pkgName === undefined) throw new Error(`unknown harness "${harness}"`);
-  let mod: Partial<{ readonly harnessProvider: HarnessProvider }>;
+  const specifier = `${pkgName}/provider`;
+  let entryUrl: string;
   try {
-    mod = (await import(`${pkgName}/provider`)) as Partial<{ readonly harnessProvider: HarnessProvider }>;
-  } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND") {
-      throw new Error(`harness "${harness}" requires ${pkgName}. Install it in your project: npm install ${pkgName}`, {
-        cause: error,
-      });
+    entryUrl = resolveFromSelf(specifier);
+  } catch (firstError) {
+    const firstCode = (firstError as { code?: unknown }).code;
+    if (firstCode !== "ERR_MODULE_NOT_FOUND" && firstCode !== "MODULE_NOT_FOUND") throw firstError;
+    try {
+      entryUrl = pathToFileURL(createRequire(join(projectDir, "package.json")).resolve(specifier)).href;
+    } catch (secondError) {
+      const secondCode = (secondError as { code?: unknown }).code;
+      if (
+        secondCode === "ERR_MODULE_NOT_FOUND" ||
+        secondCode === "MODULE_NOT_FOUND" ||
+        secondCode === "ERR_PACKAGE_PATH_NOT_EXPORTED"
+      ) {
+        throw new Error(
+          `harness "${harness}" requires ${pkgName}. Install it in your project: npm install ${pkgName}`,
+          { cause: firstError },
+        );
+      }
+      throw secondError;
     }
-    throw error;
   }
-  if (mod.harnessProvider === undefined || typeof mod.harnessProvider.openStorage !== "function") {
-    throw new Error(`${pkgName}/provider does not export a valid harnessProvider`);
+  const mod = (await import(entryUrl)) as Partial<{ readonly harnessProvider: HarnessProvider }>;
+  if (
+    mod.harnessProvider === undefined ||
+    typeof mod.harnessProvider.openStorage !== "function" ||
+    typeof mod.harnessProvider.openAgent !== "function"
+  ) {
+    throw new Error(`${specifier} does not export a valid harnessProvider`);
   }
   return mod.harnessProvider;
 }
@@ -250,7 +273,7 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       ),
     catch: (cause) => new PromiseFailure(cause),
   });
-  const provider = yield* fromPromise(() => resolveHarnessProvider(selection.harness));
+  const provider = yield* fromPromise(() => resolveHarnessProvider(selection.harness, projectDir));
   const name = yield* Effect.try({
     try: () => instanceName(definition.name, options.name),
     catch: (cause) => new PromiseFailure(cause),

@@ -602,43 +602,47 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
             watcher.end();
           };
 
-          if (live.pendingSettlement !== undefined) {
-            await live.pendingSettlement.catch(() => {});
-          }
-          let rawEvents: readonly DshSessionEventRecord[];
-          if (live.dshAgent !== undefined) {
-            rawEvents = live.dshAgent.session.snapshotEvents();
-          } else {
-            rawEvents = await readSessionRawEvents(state, live);
-            const resumed = live.dshAgent as DshLoopAgent | undefined;
-            if (resumed !== undefined) {
-              rawEvents = resumed.session.snapshotEvents();
+          try {
+            if (live.pendingSettlement !== undefined) {
+              await live.pendingSettlement.catch(() => {});
             }
-          }
-          const watermark = live.eventSeq;
-          const all = projectSessionLog(rawEvents, live.costBySeq).map((item) => item.entry);
-          let replay: Entry[] = [];
-          if (eventOptions?.after === "start") {
-            replay = all;
-          } else if (eventOptions?.after !== undefined) {
-            const idx = all.findIndex((entry) => entry.id === eventOptions.after);
-            if (idx === -1) {
-              throw agentError("not_found", `unknown entry cursor "${eventOptions.after}"`);
+            let rawEvents: readonly DshSessionEventRecord[];
+            if (live.dshAgent !== undefined) {
+              rawEvents = live.dshAgent.session.snapshotEvents();
+            } else {
+              rawEvents = await readSessionRawEvents(state, live);
+              const resumed = live.dshAgent as DshLoopAgent | undefined;
+              if (resumed !== undefined) {
+                rawEvents = resumed.session.snapshotEvents();
+              }
             }
-            replay = all.slice(idx + 1);
-          }
-          const replayedIds = new Set(replay.map((entry) => entry.id));
-          const snapshot = buildSessionSnapshotFromEvents(state, live, rawEvents);
+            const watermark = live.eventSeq;
+            const all = projectSessionLog(rawEvents, live.costBySeq).map((item) => item.entry);
+            let replay: Entry[] = [];
+            if (eventOptions?.after === "start") {
+              replay = all;
+            } else if (eventOptions?.after !== undefined) {
+              const idx = all.findIndex((entry) => entry.id === eventOptions.after);
+              if (idx === -1) {
+                throw agentError("not_found", `unknown entry cursor "${eventOptions.after}"`);
+              }
+              replay = all.slice(idx + 1);
+            }
+            const replayedIds = new Set(replay.map((entry) => entry.id));
+            const snapshot = buildSessionSnapshotFromEvents(state, live, rawEvents);
 
-          for (const entry of replay) {
-            yield { type: "entry", entry };
-          }
-          yield { type: "state", session: snapshot };
+            for (const entry of replay) {
+              yield { type: "entry", entry };
+            }
+            yield { type: "state", session: snapshot };
 
-          for await (const item of iterable) {
-            if (item.seq <= watermark) continue;
-            if (item.event.type === "entry" && replayedIds.has(item.event.entry.id)) continue;
-            yield item.event;
+            for await (const item of iterable) {
+              if (item.seq <= watermark) continue;
+              if (item.event.type === "entry" && replayedIds.has(item.event.entry.id)) continue;
+              yield item.event;
+            }
+          } finally {
+            cleanup();
           }
         }
 

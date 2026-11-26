@@ -206,7 +206,14 @@ export function createEventChannel<T>(onClose: () => void): {
 } {
   const queue: T[] = [];
   let closed = false;
+  let notified = false;
   let waiting: ((result: IteratorResult<T>) => void) | undefined;
+
+  const notifyClose = (): void => {
+    if (notified) return;
+    notified = true;
+    onClose();
+  };
 
   const watcher: EventChannelWatcher<T> = {
     push(item) {
@@ -227,6 +234,7 @@ export function createEventChannel<T>(onClose: () => void): {
         waiting = undefined;
         resolve({ done: true, value: undefined });
       }
+      notifyClose();
     },
   };
 
@@ -247,7 +255,7 @@ export function createEventChannel<T>(onClose: () => void): {
     } finally {
       closed = true;
       waiting = undefined;
-      onClose();
+      notifyClose();
     }
   }
 

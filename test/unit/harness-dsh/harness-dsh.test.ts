@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineTool, sessionIdOf } from "@fastagent-sh/fastagent";
-import { InstanceHeld, classifyPiAiError } from "@fastagent-sh/fastagent/harness";
+import { InstanceHeld, classifyPiAiError, createEventChannel } from "@fastagent-sh/fastagent/harness";
 import { MemoryDshEventStore, openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
 import { openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
 import { harnessProvider } from "@fastagent-sh/harness-dsh/provider";
@@ -17,7 +17,7 @@ import { classifyLlmFailure, isRetryableLlmFailure } from "../../../packages/har
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
-import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
+import { openAgent, resolveHarnessProvider } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { dshSubject } from "../../harnesses/dsh-subject.ts";
@@ -1202,6 +1202,87 @@ export default defineTool({
       message: "upstream 525",
       retryable: true,
     });
+  });
+
+  it("resolveHarnessProvider falls back to projectDir, preserves inner ERR_MODULE_NOT_FOUND, and validates openAgent", async () => {
+    const missingSelf = (): string => {
+      const err = Object.assign(new Error("Cannot find package '@fastagent-sh/harness-dsh'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      });
+      throw err;
+    };
+    const emptyDir = mkdtempSync(join(tmpdir(), "fa-provider-empty-"));
+    const localPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-local-"));
+    const brokenPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-broken-"));
+    const invalidPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-invalid-"));
+    try {
+      writeFileSync(join(emptyDir, "package.json"), JSON.stringify({ name: "empty", type: "module" }));
+      await expect(resolveHarnessProvider("dsh", emptyDir, missingSelf)).rejects.toThrow(
+        'harness "dsh" requires @fastagent-sh/harness-dsh. Install it in your project: npm install @fastagent-sh/harness-dsh',
+      );
+
+      // Resolves from projectDir/node_modules when non-hoisted / absent from @fastagent-sh/fastagent's own root.
+      const setupLocalProvider = (root: string, source: string) => {
+        writeFileSync(join(root, "package.json"), JSON.stringify({ name: "app", type: "module" }));
+        const pkgDir = join(root, "node_modules", "@fastagent-sh", "harness-dsh");
+        mkdirSync(pkgDir, { recursive: true });
+        writeFileSync(
+          join(pkgDir, "package.json"),
+          JSON.stringify({
+            name: "@fastagent-sh/harness-dsh",
+            type: "module",
+            exports: { "./provider": "./provider.js" },
+          }),
+        );
+        writeFileSync(join(pkgDir, "provider.js"), source);
+      };
+
+      setupLocalProvider(
+        localPkgDir,
+        `export const harnessProvider = { name: "dsh", openStorage: () => ({ close() {} }), openAgent: async () => ({}) };\n`,
+      );
+      const loaded = await resolveHarnessProvider("dsh", localPkgDir, missingSelf);
+      expect(loaded.name).toBe("dsh");
+
+      // Preserves internal ERR_MODULE_NOT_FOUND from inside an installed plugin instead of claiming the plugin is missing.
+      setupLocalProvider(brokenPkgDir, `import "@deepseek-ai/nonexistent-internal-dep";\n`);
+      const brokenErr = await resolveHarnessProvider("dsh", brokenPkgDir, missingSelf).catch((err: unknown) => err);
+      expect(brokenErr).toBeInstanceOf(Error);
+      expect((brokenErr as Error).message).toContain("@deepseek-ai/nonexistent-internal-dep");
+      expect((brokenErr as Error).message).not.toContain("npm install @fastagent-sh/harness-dsh");
+
+      // Rejects incomplete provider missing openAgent() before touching storage or MCP.
+      setupLocalProvider(
+        invalidPkgDir,
+        `export const harnessProvider = { name: "dsh", openStorage: () => ({ close() {} }) };\n`,
+      );
+      await expect(resolveHarnessProvider("dsh", invalidPkgDir, missingSelf)).rejects.toThrow(
+        "@fastagent-sh/harness-dsh/provider does not export a valid harnessProvider",
+      );
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(localPkgDir, { recursive: true, force: true });
+      rmSync(brokenPkgDir, { recursive: true, force: true });
+      rmSync(invalidPkgDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createEventChannel invokes onClose at most once even when ended before iteration starts", async () => {
+    let closedCount = 0;
+    const { watcher, iterable } = createEventChannel<number>(() => {
+      closedCount += 1;
+    });
+    watcher.push(1);
+    watcher.push(2);
+    watcher.end();
+    expect(closedCount).toBe(1);
+
+    const drained: number[] = [];
+    for await (const value of iterable) {
+      drained.push(value);
+    }
+    expect(drained).toEqual([1, 2]);
+    expect(closedCount).toBe(1);
   });
 });
 
