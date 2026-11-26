@@ -392,7 +392,7 @@ it("an open agent stops its runs once another process takes its instance over", 
       secrets: { ...process.env, FASTAGENT_DATABASE_URL: postgres.url },
     });
     let closed = false;
-    void agent.harness?.closed.then(() => {
+    void agent.closed?.then(() => {
       closed = true;
     });
     const db = openPgDatabase(postgres.url);

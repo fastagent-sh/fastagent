@@ -1,12 +1,11 @@
 /** MCP tools bridged into FastAgent's harness-neutral `defineTool`. No replay promise is inferred from a server's annotations. */
 import type { JsonObject } from "@earendil-works/pi-ai";
-import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { Schema } from "@earendil-works/pi-schema";
 import type { McpTool } from "../mcp/client.ts";
 import { McpError } from "../mcp-api.ts";
-import { defineTool } from "./tool.ts";
+import { type PortableTool, defineTool } from "./tool.ts";
 
-export function mcpTools(tools: readonly McpTool[]): ToolRegistration[] {
+export function mcpTools(tools: readonly McpTool[]): PortableTool[] {
   return tools.map((tool) =>
     defineTool({
       name: tool.name,

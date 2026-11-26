@@ -191,6 +191,22 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     expect([...piToDsh, ...dshToPi]).toEqual([]);
   });
 
+  it("only harnesses/pi-durable/ imports @earendil-works/pi-durable or @earendil-works/chord across all packages", () => {
+    const piDir = resolve(srcOf("fastagent"), "harnesses/pi-durable");
+    const offenders = PACKAGES.flatMap((pkg) =>
+      filesUnder(srcOf(pkg))
+        .filter((file) => !file.startsWith(`${piDir}/`))
+        .flatMap((file) =>
+          importsOf(file)
+            .bare.filter(
+              (spec) => spec.startsWith("@earendil-works/pi-durable") || spec.startsWith("@earendil-works/chord"),
+            )
+            .map((spec) => `${relative(repo, file)} → ${spec}`),
+        ),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   it("no module outside harnesses/pi-durable/ imports pi-durable internals (except serving.ts runtime entry)", () => {
     const fastagentSrc = srcOf("fastagent");
     const piDir = resolve(fastagentSrc, "harnesses/pi-durable");

@@ -171,7 +171,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
           ),
         );
       };
-      (agent.closed ?? agent.harness?.closed)?.then(reopen, reopen);
+      agent.closed?.then(reopen, reopen);
       return opened;
     }).pipe(
       Scope.provide(scope),

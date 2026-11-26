@@ -3,10 +3,12 @@ import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createTelemetryAdapterConformance } from "@earendil-works/pi-telemetry/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
+import { openServing } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { otlpTraces } from "../../../packages/fastagent/src/harnesses/telemetry/otlp.ts";
 import { type FinishedSpan, recordingTelemetry } from "../../../packages/fastagent/src/harnesses/telemetry/spans.ts";
 import { log } from "../../../packages/fastagent/src/log.ts";
+import { NOT_HOSTED } from "../../../packages/fastagent/src/serving-command.ts";
 import { fauxAgent } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 
@@ -159,19 +161,26 @@ describe("run traces over OTLP", () => {
     }
   });
 
-  it("sends what was recorded when the harness closes on its own", async () => {
+  it("sends what was recorded when the runtime closes", async () => {
     // Only the close may send: the batch interval never fires.
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const otlp = await collector();
     try {
       const dir = await fauxAgent("fa-traces-harness-");
-      const agent = await openSource(dir, { secrets: { ...process.env, OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url } });
-      const { id } = await agent.sessions.create();
-      expect((await agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 })).status).toBe("completed");
-      await agent.harness?.close(BACKGROUND_CONTEXT);
+      const served = await openServing(await loadSourceDefinition(dir), {
+        workdir: dir,
+        secrets: { ...process.env, OTEL_EXPORTER_OTLP_ENDPOINT: otlp.url },
+        env: {},
+        ownEnv: process.env,
+        runsAs: NOT_HOSTED,
+      });
+      const { id } = await served.agent.sessions.create();
+      expect((await served.agent.messages.send({ sessionId: id, content: "hello" }, { wait: 30 })).status).toBe(
+        "completed",
+      );
+      await served.agent.close();
       for (let tries = 0; otlp.received.length === 0 && tries < 100; tries++) await sleep(20);
       expect(otlp.received.length).toBeGreaterThan(0);
-      await agent.close();
     } finally {
       vi.useRealTimers();
       await otlp.close();

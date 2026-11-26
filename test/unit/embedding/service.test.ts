@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai/session-resources";
 import { obj } from "@earendil-works/pi-schema";
@@ -161,37 +160,38 @@ describe("openAgent: an agent directory opened in an app", () => {
         extensions: [],
       },
     });
-    const agent = await openAgent(definition, { root });
-    const service = await agent.serve({ apiKeys: ["k"] });
+    const served = await openServing(definition, {
+      workdir: root,
+      secrets: {},
+      env: {},
+      ownEnv: process.env,
+      runsAs: NOT_HOSTED,
+    });
+    const service = await serveAgent(served, { apiKeys: ["k"] });
     const port = await service.listen(0, "127.0.0.1");
     const base = `http://127.0.0.1:${port}`;
     try {
-      expect(agent.ready()).toBe(true);
+      expect(served.agent.ready?.()).toBe(true);
       expect(service.ready()).toBe(true);
       const okHealth = await fetch(`${base}/health`);
       expect([okHealth.status, await okHealth.json()]).toEqual([200, { status: "ok" }]);
       expect((await fetch(`${base}/health`, { method: "HEAD" })).status).toBe(200);
 
-      const session = await agent.sessions.create();
-      void agent.messages.send({ sessionId: session.id, content: "hold" });
+      const session = await served.agent.sessions.create();
+      void served.agent.messages.send({ sessionId: session.id, content: "hold" });
       await toolStarted;
 
-      let harnessClosedSettled = false;
       let agentClosedSettled = false;
-      void agent.harness?.closed.then(() => {
-        harnessClosedSettled = true;
-      });
-      void agent.closed?.then(() => {
+      void served.agent.closed?.then(() => {
         agentClosedSettled = true;
       });
 
       // Initiate terminal runtime shutdown while the listener stays active and cleanup is still held open.
-      const closePromise = agent.harness?.close(BACKGROUND_CONTEXT);
+      const closePromise = served.agent.close();
 
       // Observe not-ready BEFORE releasing cleanup and BEFORE closed settles.
-      expect(harnessClosedSettled).toBe(false);
       expect(agentClosedSettled).toBe(false);
-      expect(agent.ready()).toBe(false);
+      expect(served.agent.ready?.()).toBe(false);
       expect(service.ready()).toBe(false);
 
       const badHealth = await fetch(`${base}/health`);
@@ -200,17 +200,16 @@ describe("openAgent: an agent directory opened in an app", () => {
 
       const client = connectAgent(base, { apiKey: "k" });
       await expect(client.sessions.create()).rejects.toMatchObject({ code: "unavailable" });
-      expect(harnessClosedSettled).toBe(false);
       expect(agentClosedSettled).toBe(false);
 
       releaseCleanup();
       await closePromise;
-      await agent.closed;
-      expect(harnessClosedSettled).toBe(true);
+      await served.agent.closed;
       expect(agentClosedSettled).toBe(true);
     } finally {
       releaseCleanup();
-      await agent.close();
+      await service.close();
+      await served.agent.close();
     }
   });
 
@@ -346,8 +345,8 @@ describe("standalone serveService lifecycle", () => {
     expect((await fetch(`${base}/health`)).status).toBe(200);
     expect(existsSync(join(stateRoot, "owner.json"))).toBe(true);
 
-    // Unexpected terminal runtime shutdown (same path as storage lease loss closing the harness).
-    await served.agent.harness?.close(BACKGROUND_CONTEXT);
+    // Unexpected terminal runtime shutdown (same path as storage lease loss closing the runtime).
+    await served.agent.close();
     expect(await exited).toBe(1);
     expect(existsSync(join(stateRoot, "owner.json"))).toBe(false);
     expect(signals.size).toBe(0);
@@ -458,7 +457,7 @@ describe("standalone serveService lifecycle", () => {
       storage: "memory",
     });
     const stoppedService = await serveAgent(stopped, { apiKeys: ["k"] });
-    await stopped.agent.harness?.close(BACKGROUND_CONTEXT);
+    await stopped.agent.close();
 
     let listened = false;
     const stoppedExit = new Promise<number>((resolve) => {

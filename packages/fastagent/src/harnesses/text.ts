@@ -7,7 +7,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { type PromptSection, section } from "@earendil-works/pi-durable";
 import type { SendRequest } from "@fastagent-sh/client/agent-api";
 import { parse as parseYaml } from "yaml";
 import { log } from "../log.ts";
@@ -17,6 +16,13 @@ export interface AgentCommand {
   name: string;
   description?: string;
   expand(args: string): string;
+}
+
+/** One lazily evaluated prompt section contributed by an agent definition. */
+export interface DefinitionSection {
+  readonly key: string;
+  readonly tag?: boolean;
+  render(): string | undefined;
 }
 import { CODING_TOOL_NAMES, type CodingToolName } from "./define.ts";
 
@@ -286,27 +292,32 @@ export function definitionSections(
     source?: boolean;
     codingTools?: readonly CodingToolName[];
   },
-): PromptSection[] {
+): DefinitionSection[] {
   const tools = new Set<CodingToolName>(options.codingTools ?? CODING_TOOL_NAMES);
   const hasCodingTools = tools.size > 0;
   const hasRead = tools.has("read");
   const canWrite = tools.has("write") || tools.has("edit") || tools.has("bash");
   const canExec = tools.has("bash");
   return [
-    section("system", () => fileText(join(agentDir, "SYSTEM.md")), { tag: false }),
-    section("project_context", () => fileText(join(agentDir, "AGENTS.md"))),
-    section("skills", () => (hasRead ? skillsPrompt(readSkills(agentDir)) : undefined)),
-    section("workspace", () =>
-      hasCodingTools
-        ? workspaceSection({
-            agentDir,
-            workdir: options.workdir ?? agentDir,
-            source: options.source === true,
-            canWrite,
-          })
-        : undefined,
-    ),
-    section("self_change", () => (options.runsAs.deployed ? selfChangeSection({ canWrite, canExec }) : undefined)),
+    { key: "system", tag: false, render: () => fileText(join(agentDir, "SYSTEM.md")) },
+    { key: "project_context", render: () => fileText(join(agentDir, "AGENTS.md")) },
+    { key: "skills", render: () => (hasRead ? skillsPrompt(readSkills(agentDir)) : undefined) },
+    {
+      key: "workspace",
+      render: () =>
+        hasCodingTools
+          ? workspaceSection({
+              agentDir,
+              workdir: options.workdir ?? agentDir,
+              source: options.source === true,
+              canWrite,
+            })
+          : undefined,
+    },
+    {
+      key: "self_change",
+      render: () => (options.runsAs.deployed ? selfChangeSection({ canWrite, canExec }) : undefined),
+    },
   ];
 }
 
@@ -320,12 +331,9 @@ export function renderDefinitionPrompt(
     codingTools?: readonly CodingToolName[];
   },
 ): string | undefined {
-  const sections = definitionSections(agentDir, options);
-  const texts: string[] = [];
-  for (const entry of sections) {
-    const content = typeof entry.render === "function" ? entry.render({} as never, {} as never) : entry.render;
-    if (typeof content === "string" && content.trim().length > 0) texts.push(content.trim());
-  }
+  const texts = definitionSections(agentDir, options)
+    .map((entry) => entry.render()?.trim())
+    .filter((content): content is string => Boolean(content));
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 

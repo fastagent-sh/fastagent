@@ -2,18 +2,13 @@
  * Harness-neutral tool authoring: `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect
  * `Schema.toStandardJSONSchemaV1`), plain JSON Schema objects (with `as const` inference), or `pi-schema` / TypeBox
  * schemas, converting to JSON Schema once at definition time and running Standard Schema validation/transforms before
- * `execute()`, and `sessionIdOf` resolves the active session id on both `pi-durable` and `dsh`.
+ * `execute()`, and `sessionIdOf` resolves the active session id across harnesses without global state.
  */
-import type { Context } from "@earendil-works/chord/context";
-import type { JsonValue } from "@earendil-works/chord/json";
-import {
-  type ToolExecutionApi,
-  type ToolExecutionResult,
-  type ToolRegistration,
-  defineTool as defineDurableTool,
-} from "@earendil-works/pi-durable";
 import type { Static } from "@earendil-works/pi-schema";
-import { SessionId } from "@fastagent-sh/client/agent-api";
+import { type Json, SessionId } from "@fastagent-sh/client/agent-api";
+
+/** Per-invocation session-id resolver attached onto `api` by harness tool adapters. */
+export const RESOLVE_SESSION_ID: unique symbol = Symbol.for("@fastagent-sh/fastagent/resolveSessionId");
 
 interface StandardIssue {
   readonly message: string;
@@ -79,10 +74,10 @@ type Simplify<T> = { [K in keyof T]: T[K] } & {};
 
 /**
  * Inferred argument type for `execute(args)`:
- * - Standard JSON Schema v1 (Zod v4, Effect Schema, Valibot, ArkType) → `~standard.types.output`
- * - `pi-schema` / TypeBox → `pi-durable`'s `ToolArgs<T>`
- * - `as const` plain JSON Schema object → inferred property shape
- * - non-literal plain JSON Schema object → `Record<string, unknown>`
+ * - Standard JSON Schema v1 (Zod v4, Effect Schema, Valibot, ArkType) -> `~standard.types.output`
+ * - `pi-schema` / TypeBox -> `Static<T>`
+ * - `as const` plain JSON Schema object -> inferred property shape
+ * - non-literal plain JSON Schema object -> `Record<string, unknown>`
  */
 export type InferToolArgs<TParameters> = TParameters extends {
   readonly "~standard": { readonly types?: { readonly output: infer TOutput } };
@@ -96,19 +91,77 @@ export type InferToolArgs<TParameters> = TParameters extends {
       : Record<string, unknown>
     : Static<TParameters>;
 
-/** What {@link defineTool} accepts: standard schema or JSON Schema parameters, and string or full ToolExecutionResult return. */
-export type ToolDefinition<
+/** Text content block returned in a portable tool result. */
+export interface ToolOutputPart {
+  type: "text";
+  text: string;
+}
+
+/** Retention bounds applied to streamed `api.output(...)` text. */
+export interface ToolOutputLimits {
+  readonly maxBytes?: number;
+  readonly retain?: "head" | "tail";
+}
+
+/** JSON-serializable value attached to a tool result's `details`. */
+export type ToolDetails = string | number | boolean | null | ToolDetails[] | { [key: string]: ToolDetails };
+
+/** Portable result returned by `defineTool` across harnesses. */
+export interface ToolResult<TDetails extends ToolDetails = ToolDetails> {
+  readonly output?: ToolOutputPart[];
+  readonly details?: TDetails;
+  readonly isError?: boolean;
+  readonly control?: { readonly terminate?: boolean };
+  readonly kind?: never;
+}
+
+/** Invocation context passed as the third parameter of `execute(args, api, context)`. */
+export interface ToolExecutionContext {
+  readonly abortSignal?: AbortSignal | undefined;
+  readonly sessionId?: string | undefined;
+}
+
+/** Harness-neutral runtime operations passed as the second parameter of `execute(args, api, context)`. */
+export interface ToolExecutionApi {
+  /** Stream incremental progress text for this tool call. */
+  output(chunk: string): void;
+  /** Invoke another registered tool within the same session. */
+  executeTool(
+    name: string,
+    args: { [key: string]: Json },
+    context: ToolExecutionContext,
+  ): Promise<{ readonly isError?: boolean | undefined }>;
+  readonly [RESOLVE_SESSION_ID]?: (() => Promise<SessionId | undefined>) | undefined;
+}
+
+/** Compiled, harness-neutral tool registration returned by {@link defineTool}. */
+export interface PortableTool<TDetails extends ToolDetails = ToolDetails> {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: Record<string, unknown>;
+  readonly outputLimits?: ToolOutputLimits;
+  readonly replay?: "safe" | "unsafe";
+  prepareArguments?(args: unknown): unknown;
+  execute(args: unknown, api: ToolExecutionApi, context: ToolExecutionContext): Promise<ToolResult<TDetails>>;
+}
+
+/** Authoring input accepted by {@link defineTool}. */
+export interface ToolDefinition<
   TParameters extends ToolParameters = ToolParameters,
-  TDetails extends JsonValue = JsonValue,
-> = Omit<ToolRegistration<Record<string, unknown>, TDetails>, "parameters" | "execute" | "prepareArguments"> & {
+  TDetails extends ToolDetails = ToolDetails,
+> {
+  readonly name: string;
+  readonly description: string;
   readonly parameters: TParameters;
+  readonly outputLimits?: ToolOutputLimits;
+  readonly replay?: "safe" | "unsafe";
   prepareArguments?(args: unknown): unknown;
   execute(
     args: InferToolArgs<TParameters>,
-    api: ToolExecutionApi<TDetails>,
-    context: Context,
-  ): Promise<ToolExecutionResult<TDetails> | string> | ToolExecutionResult<TDetails> | string;
-};
+    api: ToolExecutionApi,
+    context: ToolExecutionContext,
+  ): Promise<ToolResult<TDetails> | string> | ToolResult<TDetails> | string;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -188,18 +241,22 @@ function resolveParameters(
 }
 
 /**
- * Define a tool for `src/tools/` using Zod v4 (or any Standard JSON Schema v1 library), plain JSON Schema, or
- * `pi-schema`. Returns a pi-durable {@link ToolRegistration} ready for FastAgent.
+ * Define a portable tool for `src/tools/` using Zod v4 (or any Standard JSON Schema v1 library), plain JSON Schema, or
+ * `pi-schema`. Works identically across `pi-durable` and `dsh`.
  * @public
  */
-export function defineTool<TParameters extends ToolParameters, TDetails extends JsonValue = JsonValue>(
+export function defineTool<TParameters extends ToolParameters, TDetails extends ToolDetails = ToolDetails>(
   tool: ToolDefinition<TParameters, TDetails>,
-): ToolRegistration<object, TDetails> {
-  const { parameters, execute, ...rest } = tool;
+): PortableTool<TDetails> {
+  const { parameters, execute, outputLimits, replay, prepareArguments } = tool;
   const { jsonSchema, validate } = resolveParameters(tool.name, parameters);
-  return defineDurableTool({
-    ...rest,
+  return {
+    name: tool.name,
+    description: tool.description,
     parameters: jsonSchema,
+    ...(outputLimits === undefined ? {} : { outputLimits }),
+    ...(replay === undefined ? {} : { replay }),
+    ...(prepareArguments === undefined ? {} : { prepareArguments }),
     execute: async (rawArgs, api, context) => {
       let parsedArgs: unknown = rawArgs;
       if (validate !== undefined) {
@@ -215,31 +272,15 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
       const outcome = await execute(parsedArgs as InferToolArgs<TParameters>, api, context);
       return typeof outcome === "string" ? { output: [{ type: "text", text: outcome }] } : outcome;
     },
-  });
+  };
 }
 
 interface SessionToolApi {
-  readonly output?: unknown;
-  readonly commit?: unknown;
-  readonly conversationId?: number;
-  readonly abortSignal?: never;
-  readonly sessionId?: never;
+  readonly [RESOLVE_SESSION_ID]?: (() => Promise<SessionId | undefined>) | undefined;
 }
 
 interface SessionToolContext {
-  readonly abortSignal?: AbortSignal;
-  readonly sessionId?: string;
-  readonly output?: never;
-  readonly commit?: never;
-}
-
-export type SessionIdResolver = (api: SessionToolApi, context: SessionToolContext) => Promise<SessionId | undefined>;
-
-let piSessionIdResolver: SessionIdResolver | undefined;
-
-/** Register the `pi-durable` implementation of `sessionIdOf` when the `pi-durable` runtime loads. */
-export function registerPiSessionIdResolver(resolver: SessionIdResolver): void {
-  piSessionIdResolver = resolver;
+  readonly sessionId?: string | undefined;
 }
 
 /**
@@ -247,13 +288,8 @@ export function registerPiSessionIdResolver(resolver: SessionIdResolver): void {
  * is not a session (a subagent's). Works on both `pi-durable` and `dsh`.
  * @public
  */
-export async function sessionIdOf(api: SessionToolApi, context: SessionToolContext): Promise<SessionId | undefined> {
+export async function sessionIdOf(api?: SessionToolApi, context?: SessionToolContext): Promise<SessionId | undefined> {
+  if (typeof api?.[RESOLVE_SESSION_ID] === "function") return api[RESOLVE_SESSION_ID]();
   if (typeof context?.sessionId === "string") return SessionId.make(context.sessionId);
-  if (typeof api?.commit === "function" && typeof api?.conversationId === "number") {
-    if (piSessionIdResolver === undefined) {
-      throw new Error("pi-durable sessionIdOf resolver is not initialized");
-    }
-    return piSessionIdResolver(api, context);
-  }
   return undefined;
 }

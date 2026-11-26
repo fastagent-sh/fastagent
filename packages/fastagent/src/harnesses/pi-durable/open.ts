@@ -10,6 +10,7 @@ import {
   type ToolRegistration,
   createRegistry,
   defineExtension,
+  section,
 } from "@earendil-works/pi-durable";
 import {
   CodingTools,
@@ -24,6 +25,7 @@ import type { AgentDefinition } from "../../definition/definition.ts";
 import { instanceName } from "../../instance-name.ts";
 import type { RunsAs } from "../../serving-command.ts";
 import {
+  type AuthoredTool,
   type BuiltDefinition,
   DEFINITION_EXTENSION,
   type Unfinished,
@@ -33,8 +35,10 @@ import {
 import { agentPresentation, resolveCodingTools } from "../config.ts";
 import { CODING_TOOL_NAMES, type CodingToolName } from "../define.ts";
 import { definitionSections, readCommands } from "../text.ts";
+import { type PortableTool, RESOLVE_SESSION_ID } from "../tool.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
+import { sessionIdOf as piSessionIdOf } from "./ids.ts";
 
 export interface AssembleAgentOptions {
   storage: Storage;
@@ -42,7 +46,7 @@ export interface AssembleAgentOptions {
   name?: string;
   workdir?: string;
   code: BuiltDefinition;
-  mcpTools?: ToolRegistration[];
+  mcpTools?: readonly PortableTool[];
   models: Models;
   model?: string;
   settings?: HarnessSettings;
@@ -70,6 +74,15 @@ function codingToolsExtension(selected: readonly CodingToolName[]): Extension | 
   });
 }
 
+function bindPiDurableTool(tool: AuthoredTool): ToolRegistration {
+  const base = tool as ToolRegistration;
+  return {
+    ...base,
+    execute: (args, api, context) =>
+      base.execute(args, Object.assign({}, api, { [RESOLVE_SESSION_ID]: () => piSessionIdOf(api, context) }), context),
+  };
+}
+
 /** Open the definition as a `pi-durable` Agent over `models`: selected coding tools, then authored and MCP tools. */
 export async function assembleAgent(definition: AgentDefinition, options: AssembleAgentOptions): Promise<DurableAgent> {
   const { dir, config } = definition;
@@ -81,19 +94,27 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const builtinCoding = codingToolsExtension(selectedCodingTools);
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
+  const sections = definitionSections(dir, {
+    runsAs: options.runsAs,
+    workdir: options.workdir ?? dir,
+    source: definition.source === true,
+    codingTools: selectedCodingTools,
+  }).map((entry) => section(entry.key, () => entry.render(), entry.tag === undefined ? undefined : { tag: entry.tag }));
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
-      sections: definitionSections(dir, {
-        runsAs: options.runsAs,
-        workdir: options.workdir ?? dir,
-        source: definition.source === true,
-        codingTools: selectedCodingTools,
-      }),
-      tools: [...code.tools, ...(options.mcpTools ?? [])],
+      sections,
+      tools: [...code.tools, ...(options.mcpTools ?? [])].map(bindPiDurableTool),
     }),
   );
-  for (const extension of code.extensions) registry.install(extension);
+  for (const raw of code.extensions) {
+    const extension = raw as Extension;
+    registry.install(
+      extension.tools === undefined
+        ? extension
+        : { ...extension, tools: extension.tools.map((t) => bindPiDurableTool(t)) },
+    );
+  }
   const { thinkingLevel } = config;
   return openDurableAgent({
     storage: options.storage,

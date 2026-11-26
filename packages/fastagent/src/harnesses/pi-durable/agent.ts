@@ -52,8 +52,7 @@ import { log } from "../../log.ts";
 import type { Defaults } from "./defaults.ts";
 import { imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
-import { registerPiSessionIdResolver } from "../tool.ts";
-import { type Ids, sessionIdOf as piSessionIdOf, storageIds } from "./ids.ts";
+import { type Ids, storageIds } from "./ids.ts";
 import { Released, countUntilSettled, createPiDurableMessages, decodeInput, released } from "./message-api.ts";
 import { SessionMetaDoc, isInput, queuedInputs, usageOfState } from "./messages.ts";
 import { durableReads, readEntryPage } from "./reads.ts";
@@ -105,9 +104,6 @@ export interface DurableAgent extends Agent {
 const OWNERLESS = { ownership: { kind: "ownerless" } } as const;
 
 export async function openDurableAgent(options: DurableAgentOptions): Promise<DurableAgent> {
-  registerPiSessionIdResolver((api, ctx) =>
-    piSessionIdOf(api as Parameters<typeof piSessionIdOf>[0], ctx as Parameters<typeof piSessionIdOf>[1]),
-  );
   const context = BACKGROUND_CONTEXT;
   const harness = await Harness.open(
     options.storage,

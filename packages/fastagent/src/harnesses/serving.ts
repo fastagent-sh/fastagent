@@ -10,7 +10,6 @@ import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
-import type { Harness } from "@earendil-works/pi-durable";
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type WorkTracker, createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
@@ -123,9 +122,8 @@ export interface OpenServingOptions {
 
 export type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
 
-/** An opened agent from either harness: the Agent API plus lifecycle and optional `pi-durable` harness handle. */
+/** An opened agent from any harness: the Agent API plus runtime lifecycle signals. */
 export interface ServingAgent extends Agent {
-  readonly harness?: Harness;
   /** Resolves once the runtime has stopped (explicit close or single-writer lease loss). */
   readonly closed?: Promise<void>;
   /** Synchronously reports whether the runtime has not started closing. */
@@ -522,8 +520,6 @@ export interface LocalAgent extends Agent, InvokeApi {
    * handler, or a server of its own (`listen`).
    */
   serve(options?: ServeAgentOptions): Promise<Service>;
-  /** pi-durable's own API when running on `harness: "pi-durable"`; absent on `harness: "dsh"`. */
-  readonly harness?: Harness;
   /** Resolves once the instance stops serving (explicit `close()` or single-writer lease loss). */
   readonly closed?: Promise<void>;
   /** Whether the runtime is ready to accept work (false as soon as shutdown starts, before cleanup settles). */
@@ -602,7 +598,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     ...(options.database === undefined ? {} : { database: options.database }),
   });
   const { agent, invoker } = opened;
-  const piHarness = agent.harness;
   type LocalAgentState =
     | { readonly _tag: "idle" }
     | { readonly _tag: "serving"; readonly ready: Deferred.Deferred<Service, PromiseFailure> }
@@ -712,7 +707,6 @@ export async function openAgent(definition: AgentDefinition, options: OpenAgentO
     messages: agent.messages,
     invoke: invoker.invoke,
     invokeStream: invoker.invokeStream,
-    ...(piHarness === undefined ? {} : { harness: piHarness }),
     ...(agent.closed === undefined ? {} : { closed: agent.closed }),
     ready: () => Ref.getUnsafe(state)._tag !== "closed" && (agent.ready?.() ?? true),
     busy: () => opened.busy(),

@@ -7,7 +7,6 @@
 import { join } from "node:path";
 import type { Agent, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Models } from "@earendil-works/pi-ai";
-import type { ToolRegistration } from "@earendil-works/pi-durable";
 import { createCloseSignal } from "../../close-signal.ts";
 import { INSTANCE_NAME_ENV } from "../../instance-name.ts";
 import { log } from "../../log.ts";
@@ -33,7 +32,7 @@ import {
   splitPgText,
 } from "../../postgres-kit.ts";
 import { Unavailable } from "../../unavailable.ts";
-import { assertNoMcpToolConflicts, resolveDefaultModel } from "../assembly.ts";
+import { type AuthoredTool, assertNoMcpToolConflicts, resolveDefaultModel } from "../assembly.ts";
 import { OPTIONAL_HARNESS_PACKAGES, agentPresentation, resolveCodingTools } from "../config.ts";
 import { mcpTools } from "../mcp.ts";
 import { readCommands, renderDefinitionPrompt } from "../text.ts";
@@ -41,8 +40,8 @@ import type { HarnessOpenContext, InstancePlace, ServingAgent } from "../serving
 
 const DSH_PACKAGE_NAME = OPTIONAL_HARNESS_PACKAGES.dsh;
 
-/** Adapt pi-durable ToolRegistration for DSH: fail visibly if a tool returns a pi-durable-only park (sleep/wait). */
-function adaptToolForDsh(tool: ToolRegistration): ToolRegistration {
+/** Adapt an authored or portable tool for DSH: fail visibly if a tool returns a pi-durable-only park (sleep/wait). */
+function adaptToolForDsh(tool: AuthoredTool): AuthoredTool {
   return {
     ...tool,
     execute: async (args, api, context) => {

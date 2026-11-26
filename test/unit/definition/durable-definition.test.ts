@@ -19,7 +19,11 @@ import {
 import * as EffectSchema from "effect/Schema";
 import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/tool.ts";
+import {
+  type ToolExecutionApi,
+  defineTool as defineFastAgentTool,
+  sessionIdOf,
+} from "../../../packages/fastagent/src/harnesses/tool.ts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
@@ -676,6 +680,28 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     expect(() => buildDefinition(def, ENV)).toThrow(
       /unconverted Standard Schema.*defineTool from "@fastagent-sh\/fastagent"/,
     );
+  });
+
+  it("executes defineTool + sessionIdOf directly in unit tests without booting any harness", async () => {
+    const stubApi: ToolExecutionApi = {
+      output: () => {},
+      executeTool: async () => ({}),
+    };
+    const whoami = defineFastAgentTool({
+      name: "whoami",
+      description: "Echo caller session",
+      parameters: { type: "object", properties: { label: { type: "string" } }, required: ["label"] } as const,
+      execute: async ({ label }, api, context) => {
+        const sid = await sessionIdOf(api, context);
+        return `${label}:${sid ?? "none"}`;
+      },
+    });
+    expect(await whoami.execute({ label: "unit" }, stubApi, { sessionId: "sess-42" })).toEqual({
+      output: [{ type: "text", text: "unit:sess-42" }],
+    });
+    expect(await whoami.execute({ label: "sub" }, stubApi, {})).toEqual({
+      output: [{ type: "text", text: "sub:none" }],
+    });
   });
 });
 
