@@ -33,19 +33,15 @@ interface TenantEntry {
 }
 
 const tenants = new Map<string, TenantEntry>();
-// Track in-flight closes (eviction or cooperative handoff) so immediate reopens wait for lock/lease release.
-const closing = new Map<string, Promise<void>>();
+// Track evicted closes only so SIGTERM awaits them before closing `sharedDb`; `openAgent()` handles reopen handoffs.
+const draining = new Set<Promise<void>>();
 
-function trackClosing(id: string, agent: LocalAgent, initiateClose: boolean): Promise<void> {
-  const work = Promise.all([
-    initiateClose ? agent.close().catch(() => undefined) : Promise.resolve(),
-    agent.closed?.catch(() => undefined),
-  ]).then(() => undefined);
-  const done = work.finally(() => {
-    if (closing.get(id) === done) closing.delete(id);
-  });
-  closing.set(id, done);
-  return done;
+function closeTenant(agent: LocalAgent): void {
+  const done = agent
+    .close()
+    .catch(() => undefined)
+    .finally(() => draining.delete(done));
+  draining.add(done);
 }
 
 function isTenantIdle(entry: TenantEntry): boolean {
@@ -60,7 +56,7 @@ function evictOverflowTenants(): void {
   for (const [id, entry] of victims) {
     if (tenants.size <= MAX_CACHED_TENANTS) break;
     tenants.delete(id);
-    if (entry.agent !== undefined) void trackClosing(id, entry.agent, true);
+    if (entry.agent !== undefined) closeTenant(entry.agent);
   }
 }
 
@@ -69,7 +65,7 @@ const reaper = setInterval(() => {
   for (const [id, entry] of [...tenants.entries()]) {
     if (entry.lastUsedAt > cutoff || !isTenantIdle(entry)) continue;
     tenants.delete(id);
-    if (entry.agent !== undefined) void trackClosing(id, entry.agent, true);
+    if (entry.agent !== undefined) closeTenant(entry.agent);
   }
 }, Math.min(60_000, Math.max(5_000, Math.floor(TENANT_IDLE_MS / 2))));
 reaper.unref();
@@ -78,38 +74,32 @@ function getTenantEntry(tenantId: string): TenantEntry {
   if (!TENANT_PATTERN.test(tenantId)) {
     throw new Error(`Invalid tenant id "${tenantId}"`);
   }
-  let entry = tenants.get(tenantId);
-  let waitPrevious = closing.get(tenantId);
-  // Skip handles already shutting down (ready() flips to false synchronously before agent.closed settles).
-  if (entry !== undefined) {
-    if (entry.agent === undefined || entry.agent.ready()) {
-      entry.lastUsedAt = Date.now();
-      return entry;
-    }
-    waitPrevious = trackClosing(tenantId, entry.agent, false);
-    tenants.delete(tenantId);
+  const existing = tenants.get(tenantId);
+  if (existing !== undefined && (existing.agent === undefined || existing.agent.ready())) {
+    existing.lastUsedAt = Date.now();
+    return existing;
   }
-  const pending = (waitPrevious ?? Promise.resolve())
-    .then(() =>
-      openAgent(definition, {
-        root: resolve(process.env.TENANTS_ROOT ?? "./.tenants", tenantId),
-        name: `tenant-${tenantId}`,
-        ...(sharedDb ? { database: sharedDb } : {}),
-        secrets: {
-          TENANT_ID: tenantId,
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-          ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-          APP_API_BASE: process.env.APP_API_BASE,
-          APP_API_TOKEN: process.env.APP_API_TOKEN,
-        },
-        env: baseEnv(process.env),
-        ...(process.env.FASTAGENT_MODEL ? { model: process.env.FASTAGENT_MODEL } : {}),
-      }),
-    )
+  tenants.delete(tenantId);
+
+  // `openAgent()` automatically waits for any in-flight `close()` or cooperative handoff on this tenant's storage.
+  const pending = openAgent(definition, {
+    root: resolve(process.env.TENANTS_ROOT ?? "./.tenants", tenantId),
+    name: `tenant-${tenantId}`,
+    ...(sharedDb ? { database: sharedDb } : {}),
+    secrets: {
+      TENANT_ID: tenantId,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      APP_API_BASE: process.env.APP_API_BASE,
+      APP_API_TOKEN: process.env.APP_API_TOKEN,
+    },
+    env: baseEnv(process.env),
+    ...(process.env.FASTAGENT_MODEL ? { model: process.env.FASTAGENT_MODEL } : {}),
+  })
     .then((agent) => {
       if (tenants.get(tenantId)?.pending === pending) {
         if (agent.ready()) {
-          entry!.agent = agent;
+          entry.agent = agent;
         } else {
           tenants.delete(tenantId);
         }
@@ -123,7 +113,7 @@ function getTenantEntry(tenantId: string): TenantEntry {
       if (tenants.get(tenantId)?.pending === pending) tenants.delete(tenantId);
       throw error;
     });
-  entry = { pending, lastUsedAt: Date.now(), activeStreams: 0 };
+  const entry: TenantEntry = { pending, lastUsedAt: Date.now(), activeStreams: 0 };
   tenants.set(tenantId, entry);
   evictOverflowTenants();
   return entry;
@@ -238,7 +228,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
     const opened = await Promise.all([...tenants.values()].map((entry) => entry.pending.catch(() => undefined)));
     await Promise.all([
       ...opened.map((a) => a?.close().catch(() => undefined)),
-      ...closing.values(),
+      ...draining,
     ]);
     await sharedDb?.close();
     process.exit(0);

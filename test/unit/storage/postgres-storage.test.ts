@@ -716,4 +716,29 @@ describe("postgres-kit shared storage primitives", () => {
       vi.useRealTimers();
     }
   });
+
+  it("serializes same-process close() -> openAgent() handoff on a shared PostgreSQL pool", async () => {
+    const shared = openPostgresDatabase({ url: postgres.url }, { max: 4 });
+    let first: Awaited<ReturnType<typeof openSource>> | undefined;
+    let second: Awaited<ReturnType<typeof openSource>> | undefined;
+    try {
+      const dir = await fauxAgent("fa-pg-reopen-");
+      const name = freshInstance();
+      first = await openSource(dir, { name, database: shared });
+      const session = await first.sessions.create({ title: "before-close" });
+
+      // Start closing without awaiting, then reopen immediately on the same shared pool and instance name.
+      const closing = first.close();
+      expect(first.ready()).toBe(false);
+      second = await openSource(dir, { name, database: shared });
+      await closing;
+
+      expect(second.ready()).toBe(true);
+      expect((await second.sessions.get(session.id)).title).toBe("before-close");
+    } finally {
+      await second?.close();
+      await first?.close();
+      await shared.close();
+    }
+  });
 });

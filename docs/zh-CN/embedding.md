@@ -55,6 +55,13 @@ await agent.close();
 
 ### 在单进程中通过一个 PostgreSQL 连接池托管多租户实例
 
+先根据产品形态选择合适的多租户嵌入模式：
+
+| 多租户模式 | 适用场景 | 接入方式 |
+| --- | --- | --- |
+| **共享密钥 SaaS 助手（单进程 1 个 `openAgent()` 实例）** | 所有租户共用统一的模型 API Key、MCP 服务器与工具定义（`codingTools: false`） | 每个进程仅打开 **1 个** `openAgent()`，在后端路由校验 `sessionId` 归属，自定义工具内通过 `sessionIdOf(api, context)` 反查所属租户；无需维护多实例缓存与驱逐逻辑。 |
+| **BYOK / 实例级隔离 SaaS（每活跃租户 1 个 `openAgent()` 实例）** | 租户自带模型密钥（`secrets`）、独立 MCP 服务器，或需要 PostgreSQL 按实例名分区隔离 | 共享一个 `openPostgresDatabase()` 连接池并传入每个 `openAgent({ name, database })`。 |
+
 当单个 Node 进程需要在 PostgreSQL（或 Aurora DSQL）上运行大量隔离实例时，用 `openPostgresDatabase` 共享一个连接池：
 
 ```ts
@@ -84,11 +91,12 @@ FastAgent 有意保持为**单实例数据面**：`openPostgresDatabase()` 与 `
 多租户共享连接池生产提示：
 - **池级批量续约：** 共享同一个 `openPostgresDatabase()` 句柄的多个实例会自动把租约续约合并为每周期一条批量 SQL（单批最多 500 个实例），避免随租户数量线性放大心跳写库压力。
 - **协作式空闲让渡与纯订阅 SSE：** 在滚动发布或多副本流量漂移时，若新副本请求打开某个已被旧副本持有但当前空闲（`!agent.busy()`）的实例，旧副本会在下一次续约周期主动释放租约并干净关闭，而不会阻塞至租约过期；活跃消息轮次与远程认证流程（`agent.busy() === true`）绝不会被中途打断。注意让渡判定仅看 `agent.busy()`，不感知纯订阅状态的 `sessions.events()` 流：当无在途消息但浏览器挂着空闲 SSE 的租户被迁移到新副本时，旧流会结束，前端需凭 `?after=<entryId>` / `Last-Event-ID` 自动断点重连。
+- **同进程 `close() -> reopen` 自动串行化：** 当同进程中某个 SQLite 文件或 PostgreSQL 实例的旧句柄正在关闭（包括显式 `close()`、协作式空闲让渡或失租清理）时，立即调用 `openAgent()` 会自动等待旧句柄释放锁/租约后再打开，避免与自身撞锁。
 - **宿主缓存 4 条实现契约**（完整参考见 [`examples/saas-copilot/server.ts`](../../examples/saas-copilot/server.ts)）：
   1. **并发打开去重：** 按租户缓存进行中的 `openAgent()` Promise，防止高并发冷启动重复打开。
-  2. **命中时检查 `agent.ready()` 并等待旧句柄关闭完成：** 当 `close()` 或协作让渡开始时，`ready()` 会同步切换为 `false`（早于异步 resolve 的 `agent.closed`）；命中到 `!agent.ready()` 的条目时应摘除，并等待 `agent.closed`（或正在进行的 `close()`）完成后再重新打开同一实例，避免与尚未释放的 SQLite 锁或 PostgreSQL 租约产生竞态。
+  2. **命中时检查 `agent.ready()`：** 当 `close()` 或协作让渡开始时，`ready()` 会同步切换为 `false`（早于异步 resolve 的 `agent.closed`）；命中到 `!agent.ready()` 的条目时直接摘除并重新调用 `openAgent()` 即可，无需手工维护按租户追踪的 `closing` 锁表。
   3. **监听 `agent.closed` 自动摘除：** 在 `agent.closed` settle 后清理缓存条目（同时覆盖协作让渡与异常失租）。
-  4. **控制内存与 MCP 预算：** 通过 TTL/LRU 回收长期空闲（`!agent.busy()` 且无活跃宿主 SSE 流）的实例，多副本下按租户 ID 做粘性路由，并在进程退出时先关闭所有缓存实例再调用 `db.close()`。
+  4. **控制内存与 MCP 预算：** 通过 TTL/LRU 回收长期空闲（`!agent.busy()` 且无活跃宿主 SSE 流）的实例，多副本下按租户 ID 做粘性路由，并在进程退出时等待所有缓存与已驱逐实例的 `close()` 完成后再调用 `db.close()`。
 
 ## 2. 调用 Agent API
 
