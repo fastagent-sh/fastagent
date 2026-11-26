@@ -9,7 +9,12 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import { agentPresentation, resolveCodingTools, resolveHarnessSelection } from "../../harnesses/config.ts";
+import {
+  agentPresentation,
+  diagnoseHarnessCompatibility,
+  resolveCodingTools,
+  resolveHarnessSelection,
+} from "../../harnesses/config.ts";
 import { definitionSecrets } from "../../definition/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
 import { describeInstanceStorage } from "../../harnesses/serving.ts";
@@ -95,6 +100,13 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     transport: server.type ?? "stdio",
     ...(server.type === "http" ? { url: server.url } : {}),
   }));
+  const warnings = [
+    ...diagnoseHarnessCompatibility(
+      definition,
+      harnessSelection,
+      code === undefined ? undefined : { extensions: code.extensions },
+    ),
+  ];
 
   if (opts.json) {
     console.log(
@@ -114,6 +126,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           mcp,
           extensions: code?.extensions.map(({ name }) => name) ?? null,
           commands,
+          warnings,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           workdir,
@@ -143,6 +156,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       ? `${harnessSelection.harness} (sandbox: ${harnessSelection.sandbox})`
       : harnessSelection.harness,
   );
+  for (const warning of warnings) cont(`⚠ ${warning}`);
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);

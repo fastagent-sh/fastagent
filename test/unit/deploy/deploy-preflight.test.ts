@@ -99,5 +99,13 @@ describe("deploy/preflight: what the container is checked for", () => {
     expect(optionalChecked.messages.filter((m) => m.level === "note").map((m) => m.text)).not.toContainEqual(
       expect.stringMatching(/generated Linux image/),
     );
+
+    const extCompatDir = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
+      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
+    });
+    expect(await warnings(extCompatDir)).toContain(
+      'skipping pi-durable extensions on harness "dsh": legacy-ext (portable tools belong in src/tools/)',
+    );
   });
 });

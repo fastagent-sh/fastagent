@@ -7,7 +7,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { loadSourceDefinition } from "../harnesses/assembly.ts";
-import { harnessPackage, resolveCodingTools, resolveHarnessSelection } from "../harnesses/config.ts";
+import {
+  diagnoseHarnessCompatibility,
+  harnessPackage,
+  resolveCodingTools,
+  resolveHarnessSelection,
+} from "../harnesses/config.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
@@ -145,6 +150,7 @@ async function gatherFacts(
     );
   }
   const harnessSelection = resolveHarnessSelection(config, {}, {});
+  for (const warning of diagnoseHarnessCompatibility(definition, harnessSelection)) report.warn(warning);
   const requiredHarnessPkg = harnessPackage(harnessSelection.harness);
   if (requiredHarnessPkg !== undefined) {
     if (!listsPackage(pkg, requiredHarnessPkg)) {
