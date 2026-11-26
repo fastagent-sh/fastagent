@@ -126,7 +126,66 @@ jobs:
 - `fastagent build --json` 执行 TypeScript 校验并产出不可变 `dist/` 制品，返回 `{ dist, name, version, warnings }`。
 - `fastagent deploy check --json` 检查 Docker 构建上下文，一旦发现 `.secrets/`、`.env*` 或 `.state/` 可能打入镜像即返回退出码 `1` 阻断发布。
 
-## 4. 为“人类 + Coding Agent”共同维护而设计
+## 4. 在 CI 中做工具单测与提示词回归评估
+
+推荐采用三层测试金字塔，而不是在测试中 Mock 大模型（Mock 模型只能测通接线，测不出 `SYSTEM.md` 或 `skills/` 的行为退化）：
+
+| 层级 | 验证目标 | 工具与执行频率 |
+| --- | --- | --- |
+| **1. 静态门禁** | TypeScript 类型、工具与 MCP 声明、Harness 兼容性、镜像密钥防泄漏 | 每次提交运行 `fastagent info --json`、`fastagent build --json`、`fastagent deploy check --json` |
+| **2. 工具单元测试** | 参数 Schema 校验与转换、业务逻辑、`needs()` 密钥注入、`sessionIdOf()` 读取 | 每次提交用 Vitest 进程内直接调用 `defineTool`（零网络、零 Harness 启动） |
+| **3. 行为回归 Evals** | 真实模型下的提示词、技能触发与工具调用质量 | PR 或每晚定时运行 Promptfoo 调用 `fastagent invoke --no-input` |
+
+### 在 Vitest 中零 Harness 直接单测 `defineTool` 与 `needs()`
+
+`defineTool` 返回与 Harness 无关的纯 `PortableTool` 对象，你可以将 `*.test.ts` 直接放在 `src/tools/*.ts` 同级目录（`fastagent build` 与运行时扫描会自动忽略 `*.test.*` 和 `*.spec.*`），无需启动任何运行时即可毫秒级单测：
+
+```ts
+// src/tools/workspace-metrics.test.ts
+import { expect, it } from "vitest";
+import type { ToolExecutionApi } from "@fastagent-sh/fastagent";
+import metricsFactory from "./workspace-metrics.ts";
+
+const stubApi: ToolExecutionApi = {
+  output: () => {},
+  executeTool: async () => ({}),
+};
+
+it("无需启动 Harness 即可校验参数并读取 sessionIdOf", async () => {
+  const tool = metricsFactory.build({ TENANT_ID: "acme" });
+  const result = await tool.execute({ windowDays: 14 }, stubApi, { sessionId: "sess-1" });
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(result.output?.[0]?.text ?? "{}")).toMatchObject({
+    tenantId: "acme",
+    sessionId: "sess-1",
+    windowDays: 14,
+  });
+});
+```
+
+### 用 Promptfoo 对提示词与技能做回归评估
+
+通过 `fastagent invoke --no-input` 接入真实模型评估（如果 Agent 启用了本地 Shell/文件工具，可追加 `--harness dsh --sandbox read-only`）：
+
+```yaml
+# promptfooconfig.yaml
+providers:
+  - id: exec:npx @fastagent-sh/fastagent invoke --no-input
+prompts:
+  - "{{prompt}}"
+tests:
+  - vars:
+      prompt: "Summarize workspace usage for the last 14 days"
+    assert:
+      - type: contains
+        value: "Pro"
+      - type: llm-rubric
+        value: "Reports active seats and API request limits clearly without inventing metrics"
+```
+
+在 PR 或夜间 CI 流水线中注入模型密钥后运行 `npx promptfoo eval --ci` 即可完成端到端行为回归。
+
+## 5. 为“人类 + Coding Agent”共同维护而设计
 
 因为整个 Agent 仅包含 Markdown 提示词/技能与强类型 TypeScript 模块——没有任何可视化画布导出物或专有图 DSL——Coding Agent（Claude Code、Codex、Cursor、Pi）可以直接采用与工程师完全一致的闭环来修改和验证项目：
 

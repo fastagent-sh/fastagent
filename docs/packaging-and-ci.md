@@ -124,7 +124,66 @@ jobs:
 - `fastagent build --json` runs TypeScript checks and emits the immutable `dist/` artifact, printing `{ dist, name, version, warnings }`.
 - `fastagent deploy check --json` inspects the Docker build context and exits `1` if `.secrets/`, `.env*`, or `.state/` would leak into the container image.
 
-## 4. Built for human + coding agent maintenance
+## 4. Test tools & evaluate prompts in CI
+
+Follow a three-layer test pyramid instead of mocking the LLM (mocking the model only tests wiring and misses prompt or skill regressions):
+
+| Layer | What it verifies | Tool & cadence |
+| --- | --- | --- |
+| **1. Static gates** | TypeScript types, tool/MCP declarations, harness compatibility, secret leaks | `fastagent info --json`, `fastagent build --json`, `fastagent deploy check --json` on every commit |
+| **2. Tool unit tests** | Schema validation/transforms, business logic, `needs()` secrets, `sessionIdOf()` | Vitest calling `defineTool` directly in-process (zero network, zero harness boot) on every commit |
+| **3. Behavioral evals** | Real prompt, skill, and tool-selection quality against a live model | Promptfoo calling `fastagent invoke --no-input` on PRs or scheduled nightly runs |
+
+### Unit-test `defineTool` & `needs()` directly in Vitest
+
+Because `defineTool` returns a harness-neutral `PortableTool`, you can colocate `*.test.ts` files right next to `src/tools/*.ts` (`fastagent build` and runtime discovery ignore `*.test.*` / `*.spec.*` automatically) and execute tools directly without starting any harness:
+
+```ts
+// src/tools/workspace-metrics.test.ts
+import { expect, it } from "vitest";
+import type { ToolExecutionApi } from "@fastagent-sh/fastagent";
+import metricsFactory from "./workspace-metrics.ts";
+
+const stubApi: ToolExecutionApi = {
+  output: () => {},
+  executeTool: async () => ({}),
+};
+
+it("validates arguments and reads sessionIdOf without booting a harness", async () => {
+  const tool = metricsFactory.build({ TENANT_ID: "acme" });
+  const result = await tool.execute({ windowDays: 14 }, stubApi, { sessionId: "sess-1" });
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(result.output?.[0]?.text ?? "{}")).toMatchObject({
+    tenantId: "acme",
+    sessionId: "sess-1",
+    windowDays: 14,
+  });
+});
+```
+
+### Regression-eval prompts & skills with Promptfoo
+
+Run real-model behavioral checks through `fastagent invoke --no-input` (passing `--harness dsh --sandbox read-only` if your agent uses shell/file tools):
+
+```yaml
+# promptfooconfig.yaml
+providers:
+  - id: exec:npx @fastagent-sh/fastagent invoke --no-input
+prompts:
+  - "{{prompt}}"
+tests:
+  - vars:
+      prompt: "Summarize workspace usage for the last 14 days"
+    assert:
+      - type: contains
+        value: "Pro"
+      - type: llm-rubric
+        value: "Reports active seats and API request limits clearly without inventing metrics"
+```
+
+Run `npx promptfoo eval --ci` in your PR or nightly workflow with your provider API key stored in CI secrets.
+
+## 5. Built for human + coding agent maintenance
 
 Because an agent contains only Markdown prompts/skills and typed TypeScript modules — with zero visual canvas exports or proprietary graph DSLs — coding agents (Claude Code, Codex, Cursor, Pi) can read, edit, refactor, and verify the entire project using the exact same loop as your engineers:
 
