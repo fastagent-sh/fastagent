@@ -477,9 +477,17 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         const forked = await agent.sessions.create({ forkFrom: { sessionId: created.id } });
         expect(forked.maxSteps).toBe(1);
 
-        // Raising maxSteps to 2 lets 1 tool round + final text answer complete; null clears it back to unlimited.
-        const raised = await agent.sessions.update(created.id, { maxSteps: 2 });
-        expect(raised.maxSteps).toBe(2);
+        // Raising maxSteps to 2 emits a live state update and lets 1 tool round + final text answer complete; null clears it.
+        const stream = attach(agent, created.id);
+        try {
+          await stream.until((event) => event.type === "state");
+          const raised = await agent.sessions.update(created.id, { maxSteps: 2 });
+          expect(raised.maxSteps).toBe(2);
+          const stateUpdates = await stream.until((event) => event.type === "state" && event.session.maxSteps === 2);
+          expect(stateUpdates.at(-1)).toMatchObject({ type: "state", session: { maxSteps: 2 } });
+        } finally {
+          await stream.close();
+        }
         const completed = await ended(agent, await send({ sessionId: created.id, content: "effect" }));
         expect(completed).toMatchObject({ status: "completed", answer: { text: "answer: effect" } });
 
