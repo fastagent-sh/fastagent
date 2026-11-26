@@ -75,6 +75,19 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
     }
   }
 
+  agentCtx.on("agent/pre-step", async (payload, next) => {
+    const effectiveMaxSteps = live.meta.maxSteps ?? state.options.maxSteps;
+    if (effectiveMaxSteps !== undefined && payload.step > effectiveMaxSteps) {
+      for (let i = payload.messages.length - 1; i >= 0; i--) {
+        const msg = payload.messages[i];
+        if (msg !== undefined) dshAgent.inbox.prepend("next-turn", msg);
+      }
+      live.hitStepLimit = true;
+      return { kind: "reject" as const };
+    }
+    return next();
+  });
+
   agentCtx.on("agent/request-error", async (payload, next) => {
     if (!isRetryableLlmFailure(payload.failure) || state.maxRetries <= 0) return next();
     const key = `${payload.turn}:${payload.step}`;
@@ -141,6 +154,7 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
     if (event.type === "turn/start") {
       live.lastAnswerInTurn = undefined;
       live.cancelRequested = false;
+      live.hitStepLimit = false;
       return;
     }
 
@@ -227,10 +241,12 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
       const reason = event.data.reason;
       const turnMessageIds = live.activeTurnMessageIds.splice(0);
       const answer = live.lastAnswerInTurn;
+      const hitStepLimit = live.hitStepLimit;
       live.lastAnswerInTurn = undefined;
       live.activeTools.clear();
       live.liveReply = { active: false, text: "", thinking: "" };
       live.cancelRequested = false;
+      live.hitStepLimit = false;
 
       if (reason.kind === "aborted" && reason.reason.kind === "disposed") {
         return;
@@ -244,14 +260,14 @@ export function bindDshAgentEvents(state: DshRuntimeState, live: LiveSession, ds
         const stored = getStoredMessage(state, live.meta.id, msgId);
         if (stored === undefined || hasEnded(stored)) continue;
         let next: DshStoredMessage;
-        if (reason.kind === "completed") {
+        if (reason.kind === "completed" || (reason.kind === "blocked" && hitStepLimit && answer !== undefined)) {
           next = {
             ...stored,
             status: "completed",
             ...(answer !== undefined ? { answer } : {}),
             updatedAt: Date.now(),
           };
-        } else if (reason.kind === "max-tokens") {
+        } else if (reason.kind === "max-tokens" || (reason.kind === "blocked" && hitStepLimit)) {
           next = {
             ...stored,
             status: "incomplete",

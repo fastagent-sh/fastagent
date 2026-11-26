@@ -1284,6 +1284,99 @@ export default defineTool({
     expect(drained).toEqual([1, 2]);
     expect(closedCount).toBe(1);
   });
+
+  it("enforces fastagent.config.ts default maxSteps across pi-durable and dsh, preserving steers on cap", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-max-steps-cfg-"));
+    const rootPi = mkdtempSync(join(tmpdir(), "fa-max-steps-pi-"));
+    const rootDsh = mkdtempSync(join(tmpdir(), "fa-max-steps-dsh-"));
+    try {
+      mkdirSync(join(dir, "src", "tools"), { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "max-steps-cfg", type: "module" }));
+      writeFileSync(
+        join(dir, "fastagent.config.ts"),
+        `import { createFauxCore, createProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { defineAgent } from "@fastagent-sh/fastagent";
+const core = createFauxCore({ provider: "ms", api: "ms" });
+const stream = (...args) => {
+  const last = args[1].messages.at(-1);
+  if (last?.role === "toolResult") {
+    core.appendResponses([fauxAssistantMessage("after-tool")]);
+  } else {
+    const text = typeof last?.content === "string" ? last.content : Array.isArray(last?.content) ? last.content.map((p) => p.text ?? "").join("") : "";
+    core.appendResponses([
+      text === "call-slow"
+        ? fauxAssistantMessage([fauxToolCall("slow_step", {})], { stopReason: "toolUse" })
+        : fauxAssistantMessage("direct:" + text),
+    ]);
+  }
+  return core.streamSimple(...args);
+};
+export default defineAgent({
+  model: "ms/" + core.getModel().id,
+  codingTools: false,
+  maxSteps: 1,
+  providers: [
+    createProvider({
+      id: "ms",
+      auth: { apiKey: { name: "MS", resolve: async () => ({ auth: {} }) } },
+      models: core.models,
+      api: { stream, streamSimple: stream },
+    }),
+  ],
+});
+`,
+      );
+      writeFileSync(
+        join(dir, "src", "tools", "slow.ts"),
+        `import { defineTool } from "@fastagent-sh/fastagent";
+export default defineTool({
+  name: "slow_step",
+  description: "Pauses briefly before returning.",
+  parameters: { type: "object", properties: {} } as const,
+  execute: async () => {
+    await new Promise((r) => setTimeout(r, 80));
+    return "slow-ok";
+  },
+});
+`,
+      );
+
+      const definition = await loadSourceDefinition(dir);
+
+      // 1) pi-durable honors config.maxSteps = 1 by default.
+      const piAgent = await openAgent(definition, { root: rootPi });
+      try {
+        const sPi = await piAgent.sessions.create();
+        const cappedPi = await piAgent.messages.send({ sessionId: sPi.id, content: "call-slow" }, { wait: 15 });
+        expect(cappedPi.status).toBe("incomplete");
+        expect(cappedPi).not.toHaveProperty("answer");
+      } finally {
+        await piAgent.close();
+      }
+
+      // 2) dsh honors config.maxSteps = 1 by default and preserves a steer arriving during the capped step.
+      const dshAgent = await openAgent(definition, { root: rootDsh, harness: "dsh", sandbox: "off" });
+      try {
+        const sDsh = await dshAgent.sessions.create();
+        const firstPromise = dshAgent.messages.send({ sessionId: sDsh.id, content: "call-slow" }, { wait: 15 });
+        await new Promise((r) => setTimeout(r, 20));
+        const steerPromise = dshAgent.messages.send(
+          { sessionId: sDsh.id, content: "steered-followup", whenBusy: "steer" },
+          { wait: 15 },
+        );
+        const [firstMsg, steerMsg] = await Promise.all([firstPromise, steerPromise]);
+        expect(firstMsg.status).toBe("incomplete");
+        expect(firstMsg).not.toHaveProperty("answer");
+        expect(steerMsg).toMatchObject({ status: "completed", answer: { text: "direct:steered-followup" } });
+      } finally {
+        await dshAgent.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(rootPi, { recursive: true, force: true });
+      rmSync(rootDsh, { recursive: true, force: true });
+    }
+  });
 });
 
 agentApiConformance("dsh (sqlite)", dshSubject());

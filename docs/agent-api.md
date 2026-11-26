@@ -47,7 +47,7 @@ Full TypeScript types ship in `@fastagent-sh/client` and `@fastagent-sh/fastagen
 | Object | What it represents |
 | --- | --- |
 | **Agent** | One running instance (one trust domain). `info()` lists available models, tools, commands, and starters; `usage()` reports cumulative spend. |
-| **Session** | A durable conversation with history entries, `status` (`idle` / `running`), `title`, timestamps, settings (`model`, `thinkingLevel`, `instructions`, `tools`), active `contextUsage`, cumulative `usage`, and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). |
+| **Session** | A durable conversation with history entries, `status` (`idle` / `running`), `title`, timestamps, settings (`model`, `thinkingLevel`, `instructions`, `tools`, `maxSteps`), active `contextUsage`, cumulative `usage`, and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). |
 | **Message** | One submission into a session, tracking its `status`, `entryId`, `answer`, `error`, `idempotencyKey`, and caller `metadata`. |
 | **Entry** | One immutable history record: `user`, `assistant`, `tool_result`, or `compaction`. Forked sessions share entries (with original ids) up to the fork point. |
 
@@ -87,7 +87,7 @@ const msg = await agent.invoke(
 | Operation | Purpose |
 | --- | --- |
 | `info()`, `usage()` | Inspect capabilities (models, tools, commands, starters) and cumulative model/tool usage |
-| `sessions.create({ title?, model?, thinkingLevel?, instructions?, tools?, forkFrom? })` | Create a session, or fork an existing session up to `forkFrom.entryId` |
+| `sessions.create({ title?, model?, thinkingLevel?, instructions?, tools?, maxSteps?, forkFrom? })` | Create a session, or fork an existing session up to `forkFrom.entryId` |
 | `sessions.get`, `sessions.list` | Fetch one session, or list sessions ordered by most recent activity (`limit`, `after`) |
 | `sessions.update` | Update title or settings for future turns; pass `null` to clear a setting back to default |
 | `sessions.delete` | Abort active work and delete the session permanently |
@@ -117,7 +117,7 @@ Passing an `AbortSignal` (`signal`) stops your client wait or stream without can
 | `queued` | No | — | Accepted and waiting its turn |
 | `running` | No | — | Executing now |
 | `completed` | Yes | Final `assistant` entry | Answered normally |
-| `incomplete` | Yes | Partial `assistant` entry | Hit model output token limit |
+| `incomplete` | Yes | Partial `assistant` entry (token limit) or absent (`maxSteps`) | Hit model output token limit or `maxSteps` turn-step cap |
 | `failed` | Yes | — | Failed; `message.error` explains why (`missing_model`, `auth_required`, `model_error`, `internal`) |
 | `canceled` | Yes | — | Stopped by `sessions.cancel` or withdrawn from queue |
 

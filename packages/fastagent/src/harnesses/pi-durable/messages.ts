@@ -161,6 +161,8 @@ function unanswered(record: Extract<EndedRecord, { status: "unanswered" }>): Pic
   switch (record.reason) {
     case "aborted":
       return { status: "canceled" };
+    case "turn_limit":
+      return { status: "incomplete" };
     case "no_model":
       return failed(
         agentError("missing_model", "The session's model was not among the agent's models when it was to answer"),
@@ -223,7 +225,7 @@ export function sessionOf(
   id: SessionId,
   live: LiveView | undefined,
   usage: UsageView | undefined,
-  agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools"> | undefined,
+  agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools" | "maxTurns"> | undefined,
   inbox?: InboxView,
   meta?: SessionMetaState,
   ids?: Ids,
@@ -245,6 +247,7 @@ export function sessionOf(
     ...(agent?.instructions === undefined ? {} : { instructions: agent.instructions }),
     // Only the list this API sets; pi-durable's other form (`{ remove }`) is set through `harness`, not here.
     ...(Array.isArray(agent?.tools) ? { tools: [...agent.tools] } : {}),
+    ...(agent?.maxTurns === undefined ? {} : { maxSteps: agent.maxTurns }),
     ...(partial === undefined
       ? {}
       : { reply: { text: replyText(partial), ...(thinking === undefined ? {} : { thinking }) } }),

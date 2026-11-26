@@ -455,6 +455,46 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         expect(tool.answer?.text).toBe("answer: effect");
       });
 
+      it("enforces maxSteps per turn (ending incomplete on tool-round cap), updates/clears/inherits it, and rejects invalid values", async () => {
+        await expect(agent.sessions.create({ maxSteps: 0 })).rejects.toMatchObject({ code: "invalid_request" });
+        await expect(agent.sessions.create({ maxSteps: 1.5 })).rejects.toMatchObject({ code: "invalid_request" });
+
+        const created = await agent.sessions.create({ maxSteps: 1 });
+        expect(created.maxSteps).toBe(1);
+
+        // 1 step allows a plain text answer, but stops incomplete after a tool round before a second model call.
+        const direct = await ended(agent, await send({ sessionId: created.id, content: "hi" }));
+        expect(direct).toMatchObject({ status: "completed", answer: { text: "answer: hi" } });
+
+        const capped = await ended(agent, await send({ sessionId: created.id, content: "effect" }));
+        expect(capped.status).toBe("incomplete");
+        expect(capped).not.toHaveProperty("answer");
+        expect(subject.effects()).toBe(1);
+
+        // Subsequent messages still run cleanly in the same session, and a fork inherits maxSteps.
+        const afterCap = await ended(agent, await send({ sessionId: created.id, content: "after" }));
+        expect(afterCap).toMatchObject({ status: "completed", answer: { text: "answer: after" } });
+        const forked = await agent.sessions.create({ forkFrom: { sessionId: created.id } });
+        expect(forked.maxSteps).toBe(1);
+
+        // Raising maxSteps to 2 emits a live state update and lets 1 tool round + final text answer complete; null clears it.
+        const stream = attach(agent, created.id);
+        try {
+          await stream.until((event) => event.type === "state");
+          const raised = await agent.sessions.update(created.id, { maxSteps: 2 });
+          expect(raised.maxSteps).toBe(2);
+          const stateUpdates = await stream.until((event) => event.type === "state" && event.session.maxSteps === 2);
+          expect(stateUpdates.at(-1)).toMatchObject({ type: "state", session: { maxSteps: 2 } });
+        } finally {
+          await stream.close();
+        }
+        const completed = await ended(agent, await send({ sessionId: created.id, content: "effect" }));
+        expect(completed).toMatchObject({ status: "completed", answer: { text: "answer: effect" } });
+
+        const cleared = await agent.sessions.update(created.id, { maxSteps: null });
+        expect(cleared).not.toHaveProperty("maxSteps");
+      });
+
       it("ends a message failed with auth_required when its model provider has no credential", async () => {
         agent = await subject.start({ signedOut: true });
         const end = await ended(agent, await send({ sessionId: await newSession(agent), content: "hi" }));

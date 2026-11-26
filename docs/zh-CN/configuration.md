@@ -41,6 +41,7 @@ export default defineAgent({
 | `harness` | `"pi-durable"` | 运行时 Harness：`"pi-durable"` 或 `"dsh"`（实验性；需安装 `@fastagent-sh/harness-dsh`） |
 | `sandbox` | `"workspace"`（`dsh` 下） | `harness: "dsh"` 时的 OS 沙箱模式：`"workspace"`、`"read-only"` 或 `"off"` |
 | `codingTools` | `true` | 内置 `read`、`write`、`edit`、`bash`：`true`、`false` 或显式子集如 `["read"]` |
+| `maxSteps` | 无限制 | 单条消息允许的最大模型步数（工具轮次），超限后消息以 `incomplete` 结束（正整数；可按会话覆盖） |
 | `starters` | 无 | 最多 6 条示例开场白，通过 `info().starters` 暴露给客户端 |
 | `providers` | `[]` | 自定义模型提供商或网关（`createProvider`，可用 `needs()` 包裹密钥） |
 | `mcpServers` | 无 | Agent 可用的 [MCP 工具服务器](mcp.md) |

@@ -121,6 +121,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           model: modelSpec ?? null,
           modelError: modelError ?? null,
           thinkingLevel: config.thinkingLevel ?? null,
+          maxSteps: config.maxSteps ?? null,
           codingTools,
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
@@ -160,6 +161,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
+  if (config.maxSteps !== undefined) line("max steps", String(config.maxSteps));
   const unbuilt = "(not built: a required secret has no value)";
   line("coding tools", codingTools.join(", ") || "(none)");
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);

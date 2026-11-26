@@ -103,7 +103,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     }),
   );
   for (const raw of code.extensions) registry.install(raw as Extension);
-  const { thinkingLevel } = config;
+  const { thinkingLevel, maxSteps } = config;
   return openDurableAgent({
     storage: options.storage,
     models,
@@ -113,6 +113,7 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(model === undefined ? {} : { model }),
     ...(unusableDefault === undefined ? {} : { unusableDefault }),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+    ...(maxSteps === undefined ? {} : { maxSteps }),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),

@@ -53,6 +53,7 @@ export interface LiveSession {
   lastAnswerInTurn?: { readonly entryId: string; readonly text: string } | undefined;
   retryCounts: Map<string, number>;
   cancelRequested: boolean;
+  hitStepLimit: boolean;
   compacting: boolean;
   admitChain: Promise<void>;
   deleteLock?: Promise<void>;
@@ -91,6 +92,7 @@ export function createLiveSession(meta: DshStoredSession, dshHandle?: AgentHandl
     queuedMessages: [],
     retryCounts: new Map(),
     cancelRequested: false,
+    hitStepLimit: false,
     compacting: false,
     admitChain: Promise.resolve(),
   };
@@ -227,6 +229,7 @@ export function buildSessionSnapshotFromEvents(
     ...(live.meta.thinkingLevel !== undefined ? { thinkingLevel: live.meta.thinkingLevel } : {}),
     ...(live.meta.instructions !== undefined ? { instructions: live.meta.instructions } : {}),
     ...(live.meta.tools !== undefined ? { tools: [...live.meta.tools] } : {}),
+    ...(live.meta.maxSteps !== undefined ? { maxSteps: live.meta.maxSteps } : {}),
     ...(reply !== undefined ? { reply } : {}),
     ...(activeTools !== undefined ? { activeTools } : {}),
     ...(queuedMessages !== undefined ? { queuedMessages } : {}),

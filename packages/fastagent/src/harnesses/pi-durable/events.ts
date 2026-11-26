@@ -257,7 +257,7 @@ const shownOf = (content: Blocks) => ({ text: replyText({ content }), thinking: 
  * the next message's entry.
  */
 function sessionPropsKey(
-  agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools"> | undefined,
+  agent: Pick<AgentState, "model" | "thinkingLevel" | "instructions" | "tools" | "maxTurns"> | undefined,
   meta: SessionMetaState | undefined,
 ): string {
   return JSON.stringify([
@@ -266,6 +266,7 @@ function sessionPropsKey(
     agent?.thinkingLevel ?? null,
     agent?.instructions ?? null,
     Array.isArray(agent?.tools) ? agent.tools : null,
+    agent?.maxTurns ?? null,
   ]);
 }
 

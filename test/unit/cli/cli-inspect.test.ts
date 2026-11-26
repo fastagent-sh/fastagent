@@ -44,13 +44,21 @@ describe("cli: info", () => {
     expect(refused.stderr).toMatch(/fastagent\.config\.ts: unknown key "defaults": its keys are top-level now/);
     // The top-level shape is the one read.
     const flat = await agentWorkspace("fa-info-flat-", {
-      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", codingTools: false };\n',
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", codingTools: false, maxSteps: 8 };\n',
     });
     const read = await runInProcess(["-C", flat, "info", "--json"], undefined, withoutModel());
     expect(read.code, read.stderr).toBe(0);
     const parsed = JSON.parse(read.stdout);
     expect(parsed.model).toBe("openai/gpt-5.5");
     expect(parsed.codingTools).toEqual([]);
+    expect(parsed.maxSteps).toBe(8);
+
+    const badSteps = await agentWorkspace("fa-info-bad-steps-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", maxSteps: 0 };\n',
+    });
+    const badStepsRes = await runInProcess(["-C", badSteps, "info"], undefined, withoutModel());
+    expect(badStepsRes.code).toBe(1);
+    expect(badStepsRes.stderr).toMatch(/maxSteps/);
   });
 
   it("info says why the definition does not open, naming the module, as dev and start would refuse it", async () => {

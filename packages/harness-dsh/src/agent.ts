@@ -102,6 +102,9 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
       retryable: false,
     });
   }
+  if (options.maxSteps !== undefined && (!Number.isInteger(options.maxSteps) || options.maxSteps < 1)) {
+    throw agentError("invalid_request", `DSH maxSteps must be a positive integer, got ${String(options.maxSteps)}`);
+  }
   const sandboxMode = options.sandbox ?? "workspace";
   if (sandboxMode !== "off" && sandboxMode !== "workspace" && sandboxMode !== "read-only") {
     throw agentError("invalid_request", `invalid sandbox mode: ${String(sandboxMode)}`);
@@ -306,10 +309,12 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
         let inheritedEventCount: SessionLogOffset | undefined;
         let inheritedEntryCount = 0;
         let inheritedContextUsage: { readonly tokens: number; readonly contextWindow?: number } | undefined;
+        let inheritedMaxSteps: number | undefined;
         let parentSession: ReturnType<typeof SessionId> | undefined;
 
         if (decoded.forkFrom !== undefined) {
           const sourceLive = requireSession(state, decoded.forkFrom.sessionId);
+          inheritedMaxSteps = sourceLive.meta.maxSteps;
           const sourceEvents = await readSessionRawEvents(state, sourceLive);
           let cutSeq: number;
           if (decoded.forkFrom.entryId !== undefined) {
@@ -334,6 +339,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           }
         }
 
+        const effectiveMaxSteps = decoded.maxSteps ?? inheritedMaxSteps;
         const meta: DshStoredSession = {
           id: sessionId,
           createdAt: now,
@@ -345,6 +351,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
           ...(decoded.instructions !== undefined ? { instructions: decoded.instructions } : {}),
           ...(decoded.tools !== undefined ? { tools: [...decoded.tools] } : {}),
+          ...(effectiveMaxSteps !== undefined ? { maxSteps: effectiveMaxSteps } : {}),
           inheritedEntryCount,
           ...(inheritedContextUsage !== undefined ? { inheritedContextUsage } : {}),
           usage: emptyUsage(),
@@ -447,6 +454,14 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
               throw agentError("invalid_request", `unknown tools: ${invalid.join(", ")}`, { tools: invalid });
             }
             nextMeta = { ...nextMeta, tools: [...decoded.tools] };
+          }
+        }
+        if (decoded.maxSteps !== undefined) {
+          if (decoded.maxSteps === null) {
+            const { maxSteps: _dropped, ...rest } = nextMeta;
+            nextMeta = rest;
+          } else {
+            nextMeta = { ...nextMeta, maxSteps: decoded.maxSteps };
           }
         }
 
