@@ -79,9 +79,16 @@ export {
   defineTool,
   sessionIdOf,
   type InferToolArgs,
+  type PortableTool,
   type StandardJSONSchemaV1,
   type ToolDefinition,
+  type ToolDetails,
+  type ToolExecutionApi,
+  type ToolExecutionContext,
+  type ToolOutputLimits,
+  type ToolOutputPart,
   type ToolParameters,
+  type ToolResult,
 } from "./harnesses/tool.ts";
 export { needs, type Needs, type SecretSpec, type SecretValues } from "./needs.ts";
 export type { AgentDefinition } from "./definition/definition.ts";

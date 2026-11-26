@@ -17,9 +17,13 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import * as EffectSchema from "effect/Schema";
-import { MemoryStorage, createRegistry, defineTask, defineTool } from "@earendil-works/pi-durable";
+import { MemoryStorage, createRegistry, defineTask, defineTool, wrapTool } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool as defineFastAgentTool } from "../../../packages/fastagent/src/harnesses/tool.ts";
+import {
+  type ToolExecutionApi,
+  defineTool as defineFastAgentTool,
+  sessionIdOf,
+} from "../../../packages/fastagent/src/harnesses/tool.ts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { type DurableAgent, openDurableAgent } from "../../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
@@ -676,6 +680,81 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     expect(() => buildDefinition(def, ENV)).toThrow(
       /unconverted Standard Schema.*defineTool from "@fastagent-sh\/fastagent"/,
     );
+  });
+
+  it("executes defineTool + sessionIdOf directly in unit tests without booting any harness", async () => {
+    const stubApi: ToolExecutionApi = {
+      output: () => {},
+      executeTool: async () => ({}),
+    };
+    const whoami = defineFastAgentTool({
+      name: "whoami",
+      description: "Echo caller session",
+      parameters: { type: "object", properties: { label: { type: "string" } }, required: ["label"] } as const,
+      execute: async ({ label }, api, context) => {
+        const sid = await sessionIdOf(api, context);
+        return `${label}:${sid ?? "none"}`;
+      },
+    });
+    expect(await whoami.execute({ label: "unit" }, stubApi, { sessionId: "sess-42" })).toEqual({
+      output: [{ type: "text", text: "unit:sess-42" }],
+    });
+    expect(await whoami.execute({ label: "sub" }, stubApi, {})).toEqual({
+      output: [{ type: "text", text: "sub:none" }],
+    });
+    await expect(sessionIdOf({ commit: async () => {}, conversationId: 1 }, {})).rejects.toThrow(
+      "pi-durable tool api is missing FastAgent session binding",
+    );
+  });
+
+  it("binds sessionIdOf and preserves live api getters on direct openDurableAgent registries and wrapTool wrappers", async () => {
+    const inspectTool = defineTool({
+      name: "inspect_direct",
+      description: "Read sessionIdOf and live api.models on direct openDurableAgent",
+      parameters: obj({}),
+      execute: async (_args, api, context) => {
+        const desc = Object.getOwnPropertyDescriptor(api, "models");
+        const sid = await sessionIdOf(api, context);
+        return {
+          output: [{ type: "text", text: `${sid}:${typeof desc?.get === "function" ? "live-getter" : "snapshot"}` }],
+        };
+      },
+    });
+    let wrapperSid: string | undefined;
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("inspect_direct", {})], { stopReason: "toolUse" }),
+      (context) => fauxAssistantMessage(lastToolResult(context)),
+    ]);
+    const registry = createRegistry();
+    registry.install({ name: "direct", tools: [inspectTool] });
+    registry.install({
+      name: "wrapper",
+      wraps: [
+        wrapTool(inspectTool, (base) => ({
+          ...base,
+          execute: async (args, api, context) => {
+            wrapperSid = await sessionIdOf(api, context);
+            return base.execute(args, api, context);
+          },
+        })),
+      ],
+    });
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
+      registry,
+      name: "direct-test",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      const session = await agent.sessions.create();
+      const msg = await agent.messages.send({ sessionId: session.id, content: "check" }, { wait: 15 });
+      expect(msg.answer?.text).toBe(`${session.id}:live-getter`);
+      expect(wrapperSid).toBe(session.id);
+    } finally {
+      await agent.close();
+    }
   });
 });
 

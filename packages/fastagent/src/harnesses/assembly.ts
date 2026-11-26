@@ -4,7 +4,6 @@
  */
 import { basename, resolve } from "node:path";
 import type { Models, Provider } from "@earendil-works/pi-ai";
-import type { Extension, ToolRegistration } from "@earendil-works/pi-durable";
 import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import { describeSecrets, missingSecrets } from "../declared-secrets.ts";
 import { type AgentDefinition, DEFINITION_FORMAT, codeSecrets, defineDefinition } from "../definition/definition.ts";
@@ -74,7 +73,7 @@ function built<T>(
 }
 
 const toolProblem = (value: unknown): string | undefined => {
-  const tool = value as Partial<ToolRegistration> | null;
+  const tool = value as Partial<AuthoredTool> | null;
   if (
     tool?.parameters !== null &&
     (typeof tool?.parameters === "object" || typeof tool?.parameters === "function") &&
@@ -96,7 +95,7 @@ const toolProblem = (value: unknown): string | undefined => {
 };
 
 const extensionProblem = (value: unknown): string | undefined =>
-  typeof (value as Partial<Extension> | null)?.name === "string"
+  typeof (value as Partial<AuthoredExtension> | null)?.name === "string"
     ? undefined
     : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
 
@@ -114,10 +113,31 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
   }
 }
 
+/** Minimal structural shape shared by portable `defineTool` registrations and `pi-durable` tools. */
+export interface AuthoredTool {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: object;
+  readonly outputLimits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" };
+  readonly replay?: "safe" | "unsafe";
+  prepareArguments?(args: unknown): unknown;
+  execute(
+    args: unknown,
+    api: never,
+    context: never,
+  ): Promise<{ readonly output?: ReadonlyArray<{ readonly type: string }> }>;
+}
+
+/** Minimal structural shape validated for `src/extensions/*` modules (`pi-durable`-specific). */
+interface AuthoredExtension {
+  readonly name: string;
+  readonly tools?: readonly { readonly name: string }[];
+}
+
 /** The definition's code, built with the values of the secrets it declares. */
 export interface BuiltDefinition {
-  tools: ToolRegistration[];
-  extensions: Extension[];
+  tools: AuthoredTool[];
+  extensions: AuthoredExtension[];
   providers: Provider[];
 }
 
@@ -141,12 +161,12 @@ export function validateDefinitionStatic(definition: AgentDefinition): void {
   const { registry, config } = definition;
   const tools: { source: string; name: string }[] = [];
   for (const { file, value } of registry.tools) {
-    const resolved = checkStatic<ToolRegistration>(file, value, toolProblem);
+    const resolved = checkStatic<AuthoredTool>(file, value, toolProblem);
     if (resolved !== undefined) tools.push({ source: file, name: resolved.name });
   }
   const extensions: { source: string; name: string }[] = [];
   for (const { file, value } of registry.extensions) {
-    const resolved = checkStatic<Extension>(file, value, extensionProblem);
+    const resolved = checkStatic<AuthoredExtension>(file, value, extensionProblem);
     if (resolved !== undefined) extensions.push({ source: file, name: resolved.name });
   }
   refuseTwins("tool", tools);
@@ -175,11 +195,11 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const { registry, config } = definition;
   const tools = registry.tools.map(({ file, value }) => ({
     source: file,
-    ...named(built<ToolRegistration>(file, value, values(value), toolProblem)),
+    ...named(built<AuthoredTool>(file, value, values(value), toolProblem)),
   }));
   const extensions = registry.extensions.map(({ file, value }) => ({
     source: file,
-    ...named(built<Extension>(file, value, values(value), extensionProblem)),
+    ...named(built<AuthoredExtension>(file, value, values(value), extensionProblem)),
   }));
   refuseTwins("tool", tools);
   const codingTools = resolveCodingTools(config.codingTools);

@@ -10,6 +10,7 @@ import {
   type ToolRegistration,
   createRegistry,
   defineExtension,
+  section,
 } from "@earendil-works/pi-durable";
 import {
   CodingTools,
@@ -33,6 +34,7 @@ import {
 import { agentPresentation, resolveCodingTools } from "../config.ts";
 import { CODING_TOOL_NAMES, type CodingToolName } from "../define.ts";
 import { definitionSections, readCommands } from "../text.ts";
+import type { PortableTool } from "../tool.ts";
 import { type DurableAgent, openDurableAgent } from "./agent.ts";
 import { InstanceExecutionEnv } from "./execution-env.ts";
 
@@ -42,7 +44,7 @@ export interface AssembleAgentOptions {
   name?: string;
   workdir?: string;
   code: BuiltDefinition;
-  mcpTools?: ToolRegistration[];
+  mcpTools?: readonly PortableTool[];
   models: Models;
   model?: string;
   settings?: HarnessSettings;
@@ -81,19 +83,20 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const builtinCoding = codingToolsExtension(selectedCodingTools);
   const registry = createRegistry();
   if (builtinCoding !== undefined) registry.install(builtinCoding);
+  const sections = definitionSections(dir, {
+    runsAs: options.runsAs,
+    workdir: options.workdir ?? dir,
+    source: definition.source === true,
+    codingTools: selectedCodingTools,
+  }).map((entry) => section(entry.key, () => entry.render(), entry.tag === undefined ? undefined : { tag: entry.tag }));
   registry.install(
     defineExtension({
       name: DEFINITION_EXTENSION,
-      sections: definitionSections(dir, {
-        runsAs: options.runsAs,
-        workdir: options.workdir ?? dir,
-        source: definition.source === true,
-        codingTools: selectedCodingTools,
-      }),
-      tools: [...code.tools, ...(options.mcpTools ?? [])],
+      sections,
+      tools: [...code.tools, ...(options.mcpTools ?? [])] as ToolRegistration[],
     }),
   );
-  for (const extension of code.extensions) registry.install(extension);
+  for (const raw of code.extensions) registry.install(raw as Extension);
   const { thinkingLevel } = config;
   return openDurableAgent({
     storage: options.storage,

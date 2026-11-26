@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { defineTool } from "@fastagent-sh/fastagent";
+import { defineTool, sessionIdOf } from "@fastagent-sh/fastagent";
 import { MemoryDshEventStore, openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
 import { DshInstanceHeldError, openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
 import {
@@ -88,6 +88,54 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
     expect(bridged.output.render?.({} as never, out as never)).toEqual([{ type: "text", text: "Hello, Ada!" }]);
 
     await expect(bridged.execute({ name: 123 }, execCtx)).rejects.toThrow(/Invalid arguments/);
+
+    const innerTool = defineTool({
+      name: "inner_sid",
+      description: "Read session id inside nested executeTool",
+      parameters: { type: "object", properties: {} } as const,
+      execute: async (_args, api, ctx) => `sid=${await sessionIdOf(api, ctx)}`,
+    });
+    const outerTool = defineTool({
+      name: "outer_stream",
+      description: "Nested executeTool + maxLines output retention",
+      parameters: { type: "object", properties: {} } as const,
+      outputLimits: { maxLines: 2, retain: "tail" },
+      execute: async (_args, api, ctx) => {
+        const nested = (await api.executeTool("inner_sid", {}, ctx)) as {
+          readonly output?: ReadonlyArray<{ readonly text?: string }>;
+        };
+        api.output("l1\nl2\nl3\n");
+        api.output(`${nested.output?.[0]?.text ?? "missing"}\n`);
+        return {};
+      },
+    });
+    const headStreamTool = defineTool({
+      name: "head_stream",
+      description: "Head maxLines output retention across chunks",
+      parameters: { type: "object", properties: {} } as const,
+      outputLimits: { maxLines: 2, retain: "head" },
+      execute: async (_args, api) => {
+        api.output("h1\nh2\n");
+        api.output("h3\n");
+        api.output("h4\n");
+        return {};
+      },
+    });
+    const toolsByName = new Map([
+      [innerTool.name, innerTool],
+      [outerTool.name, outerTool],
+      [headStreamTool.name, headStreamTool],
+    ]);
+    const bridgedOuter = bridgeDshRuntimeTool(outerTool, { toolsByName, onProgress: () => {} });
+    const bridgedHead = bridgeDshRuntimeTool(headStreamTool, { toolsByName, onProgress: () => {} });
+    const nestedExecCtx = {
+      callId: "tc-2",
+      agent: { id: "dsh-sess-9" },
+      signal: new AbortController().signal,
+      concludeTurn: () => {},
+    } as never;
+    expect(await bridgedOuter.execute({}, nestedExecCtx)).toEqual({ text: "l3\nsid=dsh-sess-9" });
+    expect(await bridgedHead.execute({}, nestedExecCtx)).toEqual({ text: "h1\nh2" });
   });
 
   it("buildDshSandboxPolicy produces fail-closed policies for workspace, read-only, and off modes", () => {
