@@ -12,6 +12,7 @@ import type {
   ThinkingLevel,
   Usage,
 } from "@fastagent-sh/client/agent-api";
+import type { AgentCommand, AuthoredTool, HarnessTelemetryContext } from "@fastagent-sh/fastagent/harness";
 
 /** OS sandbox posture for DSH filesystem and shell tools. */
 export type DshSandboxMode = "off" | "workspace" | "read-only";
@@ -143,60 +144,11 @@ export interface DshEventStoreBackend {
 /** Runtime helper object passed to FastAgent tools (`defineTool`). */
 export interface FastAgentToolApi {
   output?(chunk: string): void;
-  executeTool?(name: string, args: unknown, context?: { readonly abortSignal?: AbortSignal }): Promise<unknown>;
-}
-
-/** Minimal tool shape produced by `defineTool` from `@fastagent-sh/fastagent` (or `@earendil-works/pi-durable`). */
-export interface FastAgentToolLike {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: object;
-  readonly outputLimits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" };
-  execute(
-    args: never,
-    api: never,
-    context: never,
-  ): Promise<{
-    readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-    readonly details?: unknown;
-    readonly isError?: boolean;
-    readonly control?: { readonly terminate?: boolean };
-  }>;
-}
-
-/** Slash command advertised by `info().commands` and expanded before reaching the model. */
-export interface DshCommand {
-  readonly name: string;
-  readonly description?: string;
-  expand(args: string): string;
-}
-
-/** Minimal structural telemetry span compatible with `@earendil-works/pi-telemetry` without depending on it. */
-export interface DshTelemetrySpan {
-  startSpan<T>(
-    options: {
-      readonly name: string;
-      readonly attributes?: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>;
-    },
-    callback: (span: DshTelemetrySpan) => T | Promise<T>,
-  ): Promise<T>;
-  setAttributes(attributes: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>): void;
-  setStatus(
-    status:
-      | { readonly status: "ok" }
-      | { readonly status: "error"; readonly error?: { readonly name: string; readonly message: string } },
-  ): void;
-}
-
-/** Minimal structural telemetry context compatible with `@earendil-works/pi-telemetry` without depending on it. */
-export interface DshTelemetryContext {
-  startSpan<T>(
-    options: {
-      readonly name: string;
-      readonly attributes?: Readonly<Record<string, string | number | boolean | readonly string[] | undefined>>;
-    },
-    callback: (span: DshTelemetrySpan) => T | Promise<T>,
-  ): Promise<T>;
+  executeTool?(
+    name: string,
+    args: unknown,
+    context?: { readonly abortSignal?: AbortSignal; readonly sessionId?: string },
+  ): Promise<unknown>;
 }
 
 /** Retry policy for transient model call failures. */
@@ -225,7 +177,7 @@ export interface DshHarnessOptions {
   readonly unusableDefault?: { readonly spec: string; readonly reason: string };
   readonly thinkingLevel?: ThinkingLevel;
   /** Portable FastAgent tools to bridge into DSH's `ToolsService`. */
-  readonly tools?: readonly FastAgentToolLike[];
+  readonly tools?: readonly AuthoredTool[];
   /** Built-in sandboxed coding tools (`read`, `write`, `edit`, `bash`). Default: `false`. */
   readonly codingTools?: boolean | readonly DshCodingToolName[];
   /** Absolute paths inside `workdir` that `write` and `edit` must never modify (e.g. `.fastagent`). */
@@ -233,7 +185,7 @@ export interface DshHarnessOptions {
   /** Sanitized environment variables passed to sandboxed shell commands. Defaults to process.env when omitted. */
   readonly env?: Readonly<Record<string, string>>;
   /** Slash commands offered by `info().commands`. */
-  readonly commands?: () => readonly DshCommand[];
+  readonly commands?: () => readonly AgentCommand[];
   /** Retry policy for transient model failures. */
   readonly retry?: DshRetryOptions;
   /** OS sandbox posture for local shell/filesystem tools. Default: `"workspace"`. */
@@ -245,7 +197,7 @@ export interface DshHarnessOptions {
   /** Maximum serialized message size accepted by the backing storage. */
   readonly maxMessageBytes?: number;
   /** Optional telemetry context for exporting content-free model and tool run spans. */
-  readonly telemetry?: DshTelemetryContext;
+  readonly telemetry?: HarnessTelemetryContext;
   /** Event log + ledger storage backend. Defaults to in-memory storage when omitted. */
   readonly storage?: DshEventStoreBackend;
 }

@@ -2,6 +2,7 @@
  * `pi-durable` agent assembler: takes an already-built definition (`harnesses/assembly.ts`) and opens a
  * `DurableAgent` over `pi-durable` with its coding tools, authored tools, MCP tools, extensions, and execution env.
  */
+import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Models } from "@earendil-works/pi-ai";
 import {
   type Extension,
@@ -47,6 +48,10 @@ export interface AssembleAgentOptions {
   mcpTools?: readonly PortableTool[];
   models: Models;
   model?: string;
+  resolvedModel?: {
+    readonly model?: ModelRef;
+    readonly unusableDefault?: NonNullable<AgentInfo["unusableDefault"]>;
+  };
   settings?: HarnessSettings;
   unfinished?: Unfinished;
   processEnv: Readonly<Record<string, string>>;
@@ -77,7 +82,8 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
   const { dir, config } = definition;
   const { code, models } = options;
   const spec = options.model ?? config.model;
-  const { model, unusableDefault } = resolveDefaultModel(spec, options.model !== undefined, models);
+  const { model, unusableDefault } =
+    options.resolvedModel ?? resolveDefaultModel(spec, options.model !== undefined, models);
   assertNoMcpToolConflicts(code, options.mcpTools ?? []);
   const selectedCodingTools = resolveCodingTools(config.codingTools);
   const builtinCoding = codingToolsExtension(selectedCodingTools);

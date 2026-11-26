@@ -4,25 +4,20 @@ import { join } from "node:path";
 import * as EffectSchema from "effect/Schema";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineTool, sessionIdOf } from "@fastagent-sh/fastagent";
+import { InstanceHeld, classifyPiAiError, createEventChannel } from "@fastagent-sh/fastagent/harness";
 import { MemoryDshEventStore, openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
-import { DshInstanceHeldError, openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
+import { openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
+import { harnessProvider } from "@fastagent-sh/harness-dsh/provider";
 import {
   buildDshSandboxPolicy,
   resolveConfinedPath,
   verifyBashSandbox,
 } from "../../../packages/harness-dsh/src/sandbox.ts";
-import { classifyPiError } from "../../../packages/harness-dsh/src/llm-pi-ai.ts";
 import { classifyLlmFailure, isRetryableLlmFailure } from "../../../packages/harness-dsh/src/projection.ts";
 import { bridgeDshRuntimeTool } from "../../../packages/harness-dsh/src/tools.ts";
 import { openPgDatabase, openPostgresDatabase } from "../../../packages/fastagent/src/postgres.ts";
-import {
-  acquirePgInstanceLease,
-  isPgConflict,
-  migratePgSchema,
-  splitPgText,
-} from "../../../packages/fastagent/src/postgres-kit.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
-import { openAgent } from "../../../packages/fastagent/src/harnesses/serving.ts";
+import { openAgent, resolveHarnessProvider } from "../../../packages/fastagent/src/harnesses/serving.ts";
 import { type ServedPostgres, freshInstance, servedPostgres } from "../../doubles/postgres-double.ts";
 import { agentApiConformance } from "../../harnesses/agent-api-conformance.ts";
 import { dshSubject } from "../../harnesses/dsh-subject.ts";
@@ -156,6 +151,8 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
   });
 
   it("openDshAgent validates options up front and boots a live Cordis agent", async () => {
+    expect(harnessProvider.name).toBe("dsh");
+    expect(harnessProvider.supportsExtensions).toBe(false);
     await expect(openDshAgent({ name: "", workdir: "/srv/agent" })).rejects.toMatchObject({
       code: "invalid_request",
     });
@@ -478,12 +475,6 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
 });
 
 describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
-  const pgKit = {
-    migrate: migratePgSchema,
-    acquireLease: acquirePgInstanceLease,
-    splitText: splitPgText,
-    isConflict: isPgConflict,
-  } as const;
   let postgres: ServedPostgres;
   beforeAll(async () => {
     postgres = await servedPostgres();
@@ -496,13 +487,13 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
     const instanceB = freshInstance();
     try {
       // Single-writer lease fencing: second live holder refused, close releases immediately, expired lease taken over.
-      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, owner: "holder-1", kit: pgKit });
+      const held = await openPostgresDshStore(db, instanceA, { leaseMs: 5_000, owner: "holder-1" });
       await expect(
-        openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2", kit: pgKit }),
-      ).rejects.toThrow(DshInstanceHeldError);
+        openPostgresDshStore(db, instanceA, { leaseMs: 5_000, waitMs: 0, owner: "holder-2" }),
+      ).rejects.toThrow(InstanceHeld);
 
       // Multi-instance isolation on the same database.
-      const other = await openPostgresDshStore(db, instanceB, { leaseMs: 5_000, owner: "holder-b", kit: pgKit });
+      const other = await openPostgresDshStore(db, instanceB, { leaseMs: 5_000, owner: "holder-b" });
       const hA = await held.create({ version: 4, id: "shared-id", createdAt: 1, isSeeded: false });
       const hB = await other.create({ version: 4, id: "shared-id", createdAt: 2, isSeeded: false });
       await hA.append([{ seq: 0, type: "turn/start", data: { turn: 1 } }]);
@@ -523,7 +514,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         leaseMs: 5_000,
         waitMs: 0,
         owner: "holder-2",
-        kit: pgKit,
       });
       await expect(hA.append([{ seq: 1, type: "turn/end", data: { turn: 1 } }])).rejects.toThrow(/lease.*lost/);
       await expect(
@@ -547,7 +537,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         leaseMs: 5_000,
         waitMs: 0,
         owner: "holder-watched",
-        kit: pgKit,
         onLost: (error) => {
           lostReason = error;
         },
@@ -559,7 +548,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         leaseMs: 5_000,
         waitMs: 0,
         owner: "holder-takeover",
-        kit: pgKit,
       });
       const hWatched = await watchedHolder
         .create({ version: 4, id: "lost-id", createdAt: 1, isSeeded: false })
@@ -602,7 +590,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         return { models, model: { provider: "pg", modelId: core.getModel().id } };
       };
 
-      const store1 = await openPostgresDshStore(db, freshInstance(), { kit: pgKit });
+      const store1 = await openPostgresDshStore(db, freshInstance());
       const { models: m1, model } = makeModels();
       const agent1 = await openDshAgent({
         name: "pg-agent",
@@ -635,7 +623,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
       await store1.close();
 
       // Reopen a fresh store + fresh DSH agent on the same Postgres instance.
-      const store2 = await openPostgresDshStore(db, pgInstanceName, { kit: pgKit });
+      const store2 = await openPostgresDshStore(db, pgInstanceName);
       const { models: m2 } = makeModels();
       const agent2 = await openDshAgent({
         name: "pg-agent",
@@ -678,7 +666,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           leaseMs: 5_000,
           waitMs: 0,
           owner: "thief",
-          kit: pgKit,
         });
         await expect(openedPg.sessions.create()).rejects.toThrow(/lease.*lost/);
         await thief.close();
@@ -755,12 +742,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           limits: tightLimits,
           onLost: (err) => {
             unexpectedLost = err;
-          },
-          kit: {
-            migrate: migratePgSchema,
-            acquireLease: acquirePgInstanceLease,
-            splitText: splitPgText,
-            isConflict: isPgConflict,
           },
         });
         txQueries.length = 0;
@@ -881,7 +862,6 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           leaseMs: 5_000,
           waitMs: 0,
           owner: "prior-holder",
-          kit: pgKit,
         });
         const releaseTimer = setTimeout(() => {
           void priorHolder.close();
@@ -1193,19 +1173,19 @@ export default defineTool({
   it("classifies pi-ai errors via HTTP status and pi-ai retry rules without misclassifying 400s as auth", () => {
     const errMsg = (errorMessage: string) => ({ stopReason: "error", errorMessage }) as never;
 
-    expect(classifyPiError(errMsg("Bad request mentioning api key field"), 400)).toEqual({
+    expect(classifyPiAiError(errMsg("Bad request mentioning api key field"), 400)).toEqual({
       code: "PI_AI_ERROR",
       status: 400,
     });
-    expect(classifyPiError(errMsg("Forbidden"), 401)).toEqual({ code: "AUTH", status: 401 });
-    expect(classifyPiError(errMsg("Too many requests"), 429)).toEqual({ code: "RATE_LIMIT", status: 429 });
-    expect(classifyPiError(errMsg("You exceeded your current quota (insufficient_quota)"), 429)).toEqual({
+    expect(classifyPiAiError(errMsg("Forbidden"), 401)).toEqual({ code: "AUTH", status: 401 });
+    expect(classifyPiAiError(errMsg("Too many requests"), 429)).toEqual({ code: "RATE_LIMIT", status: 429 });
+    expect(classifyPiAiError(errMsg("You exceeded your current quota (insufficient_quota)"), 429)).toEqual({
       code: "PI_AI_ERROR",
       status: 429,
     });
-    expect(classifyPiError(errMsg("Cloudflare SSL handshake failed"), 525)).toEqual({ code: "SERVER", status: 525 });
-    expect(classifyPiError(errMsg("request rate increased too quickly"))).toEqual({ code: "SERVER", status: 503 });
-    expect(classifyPiError(errMsg("Provider returned an empty response"))).toEqual({ code: "SERVER", status: 503 });
+    expect(classifyPiAiError(errMsg("Cloudflare SSL handshake failed"), 525)).toEqual({ code: "SERVER", status: 525 });
+    expect(classifyPiAiError(errMsg("request rate increased too quickly"))).toEqual({ code: "SERVER", status: 503 });
+    expect(classifyPiAiError(errMsg("Provider returned an empty response"))).toEqual({ code: "SERVER", status: 503 });
 
     const quotaExhausted = { message: "insufficient_quota", code: "PI_AI_ERROR", status: 429 };
     expect(isRetryableLlmFailure(quotaExhausted)).toBe(false);
@@ -1222,6 +1202,87 @@ export default defineTool({
       message: "upstream 525",
       retryable: true,
     });
+  });
+
+  it("resolveHarnessProvider falls back to projectDir, preserves inner ERR_MODULE_NOT_FOUND, and validates openAgent", async () => {
+    const missingSelf = (): string => {
+      const err = Object.assign(new Error("Cannot find package '@fastagent-sh/harness-dsh'"), {
+        code: "ERR_MODULE_NOT_FOUND",
+      });
+      throw err;
+    };
+    const emptyDir = mkdtempSync(join(tmpdir(), "fa-provider-empty-"));
+    const localPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-local-"));
+    const brokenPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-broken-"));
+    const invalidPkgDir = mkdtempSync(join(tmpdir(), "fa-provider-invalid-"));
+    try {
+      writeFileSync(join(emptyDir, "package.json"), JSON.stringify({ name: "empty", type: "module" }));
+      await expect(resolveHarnessProvider("dsh", emptyDir, missingSelf)).rejects.toThrow(
+        'harness "dsh" requires @fastagent-sh/harness-dsh. Install it in your project: npm install @fastagent-sh/harness-dsh',
+      );
+
+      // Resolves from projectDir/node_modules when non-hoisted / absent from @fastagent-sh/fastagent's own root.
+      const setupLocalProvider = (root: string, source: string) => {
+        writeFileSync(join(root, "package.json"), JSON.stringify({ name: "app", type: "module" }));
+        const pkgDir = join(root, "node_modules", "@fastagent-sh", "harness-dsh");
+        mkdirSync(pkgDir, { recursive: true });
+        writeFileSync(
+          join(pkgDir, "package.json"),
+          JSON.stringify({
+            name: "@fastagent-sh/harness-dsh",
+            type: "module",
+            exports: { "./provider": "./provider.js" },
+          }),
+        );
+        writeFileSync(join(pkgDir, "provider.js"), source);
+      };
+
+      setupLocalProvider(
+        localPkgDir,
+        `export const harnessProvider = { name: "dsh", openStorage: () => ({ close() {} }), openAgent: async () => ({}) };\n`,
+      );
+      const loaded = await resolveHarnessProvider("dsh", localPkgDir, missingSelf);
+      expect(loaded.name).toBe("dsh");
+
+      // Preserves internal ERR_MODULE_NOT_FOUND from inside an installed plugin instead of claiming the plugin is missing.
+      setupLocalProvider(brokenPkgDir, `import "@deepseek-ai/nonexistent-internal-dep";\n`);
+      const brokenErr = await resolveHarnessProvider("dsh", brokenPkgDir, missingSelf).catch((err: unknown) => err);
+      expect(brokenErr).toBeInstanceOf(Error);
+      expect((brokenErr as Error).message).toContain("@deepseek-ai/nonexistent-internal-dep");
+      expect((brokenErr as Error).message).not.toContain("npm install @fastagent-sh/harness-dsh");
+
+      // Rejects incomplete provider missing openAgent() before touching storage or MCP.
+      setupLocalProvider(
+        invalidPkgDir,
+        `export const harnessProvider = { name: "dsh", openStorage: () => ({ close() {} }) };\n`,
+      );
+      await expect(resolveHarnessProvider("dsh", invalidPkgDir, missingSelf)).rejects.toThrow(
+        "@fastagent-sh/harness-dsh/provider does not export a valid harnessProvider",
+      );
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+      rmSync(localPkgDir, { recursive: true, force: true });
+      rmSync(brokenPkgDir, { recursive: true, force: true });
+      rmSync(invalidPkgDir, { recursive: true, force: true });
+    }
+  });
+
+  it("createEventChannel invokes onClose at most once even when ended before iteration starts", async () => {
+    let closedCount = 0;
+    const { watcher, iterable } = createEventChannel<number>(() => {
+      closedCount += 1;
+    });
+    watcher.push(1);
+    watcher.push(2);
+    watcher.end();
+    expect(closedCount).toBe(1);
+
+    const drained: number[] = [];
+    for await (const value of iterable) {
+      drained.push(value);
+    }
+    expect(drained).toEqual([1, 2]);
+    expect(closedCount).toBe(1);
   });
 });
 

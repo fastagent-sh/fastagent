@@ -17,13 +17,9 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
+import type { AuthoredTool } from "@fastagent-sh/fastagent/harness";
 import { openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
-import type {
-  DshAgent,
-  DshEventStoreBackend,
-  FastAgentToolApi,
-  FastAgentToolLike,
-} from "../../packages/harness-dsh/src/types.ts";
+import type { DshAgent, DshEventStoreBackend, FastAgentToolApi } from "../../packages/harness-dsh/src/types.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -214,7 +210,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
   let signalled = 0;
   let signedOut = false;
 
-  const holdTool = (name: string, description: string, before: () => void): FastAgentToolLike => ({
+  const holdTool = (name: string, description: string, before: () => void): AuthoredTool => ({
     name,
     description,
     parameters: { type: "object", properties: {} },
@@ -233,10 +229,10 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
           { once: true },
         );
       });
-    }) as FastAgentToolLike["execute"],
+    }) as AuthoredTool["execute"],
   });
 
-  const allTools: FastAgentToolLike[] = [
+  const allTools: AuthoredTool[] = [
     holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
     holdTool("mark", "Has an effect the test counts, then waits like hold", () => {
       effects++;
@@ -249,7 +245,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
         new Promise((resolve) => {
           held.push(() => resolve({ output: [{ type: "text", text: "done" }] }));
           context.abortSignal?.addEventListener("abort", () => signalled++, { once: true });
-        })) as FastAgentToolLike["execute"],
+        })) as AuthoredTool["execute"],
     },
     {
       name: "effect",
@@ -258,7 +254,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       execute: (async () => {
         effects++;
         return { output: [{ type: "text", text: `effect ${effects}` }], details: { count: effects } };
-      }) as FastAgentToolLike["execute"],
+      }) as AuthoredTool["execute"],
     },
     {
       name: "stream",
@@ -271,7 +267,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
         return {};
-      }) as FastAgentToolLike["execute"],
+      }) as AuthoredTool["execute"],
     },
     {
       name: "nested",
@@ -284,7 +280,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       ) => {
         await api.executeTool?.("lookup", { city: "London" }, context);
         return { output: [{ type: "text", text: "looked up" }] };
-      }) as FastAgentToolLike["execute"],
+      }) as AuthoredTool["execute"],
     },
     {
       name: "lookup",
@@ -293,7 +289,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       execute: (async (args: { city: string }) => {
         await new Promise((resolve) => setTimeout(resolve, 25));
         return { output: [{ type: "text", text: `found ${args.city}` }] };
-      }) as FastAgentToolLike["execute"],
+      }) as AuthoredTool["execute"],
     },
     {
       name: "finish",
@@ -302,7 +298,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       execute: (async () => ({
         output: [{ type: "text", text: "finished" }],
         control: { terminate: true },
-      })) as FastAgentToolLike["execute"],
+      })) as AuthoredTool["execute"],
     },
   ];
 

@@ -10,12 +10,12 @@ import {
   type ThinkingLevel,
   agentError,
 } from "@fastagent-sh/client/agent-api";
+import type { AgentCommand } from "@fastagent-sh/fastagent/harness";
 import { IMAGE_REF_PREFIX } from "./llm-pi-ai.ts";
-import type { DshCommand } from "./types.ts";
 
 export const DEFAULT_THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
-function expandCommandText(text: string, commands: readonly DshCommand[]): string {
+function expandCommandText(text: string, commands: readonly AgentCommand[]): string {
   if (!text.startsWith("/")) return text;
   const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(text);
   if (match === null) return text;
@@ -26,7 +26,7 @@ function expandCommandText(text: string, commands: readonly DshCommand[]): strin
 
 export function normalizeSendContent(
   content: SendRequest["content"],
-  commands: readonly DshCommand[],
+  commands: readonly AgentCommand[],
 ): {
   readonly rawParts: readonly ContentPart[];
   readonly expandedParts: readonly ContentPart[];

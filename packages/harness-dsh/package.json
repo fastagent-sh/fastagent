@@ -27,11 +27,26 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "provider": [
+        "./dist/provider.d.ts"
+      ],
+      "internal": [
+        "./dist/internal.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "@fastagent-sh/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./provider": {
+      "@fastagent-sh/source": "./src/provider.ts",
+      "types": "./dist/provider.d.ts",
+      "default": "./dist/provider.js"
     },
     "./internal": {
       "@fastagent-sh/source": "./src/internal.ts",
@@ -69,5 +84,13 @@
     "@deepseek-ai/dsh-tools": "0.2.2-rc.5",
     "@earendil-works/pi-ai": "1.6.1",
     "@fastagent-sh/client": "0.36.2"
+  },
+  "peerDependencies": {
+    "@fastagent-sh/fastagent": "0.36.2"
+  },
+  "peerDependenciesMeta": {
+    "@fastagent-sh/fastagent": {
+      "optional": true
+    }
   }
 }

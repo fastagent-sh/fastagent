@@ -43,6 +43,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./harness": {
+      "@fastagent-sh/source": "./src/harness.ts",
+      "types": "./dist/harness.d.ts",
+      "default": "./dist/harness.js"
+    },
     "./platform": {
       "@fastagent-sh/source": "./src/platform.ts",
       "types": "./dist/platform.d.ts",

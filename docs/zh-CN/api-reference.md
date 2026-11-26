@@ -35,6 +35,7 @@ FastAgent 发布 6 个版本号同步锁定的 npm 包，你可以按角色只�
 
 | 入口路径 | 用途 | 核心导出 |
 | --- | --- | --- |
+| **`@fastagent-sh/fastagent/harness`** | 构建可插拔运行时 Harness 适配器（`@fastagent-sh/harness-<name>/provider`） | `HarnessProvider`、`HarnessStorageOpenContext`、`HarnessAgentOpenContext`、`adaptToolRejectingPark`、`retainToolOutput`、`createEventChannel`、`classifyPiAiError`、`toPiThinkingLevel`、`migratePgSchema`、`acquirePgInstanceLease`、`InstanceHeld`、`splitPgText`、`isPgConflict` |
 | **`@fastagent-sh/fastagent/platform`** | 构建自定义 `fastagent deploy init <target>` 与运行时 CLI 扩展 | `ExtensionCli`、`ContainerTarget`、`agentFacts`、`writeContainer`、`buildContextLeaks`、`loadAgentBuild`、`invokeOverApi`、`readInvokeMessage`、`modelRefOf`、`DATABASE_URL_ENV`、`Unavailable`、`PostgresDatabase`、`PostgresLimits`、`CreateIndex`、`PgExecutor` |
 | **`@fastagent-sh/client/remotes`** | 构建可插拔 `remotes.json` 传输协议包（`@fastagent-sh/client-<type>`） | `RemotesFile`、`RemoteConfig`、`HttpRemoteConfig`、`ExtensionRemoteConfig`、`RemoteConnection`、`resolveRemotesPath`、`parseRemotesJson`、`upsertRemoteConfig`、`removeRemoteConfig`、`setDefaultRemoteConfig`、`expandRemoteEnvRef`、`connectExtensionRemote` |
 | **`@fastagent-sh/client/agent-api`** | 直接校验或组合 Agent API 的 Effect Schema | 全部 Agent API 类型、事件、认证流程的 Effect Schema、`AgentError`、`LIMITS`、`hasEnded`、`decodeRequest` |

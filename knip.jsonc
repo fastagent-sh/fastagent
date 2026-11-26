@@ -46,7 +46,8 @@
     },
     "packages/harness-dsh": {
       "project": ["src/**/*.ts"],
-      "includeEntryExports": true
+      "includeEntryExports": true,
+      "ignoreDependencies": ["@fastagent-sh/fastagent"]
     }
   },
   // `tsc` is the fastagent package's devDependency, the TypeScript `fastagent build` gives an agent, installed at the

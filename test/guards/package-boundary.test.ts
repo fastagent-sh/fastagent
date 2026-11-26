@@ -175,20 +175,17 @@ describe("harness neutrality: the Agent API's server imports no harness package"
     expect(offenders).toEqual([]);
   });
 
-  it("harnesses/pi-durable/ and harnesses/dsh/ never import each other (shared orchestration lives in harnesses/)", () => {
-    const piDir = resolve(srcOf("fastagent"), "harnesses/pi-durable");
-    const dshDir = resolve(srcOf("fastagent"), "harnesses/dsh");
-    const piToDsh = filesUnder(piDir).flatMap((file) =>
-      importsOf(file)
-        .relatives.filter((target) => target.startsWith(`${dshDir}/`))
-        .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
-    );
-    const dshToPi = filesUnder(dshDir).flatMap((file) =>
-      importsOf(file)
-        .relatives.filter((target) => target.startsWith(`${piDir}/`))
-        .map((target) => `${relative(repo, file)} → ${relative(repo, target)}`),
-    );
-    expect([...piToDsh, ...dshToPi]).toEqual([]);
+  it("@fastagent-sh/fastagent/harness stays free of pi-durable, chord, and @deepseek-ai/*", () => {
+    const harnessEntry = resolve(srcOf("fastagent"), "harness.ts");
+    const reached = [...staticPackageGraph(harnessEntry)];
+    expect(
+      reached.filter(
+        (spec) =>
+          spec.startsWith("@earendil-works/pi-durable") ||
+          spec.startsWith("@earendil-works/chord") ||
+          spec.startsWith("@deepseek-ai/"),
+      ),
+    ).toEqual([]);
   });
 
   it("only harnesses/pi-durable/ imports @earendil-works/pi-durable or @earendil-works/chord across all packages", () => {
@@ -250,9 +247,9 @@ describe("public entries", () => {
     }
   });
 
-  it("platform-only Postgres adapter types and build-only defineDefinition stay off the fastagent root entry", () => {
+  it("platform-only Postgres adapter types, HarnessProvider, and build-only defineDefinition stay off the fastagent root entry", () => {
     const rootEntry = readFileSync(resolve(srcOf("fastagent"), "index.ts"), "utf8");
-    for (const symbol of ["PostgresLimits", "CreateIndex", "PgExecutor", "defineDefinition"]) {
+    for (const symbol of ["PostgresLimits", "CreateIndex", "PgExecutor", "defineDefinition", "HarnessProvider"]) {
       expect(rootEntry).not.toMatch(new RegExp(`\\b${symbol}\\b`));
     }
     const internalEntry = readFileSync(resolve(srcOf("fastagent"), "internal.ts"), "utf8");

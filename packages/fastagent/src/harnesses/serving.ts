@@ -3,15 +3,16 @@
  * model environment, MCP clients, and remote auth manager once, then delegates runtime construction to the
  * selected harness (`pi-durable` or `dsh`).
  */
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import type { Agent, InvokeApi } from "@fastagent-sh/client/agent-api";
-import type { TelemetryContext } from "@earendil-works/pi-telemetry";
-import { type WorkTracker, createWorkTracker } from "../busy.ts";
+import { createWorkTracker } from "../busy.ts";
 import { processEnvironment } from "../child-env.ts";
 import { createCloseSignal } from "../close-signal.ts";
 import {
@@ -27,18 +28,30 @@ import {
   redactValues,
   revealValues,
 } from "../declared-secrets.ts";
+import type {
+  HarnessProvider,
+  HarnessRuntimeAgent,
+  HarnessStorageHandle,
+  HarnessTelemetryContext,
+} from "../harness.ts";
 import { instanceName, INSTANCE_NAME_ENV } from "../instance-name.ts";
-import { type McpClients, openMcpClients } from "../mcp/client.ts";
+import { openMcpClients } from "../mcp/client.ts";
 import { declareMcp, resolveMcpServers } from "../mcp/config.ts";
 import { DATABASE_URL_ENV, STATE_DIRNAME, resolveStateRoot } from "../paths.ts";
 import { PromiseFailure, fromPromise, originalError } from "../promise-bridge.ts";
 import { type Service, serveAgent } from "../service.ts";
 import { NOT_HOSTED, type RunsAs } from "../serving-command.ts";
 import { fastagentVersion } from "../version.ts";
-import { type BuiltDefinition, type Unfinished, buildDefinition } from "./assembly.ts";
-import { type HarnessSelection, resolveHarnessSelection } from "./config.ts";
+import {
+  type BuiltDefinition,
+  type Unfinished,
+  assertNoMcpToolConflicts,
+  buildDefinition,
+  resolveDefaultModel,
+} from "./assembly.ts";
+import { agentPresentation, harnessPackage, resolveCodingTools, resolveHarnessSelection } from "./config.ts";
 import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
-import { loadDshModule, openDshRuntime } from "./dsh/runtime.ts";
+import { mcpTools } from "./mcp.ts";
 import { overlayCredentialStore } from "./models/credentials.ts";
 import {
   type ManagedDurableCredentialStore,
@@ -47,7 +60,8 @@ import {
 } from "./models/durable-credentials.ts";
 import { type ModelEnvironment, modelEnvironment } from "./models/environment.ts";
 import { type AuthManager, createAuthManager } from "./models/remote-auth.ts";
-import { openPiDurableRuntime } from "./pi-durable/runtime.ts";
+import { piDurableProvider } from "./pi-durable/runtime.ts";
+import { readCommands, renderDefinitionPrompt } from "./text.ts";
 import { type AgentDefinition, assertDefinition } from "../definition/definition.ts";
 import {
   type PostgresDatabase,
@@ -120,7 +134,7 @@ export interface OpenServingOptions {
   database?: PostgresDatabase;
 }
 
-export type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
+type ServingStorage = "instance" | { file: string; holders?: string } | "memory";
 
 /** An opened agent from any harness: the Agent API plus runtime lifecycle signals. */
 export interface ServingAgent extends Agent {
@@ -175,35 +189,55 @@ export interface InstancePlace {
   database?: PostgresDatabase;
 }
 
-/** Shared context prepared once by `openServing()` and handed to the selected harness runtime adapter. */
-export interface HarnessOpenContext {
-  readonly definition: AgentDefinition;
-  readonly options: OpenServingOptions;
-  readonly selection: HarnessSelection;
-  readonly name: string;
-  readonly workdir: string;
-  readonly projectDir: string;
-  readonly stateRoot: string;
-  readonly chosen: ServingStorage;
-  readonly place: InstancePlace;
-  readonly database: SharedPostgresDatabase | undefined;
-  readonly maxMessageBytes: number | undefined;
-  readonly storageDescription: string;
-  readonly secrets: RedactedSecrets;
-  readonly env: Readonly<Record<string, string | undefined>>;
-  readonly processEnv: Readonly<Record<string, string>>;
-  readonly code: BuiltDefinition;
-  readonly models: ModelEnvironment;
-  readonly telemetry: TelemetryContext | undefined;
-  readonly work: WorkTracker;
-  openMcp(): Promise<McpClients>;
-}
-
 /** The database the instance's storage is in: the one given, or the one `FASTAGENT_DATABASE_URL` names, or none. */
 function databaseOf(place: InstancePlace): PostgresDatabase | undefined {
   if (place.database !== undefined) return place.database;
   const url = place.env[DATABASE_URL_ENV];
   return url ? { url } : undefined;
+}
+
+/** Resolve the built-in `pi-durable` provider or dynamically load `@fastagent-sh/harness-<name>/provider`. */
+export async function resolveHarnessProvider(
+  harness: HarnessName,
+  projectDir: string,
+  resolveFromSelf: (specifier: string) => string = (specifier) => import.meta.resolve(specifier),
+): Promise<HarnessProvider> {
+  if (harness === "pi-durable") return piDurableProvider as HarnessProvider;
+  const pkgName = harnessPackage(harness);
+  if (pkgName === undefined) throw new Error(`unknown harness "${harness}"`);
+  const specifier = `${pkgName}/provider`;
+  let entryUrl: string;
+  try {
+    entryUrl = resolveFromSelf(specifier);
+  } catch (firstError) {
+    const firstCode = (firstError as { code?: unknown }).code;
+    if (firstCode !== "ERR_MODULE_NOT_FOUND" && firstCode !== "MODULE_NOT_FOUND") throw firstError;
+    try {
+      entryUrl = pathToFileURL(createRequire(join(projectDir, "package.json")).resolve(specifier)).href;
+    } catch (secondError) {
+      const secondCode = (secondError as { code?: unknown }).code;
+      if (
+        secondCode === "ERR_MODULE_NOT_FOUND" ||
+        secondCode === "MODULE_NOT_FOUND" ||
+        secondCode === "ERR_PACKAGE_PATH_NOT_EXPORTED"
+      ) {
+        throw new Error(
+          `harness "${harness}" requires ${pkgName}. Install it in your project: npm install ${pkgName}`,
+          { cause: firstError },
+        );
+      }
+      throw secondError;
+    }
+  }
+  const mod = (await import(entryUrl)) as Partial<{ readonly harnessProvider: HarnessProvider }>;
+  if (
+    mod.harnessProvider === undefined ||
+    typeof mod.harnessProvider.openStorage !== "function" ||
+    typeof mod.harnessProvider.openAgent !== "function"
+  ) {
+    throw new Error(`${specifier} does not export a valid harnessProvider`);
+  }
+  return mod.harnessProvider;
 }
 
 /** Where the instance's storage is, as a person reads it: the database (without credentials), or the file. */
@@ -239,7 +273,7 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       ),
     catch: (cause) => new PromiseFailure(cause),
   });
-  const dshModule = selection.harness === "dsh" ? yield* fromPromise(() => loadDshModule()) : undefined;
+  const provider = yield* fromPromise(() => resolveHarnessProvider(selection.harness, projectDir));
   const name = yield* Effect.try({
     try: () => instanceName(definition.name, options.name),
     catch: (cause) => new PromiseFailure(cause),
@@ -364,30 +398,106 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       }),
     );
     const work = createWorkTracker();
-    const ctx: HarnessOpenContext = {
-      definition,
-      options,
-      selection,
-      name,
-      workdir,
-      projectDir,
-      stateRoot,
-      chosen,
-      place,
-      database,
-      maxMessageBytes: messageBytesFor(database?.limits),
-      storageDescription,
-      secrets: redactedSecrets,
-      env,
-      processEnv,
-      code,
-      models,
-      telemetry: traces?.context,
-      work,
-      openMcp: () => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv)),
+    const codingTools = resolveCodingTools(config.codingTools);
+    const presentation = agentPresentation(definition);
+    const modelSpec = options.model ?? config.model;
+    const { model: modelRef, unusableDefault } = yield* Effect.try({
+      try: () => resolveDefaultModel(modelSpec, options.model !== undefined, models.models),
+      catch: (cause) => new PromiseFailure(cause),
+    });
+    if (!provider.supportsExtensions && code.extensions.length > 0) {
+      const skipped = code.extensions.map((ext) => ext.name).join(", ");
+      log.warn(
+        `[fastagent] skipping pi-durable extensions on harness "${selection.harness}": ${skipped} (portable tools belong in src/tools/)`,
+      );
+    }
+
+    const closeSignal = createCloseSignal();
+    let currentRuntime: HarnessRuntimeAgent | undefined;
+    let currentClose: (() => Promise<void>) | undefined;
+    let earlyLost: Error | undefined;
+
+    const handoffInstance = (): void => {
+      log.info(`[fastagent] handing off idle instance "${name}" to another process`);
+      currentClose?.().catch((cause: unknown) =>
+        log.warn(`[fastagent] handing off instance "${name}" failed: ${String(cause)}`),
+      );
     };
+    const stopOnLeaseLoss = (error: Error): void => {
+      log.error(`[fastagent] ${error.message}: stopping its runs`);
+      if (currentClose === undefined) {
+        earlyLost = error;
+        return;
+      }
+      currentClose().catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
+    };
+
+    const storage: HarnessStorageHandle = yield* Effect.acquireRelease(
+      fromPromise(async () =>
+        provider.openStorage({
+          place,
+          chosen,
+          database,
+          onLost: stopOnLeaseLoss,
+          handoff: {
+            canYield: () =>
+              currentClose !== undefined && !closeSignal.isClosing() && work.active() === 0 && !currentRuntime?.busy(),
+            onHandoff: handoffInstance,
+          },
+        }),
+      ),
+      (handle) => release(() => handle.close()),
+    );
+    if (chosen === "instance" && database !== undefined) {
+      log.info(`[fastagent] storage: ${storageDescription}`);
+    }
+
+    const mcp = yield* Effect.acquireRelease(
+      fromPromise(() => openMcpClients(resolveMcpServers(mcpServers, secrets, undefined, workdir, processEnv))),
+      (clients) => release(() => clients.close()),
+    );
+    const bridgedMcpTools = yield* Effect.try({
+      try: () => {
+        const built = mcpTools(mcp.tools);
+        assertNoMcpToolConflicts(code, built);
+        return built;
+      },
+      catch: (cause) => new PromiseFailure(cause),
+    });
+
+    const maxMessageBytes = messageBytesFor(database?.limits);
     const runtimeAgent = yield* Effect.acquireRelease(
-      fromPromise(() => (dshModule !== undefined ? openDshRuntime(ctx, dshModule) : openPiDurableRuntime(ctx))),
+      fromPromise(() =>
+        provider.openAgent({
+          storage,
+          definition,
+          code,
+          mcpTools: bridgedMcpTools,
+          codingTools,
+          presentation,
+          name,
+          workdir,
+          stateRoot,
+          selection,
+          processEnv,
+          models: models.models,
+          ...(modelRef === undefined ? {} : { model: modelRef }),
+          ...(unusableDefault === undefined ? {} : { unusableDefault }),
+          runsAs: options.runsAs,
+          ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+          ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
+          ...(traces?.context === undefined ? {} : { telemetry: traces.context as HarnessTelemetryContext }),
+          work,
+          commands: () => readCommands(dir),
+          renderSystemPrompt: () =>
+            renderDefinitionPrompt(dir, {
+              workdir,
+              source: definition.source === true,
+              runsAs: options.runsAs,
+              codingTools,
+            }),
+        }),
+      ),
       (agent) => release(() => agent.close()),
     );
     const conversations = yield* Effect.try({
@@ -420,7 +530,6 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
           )
         : undefined;
 
-    const closeSignal = createCloseSignal();
     runtimeAgent.subscribeClose?.(closeSignal.mark);
     if (auth !== undefined) {
       closeSignal.subscribe(() => auth.close());
@@ -474,6 +583,11 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
         return runServingPromise(closeAgentEffect());
       },
     };
+    currentRuntime = runtimeAgent;
+    currentClose = () => wrappedAgent.close();
+    if (earlyLost !== undefined) {
+      currentClose().catch((cause: unknown) => log.warn(`[fastagent] stopping the runs failed: ${String(cause)}`));
+    }
     void runtimeAgent.closed?.then(
       () =>
         wrappedAgent.close().catch((error: unknown) => {

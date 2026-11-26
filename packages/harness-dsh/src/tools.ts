@@ -3,7 +3,8 @@
  * `@deepseek-ai/dsh-tools` registration contract (`output: { schema, render, presentationMeta }`).
  */
 import type { ToolDefinition as DshRuntimeToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import type { DshTelemetryContext, FastAgentToolApi, FastAgentToolLike } from "./types.ts";
+import { retainToolOutput, type AuthoredTool, type HarnessTelemetryContext } from "@fastagent-sh/fastagent/harness";
+import type { FastAgentToolApi } from "./types.ts";
 
 type DshPresentationMeta = ReturnType<NonNullable<DshRuntimeToolDefinition["output"]["presentationMeta"]>>;
 
@@ -25,32 +26,9 @@ interface ToolProgressEvent {
 }
 
 export interface ToolBridgeRuntime {
-  readonly toolsByName: ReadonlyMap<string, FastAgentToolLike>;
+  readonly toolsByName: ReadonlyMap<string, AuthoredTool>;
   readonly onProgress: (event: ToolProgressEvent) => void;
-  readonly telemetry?: DshTelemetryContext;
-}
-
-function retainOutput(
-  buffer: string,
-  limits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" },
-): string {
-  let out = buffer;
-  if (limits?.maxLines !== undefined && limits.maxLines > 0) {
-    const trailingNewline = out.endsWith("\n");
-    const body = trailingNewline ? out.slice(0, -1) : out;
-    const lines = body === "" ? [] : body.split("\n");
-    if (lines.length > limits.maxLines) {
-      out =
-        limits.retain === "head"
-          ? `${lines.slice(0, limits.maxLines).join("\n")}\n`
-          : `${lines.slice(-limits.maxLines).join("\n")}${trailingNewline ? "\n" : ""}`;
-    }
-  }
-  if (limits?.maxBytes === undefined || limits.maxBytes <= 0) return out;
-  const bytes = Buffer.from(out, "utf8");
-  if (bytes.byteLength <= limits.maxBytes) return out;
-  if (limits.retain === "head") return bytes.subarray(0, limits.maxBytes).toString("utf8");
-  return bytes.subarray(bytes.byteLength - limits.maxBytes).toString("utf8");
+  readonly telemetry?: HarnessTelemetryContext;
 }
 
 function formatNestedCall(name: string, args: unknown): string {
@@ -61,7 +39,7 @@ function formatNestedCall(name: string, args: unknown): string {
   return name;
 }
 
-export function validateFastAgentTool(tool: FastAgentToolLike): void {
+export function validateFastAgentTool(tool: AuthoredTool): void {
   if (!tool.name || typeof tool.name !== "string") {
     throw new Error("DSH tool bridge requires a non-empty tool name");
   }
@@ -103,7 +81,7 @@ function extractResultText(
  * nested `api.executeTool()` attribution on the outer `toolCallId`, `details` persistence,
  * and `control.terminate` -> `exec.concludeTurn()`.
  */
-export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridgeRuntime): DshRuntimeToolDefinition {
+export function bridgeDshRuntimeTool(tool: AuthoredTool, runtime: ToolBridgeRuntime): DshRuntimeToolDefinition {
   validateFastAgentTool(tool);
   return {
     name: tool.name,
@@ -130,7 +108,7 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
 
       const api: FastAgentToolApi = {
         output(chunk: string) {
-          streamedOutput = retainOutput(streamedOutput + chunk, tool.outputLimits);
+          streamedOutput = retainToolOutput(streamedOutput + chunk, tool.outputLimits);
           if (sessionId === undefined) return;
           const nonEmpty = streamedOutput
             .split(/\r?\n/)

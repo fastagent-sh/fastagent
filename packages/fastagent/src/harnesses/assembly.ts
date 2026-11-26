@@ -125,7 +125,12 @@ export interface AuthoredTool {
     args: unknown,
     api: never,
     context: never,
-  ): Promise<{ readonly output?: ReadonlyArray<{ readonly type: string }> }>;
+  ): Promise<{
+    readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+    readonly details?: unknown;
+    readonly isError?: boolean;
+    readonly control?: { readonly terminate?: boolean };
+  }>;
 }
 
 /** Minimal structural shape validated for `src/extensions/*` modules (`pi-durable`-specific). */

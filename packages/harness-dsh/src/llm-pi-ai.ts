@@ -25,13 +25,17 @@ import type {
   Message as PiMessage,
   Models,
   TextContent,
-  ThinkingLevel as PiThinkingLevel,
   Tool as PiTool,
   ToolCall as PiToolCall,
   ToolResultMessage as PiToolResultMessage,
 } from "@earendil-works/pi-ai";
-import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
-import type { DshStoredAttachment, DshTelemetryContext, DshTelemetrySpan } from "./types.ts";
+import {
+  classifyPiAiError,
+  toPiThinkingLevel,
+  type HarnessTelemetryContext,
+  type HarnessTelemetrySpan,
+} from "@fastagent-sh/fastagent/harness";
+import type { DshStoredAttachment } from "./types.ts";
 
 /** Inline image marker embedded in DSH user messages so adapters can supply raw bytes to pi-ai. */
 export const IMAGE_REF_PREFIX = "__fastagent_image_ref__:";
@@ -48,46 +52,7 @@ export interface PiAiAdapterHooks {
   /** Report the exact cost of a completed model call. */
   onCallCost?: (sessionId: string | undefined, record: PiAiCostRecord) => void;
   /** Optional telemetry context for wrapping model calls in content-free spans. */
-  telemetry?: DshTelemetryContext;
-}
-
-const VALID_REASONING: ReadonlySet<string> = new Set(["minimal", "low", "medium", "high", "xhigh"]);
-
-function toPiReasoning(effort: string | undefined): PiThinkingLevel | undefined {
-  if (effort === undefined || effort === "off") return undefined;
-  if (effort === "max") return "xhigh";
-  return VALID_REASONING.has(effort) ? (effort as PiThinkingLevel) : undefined;
-}
-
-/** Classify a failed pi-ai assistant turn using HTTP status (when available) and pi-ai's retry rules. */
-export function classifyPiError(
-  error: PiAssistantMessage,
-  status?: number,
-): { code: "AUTH" | "RATE_LIMIT" | "SERVER" | "PI_AI_ERROR"; status?: number } {
-  const message = error.errorMessage || "Model call failed";
-  const lower = message.toLowerCase();
-  if (
-    status === 401 ||
-    (status === undefined &&
-      (lower.includes("401") ||
-        lower.includes("unauthorized") ||
-        lower.includes("credential") ||
-        lower.includes("api key")))
-  ) {
-    return { code: "AUTH", status: 401 };
-  }
-  const retryProbe =
-    status !== undefined && !message.includes(String(status))
-      ? { ...error, errorMessage: `${status} ${message}` }
-      : error;
-  const retryable = isRetryableAssistantError(retryProbe);
-  if (status === 429 || lower.includes("429") || lower.includes("rate limit")) {
-    return retryable ? { code: "RATE_LIMIT", status: 429 } : { code: "PI_AI_ERROR", status: 429 };
-  }
-  if (retryable || (status !== undefined && status >= 500)) {
-    return { code: "SERVER", status: status !== undefined && status >= 500 ? status : 503 };
-  }
-  return { code: "PI_AI_ERROR", ...(status !== undefined ? { status } : {}) };
+  telemetry?: HarnessTelemetryContext;
 }
 
 function extractText(content: string | readonly ContentBlock[]): string {
@@ -286,10 +251,10 @@ export class PiAiModelsAdapter extends LlmAdapter {
 
     let finishSpan: ((err?: unknown) => void) | undefined;
     let spanDone: Promise<void> | undefined;
-    let stepSpan: DshTelemetrySpan | undefined;
+    let stepSpan: HarnessTelemetrySpan | undefined;
     if (this.hooks.telemetry !== undefined) {
       const telemetry = this.hooks.telemetry;
-      const spanReady = new Promise<DshTelemetrySpan | undefined>((resolveReady) => {
+      const spanReady = new Promise<HarnessTelemetrySpan | undefined>((resolveReady) => {
         spanDone = Promise.resolve()
           .then(() =>
             telemetry.startSpan(
@@ -318,7 +283,7 @@ export class PiAiModelsAdapter extends LlmAdapter {
     let streamError: unknown;
     let responseStatus: number | undefined;
     try {
-      const reasoning = toPiReasoning(options.reasoningEffort);
+      const reasoning = toPiThinkingLevel(options.reasoningEffort);
       const eventStream = this.models.streamSimple(model, context, {
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
         ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
@@ -433,7 +398,7 @@ export class PiAiModelsAdapter extends LlmAdapter {
               };
               return;
             }
-            const classified = classifyPiError(event.error, responseStatus);
+            const classified = classifyPiAiError(event.error, responseStatus);
             throw new LlmError(
               errMessage,
               classified.code,

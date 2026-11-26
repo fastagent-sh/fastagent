@@ -1,10 +1,20 @@
 /**
  * Durable PostgreSQL & Aurora DSQL `DshEventStoreBackend` with multi-instance isolation, single-writer fencing,
- * async index migration support, and `bytesPerValue` / per-transaction cap handling.
- * Accepts any structural `DshPgDatabase` (`query` + `transaction`), keeping `@fastagent-sh/harness-dsh` free of
- * direct `pg` and `@fastagent-sh/fastagent` dependencies.
+ * async index migration support, and `bytesPerValue` / per-transaction cap handling over `@fastagent-sh/fastagent/harness`.
  */
 import { randomUUID } from "node:crypto";
+import {
+  acquirePgInstanceLease,
+  isPgConflict,
+  migratePgSchema,
+  splitPgText,
+  type CreateIndex,
+  type PgDatabase,
+  type PgExecutor,
+  type PgLeaseHandoff,
+  type PostgresLimits,
+  type SharedPostgresHandle,
+} from "@fastagent-sh/fastagent/harness";
 import type {
   DshEventStoreBackend,
   DshSessionEvent,
@@ -16,110 +26,31 @@ import type {
   DshStoredSession,
 } from "./types.ts";
 
-/** Minimal query executor matching `PgExecutor` in `@fastagent-sh/fastagent/platform`. */
-interface DshPgExecutor {
-  query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
-}
-
-/** Minimal transactional database handle matching `PgDatabase`. */
-export interface DshPgDatabase extends DshPgExecutor {
-  transaction<T>(work: (tx: DshPgExecutor) => Promise<T>): Promise<T>;
-  close?(): Promise<void>;
-}
-
-/** Index builder matching `CreateIndex` in `@fastagent-sh/fastagent/platform` (e.g. Aurora DSQL `ASYNC` indexes). */
-type DshPgCreateIndex = (db: DshPgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
-
-/** Per-transaction and per-value caps imposed by managed PostgreSQL databases such as Aurora DSQL. */
-interface DshPgLimits {
-  readonly rowsPerTransaction?: number;
-  readonly bytesPerTransaction?: number;
-  readonly bytesPerValue?: number;
-}
-
-/** Cooperative idle handoff hooks for single-writer PostgreSQL leases. */
-interface DshPgLeaseHandoff {
-  readonly canYield: () => boolean;
-  readonly onHandoff: () => void;
-}
-
-/** Single-writer instance lease handle injected via `kit.acquireLease`. */
-interface DshPgLease {
-  readonly owner: string;
-  readonly lost: Error | undefined;
-  lose(why?: Error, notify?: boolean): Error;
-  release(): Promise<void>;
-}
-
-/** Shared PostgreSQL/DSQL primitives injected by `@fastagent-sh/fastagent` (`postgres-kit.ts`). */
-interface DshPgStoreKit {
-  readonly migrate: (
-    db: DshPgDatabase,
-    statements: readonly string[],
-    options: {
-      readonly createIndex?: DshPgCreateIndex;
-      readonly version?: { readonly table: string; readonly current: number };
-    },
-  ) => Promise<void>;
-  readonly acquireLease: (
-    db: DshPgDatabase,
-    options: {
-      readonly table: string;
-      readonly instance: string;
-      readonly owner?: string;
-      readonly leaseMs?: number;
-      readonly waitMs?: number;
-      readonly handoff?: DshPgLeaseHandoff;
-      readonly onLost?: (error: Error) => void;
-      readonly onTake?: (tx: DshPgExecutor, owner: string) => Promise<void>;
-      readonly formatHeldError?: (info: {
-        readonly instance: string;
-        readonly until: string;
-        readonly holder?: string;
-      }) => Error;
-      readonly formatLostError?: (instance: string) => Error;
-    },
-  ) => Promise<DshPgLease>;
-  readonly splitText: (text: string, bytesPerValue: number | undefined) => string[] | undefined;
-  readonly isConflict: (error: unknown) => boolean;
-}
-
 export interface PostgresDshStoreOptions {
-  /** Shared PostgreSQL primitives (`migrate`, `acquireLease`, `splitText`, `isConflict`), e.g. from `postgres-kit.ts`. */
-  readonly kit: DshPgStoreKit;
+  /** Optional shared connection pool handle enabling one-time migration and batched lease renewals. */
+  readonly pool?: SharedPostgresHandle;
   /** Lease duration in milliseconds for single-writer instance ownership. Default: 30_000. */
   readonly leaseMs?: number;
   /** Maximum milliseconds to wait for an existing holder's lease to expire on open. Default: 0 (fail fast). */
   readonly waitMs?: number;
   /** Custom owner identifier for diagnostics. Default: random UUID. */
   readonly owner?: string;
+  /** Human-readable description of other processes that may hold this instance. */
+  readonly holders?: string;
   /** Optional cooperative idle handoff hooks (never invokes `onLost`). */
-  readonly handoff?: DshPgLeaseHandoff;
+  readonly handoff?: PgLeaseHandoff;
   /** Invoked once if the single-writer lease is lost unexpectedly or fails renewal before expiry. */
   readonly onLost?: (error: Error) => void;
   /** Index builder for databases requiring async index creation (Aurora DSQL). */
-  readonly createIndex?: DshPgCreateIndex;
+  readonly createIndex?: CreateIndex;
   /** Transaction and per-value caps (e.g. `DSQL_LIMITS`). */
-  readonly limits?: DshPgLimits;
+  readonly limits?: PostgresLimits;
 }
 
 export interface PostgresDshEventStore extends DshEventStoreBackend {
   readonly instance: string;
   readonly owner: string;
   close(): Promise<void>;
-}
-
-/** Raised when another active process already holds the lease for the same DSH instance. */
-export class DshInstanceHeldError extends Error {
-  readonly instance: string;
-  readonly holder: string;
-
-  constructor(instance: string, holder: string) {
-    super(`DSH instance "${instance}" is already held by another process (${holder})`);
-    this.name = "DshInstanceHeldError";
-    this.instance = instance;
-    this.holder = holder;
-  }
 }
 
 const DSH_SCHEMA_VERSION = 1;
@@ -208,13 +139,9 @@ interface StoredValueRow {
 
 const clone = <T>(value: T): T => structuredClone(value);
 
-function prepareValue(
-  text: string,
-  bytesPerValue: number | undefined,
-  splitText: (text: string, bytesPerValue: number | undefined) => string[] | undefined,
-): PreparedValue {
+function prepareValue(text: string, bytesPerValue: number | undefined): PreparedValue {
   const bytes = Buffer.byteLength(text, "utf8");
-  const chunks = splitText(text, bytesPerValue);
+  const chunks = splitPgText(text, bytesPerValue);
   if (chunks === undefined) {
     return { inline: text, parts: null, chunks: undefined, rows: 1, bytes };
   }
@@ -222,7 +149,7 @@ function prepareValue(
 }
 
 async function writeValueParts(
-  tx: DshPgExecutor,
+  tx: PgExecutor,
   instance: string,
   kind: DshValueKind,
   sessionId: string,
@@ -241,7 +168,7 @@ async function writeValueParts(
 }
 
 async function readValues(
-  executor: DshPgExecutor,
+  executor: PgExecutor,
   instance: string,
   kind: DshValueKind,
   rows: readonly StoredValueRow[],
@@ -279,7 +206,7 @@ async function readValues(
   });
 }
 
-function assertFitsTransaction(label: string, rows: number, bytes: number, limits: DshPgLimits | undefined): void {
+function assertFitsTransaction(label: string, rows: number, bytes: number, limits: PostgresLimits | undefined): void {
   const maxRows = limits?.rowsPerTransaction;
   const maxBytes = limits?.bytesPerTransaction;
   if ((maxRows !== undefined && rows > maxRows) || (maxBytes !== undefined && bytes > maxBytes)) {
@@ -298,15 +225,12 @@ function assertFitsTransaction(label: string, rows: number, bytes: number, limit
  * @public
  */
 export async function openPostgresDshStore(
-  database: DshPgDatabase,
+  database: Pick<PgDatabase, "query" | "transaction">,
   instance: string,
-  options: PostgresDshStoreOptions,
+  options: PostgresDshStoreOptions = {},
 ): Promise<PostgresDshEventStore> {
   if (!instance || instance.trim() === "") {
     throw new Error("DSH PostgreSQL instance name must be non-empty");
-  }
-  if (options?.kit === undefined) {
-    throw new Error("openPostgresDshStore requires options.kit");
   }
   const leaseMs = options.leaseMs ?? 30_000;
   const waitMs = options.waitMs ?? 0;
@@ -320,27 +244,33 @@ export async function openPostgresDshStore(
 
   const limits = options.limits;
   const bytesPerValue = limits?.bytesPerValue;
-  const { migrate, acquireLease, splitText, isConflict } = options.kit;
 
-  await migrate(database, MIGRATION_STATEMENTS, {
-    ...(options.createIndex === undefined ? {} : { createIndex: options.createIndex }),
-    version: { table: DSH_SCHEMA_TABLE, current: DSH_SCHEMA_VERSION },
-  });
+  const runMigration = (db: PgExecutor) =>
+    migratePgSchema(db, MIGRATION_STATEMENTS, {
+      ...(options.createIndex === undefined ? {} : { createIndex: options.createIndex }),
+      version: { table: DSH_SCHEMA_TABLE, current: DSH_SCHEMA_VERSION },
+    });
+  if (options.pool !== undefined) {
+    await options.pool.ensureMigrated("dsh", runMigration);
+  } else {
+    await runMigration(database);
+  }
 
   await database.query("INSERT INTO dsh_metadata (instance) VALUES ($1) ON CONFLICT (instance) DO NOTHING", [instance]);
 
-  const lease = await acquireLease(database, {
+  const lease = await acquirePgInstanceLease(database, {
     table: DSH_LEASE_TABLE,
     instance,
     owner,
     leaseMs,
     waitMs,
+    ...(options.pool === undefined ? {} : { pool: options.pool }),
+    ...(options.holders === undefined ? {} : { holders: options.holders }),
     ...(options.handoff === undefined ? {} : { handoff: options.handoff }),
     ...(options.onLost === undefined ? {} : { onLost: options.onLost }),
     onTake: async (tx, newOwner) => {
       await tx.query("UPDATE dsh_metadata SET owner = $2 WHERE instance = $1", [instance, newOwner]);
     },
-    formatHeldError: ({ instance: name, holder }) => new DshInstanceHeldError(name, holder ?? "unknown"),
     formatLostError: (name) => new Error(`PostgreSQL DSH lease for "${name}" was lost`),
   });
 
@@ -356,7 +286,7 @@ export async function openPostgresDshStore(
   // Serialize in-process writes for this instance and fence against `dsh_metadata` (separate from `dsh_leases`)
   // so background lease renewal and concurrent sessions in this process never trigger self-inflicted 40001/OC000.
   let writeChain: Promise<void> = Promise.resolve();
-  const runFencedWrite = <T>(work: (tx: DshPgExecutor) => Promise<T>): Promise<T> => {
+  const runFencedWrite = <T>(work: (tx: PgExecutor) => Promise<T>): Promise<T> => {
     const run = async (): Promise<T> => {
       assertStoreOpen();
       try {
@@ -369,7 +299,7 @@ export async function openPostgresDshStore(
           return work(tx);
         });
       } catch (error) {
-        if (isConflict(error)) throw lease.lose(undefined, true);
+        if (isPgConflict(error)) throw lease.lose(undefined, true);
         throw error;
       }
     };
@@ -383,7 +313,7 @@ export async function openPostgresDshStore(
 
   // When `bytesPerValue` chunking is active, read parent rows and `dsh_values` in one REPEATABLE READ snapshot
   // so concurrent updates to mutable records (messages, session metadata) can never produce torn reads.
-  const runConsistentRead = <T>(work: (exec: DshPgExecutor) => Promise<T>): Promise<T> =>
+  const runConsistentRead = <T>(work: (exec: PgExecutor) => Promise<T>): Promise<T> =>
     bytesPerValue === undefined ? work(database) : database.transaction(work);
 
   const makeHandle = (
@@ -460,7 +390,7 @@ export async function openPostgresDshStore(
 
         const prepared = events.map((event) => ({
           seq: event.seq,
-          value: prepareValue(JSON.stringify(event), bytesPerValue, splitText),
+          value: prepareValue(JSON.stringify(event), bytesPerValue),
         }));
 
         // Partition into transaction-sized batches when `limits` are set (1 row reserved for the lease update).
@@ -539,7 +469,7 @@ export async function openPostgresDshStore(
       if (writers.has(header.id)) {
         throw new Error(`DSH session "${header.id}" already exists`);
       }
-      const headerVal = prepareValue(JSON.stringify(header), bytesPerValue, splitText);
+      const headerVal = prepareValue(JSON.stringify(header), bytesPerValue);
       assertFitsTransaction(`session "${header.id}" header`, 1 + headerVal.rows, headerVal.bytes, limits);
       writers.add(header.id);
       try {
@@ -699,7 +629,7 @@ export async function openPostgresDshStore(
 
     async putSessionMeta(session) {
       assertStoreOpen();
-      const metaVal = prepareValue(JSON.stringify(session), bytesPerValue, splitText);
+      const metaVal = prepareValue(JSON.stringify(session), bytesPerValue);
       assertFitsTransaction(`session "${session.id}" metadata`, 1 + metaVal.rows, metaVal.bytes, limits);
       await runFencedWrite(async (tx) => {
         const updated = await tx.query<{ session_id: string }>(
@@ -713,7 +643,7 @@ export async function openPostgresDshStore(
             createdAt: session.createdAt,
             isSeeded: false,
           };
-          const headerVal = prepareValue(JSON.stringify(fallbackHeader), bytesPerValue, splitText);
+          const headerVal = prepareValue(JSON.stringify(fallbackHeader), bytesPerValue);
           assertFitsTransaction(
             `session "${session.id}" metadata`,
             1 + headerVal.rows + metaVal.rows,
@@ -790,7 +720,7 @@ export async function openPostgresDshStore(
 
     async putMessage(message) {
       assertStoreOpen();
-      const msgVal = prepareValue(JSON.stringify(message), bytesPerValue, splitText);
+      const msgVal = prepareValue(JSON.stringify(message), bytesPerValue);
       assertFitsTransaction(`message "${message.id}"`, 1 + msgVal.rows, msgVal.bytes, limits);
       await runFencedWrite(async (tx) => {
         await tx.query(
@@ -846,7 +776,7 @@ export async function openPostgresDshStore(
     async putAttachment(attachment) {
       assertStoreOpen();
       const b64 = Buffer.from(attachment.data).toString("base64");
-      const dataVal = prepareValue(b64, bytesPerValue, splitText);
+      const dataVal = prepareValue(b64, bytesPerValue);
       assertFitsTransaction(`attachment "${attachment.ref}"`, 1 + dataVal.rows, dataVal.bytes, limits);
       await runFencedWrite(async (tx) => {
         await tx.query(
