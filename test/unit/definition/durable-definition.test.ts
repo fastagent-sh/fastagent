@@ -702,6 +702,45 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     expect(await whoami.execute({ label: "sub" }, stubApi, {})).toEqual({
       output: [{ type: "text", text: "sub:none" }],
     });
+    await expect(sessionIdOf({ commit: async () => {}, conversationId: 1 }, {})).rejects.toThrow(
+      "pi-durable tool api is missing FastAgent session binding",
+    );
+  });
+
+  it("binds sessionIdOf and preserves live api getters on direct openDurableAgent registries", async () => {
+    const inspectTool = defineTool({
+      name: "inspect_direct",
+      description: "Read sessionIdOf and live api.models on direct openDurableAgent",
+      parameters: obj({}),
+      execute: async (_args, api, context) => {
+        const desc = Object.getOwnPropertyDescriptor(api, "models");
+        const sid = await sessionIdOf(api, context);
+        return {
+          output: [{ type: "text", text: `${sid}:${typeof desc?.get === "function" ? "live-getter" : "snapshot"}` }],
+        };
+      },
+    });
+    const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("inspect_direct", {})], { stopReason: "toolUse" }),
+      (context) => fauxAssistantMessage(lastToolResult(context)),
+    ]);
+    const registry = createRegistry();
+    registry.install({ name: "direct", tools: [inspectTool] });
+    const agent = await openDurableAgent({
+      storage: new MemoryStorage(),
+      models: modelsOver(new InMemoryCredentialStore(), [faux.provider]),
+      registry,
+      name: "direct-test",
+      model: { provider: "gw", modelId: "m1" },
+    });
+    try {
+      const session = await agent.sessions.create();
+      const msg = await agent.messages.send({ sessionId: session.id, content: "check" }, { wait: 15 });
+      expect(msg.answer?.text).toBe(`${session.id}:live-getter`);
+    } finally {
+      await agent.close();
+    }
   });
 });
 

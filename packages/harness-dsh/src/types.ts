@@ -151,7 +151,7 @@ export interface FastAgentToolLike {
   readonly name: string;
   readonly description: string;
   readonly parameters: object;
-  readonly outputLimits?: { readonly maxBytes?: number; readonly retain?: "head" | "tail" };
+  readonly outputLimits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" };
   execute(
     args: never,
     api: never,

@@ -5,8 +5,17 @@
  */
 import { randomBytes } from "node:crypto";
 import type { Context } from "@earendil-works/chord/context";
-import { type Harness, type ToolExecutionApi, defineDoc } from "@earendil-works/pi-durable";
+import {
+  type Extension,
+  type Harness,
+  type RegistryReader,
+  type RegistrySnapshot,
+  type ToolExecutionApi,
+  type ToolRegistration,
+  defineDoc,
+} from "@earendil-works/pi-durable";
 import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
+import { RESOLVE_SESSION_ID } from "../tool.ts";
 import { isSession } from "./sessions.ts";
 
 const StorageDoc = defineDoc<{ incarnation: string }>({
@@ -42,7 +51,7 @@ export async function storageIds(harness: Harness, context: Context): Promise<Id
  * The session id of the conversation a tool runs in, as the Agent hands it out, or undefined when that conversation is
  * not a session (a subagent's): from the storage the tool runs on.
  */
-export async function sessionIdOf(
+async function sessionIdOf(
   api: Pick<ToolExecutionApi, "conversationId" | "snapshot" | "commit">,
   context: Context,
 ): Promise<SessionId | undefined> {
@@ -51,6 +60,70 @@ export async function sessionIdOf(
   const incarnation = (await api.snapshot(StorageDoc, context))?.incarnation;
   if (!incarnation) throw new Error("this storage has no incarnation: the Agent did not open it");
   return idsOf(incarnation).encodeSession(api.conversationId);
+}
+
+function withSessionResolver<T extends ToolExecutionApi>(api: T, context: Context): T {
+  return Object.defineProperties(Object.create(Object.getPrototypeOf(api)), {
+    ...Object.getOwnPropertyDescriptors(api),
+    [RESOLVE_SESSION_ID]: { value: () => sessionIdOf(api, context), enumerable: false },
+  }) as T;
+}
+
+/**
+ * Decorate `registry` so every tool invocation (`execute` and `cancel`) receives a bound `[RESOLVE_SESSION_ID]`
+ * resolver while preserving live getters (`models`, `env`) and symbol properties on `api`.
+ */
+export function bindSessionResolverRegistry(registry: RegistryReader): RegistryReader {
+  const boundTools = new WeakMap<ToolRegistration, ToolRegistration>();
+  const boundExtensions = new WeakMap<Extension, Extension>();
+  const boundSnapshots = new WeakMap<RegistrySnapshot, RegistrySnapshot>();
+
+  const bindTool = (tool: ToolRegistration): ToolRegistration => {
+    const cached = boundTools.get(tool);
+    if (cached !== undefined) return cached;
+    const cancelTool = tool.cancel;
+    const wrapped: ToolRegistration = {
+      ...tool,
+      execute: (args, api, context) => tool.execute(args, withSessionResolver(api, context), context),
+      ...(cancelTool === undefined
+        ? {}
+        : { cancel: (args, api, context) => cancelTool(args, withSessionResolver(api, context), context) }),
+    };
+    boundTools.set(tool, wrapped);
+    return wrapped;
+  };
+
+  const bindExtension = (extension: Extension): Extension => {
+    if (extension.tools === undefined || extension.tools.length === 0) return extension;
+    const cached = boundExtensions.get(extension);
+    if (cached !== undefined) return cached;
+    const wrapped: Extension = { ...extension, tools: extension.tools.map(bindTool) };
+    boundExtensions.set(extension, wrapped);
+    return wrapped;
+  };
+
+  const bindSnapshot = (raw: RegistrySnapshot): RegistrySnapshot => {
+    const cached = boundSnapshots.get(raw);
+    if (cached !== undefined) return cached;
+    const installed = raw.installed().map(bindExtension);
+    const byName = new Map(installed.map((ext) => [ext.name, ext]));
+    const tools = installed.flatMap((extension) => (extension.tools ?? []).map((tool) => ({ extension, tool })));
+    const wrapped: RegistrySnapshot = {
+      installed: () => installed,
+      extension: (name) => byName.get(name),
+      tools: () => tools,
+      sections: () => raw.sections(),
+      tasks: () => raw.tasks(),
+      task: (name) => raw.task(name),
+    };
+    boundSnapshots.set(raw, wrapped);
+    return wrapped;
+  };
+
+  return {
+    snapshot: () => bindSnapshot(registry.snapshot()),
+    subscribe: (listener) => registry.subscribe(listener),
+  };
 }
 
 function idsOf(incarnation: string): Ids {

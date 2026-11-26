@@ -52,7 +52,7 @@ import { log } from "../../log.ts";
 import type { Defaults } from "./defaults.ts";
 import { imageAt, isPublished, parseImageRef } from "./entries.ts";
 import { sessionEvents } from "./events.ts";
-import { type Ids, storageIds } from "./ids.ts";
+import { type Ids, bindSessionResolverRegistry, storageIds } from "./ids.ts";
 import { Released, countUntilSettled, createPiDurableMessages, decodeInput, released } from "./message-api.ts";
 import { SessionMetaDoc, isInput, queuedInputs, usageOfState } from "./messages.ts";
 import { durableReads, readEntryPage } from "./reads.ts";
@@ -109,7 +109,7 @@ export async function openDurableAgent(options: DurableAgentOptions): Promise<Du
     options.storage,
     {
       models: options.models,
-      registry: options.registry,
+      registry: bindSessionResolverRegistry(options.registry),
       ...(options.settings === undefined ? {} : { settings: options.settings }),
       ...(options.env === undefined ? {} : { env: options.env }),
       ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),

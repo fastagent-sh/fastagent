@@ -211,6 +211,72 @@ describe("openAgent: an agent directory opened in an app", () => {
       await service.close();
       await served.agent.close();
     }
+
+    // Verify public openAgent() LocalAgent.ready() and embedded service.fetch() flip synchronously on close() too.
+    const localRoot = await mkdtemp(join(tmpdir(), "fa-local-ready-timing-"));
+    let markLocalStarted!: () => void;
+    const localToolStarted = new Promise<void>((resolve) => {
+      markLocalStarted = resolve;
+    });
+    let releaseLocalCleanup!: () => void;
+    const holdLocalCleanup = new Promise<void>((resolve) => {
+      releaseLocalCleanup = resolve;
+    });
+    const localHoldTool = defineTool({
+      name: "hold_cleanup",
+      description: "Holds cleanup open on LocalAgent.",
+      parameters: obj({}),
+      execute: async () => {
+        markLocalStarted();
+        await holdLocalCleanup;
+        return { output: [{ type: "text", text: "done" }] };
+      },
+    });
+    const localFaux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+    localFaux.setResponses([
+      () => fauxAssistantMessage([fauxToolCall("hold_cleanup", {})], { stopReason: "toolUse" }),
+      () => fauxAssistantMessage("done"),
+    ]);
+    const localAgent = await openAgent(
+      defineDefinition({
+        format: DEFINITION_FORMAT,
+        builtWith: "0.0.0",
+        name: "local-hold-test",
+        version: "0.0.0",
+        dir,
+        config: { model: "gw/m1", providers: [localFaux.provider] },
+        registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: localHoldTool }], extensions: [] },
+      }),
+      { root: localRoot },
+    );
+    const localService = await localAgent.serve({ apiKeys: ["k"] });
+    try {
+      expect(localAgent.ready()).toBe(true);
+      expect(localService.ready()).toBe(true);
+      const localSession = await localAgent.sessions.create();
+      void localAgent.messages.send({ sessionId: localSession.id, content: "hold" });
+      await localToolStarted;
+
+      let localClosedSettled = false;
+      void localAgent.closed?.then(() => {
+        localClosedSettled = true;
+      });
+      const localClosePromise = localAgent.close();
+      expect(localAgent.ready()).toBe(false);
+      expect(localClosedSettled).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(localService.ready()).toBe(false);
+      expect((await localService.fetch(new Request("http://local/health"))).status).toBe(503);
+      expect(localClosedSettled).toBe(false);
+
+      releaseLocalCleanup();
+      await localClosePromise;
+      await localAgent.closed;
+      expect(localClosedSettled).toBe(true);
+    } finally {
+      releaseLocalCleanup();
+      await localAgent.close();
+    }
   });
 
   it("releases only the closed agent's provider session resources without affecting another live agent, and preserves provider identity across reopen", async () => {

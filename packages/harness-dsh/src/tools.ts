@@ -32,11 +32,18 @@ export interface ToolBridgeRuntime {
 
 function retainOutput(
   buffer: string,
-  limits?: { readonly maxBytes?: number; readonly retain?: "head" | "tail" },
+  limits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" },
 ): string {
-  if (limits?.maxBytes === undefined || limits.maxBytes <= 0) return buffer;
-  const bytes = Buffer.from(buffer, "utf8");
-  if (bytes.byteLength <= limits.maxBytes) return buffer;
+  let out = buffer;
+  if (limits?.maxLines !== undefined && limits.maxLines > 0) {
+    const lines = out.split("\n");
+    if (lines.length > limits.maxLines) {
+      out = (limits.retain === "head" ? lines.slice(0, limits.maxLines) : lines.slice(-limits.maxLines)).join("\n");
+    }
+  }
+  if (limits?.maxBytes === undefined || limits.maxBytes <= 0) return out;
+  const bytes = Buffer.from(out, "utf8");
+  if (bytes.byteLength <= limits.maxBytes) return out;
   if (limits.retain === "head") return bytes.subarray(0, limits.maxBytes).toString("utf8");
   return bytes.subarray(bytes.byteLength - limits.maxBytes).toString("utf8");
 }
@@ -135,7 +142,11 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
             });
           }
         },
-        async executeTool(nestedName: string, nestedArgs: unknown, context?: { readonly abortSignal?: AbortSignal }) {
+        async executeTool(
+          nestedName: string,
+          nestedArgs: unknown,
+          context?: { readonly abortSignal?: AbortSignal; readonly sessionId?: string },
+        ) {
           const target = runtime.toolsByName.get(nestedName);
           if (target === undefined) throw new Error(`Unknown tool: ${nestedName}`);
           if (sessionId !== undefined) {
@@ -149,13 +160,17 @@ export function bridgeDshRuntimeTool(tool: FastAgentToolLike, runtime: ToolBridg
             typeof nestedArgs === "object" && nestedArgs !== null && !Array.isArray(nestedArgs)
               ? (nestedArgs as Record<string, unknown>)
               : {};
+          const effectiveSessionId = context?.sessionId ?? sessionId;
           return (
             target.execute as (
               args: Record<string, unknown>,
               api: FastAgentToolApi,
-              context: { abortSignal: AbortSignal },
+              context: { abortSignal: AbortSignal; sessionId?: string },
             ) => Promise<unknown>
-          )(nestedInput, api, { abortSignal: context?.abortSignal ?? exec.signal });
+          )(nestedInput, api, {
+            abortSignal: context?.abortSignal ?? exec.signal,
+            ...(effectiveSessionId !== undefined ? { sessionId: effectiveSessionId } : {}),
+          });
         },
       };
 

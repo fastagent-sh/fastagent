@@ -100,6 +100,7 @@ export interface ToolOutputPart {
 /** Retention bounds applied to streamed `api.output(...)` text. */
 export interface ToolOutputLimits {
   readonly maxBytes?: number;
+  readonly maxLines?: number;
   readonly retain?: "head" | "tail";
 }
 
@@ -131,7 +132,6 @@ export interface ToolExecutionApi {
     args: { [key: string]: Json },
     context: ToolExecutionContext,
   ): Promise<{ readonly isError?: boolean | undefined }>;
-  readonly [RESOLVE_SESSION_ID]?: (() => Promise<SessionId | undefined>) | undefined;
 }
 
 /** Compiled, harness-neutral tool registration returned by {@link defineTool}. */
@@ -276,10 +276,14 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
 }
 
 interface SessionToolApi {
+  readonly output?: unknown;
+  readonly commit?: unknown;
+  readonly conversationId?: unknown;
   readonly [RESOLVE_SESSION_ID]?: (() => Promise<SessionId | undefined>) | undefined;
 }
 
 interface SessionToolContext {
+  readonly abortSignal?: AbortSignal | undefined;
   readonly sessionId?: string | undefined;
 }
 
@@ -291,5 +295,8 @@ interface SessionToolContext {
 export async function sessionIdOf(api?: SessionToolApi, context?: SessionToolContext): Promise<SessionId | undefined> {
   if (typeof api?.[RESOLVE_SESSION_ID] === "function") return api[RESOLVE_SESSION_ID]();
   if (typeof context?.sessionId === "string") return SessionId.make(context.sessionId);
+  if (typeof api?.commit === "function" && typeof api?.conversationId === "number") {
+    throw new Error("pi-durable tool api is missing FastAgent session binding");
+  }
   return undefined;
 }
