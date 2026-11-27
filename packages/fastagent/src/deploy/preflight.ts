@@ -17,7 +17,7 @@ import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
-import { hasLockfile as lockfileIn, listsFastagent, listsPackage, readPackageJson } from "../runtime.ts";
+import { RUNTIME_FLOOR, belowFloor, detectRuntime, listsFastagent, listsPackage, readPackageJson } from "../runtime.ts";
 import { DEFAULT_HTTP_PORT } from "../service.ts";
 import { buildContextPaths, checkKeptIgnoreFiles, shippedWithoutIgnoreFile } from "./build-context.ts";
 import { type ContainerInput, type ContainerTarget, DOCKER_TARGET, isGeneratedDockerfile } from "./container.ts";
@@ -131,22 +131,37 @@ async function gatherFacts(
   checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, report);
 
   const pkg = await readPackageJson(agentDir);
-  const hasLockfile = lockfileIn(agentDir);
+  const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
   const kept = await keptDockerfile(agentDir);
-  if (!hasLockfile) {
-    const otherLock = (await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock")));
+  if (runtime === "bun" && bunVersion !== undefined && belowFloor(bunVersion, RUNTIME_FLOOR.bun)) {
     report.warn(
-      otherLock
-        ? `the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
-            `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
-        : `no package-lock.json — the image build resolves deps at build time (not reproducible). ` +
-            "Run `npm install` and commit the lockfile.",
+      `package.json sets packageManager: "bun@${bunVersion}" — fastagent needs Bun ${RUNTIME_FLOOR.bun} or later ` +
+        `(for built-in node:sqlite). Upgrade packageManager before building the image.`,
     );
   }
+  if (!hasLockfile) {
+    if (runtime === "bun") {
+      report.warn(
+        `no bun.lock — the image build resolves deps at build time (not reproducible). ` +
+          "Run `bun install` and commit the lockfile.",
+      );
+    } else {
+      const otherLock = (await exists(join(agentDir, "pnpm-lock.yaml"))) || (await exists(join(agentDir, "yarn.lock")));
+      report.warn(
+        otherLock
+          ? `the generated Dockerfile is npm-based — your pnpm/yarn lockfile is NOT used (build runs ` +
+              `\`npm install\`, not reproducible). Edit the Dockerfile for your package manager, or vendor a package-lock.json.`
+          : `no package-lock.json — the image build resolves deps at build time (not reproducible). ` +
+              "Run `npm install` and commit the lockfile.",
+      );
+    }
+  }
+  const installCmd = runtime === "bun" ? "bun install" : "npm install";
+  const addCmd = runtime === "bun" ? "bun add" : "npm install";
   if (!listsFastagent(pkg)) {
     report.warn(
       `package.json does not list @fastagent-sh/fastagent — the image has no local fastagent to run, so the ` +
-        "container fails at start. Add it to dependencies and re-run `npm install`.",
+        `container fails at start. Add it to dependencies and re-run \`${installCmd}\`.`,
     );
   }
   const harnessSelection = resolveHarnessSelection(config, {}, {});
@@ -156,7 +171,7 @@ async function gatherFacts(
     if (!listsPackage(pkg, requiredHarnessPkg)) {
       report.warn(
         `fastagent.config.ts sets harness: "${harnessSelection.harness}", but package.json does not list ${requiredHarnessPkg} — ` +
-          `the container fails at start. Run \`npm install ${requiredHarnessPkg}\` and commit the lockfile.`,
+          `the container fails at start. Run \`${addCmd} ${requiredHarnessPkg}\` and commit the lockfile.`,
       );
     }
     if (
@@ -183,6 +198,8 @@ async function gatherFacts(
   const container: ContainerInput = {
     target,
     name,
+    runtime,
+    ...(bunVersion === undefined ? {} : { bunVersion }),
     hasLockfile,
     apt: needsGit ? ["git"] : [],
     machineryPaths: paths.machineryPaths,
@@ -234,7 +251,9 @@ function evaluateKeptDockerfile(
     !missingDeployed &&
     target.storage === "volume" &&
     !new RegExp(`^\\s*ENV\\s[^\\n]*\\b${INSTANCE_NAME_ENV}[=\\s]`, "m").test(dockerfileText);
-  const missingBuild = !/\bfastagent(?:\s+run)?\s+build\b|\bnpm\s+run\s+build\b/.test(dockerfileText);
+  const missingBuild = !/\bfastagent(?:\s+run)?\s+build\b|\b(?:npm|bun)\s+run\s+(?:--bun\s+)?build\b/.test(
+    dockerfileText,
+  );
   return [
     ...(missingDeployed
       ? [

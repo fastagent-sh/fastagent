@@ -3,9 +3,9 @@
  * its Agent API, over HTTP or any installed `@fastagent-sh/client-<type>` transport package.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
+import { resolveFromProject } from "../runtime.ts";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Redacted from "effect/Redacted";
 import type { AuthApi, RemoteAgent } from "@fastagent-sh/client/agent-api";
@@ -141,13 +141,7 @@ export async function resolveRemoteTarget(
 
   const cwd = resolve(dirArg);
   const loadModule = async (specifier: string): Promise<unknown> => {
-    let resolved: string | undefined;
-    try {
-      resolved = createRequire(join(cwd, "package.json")).resolve(specifier);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "MODULE_NOT_FOUND" && code !== "ERR_MODULE_NOT_FOUND") throw error;
-    }
+    const resolved = resolveFromProject(cwd, specifier);
     return resolved !== undefined ? await import(pathToFileURL(resolved).href) : await import(specifier);
   };
   try {

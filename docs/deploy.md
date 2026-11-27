@@ -36,6 +36,8 @@ Take your agent to production on any container host or serverless runtime. FastA
 
 ## Docker
 
+Generated Dockerfiles target **Node 24** by default, or **Bun** (`oven/bun`) automatically when `bun.lock`/`bun.lockb` or `"packageManager": "bun@…"` is present in the agent directory.
+
 ```bash
 fastagent deploy init docker
 docker build --pull -t my-agent .

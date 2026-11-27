@@ -1,6 +1,6 @@
 # FastAgent Examples
 
-Five production-grade examples demonstrating FastAgent's three core strengths: one Agent API everywhere, durable & isolated execution, and embedding or deploying to any platform (requires Node ≥ 24.15).
+Five production-grade examples demonstrating FastAgent's three core strengths: one Agent API everywhere, durable & isolated execution, and embedding or deploying to any platform (requires Node ≥ 24.15 or Bun ≥ 1.4).
 
 | Example | Use case | Key FastAgent features |
 | --- | --- | --- |

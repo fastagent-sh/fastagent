@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { reachOwner } from "../../../packages/fastagent/src/cli/owner.ts";
 import { resolveStateRoot } from "../../../packages/fastagent/src/paths.ts";
-import { unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
+import { detectRuntime, unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { agentWorkspace, fauxAgent as agent, runInProcess, whileServed } from "../../doubles/cli-run.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 import { servedPostgres } from "../../doubles/postgres-double.ts";
@@ -32,12 +32,38 @@ function sessionOf(run: { code: number | null; stdout: string; stderr: string })
 }
 
 describe("the runtime the CLI runs on", () => {
-  it("is Node from its floor: an older Node and Bun are refused, naming what to run", () => {
+  it("accepts Node >= 24.15.0 and Bun >= 1.4.0, and refuses older versions of either", () => {
     expect(unsupportedRuntime({ node: "24.15.0" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "26.0.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.4.0" })).toBe("fastagent needs Node 24.15.0 or later; this is 24.4.0");
-    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBe(
-      "fastagent runs on Node 24.15.0 or later, not Bun (1.4.0)",
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.4" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.3.13" })).toBe(
+      "fastagent needs Bun 1.4.0 or later; this is 1.3.13",
     );
+  });
+
+  it("detects Node vs Bun project runtime from lockfiles and packageManager", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fa-detect-runtime-"));
+    try {
+      expect(detectRuntime(dir, {})).toEqual({ runtime: "node", hasLockfile: false });
+      await writeFile(join(dir, "package-lock.json"), "{}\n");
+      expect(detectRuntime(dir, {})).toEqual({ runtime: "node", hasLockfile: true });
+      expect(detectRuntime(dir, { packageManager: "bun@1.4.4+sha256.deadbeef" })).toEqual({
+        runtime: "bun",
+        bunVersion: "1.4.4",
+        hasLockfile: false,
+      });
+      await writeFile(join(dir, "bun.lock"), "{}\n");
+      expect(detectRuntime(dir, {})).toEqual({ runtime: "bun", hasLockfile: true });
+      expect(detectRuntime(dir, { packageManager: "bun@1.4.4" })).toEqual({
+        runtime: "bun",
+        bunVersion: "1.4.4",
+        hasLockfile: true,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -44,7 +44,7 @@ Stay in the agent directory for the remaining steps: inside an agent directory, 
 
 ## 3. Set up TypeScript
 
-Write tools, helpers, and tests in TypeScript. Node ≥ 24.15 executes TypeScript natively by stripping types, so:
+Write tools, helpers, and tests in TypeScript. Node ≥ 24.15 and Bun ≥ 1.4 execute TypeScript natively, so:
 - import relative modules with `.ts` extensions (`../lib/batches.ts`) and types with `import type`;
 - avoid non-erasable syntax (enums, namespaces, parameter properties, decorators, JSX).
 

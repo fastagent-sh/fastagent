@@ -81,13 +81,20 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
       : "[fastagent] kept agentcore/ (yours once written)",
   );
   if (wrote && flags.install) {
-    const installed = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
-      cwd: join(agentDir, "agentcore", "cdk"),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const isBun = typeof process.versions.bun === "string";
+    const installed = spawnSync(
+      isBun ? process.execPath : "npm",
+      isBun ? ["install"] : ["install", "--no-audit", "--no-fund"],
+      {
+        cwd: join(agentDir, "agentcore", "cdk"),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     if (installed.stdout?.length) process.stderr.write(installed.stdout);
     if (installed.stderr?.length) process.stderr.write(installed.stderr);
-    if (installed.status !== 0) throw new Error("npm install in agentcore/cdk failed: run it there, then deploy");
+    if (installed.status !== 0) {
+      throw new Error(`${isBun ? "bun" : "npm"} install in agentcore/cdk failed: run it there, then deploy`);
+    }
   }
   const names = [...new Set(facts.secrets.filter((s) => !s.optional).map((s) => s.name))];
   const model =
