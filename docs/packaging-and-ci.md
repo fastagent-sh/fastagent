@@ -73,7 +73,7 @@ const agent = await openAgent(copilot, {
 });
 ```
 
-Upgrading an agent — or rolling back a prompt or tool regression — is a single SemVer version change in `package.json`. In long-lived hosts or desktop apps, call `await agent.close()` and reopen the new build.
+Upgrading an agent — or rolling back a prompt or tool regression — is a single SemVer version change in `package.json`. In long-lived backend hosts, call `await agent.close()` and reopen the new build.
 
 ### Option B: Consume directly in a monorepo workspace
 

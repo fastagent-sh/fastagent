@@ -73,7 +73,7 @@ const agent = await openAgent(copilot, {
 });
 ```
 
-升级 Agent 或回滚一次提示词/工具回归，只需要在 `package.json` 中修改 SemVer 版本号。在常驻服务或桌面应用中，调用 `await agent.close()` 后重新打开新版定义即可完成热升级。
+升级 Agent 或回滚一次提示词/工具回归，只需要在 `package.json` 中修改 SemVer 版本号。在常驻后端服务中，调用 `await agent.close()` 后重新打开新版定义即可完成热升级。
 
 ### 方式 B：在 Monorepo Workspace 中直接消费
 

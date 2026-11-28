@@ -68,7 +68,6 @@ my-agent/
 | **B2B SaaS sidebar copilot** (no user `bash`) | Embedded `openAgent()` + shared `openPostgresDatabase()` (`codingTools: false`) | Reuses your auth and Postgres pool with batched lease heartbeats and cooperative idle handoff across replicas |
 | **Per-user cloud workspace** (users run `bash` / code) | AWS AgentCore MicroVMs + 1 shared Aurora DSQL cluster | Strict per-user VM isolation with zero idle compute; swap to fixed-price Postgres via `FASTAGENT_DATABASE_URL` if sustained throughput grows |
 | **Low-frequency background agents** (PR review, AI SRE, daily brief) | Fly.io / Railway sleep-when-idle container + `POST /v1/invoke` + optional `dsh` sandbox | Sleeps to zero between webhooks/crons, deduplicates retries, and confines shell access |
-| **Local-first desktop app** (Electron / local tools) | Embedded `openAgent()` + built-in `node:sqlite` + optional `dsh` OS sandbox | Zero cloud relay, zero external DB setup, offline durable sessions, and dynamic model pickers |
 | **Org-wide multi-team agent platform** | Teams publish versioned npm packages (`fastagent build`); platform hosts them in one Node app | Shared runtime via `peerDependencies`, unified auth/tracing, and standard SemVer rollbacks |
 
 ## What FastAgent intentionally leaves to you

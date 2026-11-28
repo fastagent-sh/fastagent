@@ -1,12 +1,12 @@
 ---
 title: Embedding
-description: "Run a FastAgent inside your Node or Bun backend or desktop app behind your own authentication, database, and routes."
+description: "Run a FastAgent inside your Node or Bun backend behind your own authentication, database, and routes."
 status: current
 ---
 
 # Embedding
 
-Embed a compiled FastAgent directly in your Node or Bun backend or desktop application when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
+Embed a compiled FastAgent directly in your Node or Bun backend when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
 
 ```bash
 npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4.4
@@ -21,7 +21,6 @@ Compile your agent into a standalone npm package with `fastagent build` ([Packag
 | **Custom app routes / UI behind your own auth** | Call `openAgent()` and invoke `agent.messages.stream`, `agent.messages.send`, or `agent.invoke` directly from your route handlers. |
 | **Hosting multiple tenant instances in one Node/Bun process** | Open one shared pool with `openPostgresDatabase()` and pass it to each `openAgent({ name, database })`. |
 | **Exposing the standard `/v1` Agent API inside an existing web server** | Call `const service = await agent.serve({ apiKeys })` (add `remoteAuth: true` to also mount `/v1/auth/*`) and mount `service.fetch` in Next.js, Hono, Express, or Fastify. |
-| **Local desktop application** | Open with an app-owned `root`, populate model pickers from `agent.info().models`, and handle `info().unusableDefault` gracefully. |
 
 ## 1. Open the agent
 
@@ -207,11 +206,11 @@ app.register(async (scope) => {
 - **Fail fast at open:** A relative `root`, missing required `needs()` secret, held storage lock, missing `name` with PostgreSQL, or incompatible build format rejects `openAgent()` immediately with an actionable message.
 - **Multi-user isolation:** One instance is one trust domain. Give users who must not see each other's data separate instances, or set `codingTools: false` in `fastagent.config.ts`, write custom tools that cannot access shared files/storage, and authorize every session id (including `forkFrom.sessionId`) in your backend.
 
-## 5. Desktop hosts
+## 5. Model discovery & rolling upgrades
 
-When running agents inside a local desktop application:
+When operating embedded instances inside a long-lived backend host:
 
-- Pass an app-owned `root` so it never contends with a developer's `fastagent dev`.
+- Pass a dedicated host-owned `root` per instance so storage locks never contend across processes.
 - Read `agent.info().models` to populate model pickers (includes `contextWindow` and supported `thinkingLevels`).
 - If `fastagent.config.ts` names a retired or renamed default model, `openAgent()` still opens with `info().defaultModel` omitted and `info().unusableDefault` explaining why; messages without an explicit model refuse with `missing_model`. Passing an invalid `options.model` directly to `openAgent()` fails at open.
 - To upgrade to a new compiled build, `await agent.close()` and reopen the new build.
