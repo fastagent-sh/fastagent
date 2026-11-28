@@ -7,7 +7,8 @@ npm i @fastagent-sh/client
 ```
 
 ```ts
-import { connectAgent, connectAuth } from "@fastagent-sh/client";
+import { connectAgent } from "@fastagent-sh/client";
+import { connectAuth } from "@fastagent-sh/client/auth";
 
 const agent = connectAgent("https://agent.example.com", {
   apiKey: process.env.AGENT_API_KEY!,
@@ -31,6 +32,6 @@ const auth = connectAuth("https://agent.example.com", {
 const providers = await auth.providers();
 ```
 
-Also exports the Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and pluggable `remotes.json` transport contract (`/remotes`) used by cloud transport clients like `@fastagent-sh/client-agentcore`.
+Also exports the remote Auth API (`/auth`), Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and pluggable `remotes.json` transport contract (`/remotes`) used by cloud transport clients like `@fastagent-sh/client-agentcore`.
 
 See [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) and [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).

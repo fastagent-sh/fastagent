@@ -148,7 +148,7 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       );
       const key = Redacted.make(randomBytes(32).toString("base64url"));
       const service = yield* Effect.tryPromise({
-        try: () => agent.serve({ apiKeys: [key] }),
+        try: () => agent.serve({ apiKeys: [key], remoteAuth: true }),
         catch: (cause) => new OpenFailure(cause),
       });
       const opened: Opened = { agent, service, key, scope };

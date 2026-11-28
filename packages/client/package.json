@@ -31,6 +31,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./auth": {
+      "@fastagent-sh/source": "./src/auth.ts",
+      "types": "./dist/auth.d.ts",
+      "default": "./dist/auth.js"
+    },
     "./agent-api": {
       "@fastagent-sh/source": "./src/agent-api.ts",
       "types": "./dist/agent-api.d.ts",

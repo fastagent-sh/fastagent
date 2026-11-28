@@ -7,7 +7,8 @@ npm i @fastagent-sh/client-agentcore
 ```
 
 ```ts
-import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+import { connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCoreAuth } from "@fastagent-sh/client-agentcore/auth";
 
 const connection = {
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
@@ -22,6 +23,6 @@ const auth = connectAgentCoreAuth(connection);
 const providers = await auth.providers();
 ```
 
-Re-exports `connectAgent`, `connectAuth`, and `AgentError` from `@fastagent-sh/client` so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production.
+Re-exports `connectAgent` and `AgentError` from `@fastagent-sh/client` (and `connectAuth` from `@fastagent-sh/client-agentcore/auth`) so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production.
 
 See [Amazon Bedrock AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md) and [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).

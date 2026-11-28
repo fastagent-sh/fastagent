@@ -147,7 +147,7 @@ To reconnect after a drop, reopen `sessions.events` with `after` set to the last
 
 ## Remote provider auth (`/v1/auth/*`)
 
-Served instances expose an Auth API (`connectAuth` from `@fastagent-sh/client`, `connectAgentCoreAuth` from `@fastagent-sh/client-agentcore`, or `fastagent login --remote`) so operators can sign a deployed instance into OAuth or API-key model providers without baking credentials into images. Stored credentials persist in the instance's durable storage across restarts.
+CLI-served instances (`fastagent dev` / `start`), AgentCore runtimes, and embedded instances opting in via `agent.serve({ apiKeys, remoteAuth: true })` expose an Auth API (`connectAuth` from `@fastagent-sh/client/auth`, `connectAgentCoreAuth` from `@fastagent-sh/client-agentcore/auth`, or `fastagent login --remote`) so operators and cloud end-users can sign an instance into OAuth or API-key model providers without baking credentials into images. Stored credentials persist lazily in the instance's durable storage across restarts.
 
 | Method | HTTP route | Purpose |
 | --- | --- | --- |

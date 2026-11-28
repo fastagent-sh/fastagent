@@ -251,8 +251,8 @@ Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastag
 | npm 包 | 职责 | 运行时要求 |
 | --- | --- | --- |
 | [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 核心运行时（`pi-durable`）、`openAgent`、`defineTool`、`openPostgresDatabase`、HTTP 服务、CLI | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
-| [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API 与远程认证客户端（`connectAgent`、`connectAuth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
-| [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore 客户端（`connectAgentCore`、`connectAgentCoreAuth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
+| [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API（`connectAgent`）与远程认证（`./auth`）客户端 | Node 22+、浏览器、Edge、Bun（ES2024） |
+| [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore 客户端（`connectAgentCore`、`./auth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
 | [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | AWS AgentCore 服务端运行时、Aurora DSQL 适配器、Secrets Manager 集成、CDK 构造 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/pi-remote`](./packages/pi-remote/README.md) | Pi TUI 扩展（`/fa`），用于从终端交互式接入已部署的 HTTP 或 AgentCore 实例 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |

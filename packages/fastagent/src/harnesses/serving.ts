@@ -732,6 +732,8 @@ export interface LocalAgent extends Agent, InvokeApi {
 export interface ServeAgentOptions {
   /** The keys a Caller of the Agent API may present. */
   apiKeys?: readonly SecretInput[];
+  /** Mount `/v1/auth/*` endpoints for remote OAuth / API-key provider sign-in. Default: false. */
+  remoteAuth?: boolean;
 }
 
 export interface OpenAgentOptions {

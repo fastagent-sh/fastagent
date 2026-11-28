@@ -9,7 +9,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Redacted from "effect/Redacted";
 import type { AuthApi, RemoteAgent } from "@fastagent-sh/client/agent-api";
-import { connectAgent, connectAuth } from "@fastagent-sh/client";
+import { connectAgent } from "@fastagent-sh/client";
+import { connectAuth } from "@fastagent-sh/client/auth";
 import {
   connectExtensionRemote,
   expandRemoteEnvRef,

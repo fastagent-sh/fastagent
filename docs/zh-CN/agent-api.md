@@ -151,7 +151,7 @@ const msg = await agent.invoke(
 
 ## 远程提供商认证（`/v1/auth/*`）
 
-HTTP 与 AgentCore 实例均暴露 Auth API（`@fastagent-sh/client` 的 `connectAuth`、`@fastagent-sh/client-agentcore` 的 `connectAgentCoreAuth` 或 `fastagent login --remote`），让运维人员无需把凭证打进镜像即可远程为线上实例完成 OAuth 或 API Key 登录，凭证持久化存储在实例存储中跨重启保留。
+CLI 启动的实例（`fastagent dev` / `start`）、AgentCore 运行时，以及通过 `agent.serve({ apiKeys, remoteAuth: true })` 显式开启的嵌入式实例均暴露 Auth API（`@fastagent-sh/client/auth` 的 `connectAuth`、`@fastagent-sh/client-agentcore/auth` 的 `connectAgentCoreAuth` 或 `fastagent login --remote`），让运维人员或云端终端用户无需把凭证打进镜像即可远程完成 OAuth 或 API Key 登录，凭证按需懒写入实例持久存储并跨重启保留。
 
 | 方法 | HTTP 路由 | 用途 |
 | --- | --- | --- |

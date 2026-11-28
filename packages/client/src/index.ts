@@ -1,6 +1,7 @@
 /**
- * The Agent API and Auth API over HTTP, for any runtime where `fetch` exists: `connectAgent`, `connectAuth`,
- * `AgentError`, and all contract types. Zero Node dependencies, so it also runs on Bun, Deno, and Workers.
+ * The Agent API over HTTP, for any runtime where `fetch` exists: `connectAgent`, `AgentError`, and all core Agent API
+ * types. Remote provider OAuth/API-key sign-in lives at `@fastagent-sh/client/auth`. Zero Node dependencies, so it
+ * runs on Node, Bun, Deno, browsers, and edge workers.
  */
 /** @public */
 export type {
@@ -8,13 +9,6 @@ export type {
   Agent,
   AgentErrorData,
   AgentInfo,
-  AuthApi,
-  AuthFlowState,
-  AuthFlowStatus,
-  AuthLoginInput,
-  AuthMethod,
-  AuthPromptInfo,
-  AuthProviderStatus,
   CompactOptions,
   ContentPart,
   ContextUsage,
@@ -45,7 +39,6 @@ export type {
   SessionEvent,
   SessionSettings,
   SessionStatus,
-  StartAuthLoginRequest,
   ThinkingLevel,
   Tokens,
   Usage,
@@ -55,4 +48,4 @@ export type {
 export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
 
 /** @public */
-export { connectAgent, connectAuth, type ConnectOptions } from "./http/client.ts";
+export { connectAgent, type ConnectOptions } from "./http/client.ts";

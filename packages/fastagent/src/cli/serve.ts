@@ -31,9 +31,9 @@ export function parseBind(value: string | undefined): string | undefined {
   return bindAddress(trimmed);
 }
 
-/** What the CLI adds to the assembly: the API's keys. */
+/** What the CLI adds to the assembly: the API's keys and remote provider auth endpoints. */
 export function cliMountOptions(): ServeOptions {
-  return { apiKeys: apiKeysFrom(readApiKeyEnv()) };
+  return { apiKeys: apiKeysFrom(readApiKeyEnv()), remoteAuth: true };
 }
 
 interface ServeHooks {

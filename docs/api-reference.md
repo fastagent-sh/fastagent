@@ -12,15 +12,17 @@ FastAgent publishes six version-locked npm packages so you install only what you
 
 | Package | When to install | Key exports |
 | --- | --- | --- |
-| **`@fastagent-sh/fastagent`** | Writing an agent, packaging it, running the CLI, or embedding in Node | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, plus all Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, `AuthApi`, …) |
+| **`@fastagent-sh/fastagent`** | Writing an agent, packaging it, running the CLI, or embedding in Node/Bun | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, plus all core Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, …) |
 | **`@fastagent-sh/harness-dsh`** | Opting into kernel-enforced OS sandboxing (`--harness dsh`, experimental; loaded lazily by `@fastagent-sh/fastagent`) | `openDshAgent`, `MemoryDshEventStore`, `openSqliteDshStore` |
 
 ## Calling or operating a deployed agent
 
 | Package | When to install | Key exports |
 | --- | --- | --- |
-| **`@fastagent-sh/client`** | Calling any HTTP FastAgent from Node, Bun, Deno, or edge workers (zero Node deps) | `connectAgent`, `connectAuth`, `ConnectOptions`, `AgentError`, `LIMITS`, `hasEnded`, and all Agent API types |
-| **`@fastagent-sh/client-agentcore`** | Calling an AWS AgentCore-deployed FastAgent from your backend, CLI `--remote`, or Pi (zero server/DB/CDK deps) | `connectAgentCore`, `connectAgentCoreAuth`, `connectRemote`, `AgentCoreConnection`, plus re-exported `connectAgent`, `connectAuth`, `AgentError`, and Agent API types |
+| **`@fastagent-sh/client`** | Calling any HTTP FastAgent from Node, Bun, Deno, or edge workers (zero Node deps) | `connectAgent`, `ConnectOptions`, `AgentError`, `LIMITS`, `hasEnded`, and all core Agent API types |
+| **`@fastagent-sh/client/auth`** | Remote OAuth / API-key provider login over HTTP (zero Node deps) | `connectAuth`, `ConnectOptions`, `AuthApi`, `AuthFlowState`, `AuthProviderStatus`, `StartAuthLoginRequest`, `AuthLoginInput` |
+| **`@fastagent-sh/client-agentcore`** | Calling an AWS AgentCore-deployed FastAgent from your backend, CLI `--remote`, or Pi (zero server/DB/CDK deps) | `connectAgentCore`, `connectRemote`, `AgentCoreConnection`, plus re-exported `connectAgent`, `AgentError`, and core Agent API types |
+| **`@fastagent-sh/client-agentcore/auth`** | Remote OAuth / API-key provider login over AWS AgentCore | `connectAgentCoreAuth`, `AgentCoreConnection`, plus re-exported `connectAuth` and Auth API types |
 | **`@fastagent-sh/pi-remote`** | Chatting interactively with deployed HTTP or AgentCore instances inside Pi TUI (`/fa`) | Default export `fastAgentRemoteExtension` |
 
 ## Deploying on Amazon Bedrock AgentCore

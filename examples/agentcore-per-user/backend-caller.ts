@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { AgentError, connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+import { AgentError, connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCoreAuth } from "@fastagent-sh/client-agentcore/auth";
 
 /**
  * Call an AgentCore-deployed FastAgent from your backend using AWS IAM credentials (`InvokeAgentRuntime`).

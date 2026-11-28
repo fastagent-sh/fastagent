@@ -479,7 +479,8 @@ export class AuthPromptInfo extends Schema.Opaque<AuthPromptInfo>()(
   }),
 ) {}
 
-export const AuthFlowStatus = Schema.Literals(["pending", "awaiting_input", "completed", "failed", "canceled"]);
+const AuthFlowStatus = Schema.Literals(["pending", "awaiting_input", "completed", "failed", "canceled"]);
+/** @public */
 export type AuthFlowStatus = typeof AuthFlowStatus.Type;
 
 export class AuthFlowState extends Schema.Opaque<AuthFlowState>()(

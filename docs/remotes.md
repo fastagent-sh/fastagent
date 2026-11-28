@@ -94,7 +94,8 @@ Keep server authentication and provider authentication distinct:
 Zero Node dependencies—works anywhere `fetch` runs (Node, Bun, Deno, edge workers):
 
 ```ts
-import { connectAgent, connectAuth } from "@fastagent-sh/client";
+import { connectAgent } from "@fastagent-sh/client";
+import { connectAuth } from "@fastagent-sh/client/auth";
 
 const agent = connectAgent("https://agent.example.com", {
   apiKey: process.env.PROD_AGENT_KEY!,
@@ -116,7 +117,8 @@ const providers = await auth.providers();
 Zero server, database, or CDK dependencies:
 
 ```ts
-import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+import { connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCoreAuth } from "@fastagent-sh/client-agentcore/auth";
 
 const connection = {
   runtimeArn: "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/my_agent",

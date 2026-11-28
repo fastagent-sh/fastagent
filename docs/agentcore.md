@@ -90,7 +90,8 @@ npm i @fastagent-sh/client-agentcore
 ```
 
 ```ts
-import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+import { connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCoreAuth } from "@fastagent-sh/client-agentcore/auth";
 
 const connection = {
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
@@ -106,7 +107,7 @@ const auth = connectAgentCoreAuth(connection);
 const providers = await auth.providers();
 ```
 
-`@fastagent-sh/client-agentcore` also re-exports `connectAgent`, `connectAuth`, and `AgentError`, so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production. Your caller needs only IAM permission `bedrock-agentcore:InvokeAgentRuntime`—no `FASTAGENT_API_KEY` is used.
+`@fastagent-sh/client-agentcore` also re-exports `connectAgent` and `AgentError` (and `connectAuth` on `@fastagent-sh/client-agentcore/auth`), so one backend codebase works seamlessly against local `fastagent dev` over HTTP and AgentCore in production. Your caller needs only IAM permission `bedrock-agentcore:InvokeAgentRuntime`—no `FASTAGENT_API_KEY` is used.
 
 ### From your terminal (`fastagent agentcore invoke`)
 

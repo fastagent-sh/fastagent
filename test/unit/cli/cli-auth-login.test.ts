@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, stat, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess, withRepoModules } from "../../doubles/cli-run.ts";
-import { connectAuth } from "../../../packages/client/src/http/client.ts";
+import { connectAuth } from "@fastagent-sh/client/auth";
 import { openSource } from "../../harnesses/open-source.ts";
 import { CODEX_MODEL } from "../../doubles/codex-model.ts";
 
@@ -234,7 +234,7 @@ export default { model: "remote-prov/m1", providers: [provider] };
 `,
     });
     const opened = await openSource(dir);
-    const service = await opened.serve({ apiKeys: ["remote-secret"] });
+    const service = await opened.serve({ apiKeys: ["remote-secret"], remoteAuth: true });
     const port = await service.listen(0, "127.0.0.1");
     const url = `http://127.0.0.1:${port}`;
     const env = { ...process.env, FASTAGENT_API_KEY: "remote-secret" };

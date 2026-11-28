@@ -14,7 +14,8 @@ import {
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:net";
-import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
+import { connectAgent } from "@fastagent-sh/client";
+import { connectAuth } from "@fastagent-sh/client/auth";
 import { createWorkTracker } from "../../../packages/fastagent/src/busy.ts";
 import { listenLocalRedirect } from "../../../packages/fastagent/src/cli/remote-login.ts";
 import { modelEnvironment } from "../../../packages/fastagent/src/harnesses/models/environment.ts";
@@ -471,10 +472,27 @@ export default { model: "remote-keyed/m1", providers: [provider] };
 `,
     );
 
+    // Embedded openAgent().serve() defaults to remoteAuth: false and never creates credentials.sqlite eagerly.
+    const defaultAgent = await openSource(dir, { secrets: {} });
+    const defaultSvc = await defaultAgent.serve({ apiKeys: [KEY] });
+    const defaultPort = await defaultSvc.listen(0, "127.0.0.1");
+    try {
+      const disabledAuth = connectAuth(`http://127.0.0.1:${defaultPort}`, { apiKey: KEY });
+      expect(await disabledAuth.providers()).toEqual([]);
+      await expect(disabledAuth.startLogin({ provider: "remote-keyed", method: "api_key" })).rejects.toMatchObject({
+        code: "not_found",
+      });
+      expect(existsSync(join(dir, ".state", "credentials.sqlite"))).toBe(false);
+    } finally {
+      await defaultAgent.close();
+    }
+
     const first = await openSource(dir, { secrets: {} });
-    const svc1 = await first.serve({ apiKeys: [KEY] });
+    const svc1 = await first.serve({ apiKeys: [KEY], remoteAuth: true });
     const port1 = await svc1.listen(0, "127.0.0.1");
     try {
+      // Even with remoteAuth: true, credentials.sqlite is not created until a credential is actually stored.
+      expect(existsSync(join(dir, ".state", "credentials.sqlite"))).toBe(false);
       const auth = connectAuth(`http://127.0.0.1:${port1}`, { apiKey: KEY });
       const started = await auth.startLogin({ provider: "remote-keyed", method: "api_key" });
       expect(started.status).toBe("awaiting_input");
@@ -492,7 +510,7 @@ export default { model: "remote-keyed/m1", providers: [provider] };
 
     // Reopen on the same root on BOTH harnesses: credential persists in shared instance storage across harness switches.
     const dshView = await openSource(dir, { secrets: {}, harness: "dsh", sandbox: "off" });
-    const dshSvc = await dshView.serve({ apiKeys: [KEY] });
+    const dshSvc = await dshView.serve({ apiKeys: [KEY], remoteAuth: true });
     const dshPort = await dshSvc.listen(0, "127.0.0.1");
     try {
       const dshAuth = connectAuth(`http://127.0.0.1:${dshPort}`, { apiKey: KEY });
@@ -505,7 +523,7 @@ export default { model: "remote-keyed/m1", providers: [provider] };
     }
 
     const second = await openSource(dir, { secrets: {} });
-    const svc2 = await second.serve({ apiKeys: [KEY] });
+    const svc2 = await second.serve({ apiKeys: [KEY], remoteAuth: true });
     const port2 = await svc2.listen(0, "127.0.0.1");
     try {
       const auth2 = connectAuth(`http://127.0.0.1:${port2}`, { apiKey: KEY });
@@ -585,6 +603,52 @@ export default { model: "remote-keyed/m1", providers: [provider] };
       expect(await captured).toBe(`http://localhost:${port}/cb?state=expected-123&code=ok`);
     } finally {
       abort.abort();
+    }
+  });
+
+  it("sqliteDurableCredentialStore stays lazy on read/list/delete and warns on corrupt stored JSON", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-lazy-creds-"));
+    const dbPath = join(dir, "credentials.sqlite");
+    const store = sqliteDurableCredentialStore(dbPath);
+    try {
+      expect(await store.read("openai")).toBeUndefined();
+      expect(await store.list()).toEqual([]);
+      await store.delete("openai");
+      expect(existsSync(dbPath)).toBe(false);
+
+      await store.modify("openai", async () => ({ type: "api_key", key: "sk-1" }));
+      expect(existsSync(dbPath)).toBe(true);
+      expect(await store.read("openai")).toEqual({ type: "api_key", key: "sk-1" });
+    } finally {
+      await store.close();
+    }
+
+    // Corrupt a credential row and device_id directly, then verify visible warnings instead of silent swallowing.
+    const { DatabaseSync } = await import("node:sqlite");
+    const rawDb = new DatabaseSync(dbPath);
+    try {
+      rawDb
+        .prepare("INSERT OR REPLACE INTO fastagent_credentials (key, value_json, updated_at) VALUES (?, ?, ?)")
+        .run("cred:broken", "{not-json", Date.now());
+      rawDb
+        .prepare("INSERT OR REPLACE INTO fastagent_credentials (key, value_json, updated_at) VALUES (?, ?, ?)")
+        .run("device_id", "{not-json", Date.now());
+    } finally {
+      rawDb.close();
+    }
+
+    const warnings: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((msg: unknown) => warnings.push(String(msg)));
+    const reopened = sqliteDurableCredentialStore(dbPath);
+    try {
+      expect(await reopened.read("broken")).toBeUndefined();
+      const deviceId = await reopened.getOrCreateDeviceId();
+      expect(deviceId.length).toBeGreaterThan(0);
+      expect(warnings.some((line) => line.includes("corrupt stored credential for broken"))).toBe(true);
+      expect(warnings.some((line) => line.includes("stored device_id is corrupt"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      await reopened.close();
     }
   });
 

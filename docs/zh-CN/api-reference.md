@@ -12,15 +12,17 @@ FastAgent 发布 6 个版本号同步锁定的 npm 包，你可以按角色只�
 
 | 包名 | 何时安装 | 核心导出 |
 | --- | --- | --- |
-| **`@fastagent-sh/fastagent`** | 编写 Agent、打包制品、运行 CLI 或在 Node 中嵌入 | `defineAgent`、`defineTool`、`needs`、`sessionIdOf`、`openAgent`、`openPostgresDatabase`、`baseEnv`、`AgentError`、`LIMITS`、`hasEnded`、`McpError`，以及全部 Agent API 类型（`Agent`、`LocalAgent`、`RemoteAgent`、`Session`、`Message`、`Entry`、`InvokeRequest`、`AuthApi` 等） |
+| **`@fastagent-sh/fastagent`** | 编写 Agent、打包制品、运行 CLI 或在 Node/Bun 中嵌入 | `defineAgent`、`defineTool`、`needs`、`sessionIdOf`、`openAgent`、`openPostgresDatabase`、`baseEnv`、`AgentError`、`LIMITS`、`hasEnded`、`McpError`，以及全部核心 Agent API 类型（`Agent`、`LocalAgent`、`RemoteAgent`、`Session`、`Message`、`Entry`、`InvokeRequest` 等） |
 | **`@fastagent-sh/harness-dsh`** | 启用内核级 OS 沙箱（`--harness dsh`，实验性；由 `@fastagent-sh/fastagent` 懒加载） | `openDshAgent`、`MemoryDshEventStore`、`openSqliteDshStore` |
 
 ## 调用或运维已部署的 Agent
 
 | 包名 | 何时安装 | 核心导出 |
 | --- | --- | --- |
-| **`@fastagent-sh/client`** | 从 Node、Bun、Deno 或边缘函数调用任意 HTTP FastAgent（零 Node 依赖） | `connectAgent`、`connectAuth`、`ConnectOptions`、`AgentError`、`LIMITS`、`hasEnded` 及全部 Agent API 类型 |
-| **`@fastagent-sh/client-agentcore`** | 从后端、CLI `--remote` 或 Pi 调用 AWS AgentCore 实例（零服务端/DB/CDK 依赖） | `connectAgentCore`、`connectAgentCoreAuth`、`connectRemote`、`AgentCoreConnection`，并重新导出 `connectAgent`、`connectAuth`、`AgentError` 及 Agent API 类型 |
+| **`@fastagent-sh/client`** | 从 Node、Bun、Deno 或边缘函数调用任意 HTTP FastAgent（零 Node 依赖） | `connectAgent`、`ConnectOptions`、`AgentError`、`LIMITS`、`hasEnded` 及全部核心 Agent API 类型 |
+| **`@fastagent-sh/client/auth`** | 通过 HTTP 驱动远端 OAuth / API Key 登录（零 Node 依赖） | `connectAuth`、`ConnectOptions`、`AuthApi`、`AuthFlowState`、`AuthProviderStatus`、`StartAuthLoginRequest`、`AuthLoginInput` |
+| **`@fastagent-sh/client-agentcore`** | 从后端、CLI `--remote` 或 Pi 调用 AWS AgentCore 实例（零服务端/DB/CDK 依赖） | `connectAgentCore`、`connectRemote`、`AgentCoreConnection`，并重新导出 `connectAgent`、`AgentError` 及核心 Agent API 类型 |
+| **`@fastagent-sh/client-agentcore/auth`** | 通过 AWS AgentCore 驱动远端 OAuth / API Key 登录 | `connectAgentCoreAuth`、`AgentCoreConnection`，并重新导出 `connectAuth` 及 Auth API 类型 |
 | **`@fastagent-sh/pi-remote`** | 在 Pi TUI（`/fa`）中与已部署的 HTTP 或 AgentCore 实例实时对话 | 默认导出 `fastAgentRemoteExtension` |
 
 ## 部署到 Amazon Bedrock AgentCore
