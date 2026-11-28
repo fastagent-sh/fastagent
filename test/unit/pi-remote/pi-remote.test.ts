@@ -1,9 +1,17 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initTheme } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
+import { type KeybindingsManager as PiKeybindingsManager, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+  type EditorTheme,
+  KeybindingsManager,
+  type TUI,
+  TUI_KEYBINDINGS,
+  getKeybindings,
+  setKeybindings,
+  stripTerminalSequences,
+} from "@earendil-works/pi-tui";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type Agent,
   AgentError,
@@ -16,7 +24,7 @@ import {
 } from "@fastagent-sh/client";
 import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
 import { RemoteController, buildSendContent } from "@fastagent-sh/pi-remote/controller";
-import { parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/editor";
+import { RemoteEditor, parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/editor";
 import { REMOTE_ENTRY_TYPE, registerFastAgentRemoteExtension } from "@fastagent-sh/pi-remote/extension";
 import { connectRemote, loadRemotes, removeRemote, saveRemote } from "@fastagent-sh/pi-remote/remotes";
 import { renderRemoteEntry, renderRemoteFooterLines } from "@fastagent-sh/pi-remote/render";
@@ -1306,6 +1314,86 @@ describe("Pi extension host integration", () => {
       else process.env.FASTAGENT_REMOTES_PATH = prevPath;
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe("RemoteEditor followUp autocomplete (Pi 1.7.0)", () => {
+  const editorTheme: EditorTheme = {
+    borderColor: (s) => s,
+    selectList: {
+      selectedPrefix: (s) => s,
+      selectedText: (s) => s,
+      description: (s) => s,
+      scrollInfo: (s) => s,
+      noMatch: (s) => s,
+    },
+  };
+  const stubTui = { requestRender() {} } as unknown as TUI;
+
+  it("confirms slash-command and non-command completions on Alt+Enter before queuing to the remote", async () => {
+    const prevKb = getKeybindings();
+    const kb = new KeybindingsManager({
+      ...TUI_KEYBINDINGS,
+      "app.message.followUp": { defaultKeys: "alt+enter" },
+    });
+    setKeybindings(kb);
+    try {
+      const queued: string[] = [];
+      const leakedToHost: string[] = [];
+      const editor = new RemoteEditor(stubTui, editorTheme, kb as unknown as PiKeybindingsManager, {
+        isConnected: () => true,
+        isRunning: () => true,
+        onQueueMessage: (text) => queued.push(text),
+      });
+      editor.onAction("app.message.followUp", () => {
+        leakedToHost.push(editor.getText());
+      });
+      editor.setAutocompleteProvider({
+        getSuggestions: async (lines, cursorLine, cursorCol) => {
+          const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+          if (beforeCursor.startsWith("/")) {
+            return { items: [{ value: "daily", label: "daily" }], prefix: beforeCursor };
+          }
+          const match = /@\S*$/.exec(beforeCursor);
+          if (match) {
+            return { items: [{ value: "@src/app.ts", label: "src/app.ts" }], prefix: match[0] };
+          }
+          return null;
+        },
+        applyCompletion: (lines, cursorLine, cursorCol, item, prefix) => {
+          const line = lines[cursorLine] ?? "";
+          const replacement = prefix.startsWith("/") ? `/${item.value} ` : `${item.value} `;
+          const next = `${line.slice(0, cursorCol - prefix.length)}${replacement}${line.slice(cursorCol)}`;
+          return {
+            lines: lines.map((entry, idx) => (idx === cursorLine ? next : entry)),
+            cursorLine,
+            cursorCol: cursorCol - prefix.length + replacement.length,
+          };
+        },
+      });
+
+      // 1) Slash command completion + Alt+Enter completes and queues to the remote (never leaks to host).
+      for (const ch of "/dai") editor.handleInput(ch);
+      await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
+      editor.handleInput("\x1b\r"); // Alt+Enter
+      expect(editor.isShowingAutocomplete()).toBe(false);
+      expect(queued).toEqual(["/daily"]);
+      expect(leakedToHost).toEqual([]);
+
+      // 2) Non-command completion + Alt+Enter inserts without queuing; second Alt+Enter queues to remote.
+      for (const ch of "check @src/a") editor.handleInput(ch);
+      await vi.waitFor(() => expect(editor.isShowingAutocomplete()).toBe(true));
+      editor.handleInput("\x1b\r");
+      expect(editor.isShowingAutocomplete()).toBe(false);
+      expect(editor.getText()).toBe("check @src/app.ts ");
+      expect(queued).toEqual(["/daily"]);
+
+      editor.handleInput("\x1b\r");
+      expect(queued).toEqual(["/daily", "check @src/app.ts"]);
+      expect(leakedToHost).toEqual([]);
+    } finally {
+      setKeybindings(prevKb);
     }
   });
 });
