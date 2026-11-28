@@ -88,8 +88,17 @@ export class RemoteEditor extends CustomEditor {
   }
 
   override handleInput(data: string): void {
-    if (this.callbacks.isConnected() && !this.isShowingAutocomplete()) {
+    if (this.callbacks.isConnected()) {
       if (this.kb.matches(data, "app.message.followUp") && this.callbacks.isRunning()) {
+        if (this.isShowingAutocomplete()) {
+          if (typeof this.confirmAutocomplete !== "function") {
+            super.handleInput(data);
+            return;
+          }
+          if (this.confirmAutocomplete() === "applied") {
+            return;
+          }
+        }
         const text = (this.getExpandedText?.() ?? this.getText()).trim();
         if (text) {
           this.addToHistory?.(text);
@@ -98,37 +107,39 @@ export class RemoteEditor extends CustomEditor {
           return;
         }
       }
-      if (this.kb.matches(data, "app.model.select")) {
-        this.submitFa("model");
-        return;
-      }
-      if (this.kb.matches(data, "app.model.cycleForward")) {
-        this.submitFa("model-cycle", "next");
-        return;
-      }
-      if (this.kb.matches(data, "app.model.cycleBackward")) {
-        this.submitFa("model-cycle", "prev");
-        return;
-      }
-      if (this.kb.matches(data, "app.thinking.cycle")) {
-        this.submitFa("thinking-cycle");
-        return;
-      }
-      if (this.kb.matches(data, "app.message.copy")) {
-        this.submitFa("copy");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.new")) {
-        this.submitFa("new");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.resume")) {
-        this.submitFa("sessions");
-        return;
-      }
-      if (this.kb.matches(data, "app.session.fork")) {
-        this.submitFa("fork");
-        return;
+      if (!this.isShowingAutocomplete()) {
+        if (this.kb.matches(data, "app.model.select")) {
+          this.submitFa("model");
+          return;
+        }
+        if (this.kb.matches(data, "app.model.cycleForward")) {
+          this.submitFa("model-cycle", "next");
+          return;
+        }
+        if (this.kb.matches(data, "app.model.cycleBackward")) {
+          this.submitFa("model-cycle", "prev");
+          return;
+        }
+        if (this.kb.matches(data, "app.thinking.cycle")) {
+          this.submitFa("thinking-cycle");
+          return;
+        }
+        if (this.kb.matches(data, "app.message.copy")) {
+          this.submitFa("copy");
+          return;
+        }
+        if (this.kb.matches(data, "app.session.new")) {
+          this.submitFa("new");
+          return;
+        }
+        if (this.kb.matches(data, "app.session.resume")) {
+          this.submitFa("sessions");
+          return;
+        }
+        if (this.kb.matches(data, "app.session.fork")) {
+          this.submitFa("fork");
+          return;
+        }
       }
     }
     super.handleInput(data);
