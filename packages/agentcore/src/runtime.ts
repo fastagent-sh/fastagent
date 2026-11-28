@@ -9,17 +9,13 @@
  * only be one more for a Caller to hold.
  */
 import { randomBytes } from "node:crypto";
-import { createServer } from "node:http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
-import { HttpEffect, HttpServer } from "effect/http";
 import { type ErrorCode, agentError, errorData } from "@fastagent-sh/client/agent-api";
 import { statusOf } from "@fastagent-sh/client/http/contract";
 import {
@@ -30,7 +26,7 @@ import {
   type Service,
   openAgent,
 } from "@fastagent-sh/fastagent";
-import { Unavailable } from "@fastagent-sh/fastagent/platform";
+import { Unavailable, serveHandler } from "@fastagent-sh/fastagent/platform";
 import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./contract.ts";
 
 /** The header AgentCore names an invocation's session in. */
@@ -330,6 +326,14 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
   };
 }
 
+class ServeFailure {
+  readonly _tag = "ServeFailure";
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    this.cause = cause;
+  }
+}
+
 /** Serve `definition` as an AgentCore runtime, on AgentCore's port. Answers how to stop it. */
 export async function serveAgentCore(
   definition: AgentDefinition,
@@ -337,15 +341,9 @@ export async function serveAgentCore(
 ): Promise<{ close(): Promise<void> }> {
   const scope = Scope.makeUnsafe();
   const handler = agentCoreHandler(definition, options);
-  const server = NodeHttpServer.layer(() => createServer({ requestTimeout: 0, headersTimeout: 60_000 }), {
-    port: PORT,
-    host: "0.0.0.0",
-    gracefulShutdownTimeout: "500 millis",
-  });
-  const app = Effect.interruptible(HttpEffect.fromWebHandler(handler.fetch));
-  await Effect.runPromise(
+  const exit = await Effect.runPromiseExit(
     Effect.gen(function* () {
-      // Registered before the server layer so LIFO scope close stops HTTP first, then releases the instance.
+      // Registered before the server so LIFO scope close stops HTTP first, then releases the instance.
       yield* Scope.addFinalizer(
         scope,
         Effect.promise(() =>
@@ -354,9 +352,31 @@ export async function serveAgentCore(
           }),
         ),
       );
-      yield* Layer.buildWithScope(HttpServer.serve(app).pipe(Layer.provideMerge(server)), scope);
-    }).pipe(Effect.onError(() => closeScopeQuietly(scope, "starting AgentCore"))),
+      yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: async () => {
+            const server = serveHandler(handler.fetch, { port: PORT, host: "0.0.0.0" });
+            await server.listening;
+            return server;
+          },
+          catch: (cause) => new ServeFailure(cause),
+        }),
+        (server) =>
+          Effect.promise(() =>
+            server.close().catch((error: unknown) => {
+              console.error(`[fastagent] closing AgentCore HTTP server failed: ${String(error)}`);
+            }),
+          ),
+      );
+    }).pipe(
+      Scope.provide(scope),
+      Effect.onError(() => closeScopeQuietly(scope, "starting AgentCore")),
+    ),
   );
+  if (Exit.isFailure(exit)) {
+    const failure = Cause.squash(exit.cause);
+    throw failure instanceof ServeFailure ? failure.cause : failure;
+  }
   console.error(`[fastagent] serving AgentCore on port ${PORT}`);
   return {
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),

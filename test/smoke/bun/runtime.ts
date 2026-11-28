@@ -91,7 +91,7 @@ await Promise.all([
 ]);
 console.error("[bun-smoke] 1/6 public imports ok");
 
-// 2. Proxy boundary (dynamic HTTP_PROXY + loopback exemption) + SSE abort propagation on Bun's NodeHttpServer layer
+// 2. Proxy boundary (dynamic HTTP_PROXY + loopback exemption) + native Bun.serve contracts (POST, 500, SSE abort, EADDRINUSE, graceful/forced close)
 {
   const proxiedUrls: string[] = [];
   const proxyServer = createServer((req, res) => {
@@ -115,7 +115,18 @@ console.error("[bun-smoke] 1/6 public imports ok");
 
   let aborted = false;
   const server = serveHandler(
-    (req) => {
+    async (req) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/echo") {
+        return Response.json({ method: req.method, header: req.headers.get("x-bun"), body: await req.text() });
+      }
+      if (path === "/throw") {
+        throw new Error("boom /secret/path");
+      }
+      if (path === "/slow") {
+        await new Promise((r) => setTimeout(r, 80));
+        return new Response("finished-gracefully");
+      }
       req.signal.addEventListener("abort", () => {
         aborted = true;
       });
@@ -135,9 +146,38 @@ console.error("[bun-smoke] 1/6 public imports ok");
     assertEqual("proxied response body", await proxiedRes.text(), "via-proxy");
     assertEqual("proxied request count", proxiedUrls.length, 1);
 
-    // Loopback requests bypass HTTP_PROXY even when NO_PROXY is unset, and client abort propagates.
+    // POST body + headers preserved through wrappedHandler on native Bun.serve.
+    const echoRes = await fetch(`http://127.0.0.1:${port}/echo`, {
+      method: "POST",
+      headers: { "x-bun": "native" },
+      body: "hello-bun-serve",
+    });
+    assertEqual("echo response", await echoRes.json(), {
+      method: "POST",
+      header: "native",
+      body: "hello-bun-serve",
+    });
+
+    // Throwing handler returns 500 without leaking internal error message.
+    const errRes = await fetch(`http://127.0.0.1:${port}/throw`);
+    assertEqual("throwing handler status", errRes.status, 500);
+    assert(!(await errRes.text()).includes("/secret/path"), "500 body must not leak error details");
+
+    // Port conflict rejects with EADDRINUSE.
+    let bindError: (Error & { code?: unknown }) | undefined;
+    const conflict = serveHandler(() => new Response("dup"), { port, host: "127.0.0.1" });
+    try {
+      await conflict.listening;
+    } catch (error) {
+      bindError = error as Error & { code?: unknown };
+    } finally {
+      await conflict.close();
+    }
+    assertEqual("EADDRINUSE code", bindError?.code, "EADDRINUSE");
+
+    // Loopback SSE bypasses HTTP_PROXY and propagates client abort.
     const ac = new AbortController();
-    const res = await fetch(`http://127.0.0.1:${port}`, { signal: ac.signal });
+    const res = await fetch(`http://127.0.0.1:${port}/sse`, { signal: ac.signal });
     const reader = res.body?.getReader();
     assert(reader !== undefined, "expected SSE response body");
     const first = await reader.read();
@@ -146,6 +186,30 @@ console.error("[bun-smoke] 1/6 public imports ok");
     ac.abort();
     await new Promise((r) => setTimeout(r, 100));
     assert(aborted, "client abort must propagate to serveHandler request.signal on Bun");
+
+    // Graceful close lets an in-flight request complete within the 500ms budget.
+    const inflight = fetch(`http://127.0.0.1:${port}/slow`).then((r) => r.text());
+    await new Promise((r) => setTimeout(r, 20));
+    await server.close();
+    assertEqual("graceful shutdown response", await inflight, "finished-gracefully");
+
+    // Forced close after 500ms deadline terminates dangling SSE streams cleanly.
+    const hanging = serveHandler(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode("data: stay-open\n\n"));
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      { port: 0, host: "127.0.0.1" },
+    );
+    const hangingPort = await hanging.listening;
+    const openRes = await fetch(`http://127.0.0.1:${hangingPort}`);
+    await openRes.body?.getReader().read();
+    await hanging.close();
   } finally {
     for (const [k, v] of Object.entries(savedProxyEnv)) {
       if (v === undefined) delete process.env[k];
@@ -155,7 +219,7 @@ console.error("[bun-smoke] 1/6 public imports ok");
     await new Promise<void>((resolveClose) => proxyServer.close(() => resolveClose()));
   }
 }
-console.error("[bun-smoke] 2/6 proxy + HTTP SSE abort ok");
+console.error("[bun-smoke] 2/6 proxy + native Bun.serve contracts ok");
 
 const work = mkdtempSync(join(tmpdir(), "fa-bun-smoke-"));
 const cleanEnv: NodeJS.ProcessEnv = { ...process.env, HOME: join(work, "home") };
