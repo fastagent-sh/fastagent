@@ -1,12 +1,12 @@
 ---
 title: Embedding
-description: "Run a FastAgent inside your Node backend or desktop app behind your own authentication, database, and routes."
+description: "Run a FastAgent inside your Node or Bun backend or desktop app behind your own authentication, database, and routes."
 status: current
 ---
 
 # Embedding
 
-Embed a compiled FastAgent directly in your Node backend or desktop application when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
+Embed a compiled FastAgent directly in your Node or Bun backend or desktop application when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
 
 ```bash
 npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4.4
@@ -19,8 +19,8 @@ Compile your agent into a standalone npm package with `fastagent build` ([Packag
 | Scenario | Recommended pattern |
 | --- | --- |
 | **Custom app routes / UI behind your own auth** | Call `openAgent()` and invoke `agent.messages.stream`, `agent.messages.send`, or `agent.invoke` directly from your route handlers. |
-| **Hosting multiple tenant instances in one Node process** | Open one shared pool with `openPostgresDatabase()` and pass it to each `openAgent({ name, database })`. |
-| **Exposing the standard `/v1` Agent API inside an existing web server** | Call `const service = await agent.serve({ apiKeys })` and mount `service.fetch` in Next.js, Hono, Express, or Fastify. |
+| **Hosting multiple tenant instances in one Node/Bun process** | Open one shared pool with `openPostgresDatabase()` and pass it to each `openAgent({ name, database })`. |
+| **Exposing the standard `/v1` Agent API inside an existing web server** | Call `const service = await agent.serve({ apiKeys })` (add `remoteAuth: true` to also mount `/v1/auth/*`) and mount `service.fetch` in Next.js, Hono, Express, or Fastify. |
 | **Local desktop application** | Open with an app-owned `root`, populate model pickers from `agent.info().models`, and handle `info().unusableDefault` gracefully. |
 
 ## 1. Open the agent

@@ -6,7 +6,7 @@ status: current
 
 # Agent API
 
-无论 Agent 是嵌入在你的 Node 应用中（`openAgent`）、通过 HTTP 对外提供服务（`connectAgent`），还是运行在 Amazon Bedrock AgentCore 上（`connectAgentCore`），你对接的都是同一份契约：Agent API。
+无论 Agent 是嵌入在你的 Node 或 Bun 应用中（`openAgent`）、通过 HTTP 对外提供服务（`connectAgent`），还是运行在 Amazon Bedrock AgentCore 上（`connectAgentCore`），你对接的都是同一份契约：Agent API。
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -206,7 +206,7 @@ CLI 启动的实例（`fastagent dev` / `start`）、AgentCore 运行时，以�
 
 `idempotencyKey` 通过 URL 编码后的 `Idempotency-Key` 请求头传递。SSE 流发送 `event: <type>`、JSON `data`，持久化 `entry` 事件携带 `id: <entry.id>`，并至少每 15 秒发送一次保活注释。拒绝响应统一返回 `{ "error": AgentErrorData }`。
 
-`connectAgent(url, { apiKey, fetch })` 与 `connectAuth(url, { apiKey, fetch })` 支持传入自定义 `fetch` 传输层以对接签名云协议（如 [`@fastagent-sh/client-agentcore`](agentcore.md)）。
+`connectAgent(url, { apiKey, fetch })` 与 `connectAuth(url, { apiKey, fetch })`（来自 `@fastagent-sh/client/auth`）支持传入自定义 `fetch` 传输层以对接签名云协议（如 [`@fastagent-sh/client-agentcore`](agentcore.md)）。
 
 ```bash
 # 单次命名对话调用（适用于定时任务、Webhook、空闲休眠托管）

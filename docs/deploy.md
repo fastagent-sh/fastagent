@@ -119,7 +119,7 @@ Rotate `FASTAGENT_API_KEY` with zero downtime by setting `FASTAGENT_API_KEY=new,
 
 ## Container details & file ownership
 
-The generated `Dockerfile` installs dependencies, runs `fastagent build`, exposes port `8787`, sets `FASTAGENT_DEPLOYED=1`, `FASTAGENT_NAME=<agent>`, and `FASTAGENT_ROOT=/data`, and runs `fastagent start`. To enable OS sandboxing inside the container, install `@fastagent-sh/harness-dsh` in `package.json` and set `harness: "dsh"` (or `FASTAGENT_HARNESS=dsh` plus `FASTAGENT_SANDBOX`). When `bash` is enabled with sandboxing, `harness: "dsh"` verifies OS sandbox availability at startup and fails fast if unavailable; on the generated `node:24-slim` Linux image it uses the built-in Landlock launcher (requires Linux kernel Landlock support), or `bwrap` if you install `bubblewrap` in a custom Dockerfile with user-namespace support.
+The generated `Dockerfile` installs dependencies, runs `fastagent build`, exposes port `8787`, sets `FASTAGENT_DEPLOYED=1`, `FASTAGENT_NAME=<agent>`, and `FASTAGENT_ROOT=/data`, and runs `fastagent start`. To enable OS sandboxing inside the container, install `@fastagent-sh/harness-dsh` in `package.json` and set `harness: "dsh"` (or `FASTAGENT_HARNESS=dsh` plus `FASTAGENT_SANDBOX`). When `bash` is enabled with sandboxing, `harness: "dsh"` verifies OS sandbox availability at startup and fails fast if unavailable; on the generated Linux images (`node:24-slim` or `oven/bun`) it uses the built-in Landlock launcher (requires Linux kernel Landlock support), or `bwrap` if you install `bubblewrap` in a custom Dockerfile with user-namespace support.
 
 The generated `.dockerignore` excludes `.secrets/`, `.env`, `*.env`, `.state/`, `.fastagent/`, and `node_modules`.
 

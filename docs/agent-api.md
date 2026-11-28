@@ -6,7 +6,7 @@ status: current
 
 # Agent API
 
-Whether your agent runs embedded in your Node app (`openAgent`), behind HTTP (`connectAgent`), or on Amazon Bedrock AgentCore (`connectAgentCore`), you integrate with one contract: the Agent API.
+Whether your agent runs embedded in your Node or Bun app (`openAgent`), behind HTTP (`connectAgent`), or on Amazon Bedrock AgentCore (`connectAgentCore`), you integrate with one contract: the Agent API.
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -202,7 +202,7 @@ All API routes live under `/v1` and require `Authorization: Bearer <key>` (confi
 
 Send `idempotencyKey` in the percent-encoded `Idempotency-Key` header. SSE streams emit `event: <type>`, JSON `data`, `id: <entry.id>` on durable `entry` events, and keepalive comments at least every 15 seconds. Refusals return `{ "error": AgentErrorData }`.
 
-`connectAgent(url, { apiKey, fetch })` and `connectAuth(url, { apiKey, fetch })` accept a custom `fetch` transport for signed cloud protocols (such as [`@fastagent-sh/client-agentcore`](agentcore.md)).
+`connectAgent(url, { apiKey, fetch })` and `connectAuth(url, { apiKey, fetch })` (from `@fastagent-sh/client/auth`) accept a custom `fetch` transport for signed cloud protocols (such as [`@fastagent-sh/client-agentcore`](agentcore.md)).
 
 ```bash
 # Single-call invoke with caller-named conversation (cron, webhooks, scale-to-zero)
