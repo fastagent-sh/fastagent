@@ -61,9 +61,6 @@ export default needs(
 );
 `,
   "src/tools/weather.test.ts": "throw new Error('a test file is not a module');\n",
-  "src/extensions/audit.ts": `import { defineExtension, section } from "@earendil-works/pi-durable";
-export default defineExtension({ name: "audit", sections: [section("audit", () => "Every answer is audited.")] });
-`,
 };
 
 export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };

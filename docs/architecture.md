@@ -32,7 +32,7 @@ FastAgent is architected in clean layers around those five requirements.
                     │ (lazy)                             │ (optional, lazy)
 ┌───────────────────▼──────────────────┐ ┌───────────────▼───────────────────┐
 │ Harness: pi-durable (default)        │ │ Harness: @fastagent-sh/harness-dsh│
-│  Durable loop · src/extensions       │ │  @deepseek-ai/dsh · OS Sandbox    │
+│  Durable loop · Crash recovery       │ │  @deepseek-ai/dsh · OS Sandbox    │
 │  SQLite (EXCLUSIVE) / PostgreSQL     │ │  SQLite / PostgreSQL              │
 │  (shared fenced leases)              │ │  (shared fenced leases)           │
 └──────────────────────────────────────┘ └───────────────────────────────────┘
@@ -54,13 +54,12 @@ FastAgent centralizes all platform capabilities in one shared serving layer and 
 
 | Capability | Shared serving layer | Harness-specific |
 | --- | --- | --- |
-| Prompts, skills, templates, `fastagent.config.ts`, `fastagent build` | ✓ | — |
-| Portable tools (`defineTool`), `needs()` secrets, MCP servers | ✓ | — |
+| Prompts (`AGENTS.md`, `SYSTEM.md`), skills, templates, `fastagent.config.ts`, `fastagent build` | ✓ | — |
+| Portable tools (`defineTool` / Standard JSON Schema v1), `needs()` secrets, `.mcp.json` & MCP servers | ✓ | — |
 | `pi-ai` model providers & layered/durable credentials (`/v1/auth/*`) | ✓ | — |
 | Caller-named `POST /v1/invoke` conversation mapping | ✓ | — |
 | HTTP server (`/health`, `/v1/*`) & OpenTelemetry OTLP traces | ✓ | — |
 | Agent execution loop & session/message event log | — | `pi-durable` or `dsh` |
-| `src/extensions/` (`defineExtension`) | — | `pi-durable` only (skipped with warning on `dsh`) |
 | Kernel-enforced OS sandbox (`workspace`, `read-only`, `off`) | — | `@fastagent-sh/harness-dsh` |
 
 Because `pi-durable` and `dsh` store their session event logs in separate table namespaces while sharing durable credentials and conversation mappings, you can test or switch harnesses against the same storage without corrupting existing sessions.

@@ -1,6 +1,6 @@
 /**
  * `pi-durable` agent assembler: takes an already-built definition (`harnesses/assembly.ts`) and opens a
- * `DurableAgent` over `pi-durable` with its coding tools, authored tools, MCP tools, extensions, and execution env.
+ * `DurableAgent` over `pi-durable` with its coding tools, authored tools, MCP tools, and execution env.
  */
 import type { AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { Models } from "@earendil-works/pi-ai";
@@ -25,13 +25,9 @@ import type { WorkTracker } from "../../busy.ts";
 import type { AgentDefinition } from "../../definition/definition.ts";
 import { instanceName } from "../../instance-name.ts";
 import type { RunsAs } from "../../serving-command.ts";
-import {
-  type BuiltDefinition,
-  DEFINITION_EXTENSION,
-  type Unfinished,
-  assertNoMcpToolConflicts,
-  resolveDefaultModel,
-} from "../assembly.ts";
+import { type BuiltDefinition, type Unfinished, assertNoMcpToolConflicts, resolveDefaultModel } from "../assembly.ts";
+
+const DEFINITION_EXTENSION = "fastagent.definition";
 import { agentPresentation, resolveCodingTools } from "../config.ts";
 import { CODING_TOOL_NAMES, type CodingToolName } from "../define.ts";
 import { definitionSections, readCommands } from "../text.ts";
@@ -101,7 +97,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
       tools: [...code.tools, ...(options.mcpTools ?? [])] as ToolRegistration[],
     }),
   );
-  for (const raw of code.extensions) registry.install(raw as Extension);
   const { thinkingLevel, maxSteps } = config;
   return openDurableAgent({
     storage: options.storage,

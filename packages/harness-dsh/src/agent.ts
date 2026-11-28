@@ -47,7 +47,7 @@ import {
   decodeRequest,
   hasEnded,
 } from "@fastagent-sh/client/agent-api";
-import { type AuthoredTool, createEventChannel } from "@fastagent-sh/fastagent/harness";
+import { type PortableTool, createEventChannel } from "@fastagent-sh/fastagent/harness";
 import { buildCodingTools, resolveEnabledCodingTools } from "./coding-tools.ts";
 import { applyScopedSettings, bindDshAgentEvents, ensureDshAgent } from "./event-bridge.ts";
 import { PiAiModelsAdapter } from "./llm-pi-ai.ts";
@@ -136,7 +136,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     options,
     ctx,
     store,
-    toolsByName: new Map<string, AuthoredTool>(),
+    toolsByName: new Map<string, PortableTool>(),
     maxRetries: options.retry?.maxRetries ?? 1,
     baseDelayMs: options.retry?.baseDelayMs ?? 1,
     liveSessions: new Map<string, LiveSession>(),
@@ -197,7 +197,7 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
     ...(options.protectedPaths !== undefined ? { protectedPaths: options.protectedPaths } : {}),
     ...(options.env !== undefined ? { env: options.env } : {}),
   });
-  const toolsList: AuthoredTool[] = [...builtInCodingTools, ...userTools];
+  const toolsList: PortableTool[] = [...builtInCodingTools, ...userTools];
   for (const tool of toolsList) state.toolsByName.set(tool.name, tool);
 
   if (options.systemPrompt !== undefined) {

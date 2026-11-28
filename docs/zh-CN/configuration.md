@@ -10,9 +10,10 @@ FastAgent 将随代码提交的 Agent 定义（`fastagent.config.ts`、提示词
 
 | 你想配置什么 | 存放位置 |
 | --- | --- |
-| 提示词、运行规范、技能、提示词模板 | `SYSTEM.md`、`AGENTS.md`、`skills/`、`prompts/` |
-| 自定义 TypeScript 工具与扩展 | `src/tools/`、`src/extensions/` |
-| 默认模型、Harness、OS 沙箱、编码工具、自定义 Provider、MCP 服务器 | `fastagent.config.ts` |
+| 提示词、运行规范、技能、提示词模板 | `AGENTS.md`、`SYSTEM.md`、`skills/`、`prompts/` |
+| 可移植 TypeScript 工具 | `src/tools/` |
+| MCP 工具服务器 | `.mcp.json` / `mcp.json` 或 `fastagent.config.ts`（`mcpServers`） |
+| 默认模型、Harness、OS 沙箱、编码工具、自定义 Provider | `fastagent.config.ts`（可选） |
 | 按环境覆盖项（端口、存储、模型、Harness、API Key） | CLI 参数与 `FASTAGENT_*` 环境变量 |
 | 提供商登录凭证与密钥 | `.secrets/.env`、`.secrets/auth.json`、环境变量或远程 `fastagent login --remote` |
 
@@ -114,12 +115,12 @@ export default defineAgent({
 
 | 选项 | 适用场景 |
 | --- | --- |
-| **`pi-durable`（默认）** | 内置于 `@fastagent-sh/fastagent` 的标准生产选项；支持 `src/extensions/`。 |
+| **`pi-durable`（默认）** | 内置于 `@fastagent-sh/fastagent` 的标准生产选项。 |
 | **`dsh` + `sandbox: "workspace"`** | 启用 `bash`/文件工具且希望通过内核沙箱（macOS `sandbox-exec`、Linux `bwrap`/`Landlock`、Windows 受限令牌）将读写限制在工作目录内。若系统无法提供沙箱则拒绝启动。 |
 | **`dsh` + `sandbox: "read-only"`** | 允许检查工作区文件并运行只读命令，但严禁修改文件（`write` 和 `edit` 会被拒绝）。 |
 | **`dsh` + `sandbox: "off"`** | 在已经高度隔离的容器内运行 `dsh`，不需要嵌套内核沙箱。 |
 
-两种 Harness 共享同一个 SQLite 文件或 PostgreSQL 数据库，但各自使用互不冲突的表命名空间（`durable_*` 与 `dsh_*`），同时共享持久化凭证和命名对话映射。`SYSTEM.md`、`AGENTS.md`、`skills/`、`prompts/`、`src/tools/`（`defineTool`）与 `mcpServers` 在两者上完全一致；`src/extensions/` 仅适用于 `pi-durable`，在 `dsh` 上会被跳过并打印警告。
+两种 Harness 共享同一个 SQLite 文件或 PostgreSQL 数据库，但各自使用互不冲突的表命名空间（`durable_*` 与 `dsh_*`），同时共享持久化凭证和命名对话映射。所有 Agent 资产——`AGENTS.md`、`SYSTEM.md`、`skills/`、`prompts/`、`.mcp.json`、`src/tools/` 与 `mcpServers`——在两种 Harness 上 100% 一致运行。
 
 ## 提示词、技能与模板
 
@@ -127,14 +128,13 @@ export default defineAgent({
 - **`skills/<name>/SKILL.md`：** 自动发现并列在系统提示词中，可通过 `/skill:<name>` 直接调用。
 - **`prompts/<name>.md`：** 当消息以 `/<name>` 开头时自动展开的提示词模板。
 
-## 工具与扩展（`src/`）
+## 可移植工具（`src/tools/`）
 
-放在 `src/tools/` 或 `src/extensions/` 下的每个文件都会按默认导出自动加载，无需手动注册。测试文件（`*.test.*`）会被自动忽略；共享辅助模块请放在 `src/` 之外（如 `lib/`）。将文件重命名为 `<name>.ts.disabled` 可临时禁用。
+放在 `src/tools/` 下的每个文件都会按默认导出自动加载，无需手动注册。测试文件（`*.test.*`）会被自动忽略；共享辅助模块请放在 `src/tools/` 之外（如 `lib/`）。将文件重命名为 `<name>.ts.disabled` 可临时禁用。
 
 | 目录 | 默认导出 | 支持的 Harness |
 | --- | --- | --- |
-| `src/tools/` | `@fastagent-sh/fastagent`（或 `@earendil-works/pi-durable`）的 `defineTool(...)`，可选用 `needs()` 包裹 | `pi-durable` 与 `dsh` |
-| `src/extensions/` | `@earendil-works/pi-durable` 的 `defineExtension(...)`，可选用 `needs()` 包裹 | 仅 `pi-durable`（`dsh` 跳过并告警） |
+| `src/tools/` | `@fastagent-sh/fastagent` 的 `defineTool(...)` 或 `{ name, description, parameters, execute }` 工具对象（Standard JSON Schema v1 或 JSON Schema），可选用 `needs()` 包裹 | 所有服务端 Harness（`pi-durable` 与 `dsh`） |
 
 - **灵活的参数 Schema：** `defineTool` 支持 Standard JSON Schema v1（Zod v4、Valibot、ArkType、Effect `Schema.toStandardJSONSchemaV1`）或原生 JSON Schema 对象（带 `as const` 自动类型推导）。
 - **简洁的返回值：** `execute` 可直接返回纯字符串 `string`，或返回完整的 `ToolExecutionResult`（`{ output, details?, isError? }`）。
@@ -154,7 +154,7 @@ export default defineAgent({
 
 ### 在代码中声明密钥
 
-将任何需要读取密钥或环境配置的工具、扩展或 Provider 用 `needs()` 包裹：
+将任何需要读取密钥或环境配置的工具或 Provider 用 `needs()` 包裹：
 
 ```ts
 import { z } from "zod"; // 或原生 JSON Schema (`as const`)、Effect Schema、Valibot、ArkType

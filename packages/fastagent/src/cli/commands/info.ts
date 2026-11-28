@@ -9,12 +9,7 @@ import { describeSecrets, missingSecrets } from "../../declared-secrets.ts";
 import { enteredInstanceName, instanceName } from "../../instance-name.ts";
 import { type InstanceFlags, enterInstance } from "../instance.ts";
 import { modelEnvironment } from "../../harnesses/models/environment.ts";
-import {
-  agentPresentation,
-  diagnoseHarnessCompatibility,
-  resolveCodingTools,
-  resolveHarnessSelection,
-} from "../../harnesses/config.ts";
+import { agentPresentation, resolveCodingTools, resolveHarnessSelection } from "../../harnesses/config.ts";
 import { definitionSecrets } from "../../definition/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
 import { describeInstanceStorage, resolveHarnessProvider } from "../../harnesses/serving.ts";
@@ -119,14 +114,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     transport: server.type ?? "stdio",
     ...(server.type === "http" ? { url: server.url } : {}),
   }));
-  const warnings = [
-    ...diagnoseHarnessCompatibility(definition, harnessSelection, {
-      ...(code === undefined ? {} : { extensions: code.extensions }),
-      ...(resolvedProvider?.supportsExtensions === undefined
-        ? {}
-        : { supportsExtensions: resolvedProvider.supportsExtensions }),
-    }),
-  ];
 
   if (opts.json) {
     console.log(
@@ -145,9 +132,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
           codingTools,
           tools: code?.tools.map(({ name }) => name) ?? null,
           mcp,
-          extensions: code?.extensions.map(({ name }) => name) ?? null,
           commands,
-          warnings,
           secrets: definition.inputs.secrets,
           unsetSecrets: unsetSecrets.map(({ name }) => name),
           workdir,
@@ -177,7 +162,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
       ? `${harnessSelection.harness} (sandbox: ${harnessSelection.sandbox})`
       : harnessSelection.harness,
   );
-  for (const warning of warnings) cont(`⚠ ${warning}`);
   line("model", modelSpec ?? "(not set — pass --model, set FASTAGENT_MODEL, or model in fastagent.config.ts)");
   if (modelError) cont(`⚠ does not resolve: ${modelError}`);
   if (config.thinkingLevel) line("thinking", config.thinkingLevel);
@@ -185,7 +169,6 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const unbuilt = "(not built: a required secret has no value)";
   line("coding tools", codingTools.join(", ") || "(none)");
   line("tools", code ? code.tools.map(({ name }) => name).join(", ") || "(none)" : unbuilt);
-  if (code && code.extensions.length > 0) line("extensions", code.extensions.map(({ name }) => name).join(", "));
   line("mcp", mcp.map((server) => `${server.name} (${server.transport})`).join(", ") || "(none)");
   line("commands", commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   line("secrets", declared.length > 0 ? describeSecrets(declared) : "(none declared)");

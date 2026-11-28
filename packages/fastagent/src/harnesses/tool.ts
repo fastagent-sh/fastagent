@@ -9,6 +9,8 @@ import { type Json, SessionId } from "@fastagent-sh/client/agent-api";
 /** Per-invocation session-id resolver attached onto `api` by harness tool adapters. */
 export const RESOLVE_SESSION_ID: unique symbol = Symbol.for("@fastagent-sh/fastagent/resolveSessionId");
 
+const PORTABLE_TOOL: unique symbol = Symbol.for("@fastagent-sh/fastagent/portableTool");
+
 interface StandardIssue {
   readonly message: string;
   readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>;
@@ -255,7 +257,7 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
 ): PortableTool<TDetails> {
   const { parameters, execute, outputLimits, replay, prepareArguments } = tool;
   const { jsonSchema, validate } = resolveParameters(tool.name, parameters);
-  return {
+  const compiled: PortableTool<TDetails> = {
     name: tool.name,
     description: tool.description,
     parameters: jsonSchema,
@@ -275,9 +277,51 @@ export function defineTool<TParameters extends ToolParameters, TDetails extends 
         parsedArgs = result.value;
       }
       const outcome = await execute(parsedArgs as InferToolArgs<TParameters>, api, context);
-      return typeof outcome === "string" ? { output: [{ type: "text", text: outcome }] } : outcome;
+      if (typeof outcome === "string") return { output: [{ type: "text", text: outcome }] };
+      if (outcome !== null && typeof outcome === "object" && ("sleep" in outcome || "wait" in outcome)) {
+        throw new Error(
+          `tool "${tool.name}" returned a non-portable park response (sleep/wait); return a portable ToolResult or string`,
+        );
+      }
+      return outcome;
     },
   };
+  Object.defineProperty(compiled, PORTABLE_TOOL, { value: true, enumerable: false });
+  return compiled;
+}
+
+/** Whether `value` was already compiled by {@link defineTool}. */
+function isPortableTool(value: unknown): value is PortableTool {
+  return typeof value === "object" && value !== null && PORTABLE_TOOL in value;
+}
+
+/**
+ * Normalize an exported `src/tools/*` module value into a {@link PortableTool}, accepting both {@link defineTool}
+ * registrations and raw tool objects (`{ name, description, parameters, execute }`) using Standard JSON Schema v1 or
+ * plain JSON Schema `{ type: "object" }`. Rejects non-tool exports and `pi-durable` task-park tools at load/build time.
+ */
+export function normalizePortableTool(source: string, value: unknown): PortableTool {
+  if (isPortableTool(value)) return value;
+  if (
+    !isPlainObject(value) ||
+    "task" in value ||
+    typeof value.name !== "string" ||
+    value.name.trim() === "" ||
+    typeof value.description !== "string" ||
+    value.parameters === undefined ||
+    value.parameters === null ||
+    typeof value.execute !== "function"
+  ) {
+    throw new Error(
+      `${source}: must default-export a tool (defineTool from @fastagent-sh/fastagent or a { name, description, parameters, execute } tool object), or needs(...) around one`,
+    );
+  }
+  try {
+    return defineTool(value as unknown as ToolDefinition);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${source}: ${message}`, { cause: error });
+  }
 }
 
 /** Apply `ToolOutputLimits` (`maxLines` then `maxBytes`, `head` or `tail`) to streamed tool text. */

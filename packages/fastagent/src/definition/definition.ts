@@ -10,7 +10,7 @@ import type { AgentConfig } from "../harnesses/define.ts";
 import { REGISTRY_KINDS, type Registry } from "./registry.ts";
 
 /** What an opener of this FastAgent reads; a definition made for another refuses. */
-export const DEFINITION_FORMAT = 2;
+export const DEFINITION_FORMAT = 3;
 
 const DEFINITION = Symbol.for("fastagent.definition");
 

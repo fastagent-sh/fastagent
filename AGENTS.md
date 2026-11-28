@@ -37,8 +37,8 @@ FastAgent is the open-source cloud runtime narrow waist inside a four-part ortho
 - **Two harnesses behind one contract.** `pi-durable` is the built-in default harness and `@fastagent-sh/harness-dsh`
   is an optional second harness with native OS sandboxing. The contract boundary stays strictly at `@fastagent-sh/client`'s
   Agent API + `test/harnesses/agent-api-conformance.ts` (no internal `LoopPort`). `@earendil-works/pi-*` is imported
-  only under `packages/fastagent/src/harnesses/`. Portable tools use `defineTool`; `src/extensions/*` remain
-  `pi-durable`-specific and are skipped with a warning on `dsh`.
+  only under `packages/fastagent/src/harnesses/`. Every agent definition (`AGENTS.md`, `SYSTEM.md`, `skills/`, `.mcp.json`,
+  and `src/tools/` via `defineTool` or Standard JSON Schema v1 tool objects) is 100% portable across both harnesses.
 - **The contracts import no harness.** The client's `agent-api.ts` imports only `effect/Schema`; the runtime's
   `mcp-api.ts` imports nothing. Each package's `src/index.ts` names every export and exports no assembly
   part (`openServing`, `serveAgent`, `openDurableAgent` stay internal). `test/guards/package-boundary.test.ts` checks this.

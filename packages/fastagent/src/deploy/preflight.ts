@@ -5,14 +5,11 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { describeSecrets } from "../declared-secrets.ts";
+import { definitionSecrets } from "../definition/definition.ts";
 import { resolveAuthPath } from "../harnesses/models/credentials.ts";
 import { loadSourceDefinition } from "../harnesses/assembly.ts";
-import {
-  diagnoseHarnessCompatibility,
-  harnessPackage,
-  resolveCodingTools,
-  resolveHarnessSelection,
-} from "../harnesses/config.ts";
+import { harnessPackage, resolveCodingTools, resolveHarnessSelection } from "../harnesses/config.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { type McpDeclaration, declareMcp, literalCredentialAdvice, literalCredentials } from "../mcp/config.ts";
 import { DEPLOYED_ENV, exists } from "../paths.ts";
@@ -129,6 +126,10 @@ async function gatherFacts(
     throw new DeployGate(`cannot read fastagent.config.ts: ${messageOf(error)}`);
   });
   checkMcp(agentDir, rawProgram.value?.mcpServers, rawProgram.file, report);
+  const requiredSecrets = definitionSecrets(definition).filter((secret) => !secret.optional);
+  if (requiredSecrets.length > 0) {
+    report.note(`required secrets: ${describeSecrets(requiredSecrets)}`);
+  }
 
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
@@ -172,7 +173,6 @@ async function gatherFacts(
     );
   }
   const harnessSelection = resolveHarnessSelection(config, {}, {});
-  for (const warning of diagnoseHarnessCompatibility(definition, harnessSelection)) report.warn(warning);
   const requiredHarnessPkg = harnessPackage(harnessSelection.harness);
   if (requiredHarnessPkg !== undefined) {
     if (!listsPackage(pkg, requiredHarnessPkg)) {

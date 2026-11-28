@@ -22,7 +22,7 @@ afterEach(async () => {
 const program = (servers: unknown, target = dir) =>
   writeFile(join(target, "fastagent.config.ts"), `export default ${JSON.stringify({ mcpServers: servers })};\n`);
 
-describe("the servers of the program, from fastagent.config.ts", () => {
+describe("the servers of the project, from .mcp.json / mcp.json and fastagent.config.ts", () => {
   it("reads them with the instance's variables and no ambient secret forwarding", async () => {
     expect(await loadMcp(dir)).toEqual([]);
     await program({
@@ -130,4 +130,41 @@ describe("the servers of the program, from fastagent.config.ts", () => {
     },
     { arbitrary: { runs: 30 } },
   );
+
+  it("discovers .mcp.json / mcp.json (with $schema), merges with fastagent.config.ts, and refuses duplicate server names or dual files", async () => {
+    await writeFile(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        $schema: "https://json.schemastore.org/mcp.json",
+        mcpServers: {
+          duang: {
+            type: "http",
+            url: "https://duang.example.com/mcp",
+            headers: { Authorization: "Bearer ${DUANG_TOKEN}" },
+          },
+        },
+      }),
+    );
+    await program({
+      local: { command: "npx", args: ["-y", "mcp-local"] },
+    });
+
+    const merged = await loadMcp(dir);
+    expect(merged.map((m) => ({ name: m.name, file: m.file }))).toEqual([
+      { name: "duang", file: ".mcp.json" },
+      { name: "local", file: "fastagent.config.ts" },
+    ]);
+    expect(mcpSecrets(merged)).toEqual([
+      { name: "DUANG_TOKEN", declaredIn: ".mcp.json mcpServers.duang", optional: false },
+    ]);
+
+    // Duplicate server name across .mcp.json and fastagent.config.ts is refused visibly.
+    expect(() => declareMcp({ duang: { command: "npx" } }, dir)).toThrow(
+      '.mcp.json and fastagent.config.ts both define MCP server "duang"',
+    );
+
+    // Having both .mcp.json and mcp.json in the same directory is refused visibly.
+    await writeFile(join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
+    await expect(loadMcp(dir)).rejects.toThrow(/both \.mcp\.json and mcp\.json exist/);
+  });
 });

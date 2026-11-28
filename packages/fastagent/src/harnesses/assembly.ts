@@ -1,6 +1,7 @@
 /**
- * Harness-neutral definition assembly: reads a source project (`fastagent.config.ts` and `src/`) as an
- * `AgentDefinition`, resolves `needs()` secrets, validates tools/extensions/providers, and resolves model specs.
+ * Harness-neutral definition assembly: reads a source project (`fastagent.config.ts`, `.mcp.json`, `AGENTS.md`, `skills/`,
+ * and `src/tools/`) as an `AgentDefinition`, resolves `needs()` secrets, compiles portable tools, validates providers,
+ * and resolves model specs.
  */
 import { basename, resolve } from "node:path";
 import type { Models, Provider } from "@earendil-works/pi-ai";
@@ -16,12 +17,9 @@ import { decodeRuntimeCliEnv } from "../process-env.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 import { readPackageJson } from "../runtime.ts";
 import { fastagentVersion } from "../version.ts";
-import { checkProgramConfig, resolveCodingTools } from "./config.ts";
+import { checkProgramConfig } from "./config.ts";
 import type { AgentConfig } from "./define.ts";
-
-/** Reserved internal extension names that authored extensions may not shadow. */
-export const DEFINITION_EXTENSION = "fastagent.definition";
-const CODING_TOOLS_EXTENSION = "coding-tools";
+import { type PortableTool, normalizePortableTool } from "./tool.ts";
 
 /** What a process does with messages an earlier process accepted and did not finish. */
 export type Unfinished = "resume" | "refuse";
@@ -41,7 +39,7 @@ export function modelSpecFor(
   return flag ?? (fromEnv || config.model);
 }
 
-/** The source project in `dir` as a definition: `fastagent.config.ts` (optional) and the modules of `src/`. */
+/** The source project in `dir` as a definition: `fastagent.config.ts` (optional), `.mcp.json` (optional), and `src/tools/`. */
 export async function loadSourceDefinition(directory: string): Promise<AgentDefinition> {
   const dir = resolve(directory);
   const config = await loadConfig(dir);
@@ -60,49 +58,18 @@ export async function loadSourceDefinition(directory: string): Promise<AgentDefi
   });
 }
 
-function built<T>(
-  source: string,
-  value: unknown,
-  values: Record<string, string | undefined>,
-  accept: (v: unknown) => string | undefined,
-): T {
+function builtProvider(source: string, value: unknown, values: Record<string, string | undefined>): Provider {
   const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
-  const problem = accept(resolved);
-  if (problem !== undefined) throw new Error(`${source}: ${problem}`);
-  return resolved as T;
+  if (typeof (resolved as Partial<Provider> | null)?.id !== "string") {
+    throw new Error(`${source}: must be a pi-ai provider (createProvider)`);
+  }
+  return resolved as Provider;
 }
 
-const toolProblem = (value: unknown): string | undefined => {
-  const tool = value as Partial<AuthoredTool> | null;
-  if (
-    tool?.parameters !== null &&
-    (typeof tool?.parameters === "object" || typeof tool?.parameters === "function") &&
-    "~standard" in tool.parameters
-  ) {
-    return 'parameters is an unconverted Standard Schema: wrap the tool with defineTool from "@fastagent-sh/fastagent"';
-  }
-  if (
-    typeof tool?.name !== "string" ||
-    typeof tool.description !== "string" ||
-    typeof tool.parameters !== "object" ||
-    tool.parameters === null ||
-    Array.isArray(tool.parameters) ||
-    typeof tool.execute !== "function"
-  ) {
-    return "must default-export a tool (defineTool from @fastagent-sh/fastagent or @earendil-works/pi-durable), or needs(...) around one";
-  }
-  return undefined;
-};
-
-const extensionProblem = (value: unknown): string | undefined =>
-  typeof (value as Partial<AuthoredExtension> | null)?.name === "string"
-    ? undefined
-    : "must be an extension (defineExtension from @earendil-works/pi-durable), or needs(...) around one";
-
-const providerProblem = (value: unknown): string | undefined =>
-  typeof (value as Partial<Provider> | null)?.id === "string" ? undefined : "must be a pi-ai provider (createProvider)";
-
-const named = <T extends { name: string }>(value: T) => ({ name: value.name, value });
+function builtTool(source: string, value: unknown, values: Record<string, string | undefined>): PortableTool {
+  const resolved = isNeeds(value) ? (value as Needs<unknown>).build(values) : value;
+  return normalizePortableTool(source, resolved);
+}
 
 function refuseTwins(kind: string, entries: readonly { source: string; name: string }[]): void {
   const first = new Map<string, string>();
@@ -113,49 +80,10 @@ function refuseTwins(kind: string, entries: readonly { source: string; name: str
   }
 }
 
-/** Minimal structural shape shared by portable `defineTool` registrations and `pi-durable` tools. */
-export interface AuthoredTool {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: object;
-  readonly outputLimits?: { readonly maxBytes?: number; readonly maxLines?: number; readonly retain?: "head" | "tail" };
-  readonly replay?: "safe" | "unsafe";
-  prepareArguments?(args: unknown): unknown;
-  execute(
-    args: unknown,
-    api: never,
-    context: never,
-  ): Promise<{
-    readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
-    readonly details?: unknown;
-    readonly isError?: boolean;
-    readonly control?: { readonly terminate?: boolean };
-  }>;
-}
-
-/** Minimal structural shape validated for `src/extensions/*` modules (`pi-durable`-specific). */
-interface AuthoredExtension {
-  readonly name: string;
-  readonly tools?: readonly { readonly name: string }[];
-}
-
 /** The definition's code, built with the values of the secrets it declares. */
 export interface BuiltDefinition {
-  tools: AuthoredTool[];
-  extensions: AuthoredExtension[];
+  tools: PortableTool[];
   providers: Provider[];
-}
-
-function checkStatic<T>(source: string, value: unknown, accept: (v: unknown) => string | undefined): T | undefined {
-  if (isNeeds(value)) {
-    if (typeof value.build !== "function") {
-      throw new Error(`${source}: needs(...) factory must be a function`);
-    }
-    return undefined;
-  }
-  const problem = accept(value);
-  if (problem !== undefined) throw new Error(`${source}: ${problem}`);
-  return value as T;
 }
 
 /**
@@ -166,23 +94,27 @@ export function validateDefinitionStatic(definition: AgentDefinition): void {
   const { registry, config } = definition;
   const tools: { source: string; name: string }[] = [];
   for (const { file, value } of registry.tools) {
-    const resolved = checkStatic<AuthoredTool>(file, value, toolProblem);
-    if (resolved !== undefined) tools.push({ source: file, name: resolved.name });
-  }
-  const extensions: { source: string; name: string }[] = [];
-  for (const { file, value } of registry.extensions) {
-    const resolved = checkStatic<AuthoredExtension>(file, value, extensionProblem);
-    if (resolved !== undefined) extensions.push({ source: file, name: resolved.name });
+    if (isNeeds(value)) {
+      if (typeof value.build !== "function") {
+        throw new Error(`${file}: needs(...) factory must be a function`);
+      }
+      continue;
+    }
+    const compiled = normalizePortableTool(file, value);
+    tools.push({ source: file, name: compiled.name });
   }
   refuseTwins("tool", tools);
-  const codingTools = resolveCodingTools(config.codingTools);
-  refuseTwins("extension", [
-    ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CODING_TOOLS_EXTENSION }] : []),
-    { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
-    ...extensions,
-  ]);
   for (const [i, value] of (config.providers ?? []).entries()) {
-    checkStatic<Provider>(`${CONFIG_FILE} providers[${i}]`, value, providerProblem);
+    const source = `${CONFIG_FILE} providers[${i}]`;
+    if (isNeeds(value)) {
+      if (typeof value.build !== "function") {
+        throw new Error(`${source}: needs(...) factory must be a function`);
+      }
+      continue;
+    }
+    if (typeof (value as Partial<Provider> | null)?.id !== "string") {
+      throw new Error(`${source}: must be a pi-ai provider (createProvider)`);
+    }
   }
 }
 
@@ -198,26 +130,15 @@ export function buildDefinition(definition: AgentDefinition, env: NodeJS.Process
   const values = (value: unknown): Record<string, string | undefined> =>
     isNeeds(value) ? Object.fromEntries(value.secrets.map(({ name }) => [name, env[name] || undefined])) : {};
   const { registry, config } = definition;
-  const tools = registry.tools.map(({ file, value }) => ({
-    source: file,
-    ...named(built<AuthoredTool>(file, value, values(value), toolProblem)),
-  }));
-  const extensions = registry.extensions.map(({ file, value }) => ({
-    source: file,
-    ...named(built<AuthoredExtension>(file, value, values(value), extensionProblem)),
-  }));
+  const tools = registry.tools.map(({ file, value }) => {
+    const tool = builtTool(file, value, values(value));
+    return { source: file, name: tool.name, value: tool };
+  });
   refuseTwins("tool", tools);
-  const codingTools = resolveCodingTools(config.codingTools);
-  refuseTwins("extension", [
-    ...(codingTools.length > 0 ? [{ source: "pi-durable's coding tools", name: CODING_TOOLS_EXTENSION }] : []),
-    { source: "FastAgent's definition extension", name: DEFINITION_EXTENSION },
-    ...extensions,
-  ]);
   return {
     tools: tools.map(({ value }) => value),
-    extensions: extensions.map(({ value }) => value),
     providers: (config.providers ?? []).map((value, i) =>
-      built<Provider>(`${CONFIG_FILE} providers[${i}]`, value, values(value), providerProblem),
+      builtProvider(`${CONFIG_FILE} providers[${i}]`, value, values(value)),
     ),
   };
 }
@@ -254,11 +175,9 @@ export function resolveDefaultModel(
   return { unusableDefault: { spec, reason } };
 }
 
-/** Refuse MCP tools whose exposed names collide with authored tools or extension tools. */
+/** Refuse MCP tools whose exposed names collide with authored tools. */
 export function assertNoMcpToolConflicts(code: BuiltDefinition, mcpTools: readonly { name: string }[]): void {
-  const authoredNames = new Set(
-    [...code.tools, ...code.extensions.flatMap((extension) => extension.tools ?? [])].map((tool) => tool.name),
-  );
+  const authoredNames = new Set(code.tools.map((tool) => tool.name));
   for (const tool of mcpTools) {
     if (authoredNames.has(tool.name)) throw new Error(`MCP tool ${tool.name} conflicts with an authored tool`);
   }

@@ -50,12 +50,7 @@ import {
   buildDefinition,
   resolveDefaultModel,
 } from "./assembly.ts";
-import {
-  agentPresentation,
-  diagnoseHarnessCompatibility,
-  resolveCodingTools,
-  resolveHarnessSelection,
-} from "./config.ts";
+import { agentPresentation, resolveCodingTools, resolveHarnessSelection } from "./config.ts";
 import type { AgentConfig, HarnessName, SandboxMode } from "./define.ts";
 import { resolveHarnessProvider } from "./harness-loader.ts";
 import { mcpTools } from "./mcp.ts";
@@ -465,13 +460,6 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       try: () => resolveDefaultModel(modelSpec, options.model !== undefined, models.models),
       catch: (cause) => new PromiseFailure(cause),
     });
-    for (const warning of diagnoseHarnessCompatibility(definition, selection, {
-      extensions: code.extensions,
-      supportsExtensions: provider.supportsExtensions === true,
-    })) {
-      log.warn(`[fastagent] ${warning}`);
-    }
-
     const closeSignal = createCloseSignal();
     let currentRuntime: HarnessRuntimeAgent | undefined;
     let currentClose: (() => Promise<void>) | undefined;

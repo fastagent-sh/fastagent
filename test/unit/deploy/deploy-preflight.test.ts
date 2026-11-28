@@ -100,13 +100,33 @@ describe("deploy/preflight: what the container is checked for", () => {
       expect.stringMatching(/generated Linux image/),
     );
 
-    const extCompatDir = await agent({
-      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
-      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
+    // .mcp.json literal credentials, excluded .mcp.json in kept .dockerignore, and required ${VAR} secrets are reported identically to fastagent.config.ts.
+    const mcpCheckDir = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+      ".mcp.json": JSON.stringify({
+        mcpServers: {
+          duang: {
+            type: "http",
+            url: "https://duang.example.com/mcp",
+            headers: { Authorization: `Bearer \${DUANG_TOKEN}`, "X-Static-Key": "sk-literal-123" },
+          },
+        },
+      }),
+      ".dockerignore": "**/node_modules\n**/.secrets/**\n/.fastagent\n**/.env\n/.mcp.json\n",
     });
-    expect(await warnings(extCompatDir)).toContain(
-      'skipping pi-durable extensions on harness "dsh": legacy-ext (portable tools belong in src/tools/)',
-    );
+    const mcpChecked = await checkContainer({ agentDir: mcpCheckDir, force: false, target: DOCKER_TARGET });
+    expect(mcpChecked.ok).toBe(true);
+    if (mcpChecked.ok) {
+      const mcpWarns = mcpChecked.messages.filter((m) => m.level === "warn").map((m) => m.text);
+      const mcpNotes = mcpChecked.messages.filter((m) => m.level === "note").map((m) => m.text);
+      expect(mcpWarns).toContainEqual(
+        expect.stringMatching(/\.mcp\.json mcpServers\.duang\.headers\.X-Static-Key is a literal value/),
+      );
+      expect(mcpWarns).toContainEqual(
+        expect.stringMatching(/excludes `\.mcp\.json` — the image would ship WITHOUT the agent's MCP configuration/),
+      );
+      expect(mcpNotes).toContain("required secrets: DUANG_TOKEN (.mcp.json mcpServers.duang)");
+    }
   });
 
   it("detects Bun runtime from bun.lock / packageManager, checks Bun version floor, and recognizes bun run build", async () => {

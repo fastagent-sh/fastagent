@@ -1,13 +1,12 @@
 /**
- * The registry: every module in `src/tools/` and `src/extensions/` with what it default-exports, so
- * nothing is imported by hand. A file directly in the directory is a module, and anything else a module imports (a
- * helper) lives outside these directories.
+ * The registry: every module in `src/tools/` with what it default-exports, so nothing is imported by hand.
+ * A file directly in `src/tools/` is a portable tool module, and shared helpers live outside `src/tools/`.
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REGISTRY_KINDS = ["tools", "extensions"] as const;
+export const REGISTRY_KINDS = ["tools"] as const;
 type RegistryKind = (typeof REGISTRY_KINDS)[number];
 
 /** One module of the definition: where it is, and what it default-exports. */
@@ -25,20 +24,29 @@ const MODULE = /^([^.][^/]*)\.(ts|mts|js|mjs)$/;
 const NOT_A_MODULE = /\.(d|test|spec)\.[a-z]+$/;
 
 /** The module files of one directory of `src/`, sorted so the registry is the same wherever it is generated. */
-async function modulesIn(dir: string, kind: RegistryKind): Promise<{ file: string; name: string }[]> {
+async function modulesIn(dir: string, subDir: string): Promise<{ file: string; name: string }[]> {
   let names: string[];
   try {
-    names = await readdir(join(dir, "src", kind));
+    names = await readdir(join(dir, "src", subDir));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return names.sort().flatMap((entry) => {
+  return names.toSorted().flatMap((entry) => {
     const match = MODULE.exec(entry);
     return match === null || NOT_A_MODULE.test(entry)
       ? []
-      : [{ file: `src/${kind}/${entry}`, name: match[1] as string }];
+      : [{ file: `src/${subDir}/${entry}`, name: match[1] as string }];
   });
+}
+
+async function assertNoRemovedExtensionsDir(dir: string): Promise<void> {
+  const legacy = await modulesIn(dir, "extensions");
+  if (legacy.length > 0) {
+    throw new Error(
+      `src/extensions/ is removed (${legacy.map(({ file }) => file).join(", ")}): move portable tools to src/tools/ with defineTool() and prompt instructions to SYSTEM.md or AGENTS.md`,
+    );
+  }
 }
 
 /** The module files of the source project in `dir`, project-relative, in the order the registry imports them. */
@@ -50,6 +58,7 @@ export async function registryFiles(dir: string): Promise<string[]> {
 
 /** Import every module of the source project in `dir`, in the order the files sort, so each opens the same way. */
 export async function importRegistry(dir: string): Promise<Registry> {
+  await assertNoRemovedExtensionsDir(dir);
   const registry = {} as Record<RegistryKind, RegisteredModule[]>;
   for (const kind of REGISTRY_KINDS) {
     registry[kind] = [];

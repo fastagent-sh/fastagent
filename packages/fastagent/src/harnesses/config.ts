@@ -2,7 +2,6 @@
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
-import { isNeeds } from "../needs.ts";
 import { decodeRuntimeCliEnv } from "../process-env.ts";
 import {
   CODING_TOOL_NAMES,
@@ -108,37 +107,6 @@ export function resolveHarnessSelection(
   return sandbox === undefined ? { harness } : { harness, sandbox };
 }
 
-/**
- * Pure harness compatibility diagnostics shared across runtime startup (`serving.ts`), read-only inspection
- * (`fastagent info`), builds (`fastagent build`), and deploy preflight (`fastagent deploy check`).
- */
-export function diagnoseHarnessCompatibility(
-  definition: Pick<AgentDefinition, "registry">,
-  selection: HarnessSelection,
-  options?: {
-    /** Built extensions when available (exact runtime names, including `needs(...)` factories). */
-    readonly extensions?: readonly { readonly name: string }[];
-    /** Override capability from a dynamically loaded `HarnessProvider.supportsExtensions`. */
-    readonly supportsExtensions?: boolean;
-  },
-): readonly string[] {
-  const supportsExtensions = options?.supportsExtensions ?? selection.harness === "pi-durable";
-  if (supportsExtensions) return [];
-  const names =
-    options?.extensions !== undefined
-      ? options.extensions.map((ext) => ext.name)
-      : definition.registry.extensions.map((entry) => {
-          if (!isNeeds(entry.value) && typeof (entry.value as { name?: unknown } | null)?.name === "string") {
-            return (entry.value as { name: string }).name;
-          }
-          return entry.file;
-        });
-  if (names.length === 0) return [];
-  return [
-    `skipping pi-durable extensions on harness "${selection.harness}": ${names.join(", ")} (portable tools belong in src/tools/)`,
-  ];
-}
-
 /** Resolve `codingTools` from config into the concrete list of built-in coding tools to install. */
 export function resolveCodingTools(setting: CodingToolsConfig | undefined): readonly CodingToolName[] {
   if (setting === undefined || setting === true) return CODING_TOOL_NAMES;
@@ -210,12 +178,7 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
   }
   const unknownKey = Object.keys(config).find((key) => !KEY_SET.has(key));
   if (unknownKey !== undefined) {
-    const hint =
-      unknownKey === "defaults"
-        ? ": its keys are top-level now (model, thinkingLevel, starters)"
-        : unknownKey === "extensions"
-          ? ": an extension is a module of src/extensions/ that default-exports it, whether written there or imported from a package"
-          : "";
+    const hint = unknownKey === "defaults" ? ": its keys are top-level now (model, thinkingLevel, starters)" : "";
     throw new Error(`${file}: unknown key "${unknownKey}"${hint} (keys: ${KEYS.join(", ")})`);
   }
   const typed = config as AgentConfig;

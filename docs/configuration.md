@@ -10,9 +10,10 @@ FastAgent keeps what you commit with your agent (`fastagent.config.ts`, prompts,
 
 | What you want to configure | Where it lives |
 | --- | --- |
-| Prompt, standing rules, skills, prompt templates | `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/` |
-| Custom TypeScript tools & extensions | `src/tools/`, `src/extensions/` |
-| Default model, harness, OS sandbox, coding tools, custom providers, MCP servers | `fastagent.config.ts` |
+| Prompt, standing rules, skills, prompt templates | `AGENTS.md`, `SYSTEM.md`, `skills/`, `prompts/` |
+| Portable TypeScript tools | `src/tools/` |
+| MCP tool servers | `.mcp.json` / `mcp.json` or `fastagent.config.ts` (`mcpServers`) |
+| Default model, harness, OS sandbox, coding tools, custom providers | `fastagent.config.ts` (optional) |
 | Per-environment overrides (port, storage, model, harness, API keys) | CLI flags & `FASTAGENT_*` environment variables |
 | Provider logins & secrets | `.secrets/.env`, `.secrets/auth.json`, env vars, or remote `fastagent login --remote` |
 
@@ -114,12 +115,12 @@ Precedence (highest first):
 
 | Choice | When to pick it |
 | --- | --- |
-| **`pi-durable` (default)** | Standard production choice built into `@fastagent-sh/fastagent`; supports `src/extensions/`. |
+| **`pi-durable` (default)** | Standard production choice built into `@fastagent-sh/fastagent`. |
 | **`dsh` + `sandbox: "workspace"`** | When your agent enables `bash`/file tools and you want kernel-enforced confinement (`sandbox-exec` on macOS, `bwrap`/`Landlock` on Linux, restricted tokens on Windows) limited to the working directory. Fails closed if OS sandboxing is unavailable. |
 | **`dsh` + `sandbox: "read-only"`** | When the agent may inspect workspace files and run read-only commands but must not modify files (`write` and `edit` are refused). |
 | **`dsh` + `sandbox: "off"`** | Running `dsh` inside an already-isolated container without nested kernel sandboxing. |
 
-Both harnesses share the same SQLite file or PostgreSQL database in disjoint table namespaces (`durable_*` vs `dsh_*`), while sharing durable credentials and conversation mappings. `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool`), and `mcpServers` run identically on both; `src/extensions/` modules are `pi-durable`-specific and are skipped with a warning on `dsh`.
+Both harnesses share the same SQLite file or PostgreSQL database in disjoint table namespaces (`durable_*` vs `dsh_*`), while sharing durable credentials and conversation mappings. Every agent asset—`AGENTS.md`, `SYSTEM.md`, `skills/`, `prompts/`, `.mcp.json`, `src/tools/`, and `mcpServers`—runs identically on both harnesses.
 
 ## Prompts, skills, and templates
 
@@ -127,14 +128,13 @@ Both harnesses share the same SQLite file or PostgreSQL database in disjoint tab
 - **`skills/<name>/SKILL.md`:** Discovered automatically, listed in the system prompt, and invokable directly via `/skill:<name>`.
 - **`prompts/<name>.md`:** Prompt templates expanded whenever a message begins with `/<name>`.
 
-## Tools and extensions (`src/`)
+## Portable tools (`src/tools/`)
 
-Every file placed directly in `src/tools/` or `src/extensions/` is auto-loaded by default export—nothing to register manually. Test files (`*.test.*`) are ignored; place shared helpers outside `src/` (for example in `lib/`). Rename a file to `<name>.ts.disabled` to turn it off temporarily.
+Every file placed directly in `src/tools/` is auto-loaded by default export—nothing to register manually. Test files (`*.test.*`) are ignored; place shared helpers outside `src/tools/` (for example in `lib/`). Rename a file to `<name>.ts.disabled` to turn it off temporarily.
 
 | Directory | Default export | Supported harnesses |
 | --- | --- | --- |
-| `src/tools/` | `defineTool(...)` from `@fastagent-sh/fastagent` (or `@earendil-works/pi-durable`), optionally wrapped in `needs()` | Both `pi-durable` and `dsh` |
-| `src/extensions/` | `defineExtension(...)` from `@earendil-works/pi-durable`, optionally wrapped in `needs()` | `pi-durable` only (skipped with warning on `dsh`) |
+| `src/tools/` | `defineTool(...)` from `@fastagent-sh/fastagent` or a `{ name, description, parameters, execute }` object (Standard JSON Schema v1 or JSON Schema), optionally wrapped in `needs()` | All harnesses (`pi-durable` and `dsh`) |
 
 - **Flexible parameter schemas:** `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect `Schema.toStandardJSONSchemaV1`) or plain JSON Schema objects (with `as const` type inference).
 - **Simple return values:** `execute` can return a plain `string` or a full `ToolExecutionResult` (`{ output, details?, isError? }`).
@@ -154,7 +154,7 @@ Containers and embedded apps (`openAgent`) never read your local `.secrets/` or 
 
 ### Declare secrets in code
 
-Wrap any tool, extension, or provider that reads a secret or per-environment setting in `needs()`:
+Wrap any tool or provider that reads a secret or per-environment setting in `needs()`:
 
 ```ts
 import { z } from "zod"; // or plain JSON Schema (`as const`), Effect Schema, Valibot, or ArkType

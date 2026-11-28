@@ -9,7 +9,6 @@ import {
   INSTANCE_NAME_ENV,
   InstanceHeld,
   Unavailable,
-  adaptToolRejectingPark,
   describeDatabase,
   isTransientPgError,
   sharedHandleOf,
@@ -51,7 +50,6 @@ function openSqliteHandle(filePath: string): DshStorageHandle {
 
 export const harnessProvider: HarnessProvider<DshStorageHandle> = {
   name: "dsh",
-  supportsExtensions: false,
   supportsSandbox: true,
 
   async openStorage(ctx: HarnessStorageOpenContext): Promise<DshStorageHandle> {
@@ -109,7 +107,7 @@ export const harnessProvider: HarnessProvider<DshStorageHandle> = {
       ...(ctx.unusableDefault === undefined ? {} : { unusableDefault: ctx.unusableDefault }),
       ...(config.thinkingLevel === undefined ? {} : { thinkingLevel: config.thinkingLevel }),
       ...(config.maxSteps === undefined ? {} : { maxSteps: config.maxSteps }),
-      tools: [...ctx.code.tools, ...ctx.mcpTools].map(adaptToolRejectingPark),
+      tools: [...ctx.code.tools, ...ctx.mcpTools],
       codingTools: ctx.codingTools,
       protectedPaths: [ctx.stateRoot],
       env: ctx.processEnv,

@@ -32,7 +32,7 @@ FastAgent 围绕这五项要求划分为清晰的分层架构：
                     │ (lazy)                             │ (optional, lazy)
 ┌───────────────────▼──────────────────┐ ┌───────────────▼───────────────────┐
 │ Harness: pi-durable (default)        │ │ Harness: @fastagent-sh/harness-dsh│
-│  Durable loop · src/extensions       │ │  @deepseek-ai/dsh · OS Sandbox    │
+│  Durable loop · Crash recovery       │ │  @deepseek-ai/dsh · OS Sandbox    │
 │  SQLite (EXCLUSIVE) / PostgreSQL     │ │  SQLite / PostgreSQL              │
 │  (shared fenced leases)              │ │  (shared fenced leases)           │
 └──────────────────────────────────────┘ └───────────────────────────────────┘
@@ -54,13 +54,12 @@ FastAgent 将全部平台能力集中在统一服务层，仅把 Agent 执行循
 
 | 能力 | 统一服务层 | Harness 专属 |
 | --- | --- | --- |
-| 提示词、技能、模板、`fastagent.config.ts`、`fastagent build` | ✓ | — |
-| 可移植工具（`defineTool`）、`needs()` 密钥、MCP 服务器 | ✓ | — |
+| 提示词（`AGENTS.md`、`SYSTEM.md`）、技能、模板、`fastagent.config.ts`、`fastagent build` | ✓ | — |
+| 可移植工具（`defineTool` / Standard JSON Schema v1）、`needs()` 密钥、`.mcp.json` 与 MCP 服务器 | ✓ | — |
 | `pi-ai` 模型提供商与分层/持久化凭证（`/v1/auth/*`） | ✓ | — |
 | 调用方命名对话映射（`POST /v1/invoke`） | ✓ | — |
 | HTTP 服务器（`/health`、`/v1/*`）与 OpenTelemetry OTLP 追踪 | ✓ | — |
 | Agent 执行循环与会话/消息事件日志 | — | `pi-durable` 或 `dsh` |
-| `src/extensions/`（`defineExtension`） | — | 仅 `pi-durable`（在 `dsh` 上跳过并告警） |
 | 内核级 OS 沙箱（`workspace`、`read-only`、`off`） | — | `@fastagent-sh/harness-dsh` |
 
 由于 `pi-durable` 与 `dsh` 使用各自独立的表命名空间保存会话事件日志，同时共享持久化凭证和命名对话映射，你可以在同一份存储上测试或切换 Harness 而不会破坏已有会话。

@@ -9,6 +9,7 @@ import { isAbsolute, relative, join, sep } from "node:path";
 import ignore from "ignore";
 import {
   AGENT_CONFIG_FILE,
+  MCP_CONFIG_FILES,
   INSTANCES_DIRNAME,
   SECRETS_DIRNAME,
   exists,
@@ -64,6 +65,8 @@ export interface BuildContextPaths {
   readonly instancesShip?: string;
   /** The agent's node_modules, when it exists. */
   readonly depDirs: readonly string[];
+  /** Present root config files (`fastagent.config.ts`, `.mcp.json`, `mcp.json`) that must ship in the build context. */
+  readonly presentConfigFiles: readonly string[];
 }
 
 export async function buildContextPaths(agentDir: string, authPath: string): Promise<BuildContextPaths> {
@@ -122,6 +125,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
   ];
   // Same existence rule: a node_modules that is not there cannot be uploaded.
   const depDirs = await present(["node_modules"]);
+  const presentConfigFiles = await present([AGENT_CONFIG_FILE, ...MCP_CONFIG_FILES]);
   const machineryPaths = [...secretPaths, ...(stateRel && !inInstances ? [stateRel] : [])];
   return {
     machineryPaths,
@@ -129,6 +133,7 @@ export async function buildContextPaths(agentDir: string, authPath: string): Pro
     ...(stateShips === undefined ? {} : { stateShips }),
     ...(instancesShip === undefined ? {} : { instancesShip }),
     depDirs,
+    presentConfigFiles,
   };
 }
 
@@ -165,7 +170,7 @@ export async function shippedWithoutIgnoreFile(
 
 /** Pure evaluation of one kept ignore file against the build context's sensitive paths. */
 function evaluateKeptIgnore(rel: string, kept: string, paths: Readonly<BuildContextPaths>): readonly DeployMessage[] {
-  const { leakCandidates, stateShips, instancesShip, depDirs } = paths;
+  const { leakCandidates, stateShips, instancesShip, depDirs, presentConfigFiles } = paths;
   const keptIsOurs = isGeneratedDockerignore(kept);
   const remedy = (lines: readonly string[]): string =>
     keptIsOurs
@@ -174,18 +179,15 @@ function evaluateKeptIgnore(rel: string, kept: string, paths: Readonly<BuildCont
   const excluded = dockerignoreMatcher(kept);
   const leaks = leakCandidates.filter((p) => !excluded(p));
   const unexcludedDeps = depDirs.filter((p) => !excluded(`${p}/.package-lock.json`));
+  const excludedConfigs = presentConfigFiles.filter((file) => excluded(file));
   return [
-    // The marker of an agent: without it the deployed box has no agent to open.
-    ...(excluded(AGENT_CONFIG_FILE)
-      ? [
-          {
-            level: "warn" as const,
-            text:
-              `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's ` +
-              `config (the container has no agent to open and crash-loops). Remove that rule before building.`,
-          },
-        ]
-      : []),
+    ...excludedConfigs.map((file) => ({
+      level: "warn" as const,
+      text:
+        file === AGENT_CONFIG_FILE
+          ? `your ${rel} (kept) excludes \`${AGENT_CONFIG_FILE}\` — the image would ship WITHOUT the agent's config (the container has no agent to open and crash-loops). Remove that rule before building.`
+          : `your ${rel} (kept) excludes \`${file}\` — the image would ship WITHOUT the agent's MCP configuration. Remove that rule before building.`,
+    })),
     // Resolved paths, not spellings: dockerignore patterns are root-anchored (unlike .gitignore).
     ...(leaks.length > 0
       ? [

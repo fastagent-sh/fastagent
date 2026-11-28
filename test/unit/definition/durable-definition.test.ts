@@ -63,7 +63,6 @@ describe("an agent definition on pi-durable", () => {
     );
     const built = buildDefinition(definition, ENV);
     expect(built.tools.map((tool) => tool.name)).toEqual(["weather"]);
-    expect(built.extensions.map((extension) => extension.name)).toEqual(["audit"]);
   });
 
   describe("opened", () => {
@@ -93,7 +92,7 @@ describe("an agent definition on pi-durable", () => {
       return agent.messages.send({ sessionId: (await agent.sessions.create()).id, content: text }, { wait: 30 });
     }
 
-    it("renders SYSTEM.md, AGENTS.md, the skills it may load and its extensions' sections, read for each request", async () => {
+    it("renders SYSTEM.md, AGENTS.md, and the skills it may load, read for each request", async () => {
       const { dir, agent, faux } = await open();
       const prompts: string[] = [];
       faux.setResponses(
@@ -111,7 +110,6 @@ describe("an agent definition on pi-durable", () => {
       expect(first).toContain("<name>lookup-order</name>");
       expect(first).toContain(`<location>${join(dir, "skills/lookup-order/SKILL.md")}</location>`);
       expect(first).not.toContain("Not_Valid");
-      expect(first).toContain("Every answer is audited.");
       expect(second.startsWith("You are Support, version two.")).toBe(true);
     });
 
@@ -279,7 +277,7 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         version: "0.0.0",
         dir: "/tmp/support",
         config: { codingTools: selected },
-        registry: { tools: [], extensions: [] },
+        registry: { tools: [] },
       });
       selected.push("bash");
       expect(def.config.codingTools).toEqual(["read"]);
@@ -305,13 +303,14 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
       });
       await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
 
-      // An authored extension cannot shadow pi-durable's built-in "coding-tools" extension.
-      const shadowCoding = agentPackage({
+      // Removed src/extensions/ modules fail visibly at loadSourceDefinition naming the migration path.
+      const legacyExtDir = agentPackage({
         ...FILES,
         "src/extensions/shadow.ts": 'export default { name: "coding-tools" };\n',
       });
-      const shadowDef = await loadSourceDefinition(shadowCoding);
-      expect(() => buildDefinition(shadowDef, ENV)).toThrow(/both define the extension "coding-tools"/);
+      await expect(loadSourceDefinition(legacyExtDir)).rejects.toThrow(
+        /src\/extensions\/ is removed \(src\/extensions\/shadow\.ts\): move portable tools to src\/tools\//,
+      );
     });
   });
 });
@@ -640,7 +639,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
     }
   });
 
-  it("fails fast on non-object schemas, Standard Schemas without JSON Schema, and raw unconverted Standard Schemas in src/tools/", async () => {
+  it("accepts raw Standard JSON Schema v1 tool objects in src/tools/ and fails fast on non-object or non-JSON-Schema Standard Schemas", async () => {
     expect(() =>
       defineFastAgentTool({
         name: "bad_non_obj",
@@ -670,19 +669,40 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
       }),
     ).toThrow(/type: "object"/);
 
-    const rawStdDir = agentPackage({
+    // Raw Standard JSON Schema v1 tool objects exported without defineTool() compile and validate cleanly.
+    const validRawStdDir = agentPackage({
+      ...FILES,
+      "src/tools/raw_effect.ts": `import * as Schema from "effect/Schema";
+export default {
+  name: "raw_effect",
+  description: "Exported directly with Standard JSON Schema v1",
+  parameters: Schema.toStandardJSONSchemaV1(Schema.Struct({ tag: Schema.String })),
+  execute: async ({ tag }: { tag: string }) => "tag:" + tag,
+};
+`,
+    });
+    const validDef = await loadSourceDefinition(validRawStdDir);
+    const validBuilt = buildDefinition(validDef, ENV);
+    const rawCompiled = validBuilt.tools.find((t) => t.name === "raw_effect");
+    expect(rawCompiled?.parameters).toMatchObject({ type: "object", required: ["tag"] });
+    expect(await rawCompiled?.execute({ tag: "v1" }, { output: () => {}, executeTool: async () => ({}) }, {})).toEqual({
+      output: [{ type: "text", text: "tag:v1" }],
+    });
+
+    // A Standard Schema missing JSON Schema v1 conversion still fails fast naming the tool file.
+    const brokenStdDir = agentPackage({
       ...FILES,
       "src/tools/raw_std.ts": `export default {
   name: "raw_std",
-  description: "Forgot defineTool",
-  parameters: { "~standard": { version: 1, vendor: "zod" } },
+  description: "Standard Schema without jsonSchema",
+  parameters: { "~standard": { version: 1, vendor: "legacy" } },
   execute: async () => ({ output: [] }),
 };
 `,
     });
-    const def = await loadSourceDefinition(rawStdDir);
+    const def = await loadSourceDefinition(brokenStdDir);
     expect(() => buildDefinition(def, ENV)).toThrow(
-      /unconverted Standard Schema.*defineTool from "@fastagent-sh\/fastagent"/,
+      /src\/tools\/raw_std\.ts:.*Standard Schema without JSON Schema support/,
     );
   });
 

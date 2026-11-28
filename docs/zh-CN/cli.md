@@ -1,6 +1,6 @@
 ---
 title: CLI 参考
-description: "完整的 fastagent CLI 参考：按工作流分组的命令、参数、退出码、平台扩展以及脚本/Coding Agent 行为保证。"
+description: "完整的 fastagent CLI 参考：按工作流分组的命令、参数、退出码以及脚本/Coding Agent 行为保证。"
 status: current
 ---
 
@@ -21,7 +21,7 @@ fastagent <command> --help     # 由源码生成的权威参数与示例
 | `dev` | 本地热重载服务（`--no-watch` 关闭文件监听） |
 | `build` | 执行类型检查并将 Agent 编译打包至 `dist/`（`--no-check`、`--json`） |
 | `start` | 以生产姿态运行编译后的 `dist/`；拒绝缺失或陈旧构建 |
-| `info` | 只读检查解析后的 Harness、沙箱、模型、工具、MCP 服务器、扩展、命令、密钥与存储（`--json`） |
+| `info` | 只读检查解析后的 Harness、沙箱、模型、工具、MCP 服务器、命令、密钥与存储（`--json`） |
 | `models [search]` | 列出可用 `provider/modelId`（`-g` 仅内置模型；`--json`） |
 
 ### 调用、认证与远程管理

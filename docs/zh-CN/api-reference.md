@@ -29,7 +29,7 @@ FastAgent 发布 5 个版本号同步锁定、依赖树彼此独立的 npm 包�
 
 | 入口路径 | 用途 | 核心导出 |
 | --- | --- | --- |
-| **`@fastagent-sh/fastagent/harness`** | 构建可插拔服务端运行时 Harness 与云适配器（`@fastagent-sh/harness-<name>/provider`） | `HarnessProvider`、`HarnessStorageOpenContext`、`HarnessAgentOpenContext`、`serveHandler`、`Handler`、`Unavailable`、`adaptToolRejectingPark`、`retainToolOutput`、`createEventChannel`、`classifyPiAiError`、`toPiThinkingLevel`、`migratePgSchema`、`acquirePgInstanceLease`、`InstanceHeld`、`isPgConflict` |
+| **`@fastagent-sh/fastagent/harness`** | 构建可插拔服务端运行时 Harness 与云适配器（`@fastagent-sh/harness-<name>/provider`） | `HarnessProvider`、`HarnessStorageOpenContext`、`HarnessAgentOpenContext`、`serveHandler`、`Handler`、`Unavailable`、`PortableTool`、`retainToolOutput`、`createEventChannel`、`classifyPiAiError`、`toPiThinkingLevel`、`migratePgSchema`、`acquirePgInstanceLease`、`InstanceHeld`、`isPgConflict` |
 | **`@fastagent-sh/client/agent-api`** | 直接校验或组合 Agent API 的 Effect Schema | 全部 Agent API 类型、事件、认证流程的 Effect Schema、`AgentError`、`LIMITS`、`hasEnded`、`decodeRequest` |
 | **`@fastagent-sh/client/http/contract`** | 直接对接 HTTP 契约与 OpenAPI Schema | `AgentHttpApi`、`API_PREFIX`、`statusOf`、`Refusal`、`Authorization`、`Malformed`、`SessionEventFrame`、`MessageStreamEventFrame` |
 | **`@fastagent-sh/client/stream`** | 在 `Agent` 实现之上组合 `messages.stream` | `messageStream`、`StreamSource`、`leavableIterator` |

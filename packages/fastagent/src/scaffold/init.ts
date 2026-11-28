@@ -5,7 +5,7 @@ import ignore from "ignore";
 import { writeFileAtomic } from "../atomic-write.ts";
 import { BUILD_FILE, DIST_DIR } from "../definition/built.ts";
 import { GitNotInstalled, gitFor } from "../git.ts";
-import { AGENT_CONFIG_FILE, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
+import { AGENT_CONFIG_FILE, MCP_CONFIG_FILES, SECRETS_DIRNAME, displayPath, enclosingAgentDir } from "../paths.ts";
 import { fastagentBuild } from "../version.ts";
 import { DEFAULT_SCRIPTS, baseTemplate, expectedManifestDeps, packageJson, toPackageName } from "./templates.ts";
 
@@ -97,7 +97,9 @@ async function hasAgentAssets(dir: string): Promise<boolean> {
   const checks: Array<{ path: string; kind: "file" | "dir" }> = [
     { path: AGENT_CONFIG_FILE, kind: "file" },
     { path: "SYSTEM.md", kind: "file" },
+    ...MCP_CONFIG_FILES.map((path) => ({ path, kind: "file" as const })),
     { path: "skills", kind: "dir" },
+    { path: "prompts", kind: "dir" },
     { path: join("src", "tools"), kind: "dir" },
   ];
   for (const check of checks) {
