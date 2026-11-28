@@ -1,3 +1,4 @@
+import { McpError } from "../mcp-api.ts";
 import { findAgentDir, resolveAgentDir } from "../paths.ts";
 
 /** stderr renders color: a color TTY, with Node's `hasColors()` carrying the NO_COLOR/TERM=dumb veto. */
@@ -15,8 +16,11 @@ export function errorPrefix(colors: boolean = stderrHasColors()): string {
  * just the message. Anything else (a TypeError, a non-Error throw) is a bug: keep the stack.
  */
 export function failStartup(error: unknown): never {
-  if (error instanceof Error && error.constructor === Error) console.error(`${errorPrefix()} ${error.message}`);
-  else console.error(errorPrefix(), error);
+  if (error instanceof Error && (error.constructor === Error || error instanceof McpError)) {
+    console.error(`${errorPrefix()} ${error.message}`);
+  } else {
+    console.error(errorPrefix(), error);
+  }
   process.exit(1);
 }
 

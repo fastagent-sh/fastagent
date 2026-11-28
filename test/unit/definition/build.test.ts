@@ -140,9 +140,13 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
   });
 
   it("compiles a bare AAIF open-standard directory (AGENTS.md + skills/ + .mcp.json, no fastagent.config.ts or package.json) into a valid ESM dist/", async () => {
-    const { mkdirSync } = await import("node:fs");
-    const bareDir = project({});
-    rmSync(join(bareDir, "package.json"));
+    const { mkdirSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { loadProjectBuild } = await import("../../../packages/fastagent/src/definition/built.ts");
+    const parentDir = mkdtempSync(join(tmpdir(), "fa-bare-pkg-"));
+    made.push(parentDir);
+    const bareDir = join(parentDir, "_Incident_Responder");
+    mkdirSync(bareDir, { recursive: true });
     writeFileSync(join(bareDir, "AGENTS.md"), "# Incident Responder\nAlways cite runbooks.\n");
     const skillDir = join(bareDir, "skills", "triage");
     mkdirSync(skillDir, { recursive: true });
@@ -183,10 +187,18 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
     ]);
     const distPkg = JSON.parse(readFileSync(join(dist, "package.json"), "utf8"));
     expect(distPkg).toMatchObject({
+      name: "incident_responder",
       type: "module",
       version: "0.0.0",
       exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
       peerDependencies: { "@fastagent-sh/fastagent": expect.stringMatching(/^\^/) },
     });
+
+    // Adding fastagent.config.ts after building a bare directory invalidates the build fingerprint.
+    expect((await loadProjectBuild(bareDir, { checkSources: true })).name).toBe("_Incident_Responder");
+    writeFileSync(join(bareDir, "fastagent.config.ts"), "export default { codingTools: false };\n");
+    await expect(loadProjectBuild(bareDir, { checkSources: true })).rejects.toThrow(
+      /was built from other sources.*run `fastagent build`/,
+    );
   });
 });

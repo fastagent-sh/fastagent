@@ -35,6 +35,7 @@ describe("cli: login and models", () => {
     const inside = join(cwd, "agent", "tools");
     await mkdir(inside, { recursive: true });
     await writeFile(join(cwd, "agent", "fastagent.config.ts"), "export default {};\n");
+    await writeFile(join(inside, "AGENTS.md"), "# Scoped subdirectory notes\n");
     const nested = await runInProcess(["login", "no-such-provider"], inside, env);
     expect(nested.stderr).toMatch(/is inside the agent .* — run from/);
     expect(nested.stderr).not.toMatch(/logging in GLOBALLY/);

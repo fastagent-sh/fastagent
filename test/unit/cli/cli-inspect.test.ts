@@ -183,5 +183,12 @@ describe("cli: info's MCP servers", () => {
       { name: "DUANG_API_TOKEN", optional: false, declaredIn: [".mcp.json mcpServers.duang"] },
     ]);
     expect(parsed.unsetSecrets).toEqual(["DUANG_API_TOKEN"]);
+
+    // Malformed .mcp.json prints a clean one-line startup error without leaking a raw McpError stack trace.
+    await writeFile(join(bareDir, ".mcp.json"), "{ invalid json");
+    const badMcp = await runInProcess(["-C", bareDir, "info"], undefined, env);
+    expect(badMcp.code).toBe(1);
+    expect(badMcp.stderr).toMatch(/^Error: \.mcp\.json: invalid JSON:/);
+    expect(badMcp.stderr).not.toMatch(/\n\s+at /);
   });
 });

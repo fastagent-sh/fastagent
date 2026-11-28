@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exists } from "../paths.ts";
+import { AGENT_CONFIG_FILE, exists } from "../paths.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { registryFiles } from "./registry.ts";
 
@@ -96,7 +96,13 @@ async function digest(path: string): Promise<string> {
  * these, so running an agent never makes its build stale.
  */
 async function fingerprintOf(dir: string, code: readonly string[]): Promise<string> {
-  const files = new Set([...code, ...(await registryFiles(dir)), ...(await copyPlan(dir, code)), "package.json"]);
+  const files = new Set([
+    ...code,
+    ...(await registryFiles(dir)),
+    ...(await copyPlan(dir, code)),
+    AGENT_CONFIG_FILE,
+    "package.json",
+  ]);
   const hash = createHash("sha256");
   for (const file of [...files].sort()) hash.update(`${file}\0${await digest(join(dir, file))}\n`);
   return hash.digest("hex");

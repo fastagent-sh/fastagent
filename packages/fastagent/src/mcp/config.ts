@@ -76,10 +76,15 @@ export function declareServers(raw: unknown, file: string): Record<string, McpSe
   return servers;
 }
 
-function isFileOrAbsent(path: string): boolean {
+function isPresentMcpFile(path: string, file: string): boolean {
   try {
-    return statSync(path).isFile();
+    const st = statSync(path);
+    if (!st.isFile()) {
+      throw new McpError("configuration", `${file}: expected a JSON file, found a directory`);
+    }
+    return true;
   } catch (error) {
+    if (error instanceof McpError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
@@ -88,7 +93,7 @@ function isFileOrAbsent(path: string): boolean {
 
 function readMcpConfigFile(dir: string): McpDeclaration[] {
   const root = resolve(dir);
-  const present = MCP_CONFIG_FILES.filter((file) => isFileOrAbsent(join(root, file)));
+  const present = MCP_CONFIG_FILES.filter((file) => isPresentMcpFile(join(root, file), file));
   if (present.length === 0) return [];
   if (present.length > 1) {
     throw new McpError("configuration", `both .mcp.json and mcp.json exist in ${root}; keep only one`);

@@ -6,11 +6,12 @@
  */
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "../definition/built.ts";
 import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
 import { readPackageJson } from "../runtime.ts";
+import { toPackageName } from "../scaffold/templates.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
 import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
@@ -195,7 +196,7 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
     peerDependencies[FASTAGENT_PACKAGE] = `^${definition.builtWith}`;
   }
   const out = {
-    name: pkg.name ?? basename(dir),
+    name: pkg.name ?? toPackageName(dir),
     version: definition.version,
     ...(pkg.description === undefined ? {} : { description: pkg.description }),
     ...(pkg.license === undefined ? {} : { license: pkg.license }),

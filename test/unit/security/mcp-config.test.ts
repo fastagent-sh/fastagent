@@ -1,5 +1,5 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: MCP configuration uses literal environment references.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
@@ -166,5 +166,14 @@ describe("the servers of the project, from .mcp.json / mcp.json and fastagent.co
     // Having both .mcp.json and mcp.json in the same directory is refused visibly.
     await writeFile(join(dir, "mcp.json"), JSON.stringify({ mcpServers: {} }));
     await expect(loadMcp(dir)).rejects.toThrow(/both \.mcp\.json and mcp\.json exist/);
+
+    // A directory named .mcp.json is refused visibly instead of silently skipped.
+    const dirWithFolderMcp = await mkdtemp(join(tmpdir(), "mcp-dir-bad-"));
+    try {
+      await mkdir(join(dirWithFolderMcp, ".mcp.json"));
+      await expect(loadMcp(dirWithFolderMcp)).rejects.toThrow(/\.mcp\.json: expected a JSON file, found a directory/);
+    } finally {
+      await rm(dirWithFolderMcp, { recursive: true, force: true });
+    }
   });
 });

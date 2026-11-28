@@ -86,11 +86,12 @@ export function enclosingAgentDir(dir: string): string | undefined {
  */
 export function findAgentDir(dir: string): string | undefined {
   const base = resolve(dir);
-  if (isAgentDir(base)) return base;
+  if (hasConfig(base)) return base;
   const enclosing = enclosingAgentDir(base);
   if (enclosing) {
     throw new Error(`${base} is inside the agent ${enclosing} — run from ${enclosing}, or pass it as the agent`);
   }
+  if (isAgentDir(base)) return base;
   return undefined;
 }
 
