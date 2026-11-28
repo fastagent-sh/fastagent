@@ -189,6 +189,8 @@ export function serviceOver(
 export interface ServeOptions {
   /** The keys the Agent API takes; without one it is not served. */
   apiKeys?: readonly SecretInput[];
+  /** Mount `/v1/auth/*` endpoints for remote OAuth / API-key provider sign-in. Default: false. */
+  remoteAuth?: boolean;
 }
 
 /** What the assembly serves: the opened agent, its invoker, and its optional auth manager. */
@@ -217,7 +219,8 @@ function surface(api: ReturnType<typeof apiHandler> | undefined, isReady: () => 
 }
 
 const serveAgentEffect = Effect.fn("service.serveAgent")(function* (opened: ServableAgent, options: ServeOptions = {}) {
-  const { agent, invoker, auth } = opened;
+  const { agent, invoker } = opened;
+  const auth = options.remoteAuth === true ? opened.auth : undefined;
   const api = options.apiKeys?.length
     ? apiHandler(agent, {
         keys: options.apiKeys.map(redactSecret),

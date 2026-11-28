@@ -90,7 +90,8 @@ npm i @fastagent-sh/client-agentcore
 ```
 
 ```ts
-import { connectAgentCore, connectAgentCoreAuth } from "@fastagent-sh/client-agentcore";
+import { connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { connectAgentCoreAuth } from "@fastagent-sh/client-agentcore/auth";
 
 const connection = {
   runtimeArn: "arn:aws:bedrock-agentcore:<region>:<account>:runtime/<id>",
@@ -106,7 +107,7 @@ const auth = connectAgentCoreAuth(connection);
 const providers = await auth.providers();
 ```
 
-`@fastagent-sh/client-agentcore` 同时重新导出 `connectAgent`、`connectAuth` 与 `AgentError`，让同一套后端代码在本地对接 `fastagent dev`（HTTP），上线无缝切到 AgentCore。调用方仅需 IAM 权限 `bedrock-agentcore:InvokeAgentRuntime`，无需 `FASTAGENT_API_KEY`。
+`@fastagent-sh/client-agentcore` 同时重新导出 `connectAgent` 与 `AgentError`（并在 `@fastagent-sh/client-agentcore/auth` 重新导出 `connectAuth`），让同一套后端代码在本地对接 `fastagent dev`（HTTP），上线无缝切到 AgentCore。调用方仅需 IAM 权限 `bedrock-agentcore:InvokeAgentRuntime`，无需 `FASTAGENT_API_KEY`。
 
 ### 从终端调用（`fastagent agentcore invoke`）
 

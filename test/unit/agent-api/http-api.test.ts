@@ -39,7 +39,8 @@ import {
   postgresConversationStore,
   sqliteConversationStoreEffect,
 } from "../../../packages/fastagent/src/conversations.ts";
-import { connectAgent, connectAuth } from "../../../packages/client/src/http/client.ts";
+import { connectAgent } from "@fastagent-sh/client";
+import { connectAuth } from "@fastagent-sh/client/auth";
 import {
   AgentHttpApi,
   MessageStreamEventFrame,

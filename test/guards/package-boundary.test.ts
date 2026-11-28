@@ -135,10 +135,21 @@ describe("package lines", () => {
     }
   });
 
-  it("@fastagent-sh/client runs wherever fetch does: its root entry reaches no Node API and no package but effect", () => {
-    const entry = resolve(srcOf("client"), "index.ts");
-    const reached = [...staticPackageGraph(entry), ...staticPackageGraph(entry, true)];
-    expect(reached.filter((spec) => packageOf(spec) !== "effect")).toEqual([]);
+  it("@fastagent-sh/client root and ./auth entries reach no Node API and no package but effect, and keep AuthApi off root", () => {
+    for (const file of ["index.ts", "auth.ts"] as const) {
+      const entry = resolve(srcOf("client"), file);
+      const reached = [...staticPackageGraph(entry), ...staticPackageGraph(entry, true)];
+      expect(
+        reached.filter((spec) => packageOf(spec) !== "effect"),
+        file,
+      ).toEqual([]);
+    }
+    const rootText = readFileSync(resolve(srcOf("client"), "index.ts"), "utf8");
+    expect(rootText).not.toMatch(/\bconnectAuth\b|\bAuthApi\b/);
+    const acRootText = readFileSync(resolve(srcOf("client-agentcore"), "index.ts"), "utf8");
+    expect(acRootText).not.toMatch(/export\s+(?:type\s+)?\{[^}]*\b(?:connectAuth|connectAgentCoreAuth|AuthApi)\b/);
+    const acAuthEntry = resolve(srcOf("client-agentcore"), "auth.ts");
+    expect([...staticPackageGraph(acAuthEntry, true)]).toEqual([]);
   });
 
   it("@fastagent-sh/pi-remote declares host-provided @earendil-works/pi-* packages only in peerDependencies", () => {
