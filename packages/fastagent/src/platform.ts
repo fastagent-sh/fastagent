@@ -12,6 +12,7 @@ import { type AgentDefinition, definitionSecrets } from "./definition/definition
 import { loadProjectBuild } from "./definition/built.ts";
 import { loadSourceDefinition } from "./harnesses/assembly.ts";
 import { instanceName } from "./instance-name.ts";
+import { detectRuntime, readPackageJson } from "./runtime.ts";
 
 export { type Handler, serveHandler } from "./http/serve.ts";
 export { DATABASE_URL_ENV } from "./paths.ts";
@@ -25,10 +26,12 @@ export type { ContainerTarget } from "./deploy/container.ts";
 export type { DeclaredSecret } from "./declared-secrets.ts";
 export type { CreateIndex, PgExecutor, PostgresDatabase, PostgresLimits } from "./postgres.ts";
 
-/** What a platform asks of the agent in `agentDir` before it runs it: its name, its model, the values its code reads. */
+/** What a platform asks of the agent in `agentDir` before it runs it: its name, runtime, model, and declared secrets. */
 export interface AgentFacts {
   /** The definition's name as one path segment: what a platform names the agent's resources after. */
   name: string;
+  /** The JS runtime the agent targets (`"node"` or `"bun"`, detected from lockfiles and `packageManager`). */
+  runtime: "node" | "bun";
   /** `provider/modelId`, when the configuration sets one. */
   model?: string;
   /** Every value the definition declares (`needs`, its MCP servers' `${VAR}`), with where. */
@@ -36,10 +39,11 @@ export interface AgentFacts {
 }
 
 export async function agentFacts(agentDir: string): Promise<AgentFacts> {
-  const definition = await loadSourceDefinition(agentDir);
+  const [definition, pkg] = await Promise.all([loadSourceDefinition(agentDir), readPackageJson(agentDir)]);
   const { model } = definition.config;
   return {
     name: instanceName(definition.name),
+    runtime: detectRuntime(agentDir, pkg).runtime,
     ...(model === undefined ? {} : { model }),
     secrets: definitionSecrets(definition),
   };

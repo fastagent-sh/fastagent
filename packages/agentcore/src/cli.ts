@@ -9,7 +9,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { Agent, SessionSettings } from "@fastagent-sh/client/agent-api";
@@ -82,7 +82,7 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
   );
   if (wrote && flags.install) {
     const runningOnBun = typeof process.versions.bun === "string";
-    const usesBun = runningOnBun || isBunProject(agentDir);
+    const usesBun = runningOnBun || facts.runtime === "bun";
     const installed = spawnSync(
       usesBun ? (runningOnBun ? process.execPath : "bun") : "npm",
       usesBun ? ["install"] : ["install", "--no-audit", "--no-fund"],
@@ -113,14 +113,6 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
       `npx -y ${AGENTCORE_CLI} deploy`,
     ].join("\n"),
   );
-}
-
-function isBunProject(agentDir: string): boolean {
-  if (existsSync(join(agentDir, "bun.lock")) || existsSync(join(agentDir, "bun.lockb"))) return true;
-  const manifestPath = join(agentDir, "package.json");
-  if (!existsSync(manifestPath)) return false;
-  const pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as { packageManager?: unknown };
-  return typeof pkg.packageManager === "string" && pkg.packageManager.startsWith("bun@");
 }
 
 function databaseOf(environment: NodeJS.ProcessEnv): PostgresDatabase {

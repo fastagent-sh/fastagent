@@ -48,7 +48,7 @@ export {
   type LocalAgent,
   type OpenAgentOptions,
   type ServeAgentOptions,
-} from "./harnesses/serving.ts";
+} from "./harnesses/local-agent.ts";
 export type { Service } from "./service.ts";
 export {
   openPostgresDatabase,

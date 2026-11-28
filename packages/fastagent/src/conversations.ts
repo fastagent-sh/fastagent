@@ -4,6 +4,7 @@
  * `node:sqlite`, shared PostgreSQL / Aurora DSQL, or in-memory), delegating execution purely through the standard
  * `Agent` API.
  */
+import { existsSync } from "node:fs";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -25,7 +26,7 @@ import {
   agentError,
   decodeRequest,
 } from "@fastagent-sh/client/agent-api";
-import { openPostgresStore, openSqliteStore } from "./instance-store.ts";
+import { type SqliteStoreHandle, openPostgresStore, openSqliteStore } from "./instance-store.ts";
 import { log } from "./log.ts";
 import type { PostgresDatabase } from "./postgres.ts";
 
@@ -164,24 +165,55 @@ export function sqliteConversationStoreEffect(
   filePath: string,
   options: ConversationStoreOptions = {},
 ): EffectConversationStore {
+  interface OpenedSqliteConversations {
+    readonly store: SqliteStoreHandle;
+    readonly selectStmt: ReturnType<SqliteStoreHandle["db"]["prepare"]>;
+    readonly upsertStmt: ReturnType<SqliteStoreHandle["db"]["prepare"]>;
+    readonly pruneStmt: ReturnType<SqliteStoreHandle["db"]["prepare"]>;
+  }
   const ttlMs = options.ephemeralTtlMs ?? DEFAULT_EPHEMERAL_TTL_MS;
-  const store = openSqliteStore(filePath, SQLITE_SCHEMA, { journalMode: "WAL" });
-  const selectStmt = store.db.prepare(
-    "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE name = ?",
-  );
-  const upsertStmt = store.db.prepare(
-    `INSERT INTO fastagent_conversations (name, session_id, ephemeral, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET
-       session_id = excluded.session_id,
-       ephemeral = excluded.ephemeral,
-       updated_at = excluded.updated_at`,
-  );
-  const pruneStmt = store.db.prepare("DELETE FROM fastagent_conversations WHERE ephemeral = 1 AND updated_at <= ?");
+  let opened: OpenedSqliteConversations | undefined;
+  let closed = false;
+
+  const openOrCreate = (): OpenedSqliteConversations => {
+    if (closed) throw new Error("conversation store is closed");
+    if (opened !== undefined) return opened;
+    const store = openSqliteStore(filePath, SQLITE_SCHEMA, { journalMode: "WAL" });
+    opened = {
+      store,
+      selectStmt: store.db.prepare(
+        "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE name = ?",
+      ),
+      upsertStmt: store.db.prepare(
+        `INSERT INTO fastagent_conversations (name, session_id, ephemeral, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           session_id = excluded.session_id,
+           ephemeral = excluded.ephemeral,
+           updated_at = excluded.updated_at`,
+      ),
+      pruneStmt: store.db.prepare("DELETE FROM fastagent_conversations WHERE ephemeral = 1 AND updated_at <= ?"),
+    };
+    return opened;
+  };
+
+  const openIfPresent = (): OpenedSqliteConversations | undefined => {
+    if (closed) throw new Error("conversation store is closed");
+    if (opened !== undefined) return opened;
+    return existsSync(filePath) ? openOrCreate() : undefined;
+  };
+
+  // Fail fast when an existing conversations file is unreadable/corrupt, without creating one on disk eagerly.
+  if (existsSync(filePath)) openOrCreate();
+
   return {
     get: Effect.fn("conversations.sqlite.get")(function* (key: ConversationKey) {
       const row = yield* Effect.try({
-        try: () => selectStmt.get(key) as { session_id?: string; ephemeral?: number; updated_at?: number } | undefined,
+        try: () => {
+          const db = openIfPresent();
+          if (db === undefined) return undefined;
+          return db.selectStmt.get(key) as { session_id?: string; ephemeral?: number; updated_at?: number } | undefined;
+        },
         catch: (error) => asAgentError("conversations.sqlite.get", error),
       });
       if (row?.session_id === undefined) return undefined;
@@ -196,16 +228,18 @@ export function sqliteConversationStoreEffect(
     ) {
       const current = yield* Clock.currentTimeMillis;
       const isEphemeral = setOptions?.ephemeral === true ? 1 : 0;
-      yield* Effect.try({
+      const db = yield* Effect.try({
         try: () => {
-          upsertStmt.run(key, sessionId, isEphemeral, current);
+          const handle = openOrCreate();
+          handle.upsertStmt.run(key, sessionId, isEphemeral, current);
+          return handle;
         },
         catch: (error) => asAgentError("conversations.sqlite.set", error),
       });
       if (isEphemeral === 1) {
         yield* Effect.try({
           try: () => {
-            pruneStmt.run(current - ttlMs);
+            db.pruneStmt.run(current - ttlMs);
           },
           catch: (error) => asAgentError("conversations.sqlite.prune", error),
         }).pipe(
@@ -218,7 +252,13 @@ export function sqliteConversationStoreEffect(
       }
     }),
     close: Effect.tryPromise({
-      try: () => store.close(),
+      try: async () => {
+        if (closed) return;
+        closed = true;
+        const current = opened;
+        opened = undefined;
+        if (current !== undefined) await current.store.close();
+      },
       catch: (error) => asAgentError("conversations.sqlite.close", error),
     }).pipe(Effect.withSpan("conversations.sqlite.close")),
   };
@@ -241,13 +281,13 @@ function postgresConversationStoreEffect(
     get: Effect.fn("conversations.postgres.get")(function* (key: ConversationKey) {
       const rows = yield* Effect.tryPromise({
         try: () =>
-          store.query<{ session_id: string; ephemeral: boolean; updated_at: number }>(
+          store.queryIfExists<{ session_id: string; ephemeral: boolean; updated_at: number }>(
             "SELECT session_id, ephemeral, updated_at FROM fastagent_conversations WHERE instance = $1 AND name = $2",
             [instance, key],
           ),
         catch: (error) => asAgentError("conversations.postgres.get", error),
       });
-      const row = rows[0];
+      const row = rows?.[0];
       if (row === undefined) return undefined;
       const current = yield* Clock.currentTimeMillis;
       if (row.ephemeral && Number(row.updated_at) <= current - ttlMs) return undefined;
