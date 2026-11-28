@@ -138,7 +138,7 @@ const IGNORE_FILES = [".dockerignore", "Dockerfile.dockerignore"];
 /**
  * What would leave the machine of its secrets and state when the context has no `.dockerignore`, so leaves out nothing;
  * undefined when it has one, or nothing to leave out. Only `.dockerignore` counts: it is what every uploader of a
- * context reads (AgentCore's CDK packs a context for CodeBuild by it), while `Dockerfile.dockerignore` only keeps a
+ * context reads (`docker build` and cloud container builders read `.dockerignore`), while `Dockerfile.dockerignore` only keeps a
  * path out of the image Docker builds, not out of the upload.
  */
 /** Pure leak message for a build context missing `.dockerignore`. */

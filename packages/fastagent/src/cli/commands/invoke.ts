@@ -126,8 +126,7 @@ async function runRemoteInvoke(
   );
 }
 
-/** Options for sending one message over an Agent API client (`invoke --url`, `agentcore invoke`, local serve). */
-export interface InvokeOverApiOptions {
+interface InvokeOverApiOptions {
   session?: string;
   conversation?: string;
   settings?: SessionSettings;
@@ -141,7 +140,7 @@ export interface InvokeOverApiOptions {
  * Send one message through an Agent API client (`agent`), stream its answer to stdout (text or NDJSON) and progress to
  * stderr, and return the CLI exit code (0 only for `completed`). Throws on session lookup/creation refusal.
  */
-export async function invokeOverApi(
+async function invokeOverApi(
   agent: Agent,
   where: string,
   message: string,
@@ -210,10 +209,10 @@ async function remoteSession(
  * Resolve one invoke message from a positional argument, `-`, or piped stdin.
  * Returns `{ ok: false, error }` instead of exiting so every caller reports usage errors in its own format.
  */
-export async function readInvokeMessage(
+async function readInvokeMessage(
   given: string | undefined,
-  command = "fastagent invoke",
 ): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const command = "fastagent invoke";
   if (given !== undefined && given !== "-") {
     if (given.trim() === "") return { ok: false, error: "message must not be empty" };
     return { ok: true, message: given };

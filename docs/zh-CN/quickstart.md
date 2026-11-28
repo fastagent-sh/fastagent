@@ -8,7 +8,7 @@ status: current
 
 在 5 分钟内，你将完成创建 Agent、添加强类型 TypeScript 工具、本地热重载运行，以及以生产模式通过 Agent API 对外提供服务。
 
-**前提条件：** Node ≥ 24.15 或 Bun ≥ 1.4.4。
+**前提条件：** Node ≥ 22.18（推荐 Node 24/26 LTS）或 Bun ≥ 1.4.4。
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -42,7 +42,7 @@ fastagent invoke "Summarize SYSTEM.md in one sentence"
 
 ## 3. 添加一个强类型 TypeScript 工具
 
-新建 `src/tools/reverse.ts`。FastAgent 会自动加载 `src/tools/` 下的所有文件，无需手动注册。`defineTool` 在 `pi-durable` 与 `dsh` 两种 Harness 上表现完全一致，支持原生 JSON Schema（`as const`）、Zod v4（或任意 Standard JSON Schema v1 库）以及 `pi-schema`：
+新建 `src/tools/reverse.ts`。FastAgent 会自动加载 `src/tools/` 下的所有文件，无需手动注册。`defineTool` 在 `pi-durable` 与 `dsh` 两种 Harness 上表现完全一致，支持原生 JSON Schema（`as const`）或 Zod v4（或任意 Standard JSON Schema v1 库）：
 
 ```ts
 // src/tools/reverse.ts
@@ -105,5 +105,5 @@ fastagent dev --harness dsh
 - **打包为 npm 制品并接入 CI/CD：** [打包、分发与 CI/CD](packaging-and-ci.md)
 - **深入了解底层原理：** [技术架构](architecture.md)
 - **从代码或 HTTP 调用：** [Agent API](agent-api.md) · [嵌入应用](embedding.md)
-- **发布上线：** [部署指南](deploy.md) · [AWS AgentCore](agentcore.md)
-- **运维线上实例与终端交互：** [远程实例与客户端](remotes.md)
+- **发布上线：** [部署指南](deploy.md)
+- **远程调用与认证运维：** [远程实例与客户端](remotes.md)

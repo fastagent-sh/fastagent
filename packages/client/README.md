@@ -32,6 +32,6 @@ const auth = connectAuth("https://agent.example.com", {
 const providers = await auth.providers();
 ```
 
-Also exports the remote Auth API (`/auth`), Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and pluggable `remotes.json` transport contract (`/remotes`) used by cloud transport clients like `@fastagent-sh/client-agentcore`.
+Also exports the remote Auth API (`/auth`), Agent API schemas (`/agent-api`), HTTP contract (`/http/contract`), and stream helpers (`/stream`).
 
 See [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) and [Remotes & clients](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).

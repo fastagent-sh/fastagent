@@ -1,7 +1,6 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral: what a platform adds is its {@link ContainerTarget}. */
 import { DEPLOYED_ENV, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
-import { RUNTIME_FLOOR } from "../runtime.ts";
 
 export interface Artifact {
   readonly path: string;
@@ -80,10 +79,9 @@ function aptLayer(packages?: readonly string[]): string {
 }
 
 /**
- * The Node image an agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
- * (`docker build --pull`): a copy cached before the floor's release would start a Node the CLI refuses.
+ * Default Node base image for generated containers: Node 24 LTS slim (ships stable, warning-free `node:sqlite`).
  */
-const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
+const NODE_IMAGE = "node:24-slim";
 const SAFE_DOCKER_TAG = /^\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Why the image builds `dist/` itself: a build context that follows `.gitignore` drops it, and `start` needs it. */

@@ -4,14 +4,11 @@
   "type": "module",
   "workspaces": [
     "packages/client",
-    "packages/client-agentcore",
     "packages/fastagent",
-    "packages/agentcore",
-    "packages/pi-remote",
     "packages/harness-dsh"
   ],
   "engines": {
-    "node": ">=24.15.0",
+    "node": ">=22.18.0",
     "bun": ">=1.4.4"
   },
   "overrides": {
@@ -31,20 +28,15 @@
     "knip": "knip"
   },
   "devDependencies": {
-    "@aws-sdk/client-bedrock-agentcore": "^3.1175.0",
     "@biomejs/biome": "^2.6.8",
     "@effect/tsgo": "^0.73.4",
     "@effect/vitest": "^4.1.5",
-    "@earendil-works/pi-coding-agent": "1.7.0",
-    "@earendil-works/pi-tui": "1.7.0",
     "@electric-sql/pglite": "^0.6.0",
     "@hono/node-server": "^2.1.11",
     "@modelcontextprotocol/server": "2.4.0",
     "@types/express": "^5.0.6",
     "@types/pg": "^8.23.1",
     "@types/proper-lockfile": "^4.1.4",
-    "aws-cdk-lib": "^2.269.0",
-    "constructs": "^10.7.0",
     "express": "^5.3.0",
     "fastify": "^5.12.7",
     "knip": "^6.48.0",

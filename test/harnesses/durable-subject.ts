@@ -16,16 +16,10 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import {
-  type Storage,
-  type ToolExecutionResult,
-  createRegistry,
-  defineExtension,
-  defineTool,
-} from "@earendil-works/pi-durable";
-import { obj, str } from "@earendil-works/pi-schema";
+import { type Storage, type ToolRegistration, createRegistry, defineExtension } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { type DurableAgent, openDurableAgent } from "../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
+import { type ToolResult, defineTool } from "../../packages/fastagent/src/harnesses/tool.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -160,14 +154,15 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
   let signalled = 0;
   let signedOut = false;
 
+  const emptyParams = { type: "object", properties: {} } as const;
   const holdTool = (name: string, description: string, before: () => void) =>
     defineTool({
       name,
       description,
-      parameters: obj({}),
+      parameters: emptyParams,
       execute: (_args, _api, context) => {
         before();
-        return new Promise<ToolExecutionResult>((resolve, reject) => {
+        return new Promise<ToolResult>((resolve, reject) => {
           const release = () => resolve({ output: [{ type: "text", text: "held" }] });
           held.push(release);
           context.abortSignal?.addEventListener(
@@ -186,7 +181,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
   const tools = (without: readonly string[]) =>
     defineExtension({
       name: "subject",
-      tools: allTools.filter((tool) => !without.includes(tool.name)),
+      tools: allTools.filter((tool) => !without.includes(tool.name)) as ToolRegistration[],
     });
   const allTools = [
     holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
@@ -196,9 +191,9 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "stubborn",
       description: "Waits until the test lets it go, whatever its abort signal says",
-      parameters: obj({}),
+      parameters: emptyParams,
       execute: (_args, _api, context) =>
-        new Promise<ToolExecutionResult>((resolve) => {
+        new Promise<ToolResult>((resolve) => {
           held.push(() => resolve({ output: [{ type: "text", text: "done" }] }));
           context.abortSignal?.addEventListener("abort", () => signalled++, { once: true });
         }),
@@ -206,7 +201,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "effect",
       description: "Has an effect the test counts",
-      parameters: obj({}),
+      parameters: emptyParams,
       execute: async () => {
         effects++;
         return { output: [{ type: "text", text: `effect ${effects}` }], details: { count: effects } };
@@ -215,7 +210,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "stream",
       description: "Writes a few status lines while it runs, keeping only the tail of them",
-      parameters: obj({}),
+      parameters: emptyParams,
       outputLimits: { maxBytes: 24, retain: "tail" },
       execute: async (_args, api) => {
         for (const line of ["one\n", "two\n", "three of the lines\n"]) {
@@ -228,7 +223,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "nested",
       description: "Calls lookup, as a codemode script does",
-      parameters: obj({}),
+      parameters: emptyParams,
       execute: async (_args, api, context) => {
         await api.executeTool("lookup", { city: "London" }, context);
         return { output: [{ type: "text", text: "looked up" }] };
@@ -237,7 +232,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "lookup",
       description: "Looks a city up, slowly",
-      parameters: obj({ city: str() }),
+      parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } as const,
       execute: async (args) => {
         await new Promise((resolve) => setTimeout(resolve, 25));
         return { output: [{ type: "text", text: `found ${args.city}` }] };
@@ -246,7 +241,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     defineTool({
       name: "finish",
       description: "Ends the run without another model call",
-      parameters: obj({}),
+      parameters: emptyParams,
       execute: async () => ({ output: [{ type: "text", text: "finished" }], control: { terminate: true } }),
     }),
   ];

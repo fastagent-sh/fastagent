@@ -37,12 +37,8 @@ fastagent <command> --help     # authoritative flags and examples generated from
 
 | Command | What it does |
 | --- | --- |
-| `deploy init <target>` | Write container and platform files (`docker`, `compose`, `fly`, `railway`, or an installed extension such as `agentcore`; `--force`, `--no-install`) ([Deploy](deploy.md)) |
+| `deploy init <target>` | Write container and platform files (`docker`, `compose`, `fly`, or `railway`; `--force`) ([Deploy](deploy.md)) |
 | `deploy check` | Read-only CI gate verifying the definition loads and the build context leaks no local secrets or state (`--json`) |
-
-### Platform extension commands
-
-Installing a `@fastagent-sh/<name>` platform package adds both `fastagent deploy init <name>` and `fastagent <name> ...` (for example, `npm i @fastagent-sh/agentcore` adds `fastagent deploy init agentcore` and `fastagent agentcore init|start|invoke`). Run `fastagent <name> --help` for extension options. Calling an uninstalled extension exits `2` and names the package to install.
 
 ## Options
 
@@ -50,7 +46,7 @@ Global options (`-C <dir>`, `-v`/`--version`) come before the command name; comm
 
 | Option | Commands | Purpose |
 | --- | --- | --- |
-| `-C <dir>` | before any command | Run as if started in `<dir>` (including version forwarding and extension lookup) |
+| `-C <dir>` | before any command | Run as if started in `<dir>` (including project CLI version forwarding) |
 | `--model <provider/modelId>` | `dev`, `start`, `invoke`, `info` | Model override (`--model` > `FASTAGENT_MODEL` > config) |
 | `--harness <pi-durable\|dsh>` | `dev`, `start`, `invoke`, `info` | Runtime harness override (`--harness` > `FASTAGENT_HARNESS` > config > `pi-durable`) |
 | `--sandbox <workspace\|read-only\|off>` | `dev`, `start`, `invoke`, `info` | OS sandbox mode for `harness: "dsh"` |

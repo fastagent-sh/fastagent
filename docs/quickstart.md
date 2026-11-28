@@ -8,7 +8,7 @@ status: current
 
 In five minutes you will create an agent, add a typed TypeScript tool, run it locally with live reload, and serve a production build over the Agent API.
 
-**Prerequisite:** Node ≥ 24.15 or Bun ≥ 1.4.4.
+**Prerequisite:** Node ≥ 22.18 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4.
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -42,7 +42,7 @@ On the first run in a terminal, FastAgent walks you through choosing a model and
 
 ## 3. Add a typed TypeScript tool
 
-Create `src/tools/reverse.ts`. FastAgent loads every file in `src/tools/` automatically—no manual registration required. `defineTool` works on both `pi-durable` and `dsh` harnesses and accepts plain JSON Schema (`as const`), Zod v4 (or any Standard JSON Schema v1 library), or `pi-schema`:
+Create `src/tools/reverse.ts`. FastAgent loads every file in `src/tools/` automatically—no manual registration required. `defineTool` works on both `pi-durable` and `dsh` harnesses and accepts plain JSON Schema (`as const`) or Zod v4 (or any Standard JSON Schema v1 library):
 
 ```ts
 // src/tools/reverse.ts
@@ -104,5 +104,5 @@ fastagent dev --harness dsh
 - **Build a real agent step by step (or let your coding agent build it):** [Agent development guide](ai-start.md)
 - **Understand how FastAgent works under the hood:** [Technical architecture](architecture.md)
 - **Call your agent from code or HTTP:** [Agent API](agent-api.md) · [Embedding](embedding.md)
-- **Ship to production:** [Deploy](deploy.md) · [Amazon Bedrock AgentCore](agentcore.md)
-- **Operate deployed agents & chat from Pi:** [Remotes & clients](remotes.md)
+- **Ship to production:** [Deploy](deploy.md)
+- **Operate deployed agents remotely:** [Remotes & clients](remotes.md)

@@ -9,7 +9,7 @@ status: current
 Embed a compiled FastAgent directly in your Node or Bun backend when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
 
 ```bash
-npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4.4
+npm i @fastagent-sh/fastagent       # Node ≥ 22.18 or Bun ≥ 1.4.4
 ```
 
 Compile your agent into a standalone npm package with `fastagent build` ([Packaging, Distribution & CI/CD](packaging-and-ci.md)), then import it from your application.
@@ -50,7 +50,7 @@ Key options on `openAgent(definition, options)`:
 - **`env`:** Base environment for subprocesses the agent spawns (`bash`, skill scripts, stdio MCP servers). Defaults to empty; pass `baseEnv(process.env)` for standard `PATH`, `HOME`, locale, and proxy settings. Pass `OTEL_*` variables in `secrets` (not `env`) so agent subprocesses cannot read collector credentials.
 - **`model`:** Optional `provider/modelId` override over `fastagent.config.ts`.
 - **`harness` / `sandbox`:** Optional `"pi-durable"` (default) or `"dsh"` (requires `@fastagent-sh/harness-dsh`), with `sandbox: "workspace" | "read-only" | "off"` on `dsh`.
-- **`database`:** PostgreSQL descriptor (`{ url }`, `openPostgresDatabase(...)`, or `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore`).
+- **`database`:** PostgreSQL descriptor (`{ url }` or `openPostgresDatabase(...)`).
 
 ### Hosting multiple instances on one PostgreSQL pool
 
@@ -61,7 +61,7 @@ First choose the right multi-tenant pattern for your product:
 | **Shared-key SaaS copilot (1 `openAgent()` instance)** | All tenants share the same model API keys, MCP servers, and tool definitions (`codingTools: false`) | Open **one** `openAgent()` per process, authorize `sessionId` ownership in your backend routes, and call `sessionIdOf(api, context)` inside custom tools to look up the owning tenant. Zero per-tenant instance cache needed. |
 | **BYOK / tenant-isolated SaaS (1 `openAgent()` per active tenant)** | Tenants bring their own API keys (`secrets`), tenant-scoped MCP servers, or require PostgreSQL instance-level storage partitioning | Share one `openPostgresDatabase()` pool and pass it to each `openAgent({ name, database })`. |
 
-When one process hosts multiple isolated instances over PostgreSQL (or Aurora DSQL), share a single connection pool with `openPostgresDatabase`:
+When one process hosts multiple isolated instances over PostgreSQL, share a single connection pool with `openPostgresDatabase`:
 
 ```ts
 import { baseEnv, openAgent, openPostgresDatabase } from "@fastagent-sh/fastagent";

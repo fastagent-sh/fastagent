@@ -9,10 +9,7 @@ const PACKAGE_NAME = "@fastagent-sh/fastagent";
 // Every package of the workspace, in the order they build and publish; all share one version.
 const WORKSPACES = [
 	"packages/client",
-	"packages/client-agentcore",
 	"packages/fastagent",
-	"packages/agentcore",
-	"packages/pi-remote",
 	"packages/harness-dsh",
 ];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);

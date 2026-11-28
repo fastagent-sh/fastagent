@@ -15,26 +15,21 @@ export const DEFAULT_SCRIPTS = {
   start: "fastagent build && fastagent start",
 } as const;
 
-export function expectedManifestDeps(build: { version: string; harness: Record<string, string>; typescript: string }): {
+export function expectedManifestDeps(build: { version: string; typescript: string }): {
   dependencies: Record<string, string>;
   devDependencies: Record<string, string>;
 } {
   return {
-    dependencies: { "@fastagent-sh/fastagent": `^${build.version}`, ...build.harness },
+    dependencies: { "@fastagent-sh/fastagent": `^${build.version}` },
     devDependencies: { typescript: build.typescript },
   };
 }
 
 /**
- * `package.json` for a scaffolded agent: `@fastagent-sh/fastagent` at this build's version, the supporting packages
- * for custom providers (`pi-ai`), extensions (`pi-durable`), and optional schemas (`pi-schema`), and the TypeScript
- * version `fastagent build` compiles with. Its scripts expose `dev`, `build`, and `start` (`start` builds first so
- * `dist/` stays up to date).
+ * `package.json` for a scaffolded agent: `@fastagent-sh/fastagent` at this build's version and the TypeScript version
+ * `fastagent build` compiles with.
  */
-export function packageJson(
-  name: string,
-  build: { version: string; harness: Record<string, string>; typescript: string },
-): string {
+export function packageJson(name: string, build: { version: string; typescript: string }): string {
   const { dependencies, devDependencies } = expectedManifestDeps(build);
   return `${JSON.stringify(
     {

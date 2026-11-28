@@ -46,14 +46,14 @@ Modern teams build with both **engineers and coding agents**. Visual canvases an
 | --- | --- |
 | Graph DSLs are hard for humans and coding agents to maintain | **Zero DSL:** plain Markdown, typed TypeScript tools, MCP, and a `--json` CLI |
 | Prompts and tools have no clean CI gate or rollback path | **Versioned npm packages:** `fastagent build` runs `tsc` and emits `dist/` |
-| Deploys, crashes, or browser refreshes drop long runs | **Durable sessions** (SQLite, PostgreSQL, Aurora DSQL) and **resumable SSE** |
+| Deploys, crashes, or browser refreshes drop long runs | **Durable sessions** (SQLite, PostgreSQL) and **resumable SSE** |
 | Webhook retries double-run or corrupt active sessions | **Idempotent `POST /v1/invoke`**, per-conversation locking, and live **`steer`** |
 | Your app already has authentication and a database | **Native Node.js embedding** (`openAgent()` or Fetch handler) sharing your auth & DB |
-| Secrets leak into shells or containers; tools need isolation | **Declared `needs()` secrets**, **`deploy check`**, **OS sandboxing**, and **AWS microVMs** |
+| Secrets leak into shells or containers; tools need isolation | **Declared `needs()` secrets**, **`deploy check`**, **OS sandboxing**, and **container isolation** |
 
 ## Quickstart
 
-Requires **Node ≥ 24.15** (Node 26 LTS recommended) or **Bun ≥ 1.4.4**. Client SDKs (`@fastagent-sh/client`, `@fastagent-sh/client-agentcore`) support Node 22+, modern browsers, edge runtimes, and Bun.
+Requires **Node ≥ 22.18** (Node 24/26 LTS recommended) or **Bun ≥ 1.4.4**. Client SDK (`@fastagent-sh/client`) supports Node 22+, modern browsers, edge runtimes, and Bun.
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -149,7 +149,7 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 ### Self-host with Docker or deploy to your cloud
 
 ```bash
-# Targets: docker | compose | fly | railway | agentcore
+# Targets: docker | compose | fly | railway
 fastagent deploy init fly
 fastagent deploy check
 
@@ -189,9 +189,9 @@ Pick the hosting topology that matches your workload and budget without changing
 | --- | --- | --- | --- |
 | **1–20 background agents**<br>(PR review, AI SRE, daily briefs) | Always-on containers sit idle 95%+ of the day | **Sleep when idle** on Fly.io (`suspend`) or Railway (App Sleeping) woken via `POST /v1/invoke` | **~98% less idle compute** vs 24/7 containers (20 runs/day × 1 min ≈ 10 active hrs/mo vs 720 always-on hrs/mo) |
 | **100–1,000+ SaaS tenants**<br>(embedded product copilot) | Per-tenant services, 1,000 DB pools, or lease heartbeats overload Postgres | **Embed in your backend** via `openAgent()` + shared `openPostgresDatabase({ url }, { max: 20 })` (`codingTools: false`) | **0 extra services**; **1 fixed 20-connection pool** with **batched lease renewals (up to 500 tenants/query)** and cooperative idle handoff across replicas |
-| **100–10,000+ isolated users**<br>(per-user coding & shell assistants) | Operating hundreds of always-on VMs and idle costs | **Per-user AWS MicroVMs** on Bedrock AgentCore + **1 shared serverless Aurora DSQL cluster** (`pi-durable` or `dsh`) | **0 always-on servers**; microVMs recycle when idle and resume from 1 shared DSQL cluster (or swap to fixed-price Postgres via `FASTAGENT_DATABASE_URL`) |
+| **Per-user isolated cloud workspaces**<br>(per-user coding & shell assistants) | Always-on VMs burn compute and lose history on recycle | **Ephemeral sandboxed containers** (`--harness dsh`) + **shared PostgreSQL** (`FASTAGENT_DATABASE_URL`) | **0 always-on idle compute**; containers suspend or recycle cleanly while durable sessions and leases persist in 1 shared PostgreSQL cluster |
 
-<sub>Single-writer fencing guarantees one active owner per instance (default limits: `inFlightPerProcess: 100`, `queuedPerSession: 20`). Scale horizontally across instances or automatically per user on AgentCore.</sub>
+<sub>Single-writer fencing guarantees one active owner per instance (default limits: `inFlightPerProcess: 100`, `queuedPerSession: 20`). Scale horizontally across instances with cooperative idle lease handoff across replicas.</sub>
 
 ## Production examples
 
@@ -202,8 +202,7 @@ Clone a complete working agent from [`examples/`](https://github.com/fastagent-s
 | [**Multi-Tenant SaaS Copilot**](https://github.com/fastagent-sh/fastagent/tree/main/examples/saas-copilot) | Embedded (Hono + PostgreSQL) | Shared DB pool, `codingTools: false`, resumable SSE |
 | [**Sandboxed PR Review Agent**](https://github.com/fastagent-sh/fastagent/tree/main/examples/pr-review-agent) | Self-hosted + GitHub Actions | Read-only OS sandbox, per-PR memory, idempotent retries |
 | [**Sleep-When-Idle AI SRE**](https://github.com/fastagent-sh/fastagent/tree/main/examples/incident-triage-agent) | Fly.io + Alert Webhooks | Alert deduplication, mid-run `steer`, MCP servers |
-| [**Deep Research & Daily Brief**](https://github.com/fastagent-sh/fastagent/tree/main/examples/deep-research-agent) | Self-hosted + External Cron | Long crash-resilient runs, live terminal attach via Pi |
-| [**Per-User AWS MicroVM Agent**](https://github.com/fastagent-sh/fastagent/tree/main/examples/agentcore-per-user) | AWS Bedrock AgentCore | Per-user microVM, Aurora DSQL, Secrets Manager, IAM auth |
+| [**Deep Research & Daily Brief**](https://github.com/fastagent-sh/fastagent/tree/main/examples/deep-research-agent) | Self-hosted + External Cron | Long crash-resilient runs, scheduled `POST /v1/invoke` |
 
 ## When to use FastAgent
 
@@ -212,7 +211,7 @@ Clone a complete working agent from [`examples/`](https://github.com/fastagent-s
 | **How you write it** | Graph DSLs & chains | Custom loop in code | Local terminal | **Markdown, skills, typed TS tools, MCP (zero DSL)** |
 | **Packaging & CI** | App-coupled code | App-coupled code | Not packageable | **Compiled npm packages, `tsc`, `--json` CI gates** |
 | **Embed in Node.js** | Separate service / glue | Stateless by default | Not embeddable | **Native `openAgent()` + shared Postgres pool** |
-| **Scale & isolation** | DIY hosting & sandbox | DIY hosting & sandbox | Local machine | **Docker, sleep-when-idle cloud, AWS microVMs, OS sandbox** |
+| **Scale & isolation** | DIY hosting & sandbox | DIY hosting & sandbox | Local machine | **Docker, sleep-when-idle cloud, shared Postgres, OS sandbox** |
 
 <sub>Compared: Workflow frameworks (LangGraph, CrewAI), Raw LLM SDKs (Vercel AI SDK, OpenAI SDK), Coding CLIs (Claude Code).</sub>
 
@@ -227,37 +226,33 @@ Clone a complete working agent from [`examples/`](https://github.com/fastagent-s
 Every caller speaks one contract: the [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md). Swap models, storage backends, hosts, or execution harnesses without changing your agent or application code:
 
 ```text
-Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastagent-sh/pi-remote)
+Callers (CLI · openAgent · @fastagent-sh/client · Webhooks / Edge / UI Clients)
                                         │  Agent API (/v1)
 ┌───────────────────────────────────────▼───────────────────────────────────────┐
 │ Unified Runtime Layer (@fastagent-sh/fastagent)                               │
 │  Build · defineTool · needs() Secrets · Models & Durable Auth · MCP · OTLP    │
 └───────────────────┬───────────────────────────────────────┬───────────────────┘
-                    │                                       │ (optional, lazy)
+                    │ (lazy)                                │ (optional, lazy)
          ┌──────────▼──────────┐                 ┌──────────▼──────────┐
          │ pi-durable (default)│                 │ @fastagent-sh/      │
          │ SQLite / PostgreSQL │                 │ harness-dsh         │
-         │ / Aurora DSQL       │                 │ + Kernel OS Sandbox │
+         │ (fenced leases)     │                 │ + Kernel OS Sandbox │
          └─────────────────────┘                 └─────────────────────┘
 ```
 
 - **Privacy-safe tracing:** Export cost, token, and tool spans via OpenTelemetry (`OTEL_EXPORTER_OTLP_ENDPOINT`) without logging prompts or answers.
 - **Remote CLI & OAuth:** Manage live instances (`fastagent remote add prod <url>`) and complete provider OAuth remotely (`fastagent login openai-codex --remote prod`).
-- **Live terminal attach:** Inspect or steer running remote sessions from your terminal with [`@fastagent-sh/pi-remote`](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md).
 
 ## Packages & documentation
 
 | Package | Role | Runtime baseline |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Core runtime (`pi-durable`), `openAgent`, `defineTool`, `openPostgresDatabase`, HTTP server, CLI | Node ≥ 24.15 (26 LTS recommended) or Bun ≥ 1.4.4 |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Cloud runtime, `openAgent`, `defineTool`, `openPostgresDatabase`, `HarnessProvider` SDK, HTTP server, CLI | Node ≥ 22.18 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | Zero-Node-dep HTTP Agent API (`connectAgent`) & remote Auth (`./auth`) client | Node 22+, Browsers, Edge, Bun (ES2024) |
-| [`@fastagent-sh/client-agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client-agentcore/README.md) | Zero-Node-dep Amazon Bedrock AgentCore client (`connectAgentCore`, `./auth`) | Node 22+, Browsers, Edge, Bun (ES2024) |
-| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | AWS AgentCore server runtime, Aurora DSQL adapter, Secrets Manager, CDK construct | Node ≥ 24.15 (26 LTS recommended) or Bun ≥ 1.4.4 |
-| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) adapter with kernel OS sandboxing (experimental) | Node ≥ 24.15 (26 LTS recommended) or Bun ≥ 1.4.4 |
-| [`@fastagent-sh/pi-remote`](https://github.com/fastagent-sh/fastagent/blob/main/packages/pi-remote/README.md) | Pi TUI extension (`/fa`) for live terminal access to deployed HTTP or AgentCore instances | Node ≥ 24.15 (26 LTS recommended) or Bun ≥ 1.4.4 |
+| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) server adapter with kernel OS sandboxing (experimental) | Node ≥ 22.18 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
 
 **Documentation ([docs/](https://github.com/fastagent-sh/fastagent/blob/main/docs/README.md)):**
-[Overview](https://github.com/fastagent-sh/fastagent/blob/main/docs/overview.md) · [Quickstart](https://github.com/fastagent-sh/fastagent/blob/main/docs/quickstart.md) · [Packaging & CI](https://github.com/fastagent-sh/fastagent/blob/main/docs/packaging-and-ci.md) · [AI Guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md) · [Architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md) · [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) · [Configuration](https://github.com/fastagent-sh/fastagent/blob/main/docs/configuration.md) · [MCP](https://github.com/fastagent-sh/fastagent/blob/main/docs/mcp.md) · [Embedding](https://github.com/fastagent-sh/fastagent/blob/main/docs/embedding.md) · [Deploy](https://github.com/fastagent-sh/fastagent/blob/main/docs/deploy.md) · [AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md) · [Remotes](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md) · [CLI](https://github.com/fastagent-sh/fastagent/blob/main/docs/cli.md) · [API Reference](https://github.com/fastagent-sh/fastagent/blob/main/docs/api-reference.md) · [Troubleshooting](https://github.com/fastagent-sh/fastagent/blob/main/docs/troubleshooting.md)
+[Overview](https://github.com/fastagent-sh/fastagent/blob/main/docs/overview.md) · [Quickstart](https://github.com/fastagent-sh/fastagent/blob/main/docs/quickstart.md) · [Packaging & CI](https://github.com/fastagent-sh/fastagent/blob/main/docs/packaging-and-ci.md) · [AI Guide](https://github.com/fastagent-sh/fastagent/blob/main/docs/ai-start.md) · [Architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md) · [Agent API](https://github.com/fastagent-sh/fastagent/blob/main/docs/agent-api.md) · [Configuration](https://github.com/fastagent-sh/fastagent/blob/main/docs/configuration.md) · [MCP](https://github.com/fastagent-sh/fastagent/blob/main/docs/mcp.md) · [Embedding](https://github.com/fastagent-sh/fastagent/blob/main/docs/embedding.md) · [Deploy](https://github.com/fastagent-sh/fastagent/blob/main/docs/deploy.md) · [Remotes](https://github.com/fastagent-sh/fastagent/blob/main/docs/remotes.md) · [CLI](https://github.com/fastagent-sh/fastagent/blob/main/docs/cli.md) · [API Reference](https://github.com/fastagent-sh/fastagent/blob/main/docs/api-reference.md) · [Troubleshooting](https://github.com/fastagent-sh/fastagent/blob/main/docs/troubleshooting.md)
 
 ## Community & status
 

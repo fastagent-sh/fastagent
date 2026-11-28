@@ -15,6 +15,7 @@ import type { PostgresDatabase } from "../postgres.ts";
 import { PromiseFailure, fromPromise, originalError } from "../promise-bridge.ts";
 import { type Service, serveAgent } from "../service.ts";
 import { NOT_HOSTED } from "../serving-command.ts";
+import type { HarnessProvider } from "../harness.ts";
 import type { HarnessName, SandboxMode } from "./define.ts";
 import { openServing, runServingPromise, trackInFlightClose } from "./instance-lifecycle.ts";
 
@@ -30,8 +31,8 @@ export interface LocalAgent extends Agent, InvokeApi {
   /** Whether the runtime is ready to accept work (false as soon as shutdown starts, before cleanup settles). */
   ready(): boolean;
   /**
-   * Whether the process has work in flight (a message not yet ended or an active login flow).
-   * For a platform that reclaims an idle machine (AgentCore's `HealthyBusy`).
+   * Whether the process has work in flight (a message not yet ended or an active login flow),
+   * for graceful drain and scale-to-zero liveness probes.
    */
   busy(): boolean;
   /** Close what `serve` started, then release the instance's storage. */
@@ -64,14 +65,13 @@ export interface OpenAgentOptions {
   env?: Readonly<Record<string, string>>;
   /** `"provider/modelId"`, over the definition's: what a session that names none answers with. */
   model?: string;
-  /** Runtime harness override (`"pi-durable"` or `"dsh"`). */
-  harness?: HarnessName;
-  /** OS sandbox mode override for `harness: "dsh"` (`"workspace"`, `"read-only"`, or `"off"`). */
+  /** Runtime harness override (`"pi-durable"`, `"dsh"`, another `@fastagent-sh/harness-<name>`, or a `HarnessProvider`). */
+  harness?: HarnessName | HarnessProvider;
+  /** OS sandbox mode override on sandbox-capable harnesses (`"workspace"`, `"read-only"`, or `"off"`). */
   sandbox?: SandboxMode;
   /**
-   * The PostgreSQL database the instance's sessions are in, instead of `<root>/.state/agent.sqlite`: its URL,
-   * and for a platform's own database how a connection signs in and what a transaction may hold. Over
-   * `secrets.FASTAGENT_DATABASE_URL`. An instance in a database is opened by its `name`, which is then required.
+   * PostgreSQL database for instance sessions instead of `<root>/.state/agent.sqlite`, overriding
+   * `secrets.FASTAGENT_DATABASE_URL`. Requires `name` to identify the instance.
    */
   database?: PostgresDatabase;
 }

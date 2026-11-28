@@ -136,7 +136,7 @@ Every file placed directly in `src/tools/` or `src/extensions/` is auto-loaded b
 | `src/tools/` | `defineTool(...)` from `@fastagent-sh/fastagent` (or `@earendil-works/pi-durable`), optionally wrapped in `needs()` | Both `pi-durable` and `dsh` |
 | `src/extensions/` | `defineExtension(...)` from `@earendil-works/pi-durable`, optionally wrapped in `needs()` | `pi-durable` only (skipped with warning on `dsh`) |
 
-- **Flexible parameter schemas:** `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect `Schema.toStandardJSONSchemaV1`), plain JSON Schema objects (with `as const` type inference), or `@earendil-works/pi-schema`.
+- **Flexible parameter schemas:** `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect `Schema.toStandardJSONSchemaV1`) or plain JSON Schema objects (with `as const` type inference).
 - **Simple return values:** `execute` can return a plain `string` or a full `ToolExecutionResult` (`{ output, details?, isError? }`).
 - **Session id lookup:** Call `await sessionIdOf(api, context)` from `@fastagent-sh/fastagent` to read the active Agent API session id on either harness.
 - **Built-in coding tools:** `read`, `write`, `edit`, and `bash` are enabled by default. Set `codingTools: false` for tool-only or multi-user embedded agents (this also omits workspace filesystem guidance from the system prompt), or pass a subset like `codingTools: ["read"]`. Even with `read` disabled, skills remain accessible via `/skill:<name>`.
@@ -157,7 +157,7 @@ Containers and embedded apps (`openAgent`) never read your local `.secrets/` or 
 Wrap any tool, extension, or provider that reads a secret or per-environment setting in `needs()`:
 
 ```ts
-import { z } from "zod"; // or plain JSON Schema (`as const`), or @earendil-works/pi-schema
+import { z } from "zod"; // or plain JSON Schema (`as const`), Effect Schema, Valibot, or ArkType
 import { defineTool, needs } from "@fastagent-sh/fastagent";
 
 export default needs(
@@ -218,7 +218,7 @@ fastagent start
 - **Isolate environments:** Use separate databases for dev and production.
 - **Single-writer lease fencing:** Only one process owns an instance at a time across hosts. A second opener waits up to 35 s before refusing (naming the holder); a crashed holder releases its lease within 30 s.
 - **Automatic schema setup:** Tables are created on first open (`CREATE TABLE` privilege required).
-- **Shared pools & Aurora DSQL:** Multi-instance apps wrap a database descriptor with `openPostgresDatabase()` ([Embedding](embedding.md#1-open-the-agent)); AWS deployments use `dsqlDatabase({ endpoint })` from `@fastagent-sh/agentcore` ([AgentCore](agentcore.md)).
+- **Shared connection pools:** Multi-instance apps wrap a database descriptor with `openPostgresDatabase()` ([Embedding](embedding.md#1-open-the-agent)) so all tenants share one pool and coalesce lease renewals.
 
 ## Logging & OpenTelemetry traces
 
@@ -250,8 +250,5 @@ CLI commands read `OTEL_*` from the environment or `.secrets/.env`; `openAgent()
 | `FASTAGENT_NAME` | Runtime / CLI | Instance name (required with PostgreSQL and containers) |
 | `FASTAGENT_DATABASE_URL` | Runtime / CLI | PostgreSQL connection string for sessions, credentials, and conversations |
 | `FASTAGENT_LOG_LEVEL` | Runtime / CLI | Log verbosity (`debug`, `info`, `warn`, `error`) |
-| `FASTAGENT_REMOTES_PATH` | CLI / `pi-remote` | Override path to `remotes.json` (default `~/.config/fastagent/remotes.json`) |
+| `FASTAGENT_REMOTES_PATH` | CLI | Override path to `remotes.json` (default `~/.config/fastagent/remotes.json`) |
 | `FASTAGENT_DEPLOYED` | Container | Set to `1` by generated `Dockerfile` to enforce mounted storage and deployment checks |
-| `FASTAGENT_AGENTCORE_ARN` | AgentCore CLI | Default runtime ARN for `fastagent agentcore invoke` |
-| `FASTAGENT_DSQL_ENDPOINT` | AgentCore server | Aurora DSQL cluster endpoint |
-| `FASTAGENT_SECRETS` | AgentCore server | AWS Secrets Manager secret name holding JSON values |

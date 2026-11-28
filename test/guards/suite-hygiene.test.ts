@@ -107,8 +107,6 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts and cor
     ["remote", "add"],
     ["remote", "remove"],
     ["remote", "default"],
-    ["agentcore", "start"],
-    ["agentcore", "invoke"],
   ];
   const uncoveredSubs = subcommands.filter(
     ([group, sub]) =>
@@ -117,6 +115,13 @@ it("every top-level CLI command in packages/fastagent/src/cli/program.ts and cor
       ).test(testCorpus),
   );
   expect(uncoveredSubs).toEqual([]);
+});
+
+it("test suite never imports retired @earendil-works/pi-schema", () => {
+  const offenders = lines
+    .filter(({ file, line }) => !file.startsWith("guards/") && line.includes("@earendil-works/pi-schema"))
+    .map(({ at }) => at);
+  expect(offenders).toEqual([]);
 });
 
 it("unit tests never import from test/integration/ (shared fixtures belong in test/fixtures/)", () => {
@@ -137,11 +142,7 @@ it("CLI unit tests use runInProcess instead of manually spying on process.cwd or
   expect(offenders).toEqual([]);
 });
 
-const APPROVED_PROCESS_ENV_FILES = new Set([
-  "packages/fastagent/src/process-env.ts",
-  "packages/agentcore/src/cli.ts",
-  "packages/pi-remote/src/host-env.ts",
-]);
+const APPROVED_PROCESS_ENV_FILES = new Set(["packages/fastagent/src/process-env.ts"]);
 
 function stripTsComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " ")).replace(/(?<!:)\/\/[^\n]*/g, "");

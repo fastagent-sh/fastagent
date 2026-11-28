@@ -53,7 +53,7 @@
   <text class="l a12" x="20" y="390"><tspan class="pu">[http]      </tspan><tspan class="dim">▸ </tspan><tspan class="pu">POST /v1/invoke</tspan><tspan class="txt">  conversation="inc-415" </tspan><tspan class="dim">whenBusy="steer"</tspan></text>
   <text class="l a13" x="20" y="416"><tspan class="dim">[agent]     </tspan><tspan class="ok">✓ </tspan><tspan class="txt">completed · steered active run &amp; RCA posted </tspan><tspan class="dim">(2.1s)</tspan></text>
 
-  <text class="l a14" x="20" y="454"><tspan class="cm"># 4. self-host with Docker or deploy to Fly.io, Railway, or AWS AgentCore</tspan></text>
+  <text class="l a14" x="20" y="454"><tspan class="cm"># 4. self-host with Docker or deploy to Fly.io, Railway, or any cloud</tspan></text>
   <text class="l a15" x="20" y="480"><tspan class="tp">❯ </tspan><tspan class="txt">fastagent deploy init fly &amp;&amp; fastagent deploy check</tspan></text>
   <text class="l a16" x="20" y="506"><tspan class="ok">✓ </tspan><tspan class="txt">wrote Dockerfile · .dockerignore · fly.toml — no secrets leaked</tspan></text>
 </svg>

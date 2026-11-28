@@ -46,7 +46,7 @@ export interface ConnectOptions {
    * a `fetch` that authenticates each request itself.
    */
   apiKey?: string;
-  /** What sends each request. Default: the global `fetch`. A platform's own signs and routes it (AgentCore's). */
+  /** Custom `fetch` implementation used for every request (defaults to global `fetch`). */
   fetch?: typeof globalThis.fetch;
 }
 

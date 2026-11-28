@@ -64,8 +64,7 @@ describe("fastagent build", () => {
   it("builds a needs(...) tool factory without executing it or requiring its runtime secret", async () => {
     const dir = project({
       ...FILES,
-      "src/tools/secret-tool.ts": `import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool, needs } from "@fastagent-sh/fastagent";
+      "src/tools/secret-tool.ts": `import { defineTool, needs } from "@fastagent-sh/fastagent";
 export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
   if (!BILLING_API_KEY.startsWith("sk_")) {
     throw new Error("malformed BILLING_API_KEY");
@@ -73,7 +72,7 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
   return defineTool({
     name: "secret_tool",
     description: "Uses a secret.",
-    parameters: obj({ query: str() }),
+    parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } as const,
     execute: async () => ({ output: [{ type: "text", text: "ok" }] }),
   });
 });

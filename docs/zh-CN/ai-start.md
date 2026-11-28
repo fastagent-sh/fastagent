@@ -28,7 +28,7 @@ define scope → init → prompt, skill, tool → typecheck & unit test → live
 
 让 Agent 自主决定工具调用步骤；仅当产品明确要求固定顺序编排时，才把刚性多步流水线放在宿主应用中。
 
-**选择正确的隔离姿态：** 在默认的 `pi-durable` Harness 上，内置编码工具（`read`、`write`、`edit`、`bash`）以当前操作系统进程权限运行——提示词或强类型工具本身不是安全沙箱。需要强隔离时，可在 `fastagent.config.ts` 中设置 `codingTools: false`（或 `["read"]`）、使用 `harness: "dsh"` 启用内核级 OS 沙箱（`workspace` 或 `read-only`），或将 Agent 隔离在容器 / AgentCore MicroVM 中。
+**选择正确的隔离姿态：** 在默认的 `pi-durable` Harness 上，内置编码工具（`read`、`write`、`edit`、`bash`）以当前操作系统进程权限运行——提示词或强类型工具本身不是安全沙箱。需要强隔离时，可在 `fastagent.config.ts` 中设置 `codingTools: false`（或 `["read"]`）、使用 `harness: "dsh"` 启用内核级 OS 沙箱（`workspace` 或 `read-only`），或将 Agent 隔离在独立容器中。
 
 ## 2. 创建或初始化 Agent 项目
 
@@ -44,7 +44,7 @@ cd my-agent
 
 ## 3. 配置 TypeScript
 
-工具、辅助函数与测试统一使用 TypeScript 编写。Node ≥ 24.15 与 Bun ≥ 1.4.4 均原生执行 TypeScript，因此需要注意：
+工具、辅助函数与测试统一使用 TypeScript 编写。Node ≥ 22.18 与 Bun ≥ 1.4.4 均原生执行 TypeScript，因此需要注意：
 - 导入相对模块时带上 `.ts` 扩展名（`../lib/batches.ts`），导入纯类型时使用 `import type`；
 - 避免使用不可擦除语法（`enum`、`namespace`、构造函数参数属性、装饰器、JSX）。
 
@@ -130,7 +130,7 @@ export default defineTool({
 });
 ```
 
-来自 `@fastagent-sh/fastagent` 的 `defineTool` 在 `pi-durable` 和 `dsh` 上行为完全一致，支持原生 JSON Schema（`as const`）、Zod v4（或任意 Standard JSON Schema v1 库）及 `@earendil-works/pi-schema`。参数在 `execute` 运行前自动校验。需要密钥的工具用 `needs(["NAME"], (secrets) => defineTool(...))` 包裹。共享辅助模块请放在 `src/` 之外（此处放在 `lib/`）。
+来自 `@fastagent-sh/fastagent` 的 `defineTool` 在 `pi-durable` 和 `dsh` 上行为完全一致，支持原生 JSON Schema（`as const`）或 Zod v4（或任意 Standard JSON Schema v1 库）。参数在 `execute` 运行前自动校验。需要密钥的工具用 `needs(["NAME"], (secrets) => defineTool(...))` 包裹。共享辅助模块请放在 `src/` 之外（此处放在 `lib/`）。
 
 **`test/batches.test.ts`**
 
@@ -183,10 +183,10 @@ fastagent invoke "Use plan-batches for 5 proposals at 2 per batch. Do not send a
 
 ## 7. 检查并部署上线
 
-与负责人确定部署平台并阅读[部署指南](deploy.md)（若需 AWS 每用户 MicroVM 隔离，请阅读 [AWS AgentCore](agentcore.md)）。
+与负责人确定部署平台并阅读[部署指南](deploy.md)。
 
 ```bash
-fastagent deploy init docker   # 或 compose、fly、railway、agentcore
+fastagent deploy init docker   # 或 compose、fly、railway
 fastagent deploy check         # 校验定义可正常加载，且未泄漏本地密钥或状态
 ```
 
@@ -198,14 +198,14 @@ fastagent deploy check         # 校验定义可正常加载，且未泄漏本�
 fastagent invoke --url https://<your-host> "hello"
 ```
 
-也可以保存为命名远程端点（`fastagent remote add prod https://<your-host> --key '$PROD_AGENT_KEY'`），随后在 `invoke`、`login`、`logout` 和 [`@fastagent-sh/pi-remote`](remotes.md) 中统一使用 `--remote prod`。
+也可以保存为命名远程端点（`fastagent remote add prod https://<your-host> --key '$PROD_AGENT_KEY'`），随后在 `invoke`、`login` 与 `logout` 中统一使用 `--remote prod`（见[远程实例与客户端](remotes.md)）。
 
 部署后各类数据的持久化边界：
 
 | 数据 | 持久化方式 |
 | --- | --- |
 | 提示词、技能、代码 | 打包进容器镜像；随新版本部署更新 |
-| 会话、命名对话、远程认证凭证 | 持久化卷 `/data`（SQLite）或 PostgreSQL / Aurora DSQL（`FASTAGENT_DATABASE_URL`） |
+| 会话、命名对话、远程认证凭证 | 持久化卷 `/data`（SQLite）或 PostgreSQL（`FASTAGENT_DATABASE_URL`） |
 | 业务记录与外部副作用 | 你自己的数据库或外部系统；工具的外部副作用应容忍重试 |
 
 ## 8. 汇报验证清单

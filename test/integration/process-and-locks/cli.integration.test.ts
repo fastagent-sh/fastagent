@@ -51,14 +51,6 @@ describe("cli: process contracts", () => {
     const dash = await run(["-C", dir, "invoke", "-", "--json"], undefined, undefined, "hello via dash\n");
     expect(dash.code, dash.stderr).toBe(0);
     expect(dash.stdout).toContain("hello via dash");
-
-    const arn = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/demo";
-    const acEmpty = await run(["agentcore", "invoke", "--arn", arn], undefined, undefined, "   \n");
-    expect([acEmpty.code, acEmpty.stdout]).toEqual([2, ""]);
-    expect(acEmpty.stderr).toMatch(/missing message/);
-    const acDashEmpty = await run(["agentcore", "invoke", "-", "--arn", arn], undefined, undefined, "   \n");
-    expect([acDashEmpty.code, acDashEmpty.stdout]).toEqual([2, ""]);
-    expect(acDashEmpty.stderr).toMatch(/missing message/);
   });
 
   it("invoke surfaces a startup error to stderr, keeps stdout empty, exits non-zero", async () => {

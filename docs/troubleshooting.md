@@ -37,7 +37,7 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # shell or container
 ### `Invalid schema for function '...'`
 
 **Why:** Some model providers (notably OpenAI) only accept a narrow set of JSON Schema `format` values (`date-time`, `date`, `email`, `uuid`, …) and reject others like `format: "uri"`.
-**Fix:** Replace unsupported string formats with a regex pattern (`pattern: "^https?://\\S+$"` in JSON Schema, `z.string().regex(/^https?:\/\/\S+$/)` in Zod, or `str({ pattern: "^https?://\\S+$" })` in `pi-schema`).
+**Fix:** Replace unsupported string formats with a regex pattern (`pattern: "^https?://\\S+$"` in JSON Schema, or `z.string().regex(/^https?:\/\/\S+$/)` in Zod).
 
 ### Port already in use
 
@@ -88,14 +88,9 @@ npm install @fastagent-sh/harness-dsh
 
 ## Remotes & remote auth
 
-### `Remote "..." uses transport "agentcore"; install @fastagent-sh/client-agentcore`
-
-**Why:** Non-HTTP entries in `~/.config/fastagent/remotes.json` dynamically load `@fastagent-sh/client-<type>`.
-**Fix:** Install `@fastagent-sh/client-agentcore` in the environment where you run `fastagent` or Pi.
-
 ### `unauthorized` vs `auth_required` on a remote call
 
-- **`unauthorized` (HTTP 401):** Your **server API key** (`FASTAGENT_API_KEY`, `--key`, or `apiKey` in `remotes.json`) was missing or rejected by the FastAgent server (or AWS IAM rejected your AgentCore invocation).
+- **`unauthorized` (HTTP 401):** Your **server API key** (`FASTAGENT_API_KEY`, `--key`, or `apiKey` in `remotes.json`) was missing or rejected by the FastAgent server.
 - **`auth_required` (in `message.error`):** The FastAgent server accepted your request, but the **model provider** inside the deployment has no valid credential. Set the provider's API key on the host or run `fastagent login <provider> --remote <name>`.
 
 ## Deployment
@@ -103,7 +98,7 @@ npm install @fastagent-sh/harness-dsh
 ### Sessions disappear after a redeploy
 
 **Why:** Instance state is being written to ephemeral container storage.
-**Fix:** Mount a persistent volume at `/data` (the generated container's `FASTAGENT_ROOT`) or set `FASTAGENT_DATABASE_URL` to PostgreSQL / Aurora DSQL.
+**Fix:** Mount a persistent volume at `/data` (the generated container's `FASTAGENT_ROOT`) or set `FASTAGENT_DATABASE_URL` to PostgreSQL.
 
 ### `deploy init` or `deploy check` fails, or the container exits on boot
 

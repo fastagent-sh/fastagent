@@ -103,7 +103,7 @@
   <!-- Card 3C: Per-User AWS MicroVMs -->
   <rect x="564" y="290" width="272" height="90" rx="10" fill="url(#card)" stroke="#312447" stroke-width="1"/>
   <text x="580" y="312" class="heading" font-size="14">Per-User AWS MicroVMs</text>
-  <text x="580" y="330" class="sub">Bedrock AgentCore + Aurora DSQL</text>
+  <text x="580" y="330" class="sub">Sandboxed Cloud Containers + Postgres</text>
   <rect x="580" y="342" width="240" height="24" rx="5" fill="#1e1530"/>
   <text x="700" y="358" text-anchor="middle" class="mono badge-txt" fill="#b795f5">0 always-on servers · isolated VMs</text>
 

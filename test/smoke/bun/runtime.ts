@@ -1,10 +1,9 @@
 /**
  * End-to-end Bun runtime smoke test verifying FastAgent's full server & CLI contract on Bun >= 1.4.4:
- * - Public package imports across client, fastagent, agentcore, and harness-dsh
+ * - Public package imports across client, fastagent, and harness-dsh
  * - Proxy setup (`installProxyFetch`) compatibility with Bun's native `undici` shim, dynamic `HTTP_PROXY` routing, and loopback exemption
  * - `openAgent` + `serve` (HTTP + SSE streaming + client disconnect abort) + `connectAgent` on both `pi-durable` and `dsh`
  * - Durable `node:sqlite` persistence across reopen and exclusive lock contention (`SQLITE_BUSY`)
- * - `@fastagent-sh/agentcore` `agentCoreHandler` HTTP envelope & `/ping`
  * - CLI under Bun: `--version`, `init --no-install`, `invoke` (both harnesses), `build`, `deploy init/check`, and `dev` IPC
  *
  * Run after `npm run build`: `bun --conditions=@fastagent-sh/source test/smoke/bun/runtime.ts`
@@ -20,12 +19,10 @@ import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import { connectAgent } from "@fastagent-sh/client";
 import { openAgent } from "@fastagent-sh/fastagent";
 import { defineDefinition } from "@fastagent-sh/fastagent/internal";
-import { agentCoreHandler } from "../../../packages/agentcore/src/runtime.ts";
 import { installProxyFetch } from "../../../packages/fastagent/src/proxy.ts";
 import { openLockedStorage } from "../../../packages/fastagent/src/harnesses/pi-durable/storage.ts";
 import { resolveFromProject, unsupportedRuntime } from "../../../packages/fastagent/src/runtime.ts";
 import { serveHandler } from "../../../packages/fastagent/src/http/serve.ts";
-import { servedPostgres } from "../../doubles/postgres-double.ts";
 
 const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname);
 const CLI_DIST = join(REPO_ROOT, "packages/fastagent/dist/cli.js");
@@ -84,12 +81,12 @@ assert(existsSync(CLI_DIST), `missing built CLI at ${CLI_DIST}; run npm run buil
 // 1. Public package imports
 await Promise.all([
   import("@fastagent-sh/client"),
-  import("@fastagent-sh/client-agentcore"),
   import("@fastagent-sh/fastagent"),
-  import("@fastagent-sh/agentcore"),
+  import("@fastagent-sh/fastagent/harness"),
   import("@fastagent-sh/harness-dsh"),
+  import("@fastagent-sh/harness-dsh/provider"),
 ]);
-console.error("[bun-smoke] 1/6 public imports ok");
+console.error("[bun-smoke] 1/5 public imports ok");
 
 // 2. Proxy boundary (dynamic HTTP_PROXY + loopback exemption) + native Bun.serve contracts (POST, 500, SSE abort, EADDRINUSE, graceful/forced close)
 {
@@ -294,75 +291,9 @@ try {
       await reopened.close();
     }
   }
-  console.error("[bun-smoke] 4/6 embedded openAgent + HTTP SSE + durable reopen (pi-durable & dsh) ok");
+  console.error("[bun-smoke] 4/5 embedded openAgent + HTTP SSE + durable reopen (pi-durable & dsh) ok");
 
-  // 5. AgentCore runtime server under Bun
-  {
-    const pg = await servedPostgres();
-    const faux = fauxProvider({ provider: "bun-ac", models: [{ id: "m1" }] });
-    faux.setResponses([fauxAssistantMessage("agentcore-on-bun")]);
-    const def = makeDefinition(join(work, "def-ac"), "bun-agentcore", {
-      model: "bun-ac/m1",
-      providers: [faux.provider],
-    });
-    const handler = agentCoreHandler(def, { database: { url: pg.url }, root: join(work, "ac-root") });
-    const server = serveHandler(handler.fetch, { port: 0, host: "127.0.0.1" });
-    const port = await server.listening;
-    try {
-      const ping = await fetch(`http://127.0.0.1:${port}/ping`);
-      assertEqual("AgentCore /ping status", ping.status, 200);
-      const sessionHeader = "bun-agentcore-session-id-0123456789abcdef";
-      const createRes = await fetch(`http://127.0.0.1:${port}/invocations`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-amzn-bedrock-agentcore-runtime-session-id": sessionHeader,
-        },
-        body: JSON.stringify({
-          request: {
-            method: "POST",
-            path: "/v1/sessions",
-            headers: { "content-type": "application/json" },
-            body: "{}",
-          },
-        }),
-      });
-      assertEqual("AgentCore create session status", createRes.status, 200);
-      const created = (await createRes.json()) as { response: { status: number; body: string } };
-      assertEqual("AgentCore envelope status", created.response.status, 201);
-      const createdSession = JSON.parse(Buffer.from(created.response.body, "base64").toString("utf8")) as {
-        id: string;
-      };
-      const sendRes = await fetch(`http://127.0.0.1:${port}/invocations`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-amzn-bedrock-agentcore-runtime-session-id": sessionHeader,
-        },
-        body: JSON.stringify({
-          request: {
-            method: "POST",
-            path: `/v1/sessions/${createdSession.id}/messages`,
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ content: "hi", wait: 30 }),
-          },
-        }),
-      });
-      assertEqual("AgentCore send message status", sendRes.status, 200);
-      const sent = (await sendRes.json()) as { response: { status: number; body: string } };
-      const sentMessage = JSON.parse(Buffer.from(sent.response.body, "base64").toString("utf8")) as {
-        answer?: { text?: string };
-      };
-      assertEqual("AgentCore answer", sentMessage.answer?.text, "agentcore-on-bun");
-    } finally {
-      await server.close();
-      await handler.close();
-      await pg.close();
-    }
-  }
-  console.error("[bun-smoke] 5/6 AgentCore runtime server ok");
-
-  // 6. Full CLI workflow under Bun: --version, init, invoke (both harnesses), build, deploy init/check, dev IPC
+  // 5. Full CLI workflow under Bun: --version, init, invoke (both harnesses), build, deploy init/check, dev IPC
   {
     const ver = runBunCli(["--version"], work, cleanEnv);
     assertEqual("CLI --version exit", ver.status, 0);
@@ -460,7 +391,7 @@ export default { model: "bun-cli/m", providers: [faux.provider] } satisfies Agen
     devChild.kill("SIGTERM");
     await new Promise<void>((resolveExit) => devChild.once("exit", () => resolveExit()));
   }
-  console.error("[bun-smoke] 6/6 CLI workflow (init, invoke, build, deploy, dev IPC) ok");
+  console.error("[bun-smoke] 5/5 CLI workflow (init, invoke, build, deploy, dev IPC) ok");
 } finally {
   rmSync(work, { recursive: true, force: true });
 }

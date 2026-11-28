@@ -1,13 +1,11 @@
 /** The program's `fastagent.config.ts`, checked: the one place an agent's settings are written. */
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
-import { type Schema, arr, compile, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 import { declareServers } from "../mcp/config.ts";
 import { modelRefOf } from "../model-ref.ts";
 import { isNeeds } from "../needs.ts";
 import { decodeRuntimeCliEnv } from "../process-env.ts";
 import {
   CODING_TOOL_NAMES,
-  HARNESS_NAMES,
   SANDBOX_MODES,
   type AgentConfig,
   type CodingToolName,
@@ -26,6 +24,7 @@ const THINKING_LEVELS = [
   "xhigh",
   "max",
 ] as const satisfies readonly ModelThinkingLevel[];
+const THINKING_LEVEL_SET = new Set<string>(THINKING_LEVELS);
 const MAX_STARTERS = 6;
 const MAX_STARTER_LENGTH = 200;
 
@@ -42,20 +41,16 @@ const KEYS = [
 ];
 const KEY_SET = new Set<string>(KEYS);
 const CODING_TOOL_SET = new Set<string>(CODING_TOOL_NAMES);
-const HARNESS_SET = new Set<string>(HARNESS_NAMES);
 const SANDBOX_SET = new Set<string>(SANDBOX_MODES);
+const HARNESS_IDENTIFIER = /^[a-z][a-z0-9-]*$/;
 
 export const HARNESS_ENV = "FASTAGENT_HARNESS";
 export const SANDBOX_ENV = "FASTAGENT_SANDBOX";
 
-/** Optional external runtime packages required by non-default harnesses. */
-export const OPTIONAL_HARNESS_PACKAGES = {
-  dsh: "@fastagent-sh/harness-dsh",
-} as const satisfies Partial<Record<HarnessName, string>>;
-
-/** Optional runtime package required by `harness`, or `undefined` for the built-in `pi-durable` harness. */
+/** External runtime package required by `harness`, or `undefined` for the built-in `pi-durable` harness. */
 export function harnessPackage(harness: HarnessName | undefined): string | undefined {
-  return harness === "dsh" ? OPTIONAL_HARNESS_PACKAGES.dsh : undefined;
+  if (harness === undefined || harness === "pi-durable") return undefined;
+  return HARNESS_IDENTIFIER.test(harness) ? `@fastagent-sh/harness-${harness}` : undefined;
 }
 
 export interface HarnessSelection {
@@ -63,17 +58,13 @@ export interface HarnessSelection {
   readonly sandbox?: SandboxMode;
 }
 
-interface HarnessCapabilities {
-  readonly extensions: boolean;
-  readonly sandbox: boolean;
+function validateHarnessIdentifier(raw: string, prefix = ""): void {
+  if (!HARNESS_IDENTIFIER.test(raw)) {
+    throw new Error(
+      `${prefix}invalid harness name ${JSON.stringify(raw)} (expected a lowercase identifier such as "pi-durable" or "dsh")`,
+    );
+  }
 }
-
-const HARNESS_CAPABILITIES: Record<HarnessName, HarnessCapabilities> = {
-  "pi-durable": { extensions: true, sandbox: false },
-  dsh: { extensions: false, sandbox: true },
-};
-
-const SANDBOX_HARNESSES = HARNESS_NAMES.filter((name) => HARNESS_CAPABILITIES[name].sandbox);
 
 /**
  * Resolve the effective harness and sandbox posture with precedence:
@@ -88,23 +79,23 @@ export function resolveHarnessSelection(
   const envHarness = env === undefined ? decodeRuntimeCliEnv().harness : env[HARNESS_ENV];
   const envSandbox = env === undefined ? decodeRuntimeCliEnv().sandbox : env[SANDBOX_ENV];
   const rawHarness = overrides.harness ?? (envHarness || config.harness) ?? "pi-durable";
-  if (!HARNESS_SET.has(rawHarness)) {
-    throw new Error(`unknown harness ${JSON.stringify(rawHarness)} (allowed: ${HARNESS_NAMES.join(", ")})`);
-  }
+  validateHarnessIdentifier(rawHarness);
   const harness = rawHarness as HarnessName;
   const rawSandbox = overrides.sandbox ?? (envSandbox || config.sandbox);
   if (rawSandbox !== undefined && !SANDBOX_SET.has(rawSandbox)) {
     throw new Error(`unknown sandbox mode ${JSON.stringify(rawSandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }
-  if (!HARNESS_CAPABILITIES[harness].sandbox) {
+  if (harness === "pi-durable") {
     if (rawSandbox !== undefined) {
-      throw new Error(
-        `sandbox (${JSON.stringify(rawSandbox)}) requires harness: ${SANDBOX_HARNESSES.map((name) => JSON.stringify(name)).join(" or ")}`,
-      );
+      throw new Error(`sandbox (${JSON.stringify(rawSandbox)}) requires harness: "dsh"`);
     }
     return { harness };
   }
-  return { harness, sandbox: (rawSandbox as SandboxMode | undefined) ?? "workspace" };
+  const sandbox = rawSandbox as SandboxMode | undefined;
+  if (harness === "dsh") {
+    return { harness, sandbox: sandbox ?? "workspace" };
+  }
+  return sandbox === undefined ? { harness } : { harness, sandbox };
 }
 
 /**
@@ -121,7 +112,7 @@ export function diagnoseHarnessCompatibility(
     readonly supportsExtensions?: boolean;
   },
 ): readonly string[] {
-  const supportsExtensions = options?.supportsExtensions ?? HARNESS_CAPABILITIES[selection.harness].extensions;
+  const supportsExtensions = options?.supportsExtensions ?? selection.harness === "pi-durable";
   if (supportsExtensions) return [];
   const names =
     options?.extensions !== undefined
@@ -162,18 +153,44 @@ function checkCodingTools(value: unknown, file: string): void {
   }
 }
 
-/** The keys whose values are plain data; `providers` and `mcpServers` are checked by their own readers. */
-const DATA: Schema = obj({
-  model: opt(str({ description: 'The default model, "provider/modelId"', minLength: 3 })),
-  thinkingLevel: opt(oneOf(THINKING_LEVELS)),
-  maxSteps: opt(int({ description: "Maximum model steps per turn", minimum: 1 })),
-  starters: opt(
-    arr(str({ maxLength: MAX_STARTER_LENGTH, pattern: "\\S" }), {
-      description: "Example first messages a client may offer as drafts",
-      maxItems: MAX_STARTERS,
-    }),
-  ),
-});
+function checkScalarConfigFields(config: AgentConfig, file: string): void {
+  const problems: string[] = [];
+  if (config.model !== undefined) {
+    if (typeof config.model !== "string" || config.model.length < 3) {
+      problems.push("/model must be a string of at least 3 characters");
+    }
+  }
+  if (config.thinkingLevel !== undefined) {
+    if (typeof config.thinkingLevel !== "string" || !THINKING_LEVEL_SET.has(config.thinkingLevel)) {
+      problems.push(`/thinkingLevel must be one of (${THINKING_LEVELS.join(", ")})`);
+    }
+  }
+  if (config.maxSteps !== undefined) {
+    if (typeof config.maxSteps !== "number" || !Number.isInteger(config.maxSteps) || config.maxSteps < 1) {
+      problems.push("/maxSteps must be an integer >= 1");
+    }
+  }
+  if (config.starters !== undefined) {
+    if (!Array.isArray(config.starters)) {
+      problems.push("/starters must be an array");
+    } else {
+      if (config.starters.length > MAX_STARTERS) {
+        problems.push(`/starters must have <= ${MAX_STARTERS} items`);
+      }
+      for (let i = 0; i < config.starters.length; i++) {
+        const item = config.starters[i];
+        if (typeof item !== "string") {
+          problems.push(`/starters/${i} must be a string`);
+        } else if (item.length > MAX_STARTER_LENGTH || !/\S/.test(item)) {
+          problems.push(`/starters/${i} must be a non-blank string of <= ${MAX_STARTER_LENGTH} characters`);
+        }
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`${file}: ${problems.join("; ")}`);
+  }
+}
 
 /** The program's `fastagent.config.ts` default export, checked; `{}` without one. */
 export function checkProgramConfig(config: unknown, file: string): AgentConfig {
@@ -191,32 +208,26 @@ export function checkProgramConfig(config: unknown, file: string): AgentConfig {
           : "";
     throw new Error(`${file}: unknown key "${unknownKey}"${hint} (keys: ${KEYS.join(", ")})`);
   }
-  const { model, thinkingLevel, harness, sandbox, codingTools, maxSteps, starters, providers, mcpServers } =
-    config as AgentConfig;
-  const validator = compile(DATA);
-  const data = { model, thinkingLevel, maxSteps, starters };
-  if (!validator.check(data)) {
-    const problems = validator
-      .errors(data)
-      .map(({ path, message }) => `${path === "" ? "(the value)" : path} ${message}`);
-    throw new Error(`${file}: ${problems.join("; ")}`);
-  }
-  if (harness !== undefined && (typeof harness !== "string" || !HARNESS_SET.has(harness))) {
-    throw new Error(`${file}: unknown harness ${JSON.stringify(harness)} (allowed: ${HARNESS_NAMES.join(", ")})`);
+  const typed = config as AgentConfig;
+  const { model, harness, sandbox, codingTools, providers, mcpServers } = typed;
+  checkScalarConfigFields(typed, file);
+  if (harness !== undefined) {
+    if (typeof harness !== "string") {
+      throw new Error(`${file}: "harness" must be a string`);
+    }
+    validateHarnessIdentifier(harness, `${file}: `);
   }
   if (sandbox !== undefined && (typeof sandbox !== "string" || !SANDBOX_SET.has(sandbox))) {
     throw new Error(`${file}: unknown sandbox mode ${JSON.stringify(sandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }
-  if (sandbox !== undefined && !HARNESS_CAPABILITIES[harness ?? "pi-durable"].sandbox) {
-    throw new Error(
-      `${file}: "sandbox" requires harness: ${SANDBOX_HARNESSES.map((name) => JSON.stringify(name)).join(" or ")}`,
-    );
+  if (sandbox !== undefined && (harness ?? "pi-durable") === "pi-durable") {
+    throw new Error(`${file}: "sandbox" requires harness: "dsh"`);
   }
   checkCodingTools(codingTools, file);
   if (model !== undefined) modelRefOf(model, `${file}: /model`);
   if (providers !== undefined && !Array.isArray(providers)) throw new Error(`${file}: "providers" must be an array`);
   if (mcpServers !== undefined) declareServers(mcpServers, file);
-  return config as AgentConfig;
+  return typed;
 }
 
 /** What `info()` reports of who the agent is: the package's name and description, and its starters. */

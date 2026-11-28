@@ -4,8 +4,16 @@
  * message ledger, and binary attachments in 4 tables with atomic contiguous-seq transactions.
  */
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
+
+const requireSqlite = createRequire(import.meta.url);
+let CachedDatabaseSync: typeof DatabaseSync | undefined;
+function openDatabaseSync(path: string, timeout: number): DatabaseSync {
+  CachedDatabaseSync ??= (requireSqlite("node:sqlite") as typeof import("node:sqlite")).DatabaseSync;
+  return new CachedDatabaseSync(path, { timeout });
+}
 import type {
   DshEventStoreBackend,
   DshSessionEvent,
@@ -77,7 +85,7 @@ export function openSqliteDshStore(filePath: string, options: SqliteDshStoreOpti
     mkdirSync(dirname(filePath), { recursive: true });
   }
   const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
-  const db = new DatabaseSync(filePath, { timeout: busyTimeoutMs });
+  const db = openDatabaseSync(filePath, busyTimeoutMs);
   try {
     db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.trunc(busyTimeoutMs))};`);
     if (filePath !== ":memory:") {

@@ -5,8 +5,9 @@
  */
 import { writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { STORAGE_DIR } from "../../deploy/container.ts";
-import { checkDeploy } from "../../deploy/preflight.ts";
+import { applyArtifactPlan, planArtifacts } from "../../deploy/artifacts.ts";
+import { type ContainerTarget, STORAGE_DIR, containerArtifacts } from "../../deploy/container.ts";
+import { checkContainer, checkDeploy } from "../../deploy/preflight.ts";
 import {
   BUILTIN_DEPLOY_TARGETS,
   type BuiltinDeployTarget,
@@ -17,22 +18,25 @@ import {
   targetContainerSpec,
 } from "../../deploy/targets.ts";
 import { exists } from "../../paths.ts";
-import { writeContainer } from "../../platform.ts";
-import { fastagentVersion } from "../../version.ts";
-import { extensionEntry, extensionPackage, runExtension } from "../extension.ts";
 import { agentDirOrExit, errorPrefix, failStartup, failUsage } from "../fail.ts";
 
 export interface DeployInitOptions {
   force?: boolean;
-  /** false ⇔ `--no-install` (forwarded to extension targets such as `agentcore`). */
-  install?: boolean;
 }
 
 export interface DeployCheckOptions {
   json?: boolean;
 }
 
-const EXTENSION_NAME = /^[a-z][a-z0-9-]*$/;
+type ContainerWrite = { ok: false; gate: string } | { ok: true; name: string; port: number };
+
+async function writeContainer(agentDir: string, target: ContainerTarget, force: boolean): Promise<ContainerWrite> {
+  const checked = await checkContainer({ agentDir, force, target });
+  if (!checked.ok) return checked;
+  for (const m of checked.messages) console.error(`[fastagent] ${m.level === "note" ? "note" : "warn"}: ${m.text}`);
+  await applyArtifactPlan(await planArtifacts(agentDir, containerArtifacts(checked.container), force, target));
+  return { ok: true, name: checked.container.name, port: checked.port };
+}
 
 /** Write a user-owned platform file once: kept forever once it exists, even under `--force`. */
 async function writeOnce(agentDir: string, filename: string, content: string): Promise<void> {
@@ -45,12 +49,17 @@ async function writeOnce(agentDir: string, filename: string, content: string): P
   console.error(`[fastagent] wrote ${filename} (yours from now on)`);
 }
 
-async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, force: boolean): Promise<void> {
-  const written = await writeContainer(agentDir, targetContainerSpec(target), { force }).catch(failStartup);
-  if (!written.ok) failStartup(new Error(`deploy init ${target} stopped: ${written.gate}`));
+export async function runDeployInit(target: string, opts: DeployInitOptions): Promise<void> {
+  const agentDir = agentDirOrExit(resolve("."));
+  if (!(BUILTIN_DEPLOY_TARGETS as readonly string[]).includes(target)) {
+    failUsage(`unknown deploy target "${target}" (targets: ${BUILTIN_DEPLOY_TARGETS.join(", ")})`);
+  }
+  const chosen = target as BuiltinDeployTarget;
+  const written = await writeContainer(agentDir, targetContainerSpec(chosen), opts.force === true).catch(failStartup);
+  if (!written.ok) failStartup(new Error(`deploy init ${chosen} stopped: ${written.gate}`));
   const { name, port } = written;
 
-  if (target === "docker") {
+  if (chosen === "docker") {
     const image = dockerImageName(name);
     console.log(
       [
@@ -64,7 +73,7 @@ async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, for
     return;
   }
 
-  if (target === "compose") {
+  if (chosen === "compose") {
     await writeOnce(agentDir, "compose.yml", composeFileContent(port));
     console.log(
       [
@@ -76,7 +85,7 @@ async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, for
     return;
   }
 
-  if (target === "fly") {
+  if (chosen === "fly") {
     await writeOnce(agentDir, "fly.toml", flyConfigContent(flyAppName(name), port));
     console.log(
       [
@@ -90,7 +99,6 @@ async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, for
     return;
   }
 
-  // Railway deprecated railway.json/railway.toml (stops being read Dec 1, 2026) and mounts volumes outside config files.
   console.log(
     [
       `# Create a Railway service, attach a persistent volume at ${STORAGE_DIR} (keep 1 replica),`,
@@ -101,33 +109,6 @@ async function runBuiltinInit(agentDir: string, target: BuiltinDeployTarget, for
       "railway up",
     ].join("\n"),
   );
-}
-
-export async function runDeployInit(target: string, opts: DeployInitOptions): Promise<void> {
-  const agentDir = agentDirOrExit(resolve("."));
-  if ((BUILTIN_DEPLOY_TARGETS as readonly string[]).includes(target)) {
-    return runBuiltinInit(agentDir, target as BuiltinDeployTarget, opts.force === true);
-  }
-  if (!EXTENSION_NAME.test(target)) {
-    failUsage(
-      `unknown deploy target "${target}" (built-in: ${BUILTIN_DEPLOY_TARGETS.join(", ")}; or install @fastagent-sh/<target>)`,
-    );
-  }
-  const entry = extensionEntry(agentDir, target);
-  if (entry === undefined) {
-    const pkg = extensionPackage(target);
-    const version = await fastagentVersion();
-    failUsage(
-      `target "${target}" is provided by ${pkg}: install it in this agent (e.g. npm i ${pkg}@${version}), ` +
-        `then run \`fastagent deploy init ${target}\``,
-    );
-  }
-  const forwarded = [
-    "init",
-    ...(opts.force === true ? ["--force"] : []),
-    ...(opts.install === false ? ["--no-install"] : []),
-  ];
-  await runExtension(entry, forwarded).catch(failStartup);
 }
 
 export async function runDeployCheck(opts: DeployCheckOptions): Promise<void> {

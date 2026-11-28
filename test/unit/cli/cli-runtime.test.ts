@@ -32,10 +32,11 @@ function sessionOf(run: { code: number | null; stdout: string; stderr: string })
 }
 
 describe("the runtime the CLI runs on", () => {
-  it("accepts Node >= 24.15.0 and Bun >= 1.4.4, and refuses older versions of either", () => {
+  it("accepts Node >= 22.18.0 and Bun >= 1.4.4, and refuses older versions of either", () => {
+    expect(unsupportedRuntime({ node: "22.18.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.15.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "26.0.0" })).toBeUndefined();
-    expect(unsupportedRuntime({ node: "24.4.0" })).toBe("fastagent needs Node 24.15.0 or later; this is 24.4.0");
+    expect(unsupportedRuntime({ node: "22.12.0" })).toBe("fastagent needs Node 22.18.0 or later; this is 22.12.0");
     expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.4" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.15.0", bun: "1.5.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBe(

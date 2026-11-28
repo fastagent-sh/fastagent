@@ -22,7 +22,12 @@ import {
 } from "../conversations.ts";
 import { type RedactedSecrets, type SecretValuesInput, redactValues, revealValues } from "../declared-secrets.ts";
 import type { AgentDefinition } from "../definition/definition.ts";
-import type { HarnessRuntimeAgent, HarnessStorageHandle, HarnessTelemetryContext } from "../harness.ts";
+import type {
+  HarnessProvider,
+  HarnessRuntimeAgent,
+  HarnessStorageHandle,
+  HarnessTelemetryContext,
+} from "../harness.ts";
 import { INSTANCE_NAME_ENV, instanceName } from "../instance-name.ts";
 import { log } from "../log.ts";
 import { openMcpClients } from "../mcp/client.ts";
@@ -33,7 +38,6 @@ import {
   type SharedPostgresDatabase,
   describeDatabase,
   isSharedPostgresDatabase,
-  messageBytesFor,
   openPostgresDatabase,
 } from "../postgres.ts";
 import { PromiseFailure, fromPromise, originalError } from "../promise-bridge.ts";
@@ -97,8 +101,8 @@ export interface OpenServingOptions {
   runsAs: RunsAs;
   /** What a deployment sets over the definition's model (a flag, `FASTAGENT_MODEL`). */
   model?: string;
-  /** Runtime harness override (`--harness` / `FASTAGENT_HARNESS` / `fastagent.config.ts`). */
-  harness?: HarnessName;
+  /** Runtime harness override (`--harness` / `FASTAGENT_HARNESS` / `fastagent.config.ts` / custom `HarnessProvider`). */
+  harness?: HarnessName | HarnessProvider;
   /** OS sandbox mode override for `harness: "dsh"` (`--sandbox` / `FASTAGENT_SANDBOX` / `fastagent.config.ts`). */
   sandbox?: SandboxMode;
   /**
@@ -279,19 +283,38 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
   const { dir, config } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const selection = yield* Effect.try({
+  const directProvider = typeof options.harness === "object" && options.harness !== null ? options.harness : undefined;
+  const rawSelection = yield* Effect.try({
     try: () =>
       resolveHarnessSelection(
         config,
         {
-          ...(options.harness === undefined ? {} : { harness: options.harness }),
+          ...(directProvider !== undefined
+            ? { harness: directProvider.name }
+            : typeof options.harness === "string"
+              ? { harness: options.harness }
+              : {}),
           ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
         },
         options.ownEnv,
       ),
     catch: (cause) => new PromiseFailure(cause),
   });
-  const provider = yield* fromPromise(() => resolveHarnessProvider(selection.harness, projectDir));
+  const provider = yield* fromPromise(() => resolveHarnessProvider(directProvider ?? rawSelection.harness, projectDir));
+  const selection = yield* Effect.try({
+    try: () => {
+      if (rawSelection.sandbox !== undefined && provider.supportsSandbox !== true) {
+        throw new Error(
+          `sandbox (${JSON.stringify(rawSelection.sandbox)}) is not supported by harness "${provider.name}"`,
+        );
+      }
+      if (rawSelection.sandbox === undefined && provider.supportsSandbox === true) {
+        return { harness: provider.name, sandbox: "workspace" as const };
+      }
+      return rawSelection;
+    },
+    catch: (cause) => new PromiseFailure(cause),
+  });
   const name = yield* Effect.try({
     try: () => instanceName(definition.name, options.name),
     catch: (cause) => new PromiseFailure(cause),
@@ -493,7 +516,6 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       catch: (cause) => new PromiseFailure(cause),
     });
 
-    const maxMessageBytes = messageBytesFor(database?.limits);
     const runtimeAgent = yield* Effect.acquireRelease(
       fromPromise(() =>
         provider.openAgent({
@@ -513,7 +535,6 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
           ...(unusableDefault === undefined ? {} : { unusableDefault }),
           runsAs: options.runsAs,
           ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
-          ...(maxMessageBytes === undefined ? {} : { maxMessageBytes }),
           ...(traces?.context === undefined ? {} : { telemetry: traces.context as HarnessTelemetryContext }),
           work,
           commands: () => readCommands(dir),

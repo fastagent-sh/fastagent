@@ -1,21 +1,40 @@
 /**
- * Runtime harness loader: returns the built-in `pi-durable` provider or dynamically loads an installed optional
- * `@fastagent-sh/harness-<name>/provider` plugin from the runtime or project directory.
+ * Runtime harness loader: lazily imports the built-in `pi-durable` provider, dynamically loads an installed
+ * `@fastagent-sh/harness-<name>/provider` plugin from the runtime or project directory, or validates a directly
+ * injected `HarnessProvider` object.
  */
 import { pathToFileURL } from "node:url";
 import type { HarnessProvider } from "../harness.ts";
 import { isBunRuntime, resolveFromProject } from "../runtime.ts";
 import { harnessPackage } from "./config.ts";
 import type { HarnessName } from "./define.ts";
-import { piDurableProvider } from "./pi-durable/runtime.ts";
 
-/** Resolve the built-in `pi-durable` provider or dynamically load `@fastagent-sh/harness-<name>/provider`. */
+function isHarnessProvider(value: unknown): value is HarnessProvider {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Partial<HarnessProvider>).name === "string" &&
+    typeof (value as Partial<HarnessProvider>).openStorage === "function" &&
+    typeof (value as Partial<HarnessProvider>).openAgent === "function"
+  );
+}
+
+/** Resolve `"pi-durable"`, a direct `HarnessProvider`, or `@fastagent-sh/harness-<name>/provider`. */
 export async function resolveHarnessProvider(
-  harness: HarnessName,
+  harness: HarnessName | HarnessProvider,
   projectDir: string,
   resolveFromSelf: (specifier: string) => string = (specifier) => import.meta.resolve(specifier),
 ): Promise<HarnessProvider> {
-  if (harness === "pi-durable") return piDurableProvider as HarnessProvider;
+  if (typeof harness !== "string") {
+    if (!isHarnessProvider(harness)) {
+      throw new Error("harness option must be a harness name or a valid HarnessProvider");
+    }
+    return harness;
+  }
+  if (harness === "pi-durable") {
+    const { piDurableProvider } = await import("./pi-durable/runtime.ts");
+    return piDurableProvider as HarnessProvider;
+  }
   const pkgName = harnessPackage(harness);
   if (pkgName === undefined) throw new Error(`unknown harness "${harness}"`);
   const specifier = `${pkgName}/provider`;
@@ -35,11 +54,7 @@ export async function resolveHarnessProvider(
     entryUrl = pathToFileURL(resolved).href;
   }
   const mod = (await import(entryUrl)) as Partial<{ readonly harnessProvider: HarnessProvider }>;
-  if (
-    mod.harnessProvider === undefined ||
-    typeof mod.harnessProvider.openStorage !== "function" ||
-    typeof mod.harnessProvider.openAgent !== "function"
-  ) {
+  if (!isHarnessProvider(mod.harnessProvider)) {
     throw new Error(`${specifier} does not export a valid harnessProvider`);
   }
   return mod.harnessProvider;

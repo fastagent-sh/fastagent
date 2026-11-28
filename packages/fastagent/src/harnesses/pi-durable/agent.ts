@@ -87,8 +87,6 @@ export interface DurableAgentOptions {
   unfinished?: Unfinished;
   /** Where the runs' spans go (pi-durable's, and pi-ai's within them). */
   telemetry?: TelemetryContext;
-  /** The longest message the storage takes, in bytes of its stored content: a longer one is refused `too_large`. */
-  maxMessageBytes?: number;
   /** Per-instance tracker counting unsettled submissions for `busy()`. */
   work?: WorkTracker;
 }
@@ -609,7 +607,6 @@ function durableAgent(
     registry: options.registry,
     defaults,
     unusableDefault: options.unusableDefault,
-    maxMessageBytes: options.maxMessageBytes,
     commands,
     conversationOf,
     failureOf,

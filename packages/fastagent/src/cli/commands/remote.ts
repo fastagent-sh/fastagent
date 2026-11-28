@@ -1,23 +1,21 @@
 /**
- * `fastagent remote <list|add|remove|default>`: manage named remote FastAgent instances in
- * `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`), shared with `--remote`
- * and `@fastagent-sh/pi-remote`.
+ * `fastagent remote <list|add|remove|default>`: manage named remote FastAgent HTTP instances in
+ * `~/.config/fastagent/remotes.json` (overridable via `FASTAGENT_REMOTES_PATH`).
  */
 import { existsSync, readFileSync } from "node:fs";
+import { writeFileAtomic } from "../../atomic-write.ts";
+import { defaultRemotesPath } from "../deployment.ts";
+import { failUsage } from "../fail.ts";
 import {
   type RemoteConfig,
   type RemotesFile,
-  isHttpRemote,
   isRemoteEnvRef,
   parseRemotesJson,
   redactRemoteConfig,
   removeRemoteConfig,
   setDefaultRemoteConfig,
   upsertRemoteConfig,
-} from "@fastagent-sh/client/remotes";
-import { writeFileAtomic } from "../../atomic-write.ts";
-import { defaultRemotesPath } from "../deployment.ts";
-import { failUsage } from "../fail.ts";
+} from "../remotes.ts";
 
 function loadRemotesFile(): { path: string; config: RemotesFile } {
   const path = defaultRemotesPath();
@@ -61,17 +59,9 @@ export function runRemoteList(opts: { json?: boolean } = {}): void {
   for (const name of names) {
     const entry = config.remotes[name] as RemoteConfig;
     const star = config.default === name ? "*" : " ";
-    if (isHttpRemote(entry)) {
-      const keyLabel =
-        entry.apiKey === undefined
-          ? "env FASTAGENT_API_KEY"
-          : isRemoteEnvRef(entry.apiKey)
-            ? entry.apiKey
-            : "saved key";
-      console.log(` ${star} ${name}  ${entry.url}  (${keyLabel})`);
-    } else {
-      console.log(` ${star} ${name}  [${entry.type}]`);
-    }
+    const keyLabel =
+      entry.apiKey === undefined ? "env FASTAGENT_API_KEY" : isRemoteEnvRef(entry.apiKey) ? entry.apiKey : "saved key";
+    console.log(` ${star} ${name}  ${entry.url}  (${keyLabel})`);
   }
 }
 

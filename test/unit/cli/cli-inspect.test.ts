@@ -98,9 +98,13 @@ describe("cli: info's MCP servers", () => {
     expect(sandboxOnPi.code).toBe(2);
     expect(sandboxOnPi.stderr).toMatch(/requires harness: "dsh"/);
 
-    const unknownHarness = await runInProcess(["-C", dir, "info", "--harness", "bogus"]);
-    expect(unknownHarness.code).toBe(2);
-    expect(unknownHarness.stderr).toMatch(/unknown harness/);
+    const invalidHarness = await runInProcess(["-C", dir, "info", "--harness", "../bad"]);
+    expect(invalidHarness.code).toBe(2);
+    expect(invalidHarness.stderr).toMatch(/invalid harness name/);
+
+    const missingHarness = await runInProcess(["-C", dir, "info", "--harness", "bogus"]);
+    expect(missingHarness.code).toBe(2);
+    expect(missingHarness.stderr).toContain('harness "bogus" requires @fastagent-sh/harness-bogus');
 
     const configured = await agentWorkspace("fa-info-dsh-cfg-", {
       "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh", sandbox: "off" };\n',

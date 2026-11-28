@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/client",
   "version": "0.38.0",
-  "description": "The FastAgent Agent API and its client: talk to any FastAgent service over HTTP or pluggable cloud transports.",
+  "description": "The FastAgent Agent API and its zero-Node-dependency HTTP/SSE client.",
   "keywords": [
     "ai-agent",
     "agent-api",
@@ -45,11 +45,6 @@
       "@fastagent-sh/source": "./src/http/contract.ts",
       "types": "./dist/http/contract.d.ts",
       "default": "./dist/http/contract.js"
-    },
-    "./remotes": {
-      "@fastagent-sh/source": "./src/remotes.ts",
-      "types": "./dist/remotes.d.ts",
-      "default": "./dist/remotes.js"
     },
     "./stream": {
       "@fastagent-sh/source": "./src/stream.ts",

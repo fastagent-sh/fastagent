@@ -6,7 +6,7 @@ status: current
 
 # Agent API
 
-Whether your agent runs embedded in your Node or Bun app (`openAgent`), behind HTTP (`connectAgent`), or on Amazon Bedrock AgentCore (`connectAgentCore`), you integrate with one contract: the Agent API.
+Whether your agent runs embedded in your Node or Bun app (`openAgent`) or behind HTTP (`connectAgent`), you integrate with one contract: the Agent API.
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -147,7 +147,7 @@ To reconnect after a drop, reopen `sessions.events` with `after` set to the last
 
 ## Remote provider auth (`/v1/auth/*`)
 
-CLI-served instances (`fastagent dev` / `start`), AgentCore runtimes, and embedded instances opting in via `agent.serve({ apiKeys, remoteAuth: true })` expose an Auth API (`connectAuth` from `@fastagent-sh/client/auth`, `connectAgentCoreAuth` from `@fastagent-sh/client-agentcore/auth`, or `fastagent login --remote`) so operators and cloud end-users can sign an instance into OAuth or API-key model providers without baking credentials into images. Stored credentials persist lazily in the instance's durable storage across restarts.
+CLI-served instances (`fastagent dev` / `start`) and embedded instances opting in via `agent.serve({ apiKeys, remoteAuth: true })` expose an Auth API (`connectAuth` from `@fastagent-sh/client/auth` or `fastagent login --remote`) so operators and cloud hosts can sign an instance into OAuth or API-key model providers without baking credentials into images. Stored credentials persist lazily in the instance's durable storage across restarts.
 
 | Method | HTTP route | Purpose |
 | --- | --- | --- |
@@ -202,7 +202,7 @@ All API routes live under `/v1` and require `Authorization: Bearer <key>` (confi
 
 Send `idempotencyKey` in the percent-encoded `Idempotency-Key` header. SSE streams emit `event: <type>`, JSON `data`, `id: <entry.id>` on durable `entry` events, and keepalive comments at least every 15 seconds. Refusals return `{ "error": AgentErrorData }`.
 
-`connectAgent(url, { apiKey, fetch })` and `connectAuth(url, { apiKey, fetch })` (from `@fastagent-sh/client/auth`) accept a custom `fetch` transport for signed cloud protocols (such as [`@fastagent-sh/client-agentcore`](agentcore.md)).
+`connectAgent(url, { apiKey, fetch })` and `connectAuth(url, { apiKey, fetch })` (from `@fastagent-sh/client/auth`) accept an optional custom `fetch` function when routing through custom proxies or signed gateways.
 
 ```bash
 # Single-call invoke with caller-named conversation (cron, webhooks, scale-to-zero)

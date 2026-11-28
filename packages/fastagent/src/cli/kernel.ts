@@ -51,8 +51,6 @@ export interface ProgramOptions {
   examples?: ExampleSpec[];
   /** Top-level closing prose (the docs link) — reflowed like any notes. */
   notes?: string;
-  /** Said after the parser's refusal of an unknown command: how the command could exist. */
-  unknownCommandNote?: (name: string) => string | undefined;
   /** Fixed help width — a TEST seam. */
   helpWidth?: number;
   /** Force help colors on/off — a TEST seam. */
@@ -93,12 +91,7 @@ export function buildProgram(specs: readonly CommandSpec[], options: ProgramOpti
       : {}),
     // Every parse-level error carries the ONE unified prefix: bold-red `Error:` (plain when stderr has no colors).
     outputError: (str, write) => {
-      const unknown = /^error: unknown command '([^']+)'/.exec(str)?.[1];
-      // A near miss is a typo, and the parser's "did you mean" is the answer.
-      const note =
-        unknown === undefined || str.includes("Did you mean") ? undefined : options.unknownCommandNote?.(unknown);
-      const said = note === undefined ? str : `${str.trimEnd()}\n${note}\n`;
-      write(said.startsWith("error:") ? `${errorPrefix(options.colors)}${said.slice("error:".length)}` : said);
+      write(str.startsWith("error:") ? `${errorPrefix(options.colors)}${str.slice("error:".length)}` : str);
     },
   });
   program.showSuggestionAfterError(); // "did you mean models?" — suggest only, never run it (clig on DWIM)

@@ -83,91 +83,41 @@ describe("cli kernel: exit-code policy (0 success, 2 usage)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------------------------
-// End-to-end through cli.ts: the delegation seam (kernel commands bypass the legacy parseArgs).
-
-/** An extension's `./cli` entry: it says what it was given, or fails as its `fixture.json` says. */
-const EXTENSION_CLI = `import { readFileSync } from "node:fs";
-const { name, fails } = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
-export async function run(args) {
-  if (fails) throw new Error(fails);
-  console.log(JSON.stringify({ from: name, args }));
-}
-`;
-
-describe("cli: a command an installed extension adds", () => {
-  /** A project with `packages` installed: each a `./cli` entry that says what it was given, or fails with `fails`. */
-  async function project(packages: Record<string, { fails?: string }>): Promise<string> {
-    const dir = await mkdtemp(join(tmpdir(), "fa-extension-"));
-    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "agent", type: "module" }));
-    for (const [name, { fails }] of Object.entries(packages)) {
-      const at = join(dir, "node_modules", name);
-      await mkdir(at, { recursive: true });
-      await writeFile(
-        join(at, "package.json"),
-        JSON.stringify({ name, type: "module", exports: { "./cli": "./cli.js" } }),
-      );
-      await writeFile(join(at, "fixture.json"), JSON.stringify({ name, fails }));
-      await writeFile(join(at, "cli.js"), EXTENSION_CLI);
-    }
-    return dir;
-  }
-
-  it("runs the agent's own @fastagent-sh/<name>, given every argument after its name, and says why it failed", async () => {
-    const dir = await project({ "@fastagent-sh/demo": {}, "@fastagent-sh/broken": { fails: "no cluster here" } });
-    const ran = await runInProcess(["demo", "init", "--target", "prod"], dir);
-    expect([ran.code, JSON.parse(ran.stdout)]).toEqual([
-      0,
-      { from: "@fastagent-sh/demo", args: ["init", "--target", "prod"] },
-    ]);
-    const failed = await runInProcess(["broken", "deploy"], dir);
-    expect([failed.code, failed.stderr.trim()]).toEqual([1, "Error: no cluster here"]);
-  });
-
-  it("names the package to install for a command none adds, and a typo stays a typo", async () => {
-    const dir = await project({});
-    const missing = await runInProcess(["agentcore", "init"], dir);
-    expect(missing.code).toBe(2);
-    expect(missing.stderr).toContain("unknown command 'agentcore'");
-    expect(missing.stderr).toContain(
-      "install @fastagent-sh/agentcore in the agent, with npm i @fastagent-sh/agentcore",
-    );
+describe("cli: global -C <dir> and unknown commands", () => {
+  it("suggests near-miss built-in commands and exits 2 on unknown commands", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-cli-unknown-"));
     const typo = await runInProcess(["dve"], dir);
+    expect([typo.code, typo.stdout]).toEqual([2, ""]);
     expect(typo.stderr).toMatch(/Did you mean dev\?/);
-    expect(typo.stderr).not.toContain("npm i");
+
+    const unknown = await runInProcess(["nonexistent-cmd"], dir);
+    expect([unknown.code, unknown.stdout]).toEqual([2, ""]);
+    expect(unknown.stderr).toContain("unknown command 'nonexistent-cmd'");
   });
 
-  it("never runs a package outside the @fastagent-sh scope, however the name is spelled", async () => {
-    const dir = await project({ demo: {}, "@other/demo": {} });
-    for (const name of ["../demo", "../../demo", "..%2fdemo", "@other/demo"]) {
-      const refused = await runInProcess([name], dir);
-      expect([name, refused.code, refused.stdout]).toEqual([name, 2, ""]);
-    }
-  });
-
-  it("global -C <dir> selects the agent directory before extension lookup and built-in commands, and refuses bad paths", async () => {
-    const dir = await project({ "@fastagent-sh/demo": {} });
+  it("global -C <dir> selects the agent directory (including -C<dir> and chained -C), and refuses missing or nonexistent paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "fa-cli-chdir-"));
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name: "chdir-agent", type: "module" }));
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
     const nested = join(dir, "sub");
     await mkdir(nested, { recursive: true });
-    // Extension lookup runs in `-C <dir>` from outside `dir`, and strips `-C` before handing off.
-    const ext = await runInProcess(["-C", dir, "demo", "init"]);
-    expect([ext.code, JSON.parse(ext.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["init"] }]);
-    // Attached `-C<dir>` and chained `-C a -C b` work sequentially like `git -C`.
-    const attached = await runInProcess([`-C${dir}`, "demo", "ping"]);
-    expect([attached.code, JSON.parse(attached.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["ping"] }]);
-    const chained = await runInProcess(["-C", nested, "-C", "..", "demo", "ping"]);
-    expect([chained.code, JSON.parse(chained.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["ping"] }]);
-    // `-C` inside a subcommand's own args is NOT consumed as a global prefix.
-    const subArg = await runInProcess(["-C", dir, "demo", "-C", "kept"]);
-    expect([subArg.code, JSON.parse(subArg.stdout)]).toEqual([0, { from: "@fastagent-sh/demo", args: ["-C", "kept"] }]);
-    // Missing or nonexistent `-C` is a usage error (exit 2, clean stdout).
+
+    const attached = await runInProcess([`-C${dir}`, "info", "--json"]);
+    expect(attached.code, attached.stderr).toBe(0);
+    expect(JSON.parse(attached.stdout).name).toBe("chdir-agent");
+
+    const chained = await runInProcess(["-C", nested, "-C", "..", "info", "--json"]);
+    expect(chained.code, chained.stderr).toBe(0);
+    expect(JSON.parse(chained.stdout).name).toBe("chdir-agent");
+
     const missing = await runInProcess(["-C"]);
     expect([missing.code, missing.stdout]).toEqual([2, ""]);
     expect(missing.stderr).toContain("option '-C <dir>' argument missing");
+
     const nope = await runInProcess(["-C", join(dir, "no-such-dir"), "info"]);
     expect([nope.code, nope.stdout]).toEqual([2, ""]);
     expect(nope.stderr).toContain("-C ");
-    // Documented in root --help.
+
     const help = await parse(["--help"]);
     expect(help.code).toBe(0);
     expect(help.out).toContain("-C <dir>");

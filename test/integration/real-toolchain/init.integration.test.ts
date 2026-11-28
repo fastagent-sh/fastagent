@@ -178,9 +178,6 @@ describe("init: scaffoldAgent", () => {
     )}`;
     const registry = await startMockRegistry({
       "@fastagent-sh/fastagent": { version: exactVersion(build.version), postinstall: postinstallScript },
-      "@earendil-works/pi-durable": { version: exactVersion(build.harness["@earendil-works/pi-durable"] as string) },
-      "@earendil-works/pi-ai": { version: exactVersion(build.harness["@earendil-works/pi-ai"] as string) },
-      "@earendil-works/pi-schema": { version: exactVersion(build.harness["@earendil-works/pi-schema"] as string) },
       typescript: { version: exactVersion(build.typescript) },
     });
 

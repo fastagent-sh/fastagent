@@ -28,7 +28,7 @@ Confirm the agent's goal, allowed actions, external contacts, and approval rules
 
 Let the agent decide its own steps; keep rigid multi-step pipelines in your app only when the product requires fixed orchestration.
 
-**Choose the right isolation posture:** on the default `pi-durable` harness, built-in coding tools (`read`, `write`, `edit`, `bash`) run with the OS process's permissions—a prompt or typed tool is not a sandbox. When you need confinement, either set `codingTools: false` (or `["read"]`) in `fastagent.config.ts`, run on `harness: "dsh"` with kernel-enforced OS sandboxing (`workspace` or `read-only`), or isolate the agent in a container / AgentCore microVM.
+**Choose the right isolation posture:** on the default `pi-durable` harness, built-in coding tools (`read`, `write`, `edit`, `bash`) run with the OS process's permissions—a prompt or typed tool is not a sandbox. When you need confinement, either set `codingTools: false` (or `["read"]`) in `fastagent.config.ts`, run on `harness: "dsh"` with kernel-enforced OS sandboxing (`workspace` or `read-only`), or isolate the agent in a container.
 
 ## 2. Create or initialize the agent
 
@@ -44,7 +44,7 @@ Stay in the agent directory for the remaining steps: inside an agent directory, 
 
 ## 3. Set up TypeScript
 
-Write tools, helpers, and tests in TypeScript. Node ≥ 24.15 and Bun ≥ 1.4.4 execute TypeScript natively, so:
+Write tools, helpers, and tests in TypeScript. Node ≥ 22.18 and Bun ≥ 1.4.4 execute TypeScript natively, so:
 - import relative modules with `.ts` extensions (`../lib/batches.ts`) and types with `import type`;
 - avoid non-erasable syntax (enums, namespaces, parameter properties, decorators, JSX).
 
@@ -130,7 +130,7 @@ export default defineTool({
 });
 ```
 
-`defineTool` from `@fastagent-sh/fastagent` works identically on both `pi-durable` and `dsh`. It accepts plain JSON Schema (`as const`), Zod v4 (or any Standard JSON Schema v1 library), or `@earendil-works/pi-schema`. Parameters are validated before `execute` runs. A tool that needs secrets wraps itself in `needs(["NAME"], (secrets) => defineTool(...))`. Place shared helper modules outside `src/` (here in `lib/`).
+`defineTool` from `@fastagent-sh/fastagent` works identically on both `pi-durable` and `dsh`. It accepts plain JSON Schema (`as const`) or Zod v4 (or any Standard JSON Schema v1 library). Parameters are validated before `execute` runs. A tool that needs secrets wraps itself in `needs(["NAME"], (secrets) => defineTool(...))`. Place shared helper modules outside `src/` (here in `lib/`).
 
 **`test/batches.test.ts`**
 
@@ -183,10 +183,10 @@ Build the agent with `fastagent build`, open it with `openAgent(definition, { ro
 
 ## 7. Verify and deploy
 
-Choose the host with the owner and review [Deploy](deploy.md) (or [AgentCore](agentcore.md) for per-user microVM isolation on AWS).
+Choose the host with the owner and review [Deploy](deploy.md).
 
 ```bash
-fastagent deploy init docker   # or compose, fly, railway, agentcore
+fastagent deploy init docker   # or compose, fly, railway
 fastagent deploy check         # verifies the definition loads and leaks no local secrets or state
 ```
 
@@ -198,14 +198,14 @@ Verify the live deployment:
 fastagent invoke --url https://<your-host> "hello"
 ```
 
-Or save it as a named remote (`fastagent remote add prod https://<your-host> --key '$PROD_AGENT_KEY'`) and use `--remote prod` across `invoke`, `login`, `logout`, and [`@fastagent-sh/pi-remote`](remotes.md).
+Or save it as a named remote (`fastagent remote add prod https://<your-host> --key '$PROD_AGENT_KEY'`) and use `--remote prod` across `invoke`, `login`, and `logout` ([Remotes & clients](remotes.md)).
 
 What survives where in a deployment:
 
 | Data | Persistence |
 | --- | --- |
 | Prompt, skills, code | Baked into the container image; updated on new deploys |
-| Sessions, conversations, remote auth | Persistent volume at `/data` (SQLite) or PostgreSQL / Aurora DSQL (`FASTAGENT_DATABASE_URL`) |
+| Sessions, conversations, remote auth | Persistent volume at `/data` (SQLite) or PostgreSQL (`FASTAGENT_DATABASE_URL`) |
 | Business records & external artifacts | Your own database or external system; tool side effects should tolerate retries |
 
 ## 8. Report what you verified

@@ -8,7 +8,7 @@ status: current
 
 **English** · [简体中文](zh-CN/README.md)
 
-FastAgent is the open-source TypeScript & Node.js runtime for production AI agents. Write agents in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — package as versioned npm artifacts, embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and AWS AgentCore.
+FastAgent is the open-source TypeScript cloud runtime for production AI agents. Write agents in Markdown (`SYSTEM.md`, `AGENTS.md`, `skills/`), typed TypeScript tools, and MCP — package as versioned npm artifacts, embed in your app, self-host with Docker, or deploy to Fly.io, Railway, and any cloud.
 
 ## Start here
 
@@ -16,7 +16,7 @@ FastAgent is the open-source TypeScript & Node.js runtime for production AI agen
 | --- | --- |
 | Understand what FastAgent is, what it solves, and where it fits | [Overview](overview.md) |
 | Build and run your first agent in five minutes | [Quickstart](quickstart.md) |
-| Explore production examples (`pr-review-agent`, `incident-triage-agent`, `saas-copilot`, `agentcore-per-user`, `deep-research-agent`) | [Examples](../examples/README.md) |
+| Explore production examples (`pr-review-agent`, `incident-triage-agent`, `saas-copilot`, `deep-research-agent`) | [Examples](../examples/README.md) |
 | Package an agent as a versioned npm artifact & gate releases in CI | [Packaging, Distribution & CI/CD](packaging-and-ci.md) |
 | Follow the end-to-end build workflow (for humans and coding agents) | [Agent development guide](ai-start.md) |
 
@@ -38,7 +38,7 @@ FastAgent is the open-source TypeScript & Node.js runtime for production AI agen
 
 | Goal | Guide |
 | --- | --- |
-| Save remotes, call deployments, log in remotely, and use `@fastagent-sh/pi-remote` | [Remotes & clients](remotes.md) |
+| Save remotes, call deployments, and log in remotely | [Remotes & clients](remotes.md) |
 | Look up every `fastagent` command, flag, and exit code | [CLI reference](cli.md) |
 
 ## Embed & deploy
@@ -47,7 +47,6 @@ FastAgent is the open-source TypeScript & Node.js runtime for production AI agen
 | --- | --- |
 | Embed an agent in your own Node or Bun backend | [Embedding](embedding.md) |
 | Deploy a container to Docker, Compose, Fly.io, Railway, or any host | [Deploy](deploy.md) |
-| Deploy isolated per-user instances on Amazon Bedrock AgentCore + Aurora DSQL | [AgentCore](agentcore.md) |
 
 ## Reference & support
 

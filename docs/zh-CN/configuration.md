@@ -136,7 +136,7 @@ export default defineAgent({
 | `src/tools/` | `@fastagent-sh/fastagent`（或 `@earendil-works/pi-durable`）的 `defineTool(...)`，可选用 `needs()` 包裹 | `pi-durable` 与 `dsh` |
 | `src/extensions/` | `@earendil-works/pi-durable` 的 `defineExtension(...)`，可选用 `needs()` 包裹 | 仅 `pi-durable`（`dsh` 跳过并告警） |
 
-- **灵活的参数 Schema：** `defineTool` 支持 Standard JSON Schema v1（Zod v4、Valibot、ArkType、Effect `Schema.toStandardJSONSchemaV1`）、原生 JSON Schema 对象（带 `as const` 自动类型推导）或 `@earendil-works/pi-schema`。
+- **灵活的参数 Schema：** `defineTool` 支持 Standard JSON Schema v1（Zod v4、Valibot、ArkType、Effect `Schema.toStandardJSONSchemaV1`）或原生 JSON Schema 对象（带 `as const` 自动类型推导）。
 - **简洁的返回值：** `execute` 可直接返回纯字符串 `string`，或返回完整的 `ToolExecutionResult`（`{ output, details?, isError? }`）。
 - **查询当前会话 ID：** 调用 `@fastagent-sh/fastagent` 导出的 `await sessionIdOf(api, context)`，在两种 Harness 上均可获取当前 Agent API 会话 ID。
 - **内置编码工具：** 默认启用 `read`、`write`、`edit` 和 `bash`。纯工具模式或多租户嵌入场景请设 `codingTools: false`（同时会从系统提示词中移除文件系统指引），或传入子集如 `codingTools: ["read"]`。即使禁用 `read`，技能仍可通过 `/skill:<name>` 正常访问。
@@ -157,7 +157,7 @@ export default defineAgent({
 将任何需要读取密钥或环境配置的工具、扩展或 Provider 用 `needs()` 包裹：
 
 ```ts
-import { z } from "zod"; // 或原生 JSON Schema (`as const`)，或 @earendil-works/pi-schema
+import { z } from "zod"; // 或原生 JSON Schema (`as const`)、Effect Schema、Valibot、ArkType
 import { defineTool, needs } from "@fastagent-sh/fastagent";
 
 export default needs(
@@ -218,7 +218,7 @@ fastagent start
 - **环境隔离：** 开发与生产环境请使用独立数据库。
 - **单写者租约隔离：** 跨主机同一时刻仅允许一个进程拥有实例写权限。第二个打开者最多等待 35s 后报错（指明当前持有者）；崩溃进程会在 30s 内释放租约。
 - **自动建表：** 首次打开自动创建所需表结构（需要 `CREATE TABLE` 权限）。
-- **共享连接池与 Aurora DSQL：** 多实例宿主用 `openPostgresDatabase()` 封装共享连接池（见[嵌入应用](embedding.md#1-打开-agent)）；AWS 部署使用 `@fastagent-sh/agentcore` 的 `dsqlDatabase({ endpoint })`（见 [AWS AgentCore](agentcore.md)）。
+- **共享连接池：** 多实例宿主用 `openPostgresDatabase()` 封装共享连接池（见[嵌入应用](embedding.md#1-打开-agent)），让所有租户共享单一连接池并合并租约续期查询。
 
 ## 日志与 OpenTelemetry 链路追踪
 
@@ -250,8 +250,5 @@ CLI 命令从环境或 `.secrets/.env` 读取 `OTEL_*`；`openAgent()` 从 `opti
 | `FASTAGENT_NAME` | 运行时 / CLI | 实例名称（PostgreSQL 与容器部署必填） |
 | `FASTAGENT_DATABASE_URL` | 运行时 / CLI | 用于会话、凭证与命名对话的 PostgreSQL 连接串 |
 | `FASTAGENT_LOG_LEVEL` | 运行时 / CLI | 日志级别（`debug`、`info`、`warn`、`error`） |
-| `FASTAGENT_REMOTES_PATH` | CLI / `pi-remote` | 覆盖 `remotes.json` 路径（默认 `~/.config/fastagent/remotes.json`） |
+| `FASTAGENT_REMOTES_PATH` | CLI | 覆盖 `remotes.json` 路径（默认 `~/.config/fastagent/remotes.json`） |
 | `FASTAGENT_DEPLOYED` | 容器 | 由生成的 `Dockerfile` 设为 `1`，强制启用挂载存储与部署检查 |
-| `FASTAGENT_AGENTCORE_ARN` | AgentCore CLI | `fastagent agentcore invoke` 的默认 Runtime ARN |
-| `FASTAGENT_DSQL_ENDPOINT` | AgentCore 服务端 | Aurora DSQL 集群端点 |
-| `FASTAGENT_SECRETS` | AgentCore 服务端 | 存放 JSON 密钥值的 AWS Secrets Manager 密钥名称 |

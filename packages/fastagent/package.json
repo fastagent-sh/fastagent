@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/fastagent",
   "version": "0.38.0",
-  "description": "The TypeScript runtime for production AI agents: write in Markdown & TypeScript, package as an npm artifact, embed in Node.js, self-host with Docker, or deploy to Fly.io, Railway & AWS.",
+  "description": "The open-source cloud runtime for production AI agents: write in Markdown & TypeScript, package as an npm artifact, embed in Node.js or Bun, or deploy as scale-to-zero containers.",
   "keywords": [
     "ai-agent",
     "ai-agent-runtime",
@@ -33,7 +33,7 @@
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=24.15.0",
+    "node": ">=22.18.0",
     "bun": ">=1.4.4"
   },
   "main": "./dist/index.js",
@@ -48,11 +48,6 @@
       "@fastagent-sh/source": "./src/harness.ts",
       "types": "./dist/harness.d.ts",
       "default": "./dist/harness.js"
-    },
-    "./platform": {
-      "@fastagent-sh/source": "./src/platform.ts",
-      "types": "./dist/platform.d.ts",
-      "default": "./dist/platform.js"
     },
     "./internal": {
       "@fastagent-sh/source": "./src/internal.ts",
@@ -84,7 +79,6 @@
     "@earendil-works/chord": "1.7.0",
     "@earendil-works/pi-ai": "1.7.0",
     "@earendil-works/pi-durable": "1.7.0",
-    "@earendil-works/pi-schema": "1.7.0",
     "@earendil-works/pi-telemetry": "1.7.0",
     "@effect/platform-node": "^4.1.5",
     "@fastagent-sh/client": "0.38.0",
