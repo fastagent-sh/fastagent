@@ -283,24 +283,33 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
   const { dir, config } = definition;
   const workdir = options.workdir ?? dir;
   const projectDir = options.projectDir ?? workdir;
-  const directProvider = typeof options.harness === "object" && options.harness !== null ? options.harness : undefined;
+  const directProvider =
+    options.harness !== undefined && typeof options.harness !== "string" ? options.harness : undefined;
+  const validatedDirectProvider =
+    directProvider !== undefined
+      ? yield* fromPromise(() => resolveHarnessProvider(directProvider, projectDir))
+      : undefined;
   const rawSelection = yield* Effect.try({
     try: () =>
       resolveHarnessSelection(
         config,
         {
-          ...(directProvider !== undefined
-            ? { harness: directProvider.name }
+          ...(validatedDirectProvider !== undefined
+            ? { harness: validatedDirectProvider.name }
             : typeof options.harness === "string"
               ? { harness: options.harness }
               : {}),
           ...(options.sandbox === undefined ? {} : { sandbox: options.sandbox }),
         },
         options.ownEnv,
+        validatedDirectProvider === undefined
+          ? undefined
+          : { supportsSandbox: validatedDirectProvider.supportsSandbox === true },
       ),
     catch: (cause) => new PromiseFailure(cause),
   });
-  const provider = yield* fromPromise(() => resolveHarnessProvider(directProvider ?? rawSelection.harness, projectDir));
+  const provider =
+    validatedDirectProvider ?? (yield* fromPromise(() => resolveHarnessProvider(rawSelection.harness, projectDir)));
   const selection = yield* Effect.try({
     try: () => {
       if (rawSelection.sandbox !== undefined && provider.supportsSandbox !== true) {

@@ -75,6 +75,7 @@ export function resolveHarnessSelection(
   config: Pick<AgentConfig, "harness" | "sandbox">,
   overrides: { readonly harness?: string; readonly sandbox?: string } = {},
   env?: Readonly<Record<string, string | undefined>>,
+  providerCapabilities?: { readonly supportsSandbox: boolean },
 ): HarnessSelection {
   const envHarness = env === undefined ? decodeRuntimeCliEnv().harness : env[HARNESS_ENV];
   const envSandbox = env === undefined ? decodeRuntimeCliEnv().sandbox : env[SANDBOX_ENV];
@@ -85,13 +86,22 @@ export function resolveHarnessSelection(
   if (rawSandbox !== undefined && !SANDBOX_SET.has(rawSandbox)) {
     throw new Error(`unknown sandbox mode ${JSON.stringify(rawSandbox)} (allowed: ${SANDBOX_MODES.join(", ")})`);
   }
+  const sandbox = rawSandbox as SandboxMode | undefined;
+  if (providerCapabilities !== undefined) {
+    if (!providerCapabilities.supportsSandbox) {
+      if (sandbox !== undefined) {
+        throw new Error(`sandbox (${JSON.stringify(sandbox)}) is not supported by harness "${harness}"`);
+      }
+      return { harness };
+    }
+    return { harness, sandbox: sandbox ?? "workspace" };
+  }
   if (harness === "pi-durable") {
-    if (rawSandbox !== undefined) {
-      throw new Error(`sandbox (${JSON.stringify(rawSandbox)}) requires harness: "dsh"`);
+    if (sandbox !== undefined) {
+      throw new Error(`sandbox (${JSON.stringify(sandbox)}) requires harness: "dsh"`);
     }
     return { harness };
   }
-  const sandbox = rawSandbox as SandboxMode | undefined;
   if (harness === "dsh") {
     return { harness, sandbox: sandbox ?? "workspace" };
   }

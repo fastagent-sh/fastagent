@@ -44,7 +44,7 @@ cd my-agent
 
 ## 3. 配置 TypeScript
 
-工具、辅助函数与测试统一使用 TypeScript 编写。Node ≥ 22.18 与 Bun ≥ 1.4.4 均原生执行 TypeScript，因此需要注意：
+工具、辅助函数与测试统一使用 TypeScript 编写。Node ≥ 22.22 与 Bun ≥ 1.4.4 均原生执行 TypeScript，因此需要注意：
 - 导入相对模块时带上 `.ts` 扩展名（`../lib/batches.ts`），导入纯类型时使用 `import type`；
 - 避免使用不可擦除语法（`enum`、`namespace`、构造函数参数属性、装饰器、JSX）。
 

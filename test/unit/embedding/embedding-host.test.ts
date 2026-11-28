@@ -153,10 +153,30 @@ export default defineTool({
       },
     };
 
+    await expect(
+      openAgent(definition, { root, harness: {} as unknown as HarnessProvider, sandbox: "read-only" }),
+    ).rejects.toThrow("harness option must be a harness name or a valid HarnessProvider");
+
     await expect(openAgent(definition, { root, harness: customProvider, sandbox: "read-only" })).rejects.toThrow(
       'sandbox ("read-only") is not supported by harness "custom-server"',
     );
 
+    let observedSandbox: string | undefined;
+    const sandboxOverrideProvider: HarnessProvider = {
+      ...customProvider,
+      name: "pi-durable",
+      supportsSandbox: true,
+      openAgent: async (ctx) => {
+        observedSandbox = ctx.selection.sandbox;
+        return customProvider.openAgent(ctx);
+      },
+    };
+    const sandboxed = await openAgent(definition, { root, harness: sandboxOverrideProvider, sandbox: "read-only" });
+    expect(observedSandbox).toBe("read-only");
+    await sandboxed.close();
+
+    storageClosed = false;
+    runtimeClosed = false;
     const opened = await openAgent(definition, { root, harness: customProvider });
     const session = await opened.sessions.create();
     expect(session.id).toBeTruthy();

@@ -158,5 +158,24 @@ describe("deploy/preflight: what the container is checked for", () => {
     expect(await warnings(rangeBun)).toContainEqual(
       expect.stringMatching(/not a concrete Bun version tag.*oven\/bun:1/),
     );
+
+    const customHarnessDir = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "custom" };\n',
+      "package.json": JSON.stringify({
+        type: "module",
+        name: "custom-harness-agent",
+        dependencies: { "@fastagent-sh/fastagent": "*" },
+      }),
+      "package-lock.json": "{}\n",
+    });
+    const customChecked = await checkContainer({ agentDir: customHarnessDir, force: false, target: DOCKER_TARGET });
+    expect(customChecked.ok).toBe(true);
+    if (customChecked.ok) {
+      expect(customChecked.messages.map((m) => m.text)).toContainEqual(
+        expect.stringMatching(/npm install @fastagent-sh\/harness-custom/),
+      );
+      expect(customChecked.messages.map((m) => m.text).join("\n")).not.toContain("undefined sandbox");
+      expect(customChecked.messages.map((m) => m.text).join("\n")).not.toContain("Landlock");
+    }
   });
 });

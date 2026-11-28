@@ -15,7 +15,7 @@ import {
   openPostgresDatabase,
   sharedHandleOf,
 } from "../../../packages/fastagent/src/postgres.ts";
-import { acquirePgInstanceLease, migratePgSchema } from "../../../packages/fastagent/src/postgres-kit.ts";
+import { acquirePgInstanceLease, isPgConflict, migratePgSchema } from "../../../packages/fastagent/src/postgres-kit.ts";
 import { migrate } from "../../../packages/fastagent/src/harnesses/pi-durable/postgres/schema.ts";
 import {
   InstanceHeld,
@@ -338,7 +338,10 @@ describe("openPostgresDatabase: shared connection pool across multiple instances
 });
 
 describe("postgres-kit shared storage primitives", () => {
-  it("migrates tables + UNIQUE indexes, tolerates concurrent DDL codes, and rejects newer schema versions", async () => {
+  it("migrates tables + UNIQUE indexes, tolerates concurrent DDL codes, rejects newer or incompatible older schema versions, and classifies only 40001 as OCC conflict", async () => {
+    expect(isPgConflict({ code: "40001" })).toBe(true);
+    expect(isPgConflict({ code: "40P01" })).toBe(false);
+
     const executed: string[] = [];
     let version = 0;
     const db = {
@@ -346,7 +349,7 @@ describe("postgres-kit shared storage primitives", () => {
         executed.push(text);
         if (text.startsWith("SELECT max(version)")) return [{ version }] as T[];
         if (text.includes("table_race")) throw Object.assign(new Error("duplicate"), { code: "42P07" });
-        if (text.startsWith("INSERT INTO kit_schema")) version = 1;
+        if (text.startsWith("INSERT INTO kit_schema")) version = 2;
         return [] as T[];
       },
     };
@@ -357,14 +360,19 @@ describe("postgres-kit shared storage primitives", () => {
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_u ON table_race (id)",
       ],
       {
-        version: { table: "kit_schema", current: 1 },
+        version: { table: "kit_schema", current: 2, minimum: 2 },
       },
     );
     expect(executed).toContain("CREATE UNIQUE INDEX IF NOT EXISTS idx_u ON table_race (id)");
 
-    version = 2;
-    await expect(migratePgSchema(db, [], { version: { table: "kit_schema", current: 1 } })).rejects.toThrow(
-      /holds storage of version 2, newer than this FastAgent's 1/,
+    version = 1;
+    await expect(migratePgSchema(db, [], { version: { table: "kit_schema", current: 2, minimum: 2 } })).rejects.toThrow(
+      "the database holds incompatible storage of version 1 (this FastAgent requires version 2)",
+    );
+
+    version = 3;
+    await expect(migratePgSchema(db, [], { version: { table: "kit_schema", current: 2, minimum: 2 } })).rejects.toThrow(
+      /holds storage of version 3, newer than this FastAgent's 2/,
     );
   });
 

@@ -112,4 +112,4 @@ FastAgent 以 5 个版本号锁定、依赖树彼此独立的 npm 包发布，�
 | 包分层 | 包含包 | 编译目标 | 运行时基线 | 说明 |
 | --- | --- | --- | --- | --- |
 | **客户端 SDK** | `@fastagent-sh/client`、`@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+、Web Baseline 浏览器、Cloudflare Workers、Vercel Edge、Bun | 不锁定 `engines`，零 Node API 依赖；公开入口返回标准 `Promise` / `AsyncIterable`。 |
-| **服务端运行时、CLI 与云适配** | `@fastagent-sh/fastagent`、`@fastagent-sh/harness-dsh`、`@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.18.0（推荐 Node 24/26 LTS）或 Bun ≥ 1.4.4 | `node:sqlite` 仅在打开本地 SQLite 存储时按需加载；纯 PostgreSQL 云端部署无需加载 `node:sqlite`。 |
+| **服务端运行时、CLI 与云适配** | `@fastagent-sh/fastagent`、`@fastagent-sh/harness-dsh`、`@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.22.0（推荐 Node 24/26 LTS）或 Bun ≥ 1.4.4 | `node:sqlite` 仅在打开本地 SQLite 存储时按需加载；纯 PostgreSQL 云端部署无需加载 `node:sqlite`。 |

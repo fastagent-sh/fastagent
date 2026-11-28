@@ -23,7 +23,7 @@
   "type": "module",
   "sideEffects": false,
   "engines": {
-    "node": ">=22.18.0",
+    "node": ">=22.22.0",
     "bun": ">=1.4.4"
   },
   "main": "./dist/index.js",

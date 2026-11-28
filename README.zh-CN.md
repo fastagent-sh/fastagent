@@ -53,7 +53,7 @@
 
 ## 5 分钟快速上手
 
-环境要求：服务端与 CLI 需要 **Node ≥ 22.18**（推荐 Node 24/26 LTS）或 **Bun ≥ 1.4.4**；客户端 SDK（`@fastagent-sh/client`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
+环境要求：服务端与 CLI 需要 **Node ≥ 22.22**（推荐 Node 24/26 LTS）或 **Bun ≥ 1.4.4**；客户端 SDK（`@fastagent-sh/client`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -247,10 +247,10 @@ Callers (CLI · openAgent · @fastagent-sh/client · Webhooks / Edge / UI Client
 
 | npm 包 | 职责 | 运行时要求 |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 云运行时、`openAgent`、`defineTool`、`openPostgresDatabase`、`HarnessProvider` SDK、HTTP 服务、CLI | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 云运行时、`openAgent`、`defineTool`、`openPostgresDatabase`、`HarnessProvider` SDK、HTTP 服务、CLI | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API（`connectAgent`）与远程认证（`./auth`）客户端 | Node 22+、浏览器、Edge、Bun（ES2024） |
-| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）服务端适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
-| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM 服务端运行时适配器（`serveAgentCore`、`agentCoreHandler`），对接标准 PostgreSQL | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）服务端适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM 服务端运行时适配器（`serveAgentCore`、`agentCoreHandler`），对接标准 PostgreSQL | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore SigV4 客户端（`connectAgentCore`、`./auth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
 
 **完整中文文档（[docs/zh-CN/](./docs/zh-CN/README.md)）：**

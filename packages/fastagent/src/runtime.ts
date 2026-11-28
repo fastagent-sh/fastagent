@@ -72,11 +72,11 @@ export function resolveFromProject(dir: string, specifier: string): string | und
 }
 
 /**
- * Minimum supported server runtimes: Node 22.18.0 LTS (ES2024 + Set/Iterator helpers, unflagged TS execution, and
- * built-in `node:sqlite`, loaded lazily only when local SQLite storage is used) and Bun 1.4.4 (which reliably releases
+ * Minimum supported server runtimes: Node 22.22.0 LTS (satisfies chokidar 6 / pi-* / undici engine floors, ES2024 +
+ * Set/Iterator helpers, unflagged TS execution, and lazy built-in `node:sqlite`) and Bun 1.4.4 (which reliably releases
  * `PRAGMA locking_mode = EXCLUSIVE` SQLite locks on `DatabaseSync.close()`).
  */
-export const RUNTIME_FLOOR = { node: "22.18.0", bun: "1.4.4" } as const;
+export const RUNTIME_FLOOR = { node: "22.22.0", bun: "1.4.4" } as const;
 
 /** Whether `version` (`1.3.13`, `24.4`) is older than `floor`; false for one that names no version (`canary`). */
 export function belowFloor(version: string, floor: string): boolean {

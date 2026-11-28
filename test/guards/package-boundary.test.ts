@@ -119,8 +119,12 @@ describe("package lines", () => {
     ]);
   });
 
-  it("@fastagent-sh/agentcore carries zero AWS SDK, CDK, or client-agentcore dependencies", () => {
-    const manifest = manifestOf("agentcore");
+  it("@fastagent-sh/agentcore carries zero AWS SDK/CDK deps and declares @fastagent-sh/fastagent as a required peerDependency", () => {
+    const manifest = JSON.parse(readFileSync(resolve(repo, "packages/agentcore/package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
     const allDeps = [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})];
     expect(
       allDeps.filter(
@@ -131,6 +135,8 @@ describe("package lines", () => {
           dep === "@fastagent-sh/client-agentcore",
       ),
     ).toEqual([]);
+    expect(manifest.peerDependencies?.["@fastagent-sh/fastagent"]).toBeDefined();
+    expect(manifest.peerDependenciesMeta?.["@fastagent-sh/fastagent"]?.optional).not.toBe(true);
   });
 
   it("@fastagent-sh/client, @fastagent-sh/fastagent, and @fastagent-sh/harness-dsh never import cloud-vendor SDKs or AgentCore packages", () => {

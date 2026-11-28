@@ -6,7 +6,7 @@
 import type { PgDatabase } from "../../../postgres.ts";
 import { migratePgSchema } from "../../../postgres-kit.ts";
 
-const VERSION = 1;
+const VERSION = 2;
 
 const TABLES = [
   `CREATE TABLE IF NOT EXISTS durable_metadata (
@@ -52,6 +52,6 @@ const TABLES = [
 
 export async function migrate(db: PgDatabase): Promise<void> {
   await migratePgSchema(db, TABLES, {
-    version: { table: "durable_schema", current: VERSION },
+    version: { table: "durable_schema", current: VERSION, minimum: VERSION },
   });
 }

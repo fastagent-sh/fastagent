@@ -29,7 +29,7 @@ FastAgent publishes five version-locked npm packages with independent dependency
 
 | Entry point | Purpose | Key exports |
 | --- | --- | --- |
-| **`@fastagent-sh/fastagent/harness`** | Building pluggable server-grade runtime harness adapters (`@fastagent-sh/harness-<name>/provider`) | `HarnessProvider`, `HarnessStorageOpenContext`, `HarnessAgentOpenContext`, `adaptToolRejectingPark`, `retainToolOutput`, `createEventChannel`, `classifyPiAiError`, `toPiThinkingLevel`, `migratePgSchema`, `acquirePgInstanceLease`, `InstanceHeld`, `isPgConflict` |
+| **`@fastagent-sh/fastagent/harness`** | Building pluggable server-grade runtime harness & cloud adapters (`@fastagent-sh/harness-<name>/provider`) | `HarnessProvider`, `HarnessStorageOpenContext`, `HarnessAgentOpenContext`, `serveHandler`, `Handler`, `Unavailable`, `adaptToolRejectingPark`, `retainToolOutput`, `createEventChannel`, `classifyPiAiError`, `toPiThinkingLevel`, `migratePgSchema`, `acquirePgInstanceLease`, `InstanceHeld`, `isPgConflict` |
 | **`@fastagent-sh/client/agent-api`** | Validating or composing Agent API Effect Schemas directly | Effect Schemas for every Agent API type, event, auth flow, `AgentError`, `LIMITS`, `hasEnded`, `decodeRequest` |
 | **`@fastagent-sh/client/http/contract`** | Integrating directly with the HTTP contract & OpenAPI schema | `AgentHttpApi`, `API_PREFIX`, `statusOf`, `Refusal`, `Authorization`, `Malformed`, `SessionEventFrame`, `MessageStreamEventFrame` |
 | **`@fastagent-sh/client/stream`** | Composing `messages.stream` over an `Agent` implementation | `messageStream`, `StreamSource`, `leavableIterator` |

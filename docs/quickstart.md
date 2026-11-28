@@ -8,7 +8,7 @@ status: current
 
 In five minutes you will create an agent, add a typed TypeScript tool, run it locally with live reload, and serve a production build over the Agent API.
 
-**Prerequisite:** Node ≥ 22.18 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4.
+**Prerequisite:** Node ≥ 22.22 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4.
 
 ```bash
 npm i -g @fastagent-sh/fastagent

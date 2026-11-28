@@ -26,8 +26,7 @@
     },
     "packages/agentcore": {
       "project": ["src/**/*.ts"],
-      "includeEntryExports": true,
-      "ignoreDependencies": ["@fastagent-sh/fastagent"]
+      "includeEntryExports": true
     },
     "packages/harness-dsh": {
       "project": ["src/**/*.ts"],

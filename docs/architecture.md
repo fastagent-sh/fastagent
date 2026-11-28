@@ -112,4 +112,4 @@ FastAgent ships as five version-locked npm packages with isolated dependency tre
 | Package tier | Packages | Build target | Runtime baseline | Notes |
 | --- | --- | --- | --- | --- |
 | **Client SDKs** | `@fastagent-sh/client`, `@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
-| **Server runtime, CLI & adapters** | `@fastagent-sh/fastagent`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.18.0 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4 | `node:sqlite` is loaded lazily only when SQLite storage is opened; PostgreSQL deployments run without loading `node:sqlite`. |
+| **Server runtime, CLI & adapters** | `@fastagent-sh/fastagent`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.22.0 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4 | `node:sqlite` is loaded lazily only when SQLite storage is opened; PostgreSQL deployments run without loading `node:sqlite`. |

@@ -53,7 +53,7 @@ Modern teams build with both **engineers and coding agents**. Visual canvases an
 
 ## Quickstart
 
-Requires **Node ≥ 22.18** (Node 24/26 LTS recommended) or **Bun ≥ 1.4.4**. Client SDK (`@fastagent-sh/client`) supports Node 22+, modern browsers, edge runtimes, and Bun.
+Requires **Node ≥ 22.22** (Node 24/26 LTS recommended) or **Bun ≥ 1.4.4**. Client SDK (`@fastagent-sh/client`) supports Node 22+, modern browsers, edge runtimes, and Bun.
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -247,10 +247,10 @@ Callers (CLI · openAgent · @fastagent-sh/client · Webhooks / Edge / UI Client
 
 | Package | Role | Runtime baseline |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Cloud runtime, `openAgent`, `defineTool`, `openPostgresDatabase`, `HarnessProvider` SDK, HTTP server, CLI | Node ≥ 22.18 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | Cloud runtime, `openAgent`, `defineTool`, `openPostgresDatabase`, `HarnessProvider` SDK, HTTP server, CLI | Node ≥ 22.22 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client/README.md) | Zero-Node-dep HTTP Agent API (`connectAgent`) & remote Auth (`./auth`) client | Node 22+, Browsers, Edge, Bun (ES2024) |
-| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) server adapter with kernel OS sandboxing (experimental) | Node ≥ 22.18 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
-| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM server adapter (`serveAgentCore`, `agentCoreHandler`) over PostgreSQL | Node ≥ 22.18 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
+| [`@fastagent-sh/harness-dsh`](https://github.com/fastagent-sh/fastagent/blob/main/packages/harness-dsh/README.md) | Optional DeepSeek Harness (`@deepseek-ai/dsh`) server adapter with kernel OS sandboxing (experimental) | Node ≥ 22.22 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
+| [`@fastagent-sh/agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM server adapter (`serveAgentCore`, `agentCoreHandler`) over PostgreSQL | Node ≥ 22.22 (24/26 LTS recommended) or Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client-agentcore`](https://github.com/fastagent-sh/fastagent/blob/main/packages/client-agentcore/README.md) | Zero-Node-dep Amazon Bedrock AgentCore SigV4 client (`connectAgentCore`, `./auth`) | Node 22+, Browsers, Edge, Bun (ES2024) |
 
 **Documentation ([docs/](https://github.com/fastagent-sh/fastagent/blob/main/docs/README.md)):**

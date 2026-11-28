@@ -1,8 +1,8 @@
 /**
- * SDK entry (`@fastagent-sh/fastagent/harness`) for server-grade runtime harness plugins (`@fastagent-sh/harness-<name>`).
+ * SDK entry (`@fastagent-sh/fastagent/harness`) for server-grade runtime harness and cloud serving adapters.
  * Centralizes the two-phase `HarnessProvider` contract, portable tool/command/telemetry types, PostgreSQL single-writer
- * storage primitives, `pi-ai` error classification, and async event channel helpers without pulling in
- * `@earendil-works/pi-durable`, `@earendil-works/chord`, or any `@deepseek-ai/*` package.
+ * storage primitives, Fetch HTTP server helper (`serveHandler`), `pi-ai` error classification, and async event channel
+ * helpers without pulling in `@earendil-works/pi-durable`, `@earendil-works/chord`, or any `@deepseek-ai/*` package.
  */
 import type { Models } from "@earendil-works/pi-ai";
 import type { Agent, AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";

@@ -13,10 +13,10 @@ import { Unavailable } from "./unavailable.ts";
  */
 export const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
 
-/** Whether `error` is a PostgreSQL serialization/deadlock conflict (`40001` / `40P01`). */
+/** Whether `error` is a PostgreSQL serialization conflict (`40001`). */
 export function isPgConflict(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return code === "40001" || code === "40P01";
+  return code === "40001";
 }
 
 const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
@@ -26,6 +26,7 @@ export interface MigratePgSchemaOptions {
   readonly version?: {
     readonly table: string;
     readonly current: number;
+    readonly minimum?: number;
   };
 }
 
@@ -52,6 +53,12 @@ export async function migratePgSchema(
     if (existing > version.current) {
       throw new Error(
         `the database holds storage of version ${existing}, newer than this FastAgent's ${version.current}`,
+      );
+    }
+    const minimum = version.minimum ?? version.current;
+    if (existing > 0 && existing < minimum) {
+      throw new Error(
+        `the database holds incompatible storage of version ${existing} (this FastAgent requires version ${minimum})`,
       );
     }
     if (existing === version.current) return;

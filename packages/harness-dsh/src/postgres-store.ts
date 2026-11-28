@@ -46,7 +46,7 @@ export interface PostgresDshEventStore extends DshEventStoreBackend {
   close(): Promise<void>;
 }
 
-const DSH_SCHEMA_VERSION = 1;
+const DSH_SCHEMA_VERSION = 2;
 const DSH_LEASE_TABLE = "dsh_leases";
 const DSH_SCHEMA_TABLE = "dsh_schema";
 
@@ -103,7 +103,7 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 async function migratePostgresDshSchema(db: PgExecutor): Promise<void> {
   await migratePgSchema(db, MIGRATION_STATEMENTS, {
-    version: { table: DSH_SCHEMA_TABLE, current: DSH_SCHEMA_VERSION },
+    version: { table: DSH_SCHEMA_TABLE, current: DSH_SCHEMA_VERSION, minimum: DSH_SCHEMA_VERSION },
   });
 }
 
