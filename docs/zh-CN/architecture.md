@@ -97,17 +97,19 @@ FastAgent 在四个独立边界隔离不可信输入、密钥与运行时状态�
 
 ## 6. 包清单与依赖边界
 
-FastAgent 以 3 个版本号锁定的 npm 包发布，按角色按需安装：
+FastAgent 以 5 个版本号锁定、依赖树彼此独立的 npm 包发布，按角色按需安装：
 
 | 包 | 何时安装 | 依赖体量 |
 | --- | --- | --- |
 | [`@fastagent-sh/fastagent`](api-reference.md) | 编写、运行（`dev`/`start`/`invoke`）、打包（`build`）或在 Node/Bun 中嵌入 Agent | 云运行时、`HarnessProvider` SDK、CLI、HTTP 服务；零 `@deepseek-ai/*` 或云 SDK |
 | [`@fastagent-sh/client`](api-reference.md) | 从 Node、Bun、Deno、浏览器或边缘函数调用 HTTP FastAgent 服务 | 仅依赖 `effect`；零 Node API、零运行时或云依赖 |
 | [`@fastagent-sh/harness-dsh`](api-reference.md) | 启用内核级 OS 沙箱（`--harness dsh`） | `@deepseek-ai/dsh` 服务端适配器；由 `@fastagent-sh/fastagent` 懒加载 |
+| [`@fastagent-sh/agentcore`](api-reference.md) | 在 AWS Bedrock AgentCore MicroVM 中运行编译制品并对接 PostgreSQL | `@fastagent-sh/client` + `effect`；零 AWS SDK 或 CDK 依赖 |
+| [`@fastagent-sh/client-agentcore`](api-reference.md) | 通过 AWS IAM SigV4 调用 AgentCore 部署实例 | `@fastagent-sh/client` + `@aws-sdk/client-bedrock-agentcore`；零 Node/服务端依赖 |
 
 ### 运行时兼容矩阵
 
 | 包分层 | 包含包 | 编译目标 | 运行时基线 | 说明 |
 | --- | --- | --- | --- | --- |
-| **客户端 SDK** | `@fastagent-sh/client` | ES2024 ESM | Node 22+、Web Baseline 浏览器、Cloudflare Workers、Vercel Edge、Bun | 不锁定 `engines`，零 Node API 依赖；公开入口返回标准 `Promise` / `AsyncIterable`。 |
-| **服务端运行时与 CLI** | `@fastagent-sh/fastagent`、`@fastagent-sh/harness-dsh` | ES2024 ESM | Node ≥ 22.18.0（推荐 Node 24/26 LTS）或 Bun ≥ 1.4.4 | `node:sqlite` 仅在打开本地 SQLite 存储时按需加载；纯 PostgreSQL 云端部署无需加载 `node:sqlite`。 |
+| **客户端 SDK** | `@fastagent-sh/client`、`@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+、Web Baseline 浏览器、Cloudflare Workers、Vercel Edge、Bun | 不锁定 `engines`，零 Node API 依赖；公开入口返回标准 `Promise` / `AsyncIterable`。 |
+| **服务端运行时、CLI 与云适配** | `@fastagent-sh/fastagent`、`@fastagent-sh/harness-dsh`、`@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.18.0（推荐 Node 24/26 LTS）或 Bun ≥ 1.4.4 | `node:sqlite` 仅在打开本地 SQLite 存储时按需加载；纯 PostgreSQL 云端部署无需加载 `node:sqlite`。 |

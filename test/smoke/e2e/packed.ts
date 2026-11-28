@@ -28,9 +28,10 @@ sh("mkdir", ["-p", tools], work);
 sh("npm", ["init", "-y"], tools);
 sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], tools);
 
+const serverTarballs = tarballs.filter((t) => !t.includes("fastagent-sh-client-agentcore-"));
 const agent = join(work, "agent");
 sh(join(tools, "node_modules", ".bin", "fastagent"), ["init", agent, "--no-install"], work);
-sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], agent);
+sh("npm", ["install", "--no-audit", "--no-fund", ...serverTarballs], agent);
 writeFileSync(
   join(agent, "fastagent.config.ts"),
   `import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";

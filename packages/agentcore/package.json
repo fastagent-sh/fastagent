@@ -1,0 +1,65 @@
+{
+  "name": "@fastagent-sh/agentcore",
+  "version": "0.38.0",
+  "description": "Amazon Bedrock AgentCore MicroVM server runtime adapter for FastAgent backed by standard PostgreSQL.",
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "agentcore",
+    "aws",
+    "microvm",
+    "fastagent"
+  ],
+  "license": "MIT",
+  "author": "the fastagent authors (https://github.com/fastagent-sh/fastagent)",
+  "homepage": "https://github.com/fastagent-sh/fastagent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fastagent-sh/fastagent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fastagent-sh/fastagent/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "@fastagent-sh/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.18.0",
+    "bun": ">=1.4.4"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "node ../../scripts/prepack.mjs && npm run build"
+  },
+  "dependencies": {
+    "@fastagent-sh/client": "0.38.0",
+    "effect": "^4.1.5"
+  },
+  "peerDependencies": {
+    "@fastagent-sh/fastagent": "0.38.0"
+  },
+  "peerDependenciesMeta": {
+    "@fastagent-sh/fastagent": {
+      "optional": true
+    }
+  }
+}

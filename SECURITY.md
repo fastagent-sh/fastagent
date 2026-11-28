@@ -28,7 +28,7 @@ We aim to acknowledge a report within 5 business days and provide a remediation 
 
 In scope:
 
-- `@fastagent-sh/fastagent`, `@fastagent-sh/client`, and `@fastagent-sh/harness-dsh`,
+- `@fastagent-sh/fastagent`, `@fastagent-sh/client`, `@fastagent-sh/client-agentcore`, `@fastagent-sh/agentcore`, and `@fastagent-sh/harness-dsh`,
 - credential handling across `<agentDir>/.secrets/auth.json`, `~/.fastagent/.secrets/auth.json`, `<root>/.state/auth.json`, durable instance credentials (`<root>/.state/credentials.sqlite` and PostgreSQL `fastagent_credentials`), saved remote configs (`~/.config/fastagent/remotes.json`), and OAuth/env resolution paths,
 - HTTP Agent API authentication (`FASTAGENT_API_KEY`), build-context secret leak checks (`fastagent deploy check`), subprocess environment sanitization, and `@fastagent-sh/harness-dsh` OS sandbox confinement.
 

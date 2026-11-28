@@ -250,6 +250,8 @@ Callers (CLI · openAgent · @fastagent-sh/client · Webhooks / Edge / UI Client
 | [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 云运行时、`openAgent`、`defineTool`、`openPostgresDatabase`、`HarnessProvider` SDK、HTTP 服务、CLI | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API（`connectAgent`）与远程认证（`./auth`）客户端 | Node 22+、浏览器、Edge、Bun（ES2024） |
 | [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）服务端适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM 服务端运行时适配器（`serveAgentCore`、`agentCoreHandler`），对接标准 PostgreSQL | Node ≥ 22.18（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore SigV4 客户端（`connectAgentCore`、`./auth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
 
 **完整中文文档（[docs/zh-CN/](./docs/zh-CN/README.md)）：**
 [产品概览](./docs/zh-CN/overview.md) · [快速上手](./docs/zh-CN/quickstart.md) · [打包与 CI](./docs/zh-CN/packaging-and-ci.md) · [AI 协作开发指南](./docs/zh-CN/ai-start.md) · [技术架构](./docs/zh-CN/architecture.md) · [Agent API](./docs/zh-CN/agent-api.md) · [配置指南](./docs/zh-CN/configuration.md) · [MCP 服务器](./docs/zh-CN/mcp.md) · [嵌入应用](./docs/zh-CN/embedding.md) · [部署指南](./docs/zh-CN/deploy.md) · [远程实例与客户端](./docs/zh-CN/remotes.md) · [CLI 参考](./docs/zh-CN/cli.md) · [API 参考](./docs/zh-CN/api-reference.md) · [故障排查](./docs/zh-CN/troubleshooting.md)

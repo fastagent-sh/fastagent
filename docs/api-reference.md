@@ -6,7 +6,7 @@ status: current
 
 # API Reference
 
-FastAgent publishes three version-locked npm packages so you install only what your role needs. Every package ships full TypeScript declarations (`dist/*.d.ts`) for inline editor documentation.
+FastAgent publishes five version-locked npm packages with independent dependency trees so you install only what your role needs. Every package ships full TypeScript declarations (`dist/*.d.ts`) for inline editor documentation.
 
 ## Building or embedding an agent
 
@@ -14,6 +14,7 @@ FastAgent publishes three version-locked npm packages so you install only what y
 | --- | --- | --- |
 | **`@fastagent-sh/fastagent`** | Writing an agent, packaging it, running the CLI, or embedding in Node/Bun | `defineAgent`, `defineTool`, `needs`, `sessionIdOf`, `openAgent`, `openPostgresDatabase`, `baseEnv`, `AgentError`, `LIMITS`, `hasEnded`, `McpError`, plus all core Agent API types (`Agent`, `LocalAgent`, `RemoteAgent`, `Session`, `Message`, `Entry`, `InvokeRequest`, …) |
 | **`@fastagent-sh/harness-dsh`** | Opting into kernel-enforced OS sandboxing (`--harness dsh`, experimental; loaded lazily by `@fastagent-sh/fastagent`) | `openDshAgent`, `MemoryDshEventStore`, `openSqliteDshStore` |
+| **`@fastagent-sh/agentcore`** | Serving a compiled agent inside Amazon Bedrock AgentCore MicroVMs backed by PostgreSQL (zero AWS SDK/CDK deps) | `serveAgentCore`, `agentCoreHandler`, `SESSION_HEADER`, `AgentCoreOptions`, `AgentCoreHandler` |
 
 ## Calling or operating a deployed agent
 
@@ -21,6 +22,8 @@ FastAgent publishes three version-locked npm packages so you install only what y
 | --- | --- | --- |
 | **`@fastagent-sh/client`** | Calling any HTTP FastAgent from Node, Bun, Deno, browsers, or edge workers (zero Node deps) | `connectAgent`, `ConnectOptions`, `AgentError`, `LIMITS`, `hasEnded`, and all core Agent API types |
 | **`@fastagent-sh/client/auth`** | Remote OAuth / API-key provider login over HTTP (zero Node deps) | `connectAuth`, `ConnectOptions`, `AuthApi`, `AuthFlowState`, `AuthProviderStatus`, `StartAuthLoginRequest`, `AuthLoginInput` |
+| **`@fastagent-sh/client-agentcore`** | Calling an AWS AgentCore-deployed FastAgent over IAM SigV4 (zero Node/server deps) | `connectAgentCore`, `AgentCoreConnection`, plus re-exported `connectAgent`, `AgentError`, and Agent API types |
+| **`@fastagent-sh/client-agentcore/auth`** | Remote OAuth / API-key provider login over AWS AgentCore | `connectAgentCoreAuth`, `AgentCoreConnection`, plus re-exported `connectAuth` and Auth API types |
 
 ## Extending FastAgent (harness & protocol authors)
 

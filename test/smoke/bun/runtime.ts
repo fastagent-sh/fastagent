@@ -81,8 +81,11 @@ assert(existsSync(CLI_DIST), `missing built CLI at ${CLI_DIST}; run npm run buil
 // 1. Public package imports
 await Promise.all([
   import("@fastagent-sh/client"),
+  import("@fastagent-sh/client-agentcore"),
+  import("@fastagent-sh/client-agentcore/auth"),
   import("@fastagent-sh/fastagent"),
   import("@fastagent-sh/fastagent/harness"),
+  import("@fastagent-sh/agentcore"),
   import("@fastagent-sh/harness-dsh"),
   import("@fastagent-sh/harness-dsh/provider"),
 ]);

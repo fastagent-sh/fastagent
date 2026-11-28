@@ -97,17 +97,19 @@ When `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is co
 
 ## 6. Package map
 
-FastAgent ships as three version-locked npm packages so you install only what your role needs:
+FastAgent ships as five version-locked npm packages with isolated dependency trees so you install only what your role needs:
 
 | Package | Install when you want to… | Dependency footprint |
 | --- | --- | --- |
 | [`@fastagent-sh/fastagent`](api-reference.md) | Write, run (`dev`/`start`/`invoke`), package (`build`), or embed an agent in Node/Bun | Cloud runtime, `HarnessProvider` SDK, CLI, HTTP server; zero `@deepseek-ai/*` or cloud SDKs |
 | [`@fastagent-sh/client`](api-reference.md) | Call any HTTP FastAgent instance from Node, Bun, Deno, browsers, or edge workers | Depends only on `effect`; zero Node APIs, zero runtime or cloud deps |
 | [`@fastagent-sh/harness-dsh`](api-reference.md) | Run an agent with kernel-enforced OS sandboxing (`--harness dsh`) | `@deepseek-ai/dsh` server adapter; lazily loaded by `@fastagent-sh/fastagent` |
+| [`@fastagent-sh/agentcore`](api-reference.md) | Serve a compiled agent inside AWS Bedrock AgentCore MicroVMs over PostgreSQL | `@fastagent-sh/client` + `effect`; zero AWS SDK or CDK deps |
+| [`@fastagent-sh/client-agentcore`](api-reference.md) | Call an AgentCore-deployed FastAgent over AWS IAM SigV4 | `@fastagent-sh/client` + `@aws-sdk/client-bedrock-agentcore`; zero Node/server deps |
 
 ### Runtime compatibility
 
 | Package tier | Packages | Build target | Runtime baseline | Notes |
 | --- | --- | --- | --- | --- |
-| **Client SDK** | `@fastagent-sh/client` | ES2024 ESM | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
-| **Server runtime & CLI** | `@fastagent-sh/fastagent`, `@fastagent-sh/harness-dsh` | ES2024 ESM | Node ≥ 22.18.0 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4 | `node:sqlite` is loaded lazily only when SQLite storage is opened; PostgreSQL deployments run without loading `node:sqlite`. |
+| **Client SDKs** | `@fastagent-sh/client`, `@fastagent-sh/client-agentcore` | ES2024 ESM | Node 22+, Web Baseline browsers, Cloudflare Workers, Vercel Edge, Bun | No `engines` lock, zero Node APIs; public entrypoints return standard `Promise` / `AsyncIterable`. |
+| **Server runtime, CLI & adapters** | `@fastagent-sh/fastagent`, `@fastagent-sh/harness-dsh`, `@fastagent-sh/agentcore` | ES2024 ESM | Node ≥ 22.18.0 (Node 24/26 LTS recommended) or Bun ≥ 1.4.4 | `node:sqlite` is loaded lazily only when SQLite storage is opened; PostgreSQL deployments run without loading `node:sqlite`. |

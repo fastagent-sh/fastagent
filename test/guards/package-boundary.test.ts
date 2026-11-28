@@ -4,11 +4,11 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * The workspace's package lines. A package reaches another only by its name, and only one it depends on; the client
- * (`@fastagent-sh/client`) imports no runtime, so its root entry loads where only `fetch` is.
+ * The workspace's package lines. Every package declares its own independent dependency tree, reaches another package
+ * only by name when declared in its own `package.json`, and never leaks cloud-vendor or harness SDKs into core.
  */
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PACKAGES = ["client", "fastagent", "harness-dsh"] as const;
+const PACKAGES = ["client", "client-agentcore", "fastagent", "agentcore", "harness-dsh"] as const;
 const srcOf = (name: string) => resolve(repo, "packages", name, "src");
 const manifestOf = (name: string) =>
   JSON.parse(readFileSync(resolve(repo, "packages", name, "package.json"), "utf8")) as {
@@ -42,10 +42,6 @@ const filesUnder = (dir: string): string[] =>
     .filter((name) => name.endsWith(".ts") && !name.startsWith("scaffold/templates/"))
     .map((name) => resolve(dir, name));
 
-/**
- * The packages reachable from `entry` through STATIC value imports (`import type` and lazy `await import()` excluded:
- * what loads when the entry is imported), following relative imports; with `builtins`, the `node:` modules instead.
- */
 function staticPackageGraph(entry: string, builtins = false): Set<string> {
   const visited = new Set<string>();
   const packages = new Set<string>();
@@ -96,15 +92,61 @@ describe("package lines", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("no package imports cloud-vendor SDKs or @earendil-works/pi-schema", () => {
+  it("no package imports retired @earendil-works/pi-schema", () => {
     const offenders = PACKAGES.flatMap((pkg) =>
       filesUnder(srcOf(pkg)).flatMap((file) =>
         importsOf(file)
-          .bare.filter((spec) => spec.startsWith("@aws-sdk/") || spec.startsWith("@earendil-works/pi-schema"))
+          .bare.filter((spec) => spec.startsWith("@earendil-works/pi-schema"))
           .map((spec) => `${relative(repo, file)} → ${spec}`),
       ),
     );
     expect(offenders).toEqual([]);
+  });
+
+  it("@fastagent-sh/client-agentcore reaches no Node API and no server package", () => {
+    const entry = resolve(srcOf("client-agentcore"), "index.ts");
+    const packages = [...staticPackageGraph(entry)].map(packageOf);
+    expect(
+      packages.filter(
+        (p) => p !== "effect" && p !== "@fastagent-sh/client" && p !== "@aws-sdk/client-bedrock-agentcore",
+      ),
+    ).toEqual([]);
+    expect([...staticPackageGraph(entry, true)]).toEqual([]);
+    const manifest = manifestOf("client-agentcore");
+    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
+      "@aws-sdk/client-bedrock-agentcore",
+      "@fastagent-sh/client",
+    ]);
+  });
+
+  it("@fastagent-sh/agentcore carries zero AWS SDK, CDK, or client-agentcore dependencies", () => {
+    const manifest = manifestOf("agentcore");
+    const allDeps = [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})];
+    expect(
+      allDeps.filter(
+        (dep) =>
+          dep.startsWith("@aws-sdk/") ||
+          dep === "aws-cdk-lib" ||
+          dep === "constructs" ||
+          dep === "@fastagent-sh/client-agentcore",
+      ),
+    ).toEqual([]);
+  });
+
+  it("@fastagent-sh/client, @fastagent-sh/fastagent, and @fastagent-sh/harness-dsh never import cloud-vendor SDKs or AgentCore packages", () => {
+    for (const pkg of ["client", "fastagent", "harness-dsh"] as const) {
+      const offenders = filesUnder(srcOf(pkg)).flatMap((file) =>
+        importsOf(file)
+          .bare.filter(
+            (spec) =>
+              spec.startsWith("@aws-sdk/") ||
+              spec.startsWith("@fastagent-sh/agentcore") ||
+              spec.startsWith("@fastagent-sh/client-agentcore"),
+          )
+          .map((spec) => `${relative(repo, file)} → ${spec}`),
+      );
+      expect(offenders).toEqual([]);
+    }
   });
 
   it("@fastagent-sh/client root and ./auth entries reach no Node API and no package but effect, and keep AuthApi off root", () => {
@@ -118,6 +160,10 @@ describe("package lines", () => {
     }
     const rootText = readFileSync(resolve(srcOf("client"), "index.ts"), "utf8");
     expect(rootText).not.toMatch(/\bconnectAuth\b|\bAuthApi\b/);
+    const acRootText = readFileSync(resolve(srcOf("client-agentcore"), "index.ts"), "utf8");
+    expect(acRootText).not.toMatch(/export\s+(?:type\s+)?\{[^}]*\b(?:connectAuth|connectAgentCoreAuth|AuthApi)\b/);
+    const acAuthEntry = resolve(srcOf("client-agentcore"), "auth.ts");
+    expect([...staticPackageGraph(acAuthEntry, true)]).toEqual([]);
   });
 
   it("@fastagent-sh/harness-dsh stays decoupled from pi-durable, and @fastagent-sh/fastagent never imports @deepseek-ai/*", () => {
@@ -241,8 +287,8 @@ describe("public entries", () => {
     expect(internalEntry).toMatch(/\bdefineDefinition\b/);
   });
 
-  it("client and fastagent re-export the exact same Agent API type set", () => {
-    const extractAgentApiTypes = (pkg: "client" | "fastagent"): string[] => {
+  it("client, client-agentcore, and fastagent re-export the exact same Agent API type set", () => {
+    const extractAgentApiTypes = (pkg: "client" | "client-agentcore" | "fastagent"): string[] => {
       const text = readFileSync(resolve(srcOf(pkg), "index.ts"), "utf8");
       const match =
         /export\s+type\s*\{([^}]+)\}\s*from\s*["'](?:\.\/agent-api\.ts|@fastagent-sh\/client\/agent-api)["']/.exec(
@@ -255,10 +301,13 @@ describe("public entries", () => {
         .filter(Boolean)
         .toSorted();
     };
-    expect(extractAgentApiTypes("fastagent")).toEqual(extractAgentApiTypes("client"));
+    const clientTypes = extractAgentApiTypes("client");
+    expect(extractAgentApiTypes("client-agentcore")).toEqual(clientTypes);
+    expect(extractAgentApiTypes("fastagent")).toEqual(clientTypes);
   });
 
-  it("harness-dsh root entry stays minimal without leaking internal adapter symbols", () => {
+  it("agentcore and harness-dsh root entries stay minimal without leaking internal adapter symbols", () => {
+    expect(Object.keys(manifestOf("agentcore").exports).toSorted()).toEqual([".", "./package.json"]);
     const dshRoot = readFileSync(resolve(srcOf("harness-dsh"), "index.ts"), "utf8");
     expect(dshRoot).not.toMatch(/\bDshPg\w+\b/);
     expect(dshRoot).not.toMatch(/\bFastAgentTool\w+\b/);
@@ -269,6 +318,10 @@ describe("public entries", () => {
 describe("the contracts depend on nothing", () => {
   it("each of them pulls no package but the Agent API's Schema", () => {
     expect([...staticPackageGraph(resolve(srcOf("client"), "agent-api.ts"))]).toEqual(["effect/Schema"]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("agentcore"), "contract.ts"), true)]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client-agentcore"), "contract.ts"))]).toEqual([]);
+    expect([...staticPackageGraph(resolve(srcOf("client-agentcore"), "contract.ts"), true)]).toEqual([]);
     expect([...staticPackageGraph(resolve(srcOf("fastagent"), "mcp-api.ts"))]).toEqual([]);
   });
 });

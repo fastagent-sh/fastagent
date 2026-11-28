@@ -8,7 +8,7 @@ test/
 ├── doubles/      # Shared test doubles
 ├── harnesses/    # Multi-suite conformance and package harnesses
 ├── fixtures/     # Shared unit+integration fixtures and static shims
-├── unit/         # [L1] domain suites: agent-api, cli, definition, deploy, embedding, harness-dsh, security, storage, traces
+├── unit/         # [L1] domain suites: agent-api, agentcore, cli, definition, deploy, embedding, harness-dsh, security, storage, traces
 ├── integration/  # [L2] double-parity, process-and-locks, real-toolchain
 └── smoke/        # [L3] CI packed E2E (`e2e/packed.ts`, `e2e/examples.ts`) and Bun 1.4.4 runtime/CLI smoke (`bun/runtime.ts`)
 ```

@@ -134,7 +134,7 @@ jobs:
           cd "$RUNNER_TEMP/package-smoke"
           npm init -y
           npm install "$RUNNER_TEMP"/tarballs/*.tgz --ignore-scripts
-          node --input-type=module -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/client/auth"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/harness"); await import("@fastagent-sh/harness-dsh"); await import("@fastagent-sh/harness-dsh/provider")'
+          node --input-type=module -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/client/auth"); await import("@fastagent-sh/client-agentcore"); await import("@fastagent-sh/client-agentcore/auth"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/harness"); await import("@fastagent-sh/agentcore"); await import("@fastagent-sh/harness-dsh"); await import("@fastagent-sh/harness-dsh/provider")'
           ./node_modules/.bin/fastagent --version
 
       # An agent made by `init` from the packed packages answers through `invoke`, builds, and its build answers in an app.
@@ -191,7 +191,7 @@ jobs:
             fs.writeFileSync("package.json", JSON.stringify({ name: "bun-package-smoke", private: true, type: "module", overrides }, null, 2) + "\n");
           '
           bun add "$RUNNER_TEMP"/tarballs/*.tgz --ignore-scripts
-          bun -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/client/auth"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/harness"); await import("@fastagent-sh/harness-dsh"); await import("@fastagent-sh/harness-dsh/provider")'
+          bun -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/client/auth"); await import("@fastagent-sh/client-agentcore"); await import("@fastagent-sh/client-agentcore/auth"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/fastagent/harness"); await import("@fastagent-sh/agentcore"); await import("@fastagent-sh/harness-dsh"); await import("@fastagent-sh/harness-dsh/provider")'
           bun ./node_modules/.bin/fastagent --version
 
   # Stable-named aggregate gate: this is the branch-protection required check.

@@ -18,6 +18,7 @@ import type { PgLeaseHandoff } from "./postgres-kit.ts";
 import type { RunsAs } from "./serving-command.ts";
 
 export { INSTANCE_NAME_ENV } from "./instance-name.ts";
+export { type Handler, serveHandler } from "./http/serve.ts";
 export { Unavailable } from "./unavailable.ts";
 export {
   DEFAULT_LEASE_MS,

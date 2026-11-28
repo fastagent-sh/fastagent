@@ -14,10 +14,14 @@ export default defineConfig({
   // listed BEFORE the bare name: a string alias also matches `<name>/...` and would rewrite the subpath onto index.ts.
   resolve: {
     alias: [
+      { find: /^@fastagent-sh\/client-agentcore\/(.+)$/, replacement: `${source("client-agentcore")}/$1.ts` },
+      { find: /^@fastagent-sh\/client-agentcore$/, replacement: `${source("client-agentcore")}/index.ts` },
       { find: /^@fastagent-sh\/client\/(.+)$/, replacement: `${source("client")}/$1.ts` },
       { find: /^@fastagent-sh\/client$/, replacement: `${source("client")}/index.ts` },
       { find: /^@fastagent-sh\/fastagent\/(.+)$/, replacement: `${source("fastagent")}/$1.ts` },
       { find: /^@fastagent-sh\/fastagent$/, replacement: `${source("fastagent")}/index.ts` },
+      { find: /^@fastagent-sh\/agentcore\/(.+)$/, replacement: `${source("agentcore")}/$1.ts` },
+      { find: /^@fastagent-sh\/agentcore$/, replacement: `${source("agentcore")}/index.ts` },
       { find: /^@fastagent-sh\/harness-dsh\/(.+)$/, replacement: `${source("harness-dsh")}/$1.ts` },
       { find: /^@fastagent-sh\/harness-dsh$/, replacement: `${source("harness-dsh")}/index.ts` },
     ],

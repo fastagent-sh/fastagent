@@ -6,7 +6,7 @@ status: current
 
 # API 参考
 
-FastAgent 发布 3 个版本号同步锁定的 npm 包，你可以按角色只安装所需部分。每个包均包含完整 TypeScript 类型声明（`dist/*.d.ts`）以支持编辑器内联文档提示。
+FastAgent 发布 5 个版本号同步锁定、依赖树彼此独立的 npm 包，你可以按角色只安装所需部分。每个包均包含完整 TypeScript 类型声明（`dist/*.d.ts`）以支持编辑器内联文档提示。
 
 ## 编写、打包或嵌入 Agent
 
@@ -14,6 +14,7 @@ FastAgent 发布 3 个版本号同步锁定的 npm 包，你可以按角色只�
 | --- | --- | --- |
 | **`@fastagent-sh/fastagent`** | 编写 Agent、打包制品、运行 CLI 或在 Node/Bun 后端中嵌入 | `defineAgent`、`defineTool`、`needs`、`sessionIdOf`、`openAgent`、`openPostgresDatabase`、`baseEnv`、`AgentError`、`LIMITS`、`hasEnded`、`McpError`，以及全部核心 Agent API 类型（`Agent`、`LocalAgent`、`RemoteAgent`、`Session`、`Message`、`Entry`、`InvokeRequest` 等） |
 | **`@fastagent-sh/harness-dsh`** | 启用内核级 OS 沙箱（`--harness dsh`，实验性；由 `@fastagent-sh/fastagent` 懒加载） | `openDshAgent`、`MemoryDshEventStore`、`openSqliteDshStore` |
+| **`@fastagent-sh/agentcore`** | 在 Amazon Bedrock AgentCore MicroVM 中运行编译后的 Agent 并对接 PostgreSQL（零 AWS SDK/CDK 依赖） | `serveAgentCore`、`agentCoreHandler`、`SESSION_HEADER`、`AgentCoreOptions`、`AgentCoreHandler` |
 
 ## 调用或运维已部署的 Agent
 
@@ -21,6 +22,8 @@ FastAgent 发布 3 个版本号同步锁定的 npm 包，你可以按角色只�
 | --- | --- | --- |
 | **`@fastagent-sh/client`** | 从 Node、Bun、Deno、浏览器或边缘函数调用任意 HTTP FastAgent（零 Node 依赖） | `connectAgent`、`ConnectOptions`、`AgentError`、`LIMITS`、`hasEnded` 及全部核心 Agent API 类型 |
 | **`@fastagent-sh/client/auth`** | 通过 HTTP 驱动远端 OAuth / API Key 登录（零 Node 依赖） | `connectAuth`、`ConnectOptions`、`AuthApi`、`AuthFlowState`、`AuthProviderStatus`、`StartAuthLoginRequest`、`AuthLoginInput` |
+| **`@fastagent-sh/client-agentcore`** | 通过 AWS IAM SigV4 调用 AgentCore 实例（零 Node/服务端依赖） | `connectAgentCore`、`AgentCoreConnection`，并重新导出 `connectAgent`、`AgentError` 及核心 Agent API 类型 |
+| **`@fastagent-sh/client-agentcore/auth`** | 通过 AWS AgentCore 驱动远端 OAuth / API Key 登录 | `connectAgentCoreAuth`、`AgentCoreConnection`，并重新导出 `connectAuth` 及 Auth API 类型 |
 
 ## 扩展 FastAgent（Harness 与协议作者）
 
