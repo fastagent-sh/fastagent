@@ -20,7 +20,7 @@
     "build": "npm run build --workspaces",
     "test": "vitest --run --project unit",
     "test:guards": "vitest --run --project unit test/guards",
-    "test:integration": "vitest --run --project integration",
+    "test:integration": "npm run build && vitest --run --project integration",
     "typecheck": "effect-tsgo tsc --noEmit",
     "lint": "biome check packages test && node scripts/check-doc-links.mjs && knip",
     "format": "biome check --write packages test",

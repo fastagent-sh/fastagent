@@ -66,9 +66,8 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const harnessSelection = (() => {
     if (resolvedProvider === undefined) return rawSelection;
     if (rawSelection.sandbox !== undefined && resolvedProvider.supportsSandbox !== true) {
-      return failUsage(
-        `sandbox (${JSON.stringify(rawSelection.sandbox)}) is not supported by harness "${resolvedProvider.name}"`,
-      );
+      const message = `sandbox (${JSON.stringify(rawSelection.sandbox)}) is not supported by harness "${resolvedProvider.name}"`;
+      return opts.sandbox !== undefined ? failUsage(message) : failStartup(new Error(message));
     }
     if (rawSelection.sandbox === undefined && resolvedProvider.supportsSandbox === true) {
       return { harness: resolvedProvider.name, sandbox: "workspace" as const };
