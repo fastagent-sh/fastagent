@@ -45,7 +45,7 @@ FastAgent 是面向生产级 AI Agent 的开源 TypeScript & Node.js 运行时�
 
 | 目标 | 指南 |
 | --- | --- |
-| 将 Agent 嵌入现有 Node 后端或桌面应用 | [嵌入应用](embedding.md) |
+| 将 Agent 嵌入现有 Node 或 Bun 后端 | [嵌入应用](embedding.md) |
 | 部署到 Docker、Compose、Fly.io、Railway 或任意容器宿主机 | [部署指南](deploy.md) |
 | 在 Amazon Bedrock AgentCore + Aurora DSQL 上运行每用户隔离 MicroVM | [AWS AgentCore](agentcore.md) |
 

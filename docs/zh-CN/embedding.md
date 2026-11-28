@@ -1,12 +1,12 @@
 ---
 title: 嵌入应用
-description: "将 FastAgent 直接嵌入你的 Node 或 Bun 后端或桌面应用，保留原有的认证、数据库与路由。"
+description: "将 FastAgent 直接嵌入你的 Node 或 Bun 后端，保留原有的认证、数据库与路由。"
 status: current
 ---
 
 # 嵌入应用
 
-当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 或 Bun 后端或桌面应用中。
+当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 或 Bun 后端服务中。
 
 ```bash
 npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
@@ -21,7 +21,6 @@ npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
 | **在自有鉴权后端中编写自定义路由 / UI** | 调用 `openAgent()`，在你的路由处理器中直接调用 `agent.messages.stream`、`agent.messages.send` 或 `agent.invoke`。 |
 | **单 Node/Bun 进程托管多租户实例** | 使用 `openPostgresDatabase()` 创建共享连接池，传给每个 `openAgent({ name, database })`。 |
 | **在现有 Web 服务中暴露标准 `/v1` Agent API** | 调用 `const service = await agent.serve({ apiKeys })`（需挂载 `/v1/auth/*` 时传入 `remoteAuth: true`），将 `service.fetch` 挂载到 Next.js、Hono、Express 或 Fastify。 |
-| **本地桌面应用** | 传入应用独占的 `root`，用 `agent.info().models` 渲染模型选择器，并妥善处理 `info().unusableDefault`。 |
 
 ## 1. 打开 Agent
 
@@ -207,11 +206,11 @@ app.register(async (scope) => {
 - **打开即快速失败：** 相对路径 `root`、缺少必填 `needs()` 密钥、存储锁已被占用、使用 PostgreSQL 但未传 `name` 或不兼容的构建格式，都会让 `openAgent()` 立即拒绝并给出可操作的错误信息。
 - **多用户隔离：** 一个实例是一个信任域。需要强隔离的用户请分配独立实例；若共享实例，请在 `fastagent.config.ts` 中设 `codingTools: false`，确保自定义工具不读写共享文件/存储，并在后端校验每个会话 ID（含 `forkFrom.sessionId`）。
 
-## 5. 桌面应用宿主
+## 5. 模型发现与滚动升级
 
-在本地桌面应用中运行 Agent 时建议：
+在常驻后端宿主中运行嵌入实例时建议：
 
-- 传入应用专属 `root`，避免与开发者的 `fastagent dev` 抢锁。
+- 为每个实例传入独立的宿主专属 `root`，避免跨进程抢占本地存储锁。
 - 读取 `agent.info().models` 渲染模型选择器（含 `contextWindow` 与支持的 `thinkingLevels`）。
 - 若 `fastagent.config.ts` 指定的默认模型被下线或改名，`openAgent()` 仍能打开，但 `info().defaultModel` 为空且 `info().unusableDefault` 说明原因；未显式指定模型的消息会拒绝并返回 `missing_model`。直接向 `openAgent()` 传入无效 `options.model` 则会在打开时失败。
 - 升级到新编译版本时，先 `await agent.close()` 再用新构建重新打开。

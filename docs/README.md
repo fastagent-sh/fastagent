@@ -45,7 +45,7 @@ FastAgent is the open-source TypeScript & Node.js runtime for production AI agen
 
 | Goal | Guide |
 | --- | --- |
-| Embed an agent in your own backend or desktop app | [Embedding](embedding.md) |
+| Embed an agent in your own Node or Bun backend | [Embedding](embedding.md) |
 | Deploy a container to Docker, Compose, Fly.io, Railway, or any host | [Deploy](deploy.md) |
 | Deploy isolated per-user instances on Amazon Bedrock AgentCore + Aurora DSQL | [AgentCore](agentcore.md) |
 

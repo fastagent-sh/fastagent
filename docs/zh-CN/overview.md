@@ -68,7 +68,6 @@ my-agent/
 | **B2B SaaS 侧边栏助手**（无需用户跑 `bash`） | 嵌入式 `openAgent()` + 共享 `openPostgresDatabase()`（`codingTools: false`） | 复用现有鉴权与 Postgres 连接池，自带池级批量续约与多副本空闲协作让渡 |
 | **每用户云端工作站 / AI 员工**（需执行代码与 `bash`） | AWS AgentCore 独立 MicroVM + 1 个共享 Aurora DSQL 集群 | 强 VM 级用户隔离且零闲置算力费；高吞吐时改 `FASTAGENT_DATABASE_URL` 即可零代码切至包月 Postgres |
 | **低频后台自动化员工**（PR 审查、AI SRE、每日简报） | Fly.io / Railway 空闲休眠容器 + `POST /v1/invoke` + 可选 `dsh` 沙箱 | Webhook/定时触发间隙自动休眠到零、幂等防重试、内核级限制 shell 权限 |
-| **本地优先桌面应用**（Electron、本地研发/数据工具） | 本地嵌入 `openAgent()` + 内置 `node:sqlite` + 可选 `dsh` OS 沙箱 | 零云端中转、零外部数据库安装、离线持久会话与动态模型选择器 |
 | **企业多团队 Agent 平台** | 各团队用 `fastagent build` 发布版本化 npm 包，平台团队在单一 Node 宿主统一托管 | 通过 `peerDependencies` 共享运行时、统一鉴权与追踪、标准 SemVer 秒级回滚 |
 
 ## FastAgent 刻意留给外部应用的职责

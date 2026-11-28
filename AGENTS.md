@@ -30,6 +30,15 @@ that API from outside the runtime: channels are not part of it.
   stays true goes into the code: a name, a header, a test.
 - The Agent API is `packages/client/src/agent-api.ts` and `packages/client/src/http/contract.ts`; what it promises is `docs/agent-api.md`, and `test/harnesses/agent-api-conformance.ts` and `test/unit/agent-api/http-api.test.ts` enforce those promises across both `pi-durable` and `dsh` harnesses. Changing them is an explicit decision.
 
+## Product matrix boundaries
+
+FastAgent is the open-source cloud runtime narrow waist inside a four-part orthogonal product matrix. Keep each concern in its owning repository:
+
+- **`fastagent` (this repository):** Cloud-deployed runtime kernel, immutable agent artifact build (`fastagent build`), server-grade `HarnessProvider` plugins (`pi-durable`, `dsh`), SQLite/PostgreSQL single-writer fenced state, and the canonical `Agent API` (`@fastagent-sh/client`). Targets cloud-embedded backends (`openAgent` / `service.fetch`) and scale-to-zero containers. Never add local desktop/IDE runtime modes, editor `ACP` stdio wrappers, third-party SaaS OAuth vaults, or managed cloud billing here.
+- **`duang`:** External capability catalog, progressive 4-meta-tool discovery (`discover`, `inspect`, `call`, `get_call`), and per-team encrypted credential vault exposed to agents via standard remote HTTP `/mcp` and `SKILL.md`.
+- **`fastagent-cloud`:** Managed serverless hosting, scale-to-zero compute/sandbox pools, visitor sharing boundaries, and billing for compiled `fastagent` artifacts over the standard `Agent API`.
+- **`kage`:** Cross-platform thin client (Web, macOS, mobile) speaking `@fastagent-sh/client` `Agent API` to cloud-deployed `fastagent` instances; owns zero agent runtime or second session store.
+
 ## Decisions the code cannot show
 
 - **Two harnesses behind one contract.** `pi-durable` is the built-in default harness and `@fastagent-sh/harness-dsh`
