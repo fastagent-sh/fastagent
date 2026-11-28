@@ -49,6 +49,47 @@ describe("deploy/container: the portable image", () => {
     expect(dockerfile).toMatch(/^EXPOSE 8787$/m);
     for (const name of ["FASTAGENT_MODEL", "FASTAGENT_API_KEY"]) expect(dockerfile).not.toContain(name);
   });
+
+  it("writes an oven/bun Dockerfile with bun install, build, and CMD when targeting Bun", () => {
+    const locked = containerArtifacts({
+      target: DOCKER_TARGET,
+      name: "reviewer",
+      runtime: "bun",
+      bunVersion: "1.4.4",
+      hasLockfile: true,
+    }).find((artifact) => artifact.path === "Dockerfile")!.content;
+    expect(locked).toMatch(/^FROM oven\/bun:1\.4\.4$/m);
+    expect(locked).toMatch(/^ENV BUN_INSTALL_CACHE_DIR=\/tmp\/fastagent\/bun$/m);
+    expect(locked).toMatch(/^COPY package\.json bun\.lock\* \*\.tgz \.\/$/m);
+    expect(locked).toMatch(/^RUN bun install --frozen-lockfile$/m);
+    expect(locked).toMatch(/^RUN bun \.\/node_modules\/\.bin\/fastagent build$/m);
+    expect(locked).toMatch(/^CMD \["bun", "\.\/node_modules\/\.bin\/fastagent", "start"\]$/m);
+
+    const unlocked = containerArtifacts({
+      target: {
+        writtenBy: "fastagent deploy init agentcore",
+        command: ["./node_modules/.bin/fastagent", "agentcore", "start"],
+        storage: "database",
+        port: 8080,
+      },
+      name: "reviewer",
+      runtime: "bun",
+      hasLockfile: false,
+    }).find((artifact) => artifact.path === "Dockerfile")!.content;
+    expect(unlocked).toMatch(/^FROM oven\/bun:1$/m);
+    expect(unlocked).toMatch(/^RUN bun install$/m);
+    expect(unlocked).toMatch(/^CMD \["bun", "\.\/node_modules\/\.bin\/fastagent", "agentcore", "start"\]$/m);
+
+    expect(() =>
+      containerArtifacts({
+        target: DOCKER_TARGET,
+        name: "reviewer",
+        runtime: "bun",
+        bunVersion: "1.4.4\nRUN evil",
+        hasLockfile: true,
+      }),
+    ).toThrow(/invalid Bun Docker tag/);
+  });
 });
 
 describe("deploy init: ownership decides what --force may replace", () => {

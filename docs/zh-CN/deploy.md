@@ -36,6 +36,8 @@ status: current
 
 ## Docker
 
+生成的 `Dockerfile` 默认基于 **Node 24**；当 Agent 目录存在 `bun.lock`/`bun.lockb` 或 `"packageManager": "bun@…"` 时会自动生成 **Bun**（`oven/bun`）镜像。
+
 ```bash
 fastagent deploy init docker
 docker build --pull -t my-agent .

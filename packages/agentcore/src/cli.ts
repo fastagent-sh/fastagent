@@ -9,7 +9,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { Agent, SessionSettings } from "@fastagent-sh/client/agent-api";
@@ -81,13 +81,21 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
       : "[fastagent] kept agentcore/ (yours once written)",
   );
   if (wrote && flags.install) {
-    const installed = spawnSync("npm", ["install", "--no-audit", "--no-fund"], {
-      cwd: join(agentDir, "agentcore", "cdk"),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const runningOnBun = typeof process.versions.bun === "string";
+    const usesBun = runningOnBun || isBunProject(agentDir);
+    const installed = spawnSync(
+      usesBun ? (runningOnBun ? process.execPath : "bun") : "npm",
+      usesBun ? ["install"] : ["install", "--no-audit", "--no-fund"],
+      {
+        cwd: join(agentDir, "agentcore", "cdk"),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     if (installed.stdout?.length) process.stderr.write(installed.stdout);
     if (installed.stderr?.length) process.stderr.write(installed.stderr);
-    if (installed.status !== 0) throw new Error("npm install in agentcore/cdk failed: run it there, then deploy");
+    if (installed.status !== 0) {
+      throw new Error(`${usesBun ? "bun" : "npm"} install in agentcore/cdk failed: run it there, then deploy`);
+    }
   }
   const names = [...new Set(facts.secrets.filter((s) => !s.optional).map((s) => s.name))];
   const model =
@@ -105,6 +113,14 @@ async function init(agentDir: string, flags: { force: boolean; install: boolean 
       `npx -y ${AGENTCORE_CLI} deploy`,
     ].join("\n"),
   );
+}
+
+function isBunProject(agentDir: string): boolean {
+  if (existsSync(join(agentDir, "bun.lock")) || existsSync(join(agentDir, "bun.lockb"))) return true;
+  const manifestPath = join(agentDir, "package.json");
+  if (!existsSync(manifestPath)) return false;
+  const pkg = JSON.parse(readFileSync(manifestPath, "utf8")) as { packageManager?: unknown };
+  return typeof pkg.packageManager === "string" && pkg.packageManager.startsWith("bun@");
 }
 
 function databaseOf(environment: NodeJS.ProcessEnv): PostgresDatabase {

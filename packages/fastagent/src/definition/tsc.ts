@@ -5,8 +5,8 @@
  */
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { isBunRuntime, resolveFromProject } from "../runtime.ts";
 
 const MIN_TYPESCRIPT = 7;
 
@@ -41,24 +41,20 @@ export function projectCompiler(dir: string): ProjectCompiler {
 
 /** The project's `tsc`, by the package's own `bin`: FastAgent does not carry a compiler, as Next.js does not. */
 function projectTsc(dir: string): string {
-  try {
-    const manifest = createRequire(join(dir, "package.json")).resolve("typescript/package.json");
-    const { bin, version } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string }; version?: string };
-    if (bin?.tsc === undefined) throw new Error(`${manifest} has no tsc`);
-    // The options the build sets (--ignoreConfig, --erasableSyntaxOnly, --rewriteRelativeImportExtensions) are 7's.
-    if (!(Number.parseInt(version ?? "", 10) >= MIN_TYPESCRIPT)) {
-      throw new Error(
-        `fastagent build needs TypeScript ${MIN_TYPESCRIPT} or newer; ${dir} has ${version ?? "an unknown version"}`,
-      );
-    }
-    return join(dirname(manifest), bin.tsc);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "MODULE_NOT_FOUND") throw error;
+  const manifest = resolveFromProject(dir, "typescript/package.json");
+  if (manifest === undefined) {
+    const installHint = isBunRuntime() ? "bun add -d typescript" : "npm install --save-dev typescript";
+    throw new Error(`fastagent build compiles with the project's TypeScript, and ${dir} has none: ${installHint}`);
+  }
+  const { bin, version } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string }; version?: string };
+  if (bin?.tsc === undefined) throw new Error(`${manifest} has no tsc`);
+  // The options the build sets (--ignoreConfig, --erasableSyntaxOnly, --rewriteRelativeImportExtensions) are 7's.
+  if (!(Number.parseInt(version ?? "", 10) >= MIN_TYPESCRIPT)) {
     throw new Error(
-      `fastagent build compiles with the project's TypeScript, and ${dir} has none: npm install --save-dev typescript`,
-      { cause: error },
+      `fastagent build needs TypeScript ${MIN_TYPESCRIPT} or newer; ${dir} has ${version ?? "an unknown version"}`,
     );
   }
+  return join(dirname(manifest), bin.tsc);
 }
 
 /** What the compiler is run with: FastAgent sets it, and the author's `tsconfig.json` is the editor's. */

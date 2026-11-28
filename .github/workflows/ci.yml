@@ -145,13 +145,50 @@ jobs:
       - name: Verify production examples against packed packages
         run: node test/smoke/e2e/examples.ts "$RUNNER_TEMP"/tarballs/*.tgz
 
+  bun-smoke:
+    name: Bun 1.4.4 smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.15.0'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          # The floor: Bun 1.4.4 reliably releases EXCLUSIVE node:sqlite locks on DatabaseSync.close().
+          bun-version: '1.4.4'
+
+      - name: Install and build
+        run: npm ci && npm run build
+
+      - name: Run Bun runtime and CLI smoke checks
+        run: bun --conditions=@fastagent-sh/source test/smoke/bun/runtime.ts
+
+      - name: Pack, install with Bun, and verify published surface
+        run: |
+          mkdir "$RUNNER_TEMP/tarballs" "$RUNNER_TEMP/bun-package-smoke"
+          npm pack --workspaces --silent --pack-destination "$RUNNER_TEMP/tarballs"
+          cd "$RUNNER_TEMP/bun-package-smoke"
+          printf '{"name":"bun-package-smoke","private":true,"type":"module"}\n' > package.json
+          bun add "$RUNNER_TEMP"/tarballs/*.tgz --ignore-scripts
+          bun -e 'await import("@fastagent-sh/client"); await import("@fastagent-sh/client-agentcore"); await import("@fastagent-sh/fastagent"); await import("@fastagent-sh/agentcore"); await import("@fastagent-sh/harness-dsh")'
+          bun ./node_modules/.bin/fastagent --version
+
   # Stable-named aggregate gate: this is the branch-protection required check.
   # Keeping a fixed name (independent of the matrix) means adding/removing Node
   # versions never requires editing branch protection. ("Core" = the essential
   # aggregate gate, not the removed core/ directory.)
   core-checks:
     name: Core checks
-    needs: [unit, integration, package-smoke]
+    needs: [unit, integration, package-smoke, bun-smoke]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -160,3 +197,4 @@ jobs:
           [ "${{ needs.unit.result }}" = "success" ]
           [ "${{ needs.integration.result }}" = "success" ]
           [ "${{ needs.package-smoke.result }}" = "success" ]
+          [ "${{ needs.bun-smoke.result }}" = "success" ]

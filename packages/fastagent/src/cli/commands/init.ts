@@ -5,6 +5,7 @@ import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { writeFileAtomic } from "../../atomic-write.ts";
 import { INSTANCES_DIRNAME, displayPath, exists } from "../../paths.ts";
+import { detectRuntime, isBunRuntime, readPackageJson, resolveFromProject } from "../../runtime.ts";
 import { assertSafeWriteTarget, initRepository, scaffoldAgent } from "../../scaffold/init.ts";
 import { expectedManifestDeps } from "../../scaffold/templates.ts";
 import { fastagentBuild } from "../../version.ts";
@@ -40,23 +41,26 @@ export async function runInit(dirArg = ".", opts: InitOptions = { install: true 
   const pendingPath = join(dir, PENDING_MARKER);
   const hadPending = await exists(pendingPath);
 
-  // Initialize git for fresh standalone scaffolds before npm install so a failed install still preserves the initial commit on retry.
+  // Initialize git for fresh standalone scaffolds before installing deps so a failed install still preserves the initial commit on retry.
   const repository = result.mode === "fresh" ? await initRepository(dir, { mode: "fresh" }) : undefined;
+  const pkg = await readPackageJson(dir).catch(failStartup);
+  const pm: "npm" | "bun" = isBunRuntime() || detectRuntime(dir, pkg).runtime === "bun" ? "bun" : "npm";
+  const installCmd = `${pm} install`;
 
   let installState: "installed" | "skipped" | "satisfied" = "skipped";
   if (opts.install) {
     const needInstall =
-      hadPending || result.dependenciesChanged || !(await areDependenciesInstalled(dir, requiredPackages));
+      hadPending || result.dependenciesChanged || !(await areDependenciesInstalled(dir, requiredPackages, pm));
     if (needInstall) {
       await assertSafeWriteTarget(dir, PENDING_MARKER, hadPending ? "update" : "create").catch(failStartup);
       writeFileAtomic(pendingPath, "pending\n");
-      console.error("[fastagent] installing dependencies (npm install)…");
-      const code = await npmInstall(dir);
+      console.error(`[fastagent] installing dependencies (${installCmd})…`);
+      const code = await runPackageInstall(dir, pm);
       if (code !== 0) {
         if (repository !== undefined) console.error(`[fastagent] git: ${repository}`);
         reportTrackedSecrets(result.trackedSecrets);
         console.error(
-          `[fastagent] Error: npm install failed (exit ${code}) — scaffold kept in ${dir}; fix the issue and re-run \`${retryCommand(dirArg)}\``,
+          `[fastagent] Error: ${installCmd} failed (exit ${code}) — scaffold kept in ${dir}; fix the issue and re-run \`${retryCommand(dirArg)}\``,
         );
         process.exit(1);
       }
@@ -80,16 +84,22 @@ export async function runInit(dirArg = ".", opts: InitOptions = { install: true 
   if (result.preserved.length > 0) console.error(`  preserved: ${result.preserved.join(", ")}`);
   if (repository !== undefined) console.error(`[fastagent] git: ${repository}`);
   if (installState === "skipped") {
-    console.error("[fastagent] dependencies: skipped (--no-install) — run `npm install` or re-run `fastagent init`");
+    console.error(
+      `[fastagent] dependencies: skipped (--no-install) — run \`${installCmd}\` or re-run \`fastagent init\``,
+    );
   }
   reportTrackedSecrets(result.trackedSecrets);
 
   console.error("  next steps:");
   const cdTarget = displayPath(process.cwd(), dir);
   if (cdTarget) console.error(`    cd ${cdTarget}`);
-  if (installState === "skipped") console.error("    npm install");
+  if (installState === "skipped") console.error(`    ${installCmd}`);
   if (result.mode === "existing") console.error("    fastagent info --json   # verify your skills and setup");
-  console.error("    npm run dev   # serve locally and iterate");
+  console.error(
+    pm === "bun"
+      ? "    bun run --bun dev   # serve locally and iterate"
+      : "    npm run dev   # serve locally and iterate",
+  );
 }
 
 function reportTrackedSecrets(trackedSecrets: readonly string[]): void {
@@ -121,7 +131,14 @@ function findTargetChain(
 }
 
 /** Check whether every required package is installed and valid for the target package (standalone or workspace). */
-async function areDependenciesInstalled(dir: string, requiredPackages: readonly string[]): Promise<boolean> {
+async function areDependenciesInstalled(
+  dir: string,
+  requiredPackages: readonly string[],
+  pm: "npm" | "bun",
+): Promise<boolean> {
+  if (pm === "bun") {
+    return requiredPackages.every((pkgName) => resolveFromProject(dir, `${pkgName}/package.json`) !== undefined);
+  }
   let targetName: string | undefined;
   let targetRealPath: string;
   try {
@@ -187,10 +204,11 @@ function npmLsJson(cwd: string): Promise<string | undefined> {
   });
 }
 
-/** Run `npm install` in `cwd`, keeping progress output on stderr so stdout stays clean. */
-function npmInstall(cwd: string): Promise<number> {
+/** Run `npm install` or `bun install` in `cwd`, keeping progress output on stderr so stdout stays clean. */
+function runPackageInstall(cwd: string, pm: "npm" | "bun"): Promise<number> {
+  const command = pm === "bun" && isBunRuntime() ? process.execPath : pm;
   return new Promise((resolveCode) => {
-    const child = spawn("npm", ["install"], { cwd, stdio: ["inherit", "pipe", "pipe"] });
+    const child = spawn(command, ["install"], { cwd, stdio: ["inherit", "pipe", "pipe"] });
     child.stdout?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
     child.stderr?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
     child.on("close", (code) => resolveCode(code ?? 1));

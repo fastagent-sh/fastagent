@@ -1,7 +1,7 @@
 /** The portable container — Dockerfile + .dockerignore, host-neutral: what a platform adds is its {@link ContainerTarget}. */
 import { DEPLOYED_ENV, INSTANCES_DIRNAME, SECRETS_DIRNAME, STATE_DIRNAME } from "../paths.ts";
 import { INSTANCE_NAME_ENV } from "../instance-name.ts";
-import { NODE_FLOOR } from "../runtime.ts";
+import { RUNTIME_FLOOR } from "../runtime.ts";
 
 export interface Artifact {
   readonly path: string;
@@ -57,7 +57,11 @@ export interface ContainerInput {
   readonly target: ContainerTarget;
   /** The agent the image runs, set as `FASTAGENT_NAME` on a volume: the agent its storage belongs to. */
   readonly name: string;
-  /** Whether `package-lock.json` exists: the image installs from it with `npm ci`. */
+  /** Target JS runtime for the generated image (`"node"` by default). */
+  readonly runtime?: "node" | "bun";
+  /** For `runtime: "bun"`, the `FROM oven/bun:<tag>` version (from `packageManager: "bun@x"`), else `"1"`. */
+  readonly bunVersion?: string;
+  /** Whether the runtime's lockfile exists (`package-lock.json` for npm, `bun.lock`/`bun.lockb` for bun). */
   readonly hasLockfile: boolean;
   /** Debian packages the image installs (`git` for a shipped `.git`). */
   readonly apt?: readonly string[];
@@ -79,7 +83,8 @@ function aptLayer(packages?: readonly string[]): string {
  * The Node image an agent runs on: the newest of the floor's line. A floating tag, so every build pulls it
  * (`docker build --pull`): a copy cached before the floor's release would start a Node the CLI refuses.
  */
-const NODE_IMAGE = `node:${NODE_FLOOR.split(".")[0]}-slim`;
+const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
+const SAFE_DOCKER_TAG = /^\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Why the image builds `dist/` itself: a build context that follows `.gitignore` drops it, and `start` needs it. */
 const BUILD_STEP_NOTE =
@@ -94,27 +99,48 @@ function dockerfile(input: ContainerInput): string {
   // slim image lacks.
   const apt = aptLayer(input.apt);
   const { target } = input;
+  const isBun = input.runtime === "bun";
   // The caches stay off the volume: they are rebuildable, and a host mount is the slow disk.
   const volume =
     target.storage === "volume"
       ? `ENV ${DEPLOYED_ENV}=1\nENV ${INSTANCE_NAME_ENV}=${input.name}\nENV FASTAGENT_ROOT=${STORAGE_DIR}\n`
       : "";
-  const deployment = `${volume}ENV npm_config_cache=/tmp/fastagent/npm\n`;
-  const note = "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
+  const cacheEnv = isBun
+    ? "ENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n"
+    : "ENV npm_config_cache=/tmp/fastagent/npm\n";
+  if (input.bunVersion !== undefined && !SAFE_DOCKER_TAG.test(input.bunVersion)) {
+    throw new Error(`invalid Bun Docker tag: ${JSON.stringify(input.bunVersion)}`);
+  }
+  const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
+  const note = isBun
+    ? "# Bun-based (packageManager: bun / bun lockfile detected). fastagent runs under Bun."
+    : "# npm-based — for pnpm/yarn, adapt the install line + the lockfile COPY (corepack enable, etc.).";
   const head = `${markerOf(target.writtenBy)}. ${layoutNote}
 ${note}
-FROM ${NODE_IMAGE}
+FROM ${base}
 ${apt}WORKDIR ${dir}
-${deployment}`;
+${volume}${cacheEnv}`;
+  const expose = target.port === undefined ? "" : `EXPOSE ${target.port}\n`;
   // Install ALL deps (no --omit=dev / --production): an agent's tools may need its full toolchain.
   //
   // `*.tgz` RIDES ALONG with the manifest, because the install layer runs BEFORE `COPY . .` and a
   // `"dep": "file:./something.tgz"` resolves against the directory it is installing in. Without this the file is
   // not there yet and the build fails on a dependency the author can see sitting in the agent directory.
+  if (isBun) {
+    // `--frozen-lockfile` needs bun.lock and hard-fails without it; fall back to `bun install`.
+    const install = input.hasLockfile ? "bun install --frozen-lockfile" : "bun install";
+    const cmd = target.command[0] === "bun" ? target.command : ["bun", ...target.command];
+    return `${head}COPY package.json bun.lock* *.tgz ./
+RUN ${install}
+COPY . .
+${BUILD_STEP_NOTE}
+RUN bun ./node_modules/.bin/fastagent build
+${expose}CMD [${cmd.map((part) => JSON.stringify(part)).join(", ")}]
+`;
+  }
   // `npm ci` requires a lockfile and hard-fails without one (a common `init --no-install` agent); fall back to `npm
   // install` when there is none so the build never breaks.
   const install = input.hasLockfile ? "npm ci" : "npm install";
-  const expose = target.port === undefined ? "" : `EXPOSE ${target.port}\n`;
   return `${head}COPY package.json package-lock.json* *.tgz ./
 RUN ${install}
 COPY . .

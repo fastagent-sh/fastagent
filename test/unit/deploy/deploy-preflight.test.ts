@@ -108,4 +108,55 @@ describe("deploy/preflight: what the container is checked for", () => {
       'skipping pi-durable extensions on harness "dsh": legacy-ext (portable tools belong in src/tools/)',
     );
   });
+
+  it("detects Bun runtime from bun.lock / packageManager, checks Bun version floor, and recognizes bun run build", async () => {
+    const lockedBun = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+      "package.json": JSON.stringify({
+        type: "module",
+        name: "bun-agent",
+        packageManager: "bun@1.4.4",
+        dependencies: { "@fastagent-sh/fastagent": "*" },
+      }),
+      "bun.lock": "{}\n",
+    });
+    const checked = await checkContainer({ agentDir: lockedBun, force: false, target: DOCKER_TARGET });
+    expect(checked.ok).toBe(true);
+    if (checked.ok) {
+      expect(checked.container.runtime).toBe("bun");
+      expect(checked.container.bunVersion).toBe("1.4.4");
+      expect(checked.container.hasLockfile).toBe(true);
+      expect(checked.messages.filter((m) => m.level === "warn")).toEqual([]);
+    }
+
+    const oldUnlockedBun = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
+      "package.json": JSON.stringify({
+        type: "module",
+        name: "old-bun-agent",
+        packageManager: "bun@1.3.13",
+        dependencies: { "@fastagent-sh/fastagent": "*" },
+      }),
+      Dockerfile: "FROM oven/bun:1\nENV FASTAGENT_DEPLOYED=1\nENV FASTAGENT_NAME=old-bun-agent\nRUN bun run build\n",
+    });
+    const oldWarnings = await warnings(oldUnlockedBun);
+    expect(oldWarnings).toContainEqual(expect.stringMatching(/fastagent needs Bun 1\.4\.4 or later/));
+    expect(oldWarnings).toContainEqual(expect.stringMatching(/no bun\.lock.*bun install/));
+    expect(oldWarnings).toContainEqual(expect.stringMatching(/bun add @fastagent-sh\/harness-dsh/));
+    expect(oldWarnings).not.toContainEqual(expect.stringMatching(/does not run `fastagent build`/));
+
+    const rangeBun = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+      "package.json": JSON.stringify({
+        type: "module",
+        name: "range-bun-agent",
+        packageManager: "bun@^1.4.4",
+        dependencies: { "@fastagent-sh/fastagent": "*" },
+      }),
+      "bun.lock": "{}\n",
+    });
+    expect(await warnings(rangeBun)).toContainEqual(
+      expect.stringMatching(/not a concrete Bun version tag.*oven\/bun:1/),
+    );
+  });
 });

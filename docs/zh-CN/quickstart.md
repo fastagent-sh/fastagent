@@ -8,7 +8,7 @@ status: current
 
 在 5 分钟内，你将完成创建 Agent、添加强类型 TypeScript 工具、本地热重载运行，以及以生产模式通过 Agent API 对外提供服务。
 
-**前提条件：** Node ≥ 24.15。
+**前提条件：** Node ≥ 24.15 或 Bun ≥ 1.4.4。
 
 ```bash
 npm i -g @fastagent-sh/fastagent

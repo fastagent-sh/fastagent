@@ -8,6 +8,7 @@ import * as Scope from "effect/Scope";
 import { HttpEffect, HttpServer, HttpServerError } from "effect/http";
 import type * as NetAddress from "effect/net/NetAddress";
 import { log } from "../log.ts";
+import { isBunRuntime } from "../runtime.ts";
 import { text } from "./respond.ts";
 
 /** A Fetch handler: what a serve answers a request with. */
@@ -65,9 +66,79 @@ function watchedBody(response: Response, left: () => void): Response {
  * How long `close()` gives in-flight HTTP requests before ending them, sized to fit the CLI's shutdown deadline
  * (`FORCED_EXIT_MS` in `src/cli/serve.ts`).
  */
-const GRACEFUL_SHUTDOWN = "500 millis";
+const GRACEFUL_SHUTDOWN_MS = 500;
+const GRACEFUL_SHUTDOWN = `${GRACEFUL_SHUTDOWN_MS} millis` as const;
 
-/** The server a serve listens on: Node's `http.Server`. */
+interface BunServerHandle {
+  readonly port: number | undefined;
+  stop(closeActiveConnections?: boolean): Promise<void>;
+}
+
+interface BunGlobal {
+  serve(options: {
+    port: number;
+    hostname?: string;
+    idleTimeout?: number;
+    fetch(request: Request): Response | Promise<Response>;
+  }): BunServerHandle;
+}
+
+function wrappedHandler(handler: Handler): (request: Request) => Promise<Response> {
+  return (request) => {
+    // The handler's `signal` follows its client to the end of the response: a body cancelled because the client left
+    // aborts it too, even after headers are out.
+    const left = new AbortController();
+    const followed = new Request(request, { signal: AbortSignal.any([request.signal, left.signal]) });
+    return totalFetch(handler, (response) => watchedBody(response, () => left.abort()))(followed);
+  };
+}
+
+/** Serve `handler` directly on Bun's native Fetch server, avoiding the `node:http` shim layer. */
+function serveOnBun(
+  bun: BunGlobal,
+  handler: Handler,
+  options: { port: number; host?: string },
+): { listening: Promise<number>; close: () => Promise<void> } {
+  const fetch = wrappedHandler(handler);
+  let server: BunServerHandle | undefined;
+  let closing: Promise<void> | undefined;
+  const listening = Promise.resolve().then(() => {
+    if (closing !== undefined) throw new Error("the server was closed before it listened");
+    server = bun.serve({
+      port: options.port,
+      ...(options.host === undefined ? {} : { hostname: options.host }),
+      // Disable Bun's 10s default idle socket timeout so long-polling `invoke?wait=600` and quiet SSE streams survive.
+      idleTimeout: 0,
+      fetch,
+    });
+    if (server.port === undefined) throw new Error("Bun.serve did not bind a TCP port");
+    return server.port;
+  });
+  return {
+    listening,
+    close() {
+      if (closing !== undefined) return closing;
+      closing = (async () => {
+        await listening.then(
+          () => undefined,
+          () => undefined,
+        );
+        if (server === undefined) return;
+        const active = server;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), GRACEFUL_SHUTDOWN_MS);
+        });
+        const outcome = await Promise.race([active.stop(false).then(() => "stopped" as const), deadline]);
+        if (timer !== undefined) clearTimeout(timer);
+        if (outcome === "timeout") await active.stop(true);
+      })();
+      return closing;
+    },
+  };
+}
+
+/** The server a serve listens on under Node: Node's `http.Server`. */
 async function serverLayer(options: {
   port: number;
   host?: string;
@@ -85,24 +156,19 @@ function bindFailure(error: unknown): unknown {
   return error instanceof HttpServerError.ServeError ? error.cause : error;
 }
 
-/** Serve `handler` on Node's `http.Server`. */
+/** Serve `handler` on the host runtime's native HTTP server (Node's `http.Server` or Bun's `Bun.serve`). */
 export function serveHandler(
   handler: Handler,
   options: { port: number; host?: string },
 ): { listening: Promise<number>; close: () => Promise<void> } {
+  const bun = (globalThis as { readonly Bun?: BunGlobal }).Bun;
+  if (isBunRuntime() && bun !== undefined) return serveOnBun(bun, handler, options);
+
   const scope = Scope.makeUnsafe();
   let closed = false;
   // A server runs each request uninterruptibly unless told otherwise; a request that has not answered when the server
   // closes must be interruptible, or closing waits on it forever.
-  const app = Effect.interruptible(
-    HttpEffect.fromWebHandler((request) => {
-      // The handler's `signal` follows its client to the end of the response, as a Node server's request does: this
-      // server aborts it only while the handler runs, so a body cancelled because the client left aborts it too.
-      const left = new AbortController();
-      const followed = new Request(request, { signal: AbortSignal.any([request.signal, left.signal]) });
-      return totalFetch(handler, (response) => watchedBody(response, () => left.abort()))(followed);
-    }),
-  );
+  const app = Effect.interruptible(HttpEffect.fromWebHandler(wrappedHandler(handler)));
   const listening = serverLayer(options)
     .then((server) => {
       if (closed) throw new Error("the server was closed before it listened");

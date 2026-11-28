@@ -4,7 +4,7 @@
  * selected harness (`pi-durable` or `dsh`).
  */
 import { realpathSync } from "node:fs";
-import { createRequire } from "node:module";
+import { isBunRuntime, resolveFromProject } from "../runtime.ts";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
@@ -289,22 +289,14 @@ export async function resolveHarnessProvider(
   } catch (firstError) {
     const firstCode = (firstError as { code?: unknown }).code;
     if (firstCode !== "ERR_MODULE_NOT_FOUND" && firstCode !== "MODULE_NOT_FOUND") throw firstError;
-    try {
-      entryUrl = pathToFileURL(createRequire(join(projectDir, "package.json")).resolve(specifier)).href;
-    } catch (secondError) {
-      const secondCode = (secondError as { code?: unknown }).code;
-      if (
-        secondCode === "ERR_MODULE_NOT_FOUND" ||
-        secondCode === "MODULE_NOT_FOUND" ||
-        secondCode === "ERR_PACKAGE_PATH_NOT_EXPORTED"
-      ) {
-        throw new Error(
-          `harness "${harness}" requires ${pkgName}. Install it in your project: npm install ${pkgName}`,
-          { cause: firstError },
-        );
-      }
-      throw secondError;
+    const resolved = resolveFromProject(projectDir, specifier);
+    if (resolved === undefined) {
+      const installHint = isBunRuntime() ? `bun add ${pkgName}` : `npm install ${pkgName}`;
+      throw new Error(`harness "${harness}" requires ${pkgName}. Install it in your project: ${installHint}`, {
+        cause: firstError,
+      });
     }
+    entryUrl = pathToFileURL(resolved).href;
   }
   const mod = (await import(entryUrl)) as Partial<{ readonly harnessProvider: HarnessProvider }>;
   if (
