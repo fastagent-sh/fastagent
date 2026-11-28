@@ -17,7 +17,6 @@ import {
   isHttpRemote,
   isHttpUrl,
   parseApiKeys,
-  parseRemoteEntry,
   parseRemotesJson,
   removeRemoteConfig,
   resolveRemotesPath,
@@ -63,13 +62,10 @@ export function saveRemote(
   remote: RemoteConfig,
   options: LoadRemotesOptions & { setDefault?: boolean } = {},
 ): { path: string; config: RemotesFile } {
-  const trimmed = name.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
-    throw new Error(`Invalid remote name "${name}": must be non-empty without whitespace`);
-  }
-  const validated = parseRemoteEntry(trimmed, remote);
+  // Validate the caller's name and entry before reading an existing file from disk.
+  upsertRemoteConfig({ remotes: {} }, name, remote, options);
   const { path, config } = loadRemotes(options);
-  const next = upsertRemoteConfig(config, trimmed, validated, options);
+  const next = upsertRemoteConfig(config, name, remote, options);
   writeRemotesFile(path, next);
   return { path, config: next };
 }
