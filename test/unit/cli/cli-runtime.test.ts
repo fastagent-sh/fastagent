@@ -32,14 +32,17 @@ function sessionOf(run: { code: number | null; stdout: string; stderr: string })
 }
 
 describe("the runtime the CLI runs on", () => {
-  it("accepts Node >= 24.15.0 and Bun >= 1.4.0, and refuses older versions of either", () => {
+  it("accepts Node >= 24.15.0 and Bun >= 1.4.4, and refuses older versions of either", () => {
     expect(unsupportedRuntime({ node: "24.15.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "26.0.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.4.0" })).toBe("fastagent needs Node 24.15.0 or later; this is 24.4.0");
-    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBeUndefined();
     expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.4" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.5.0" })).toBeUndefined();
+    expect(unsupportedRuntime({ node: "24.15.0", bun: "1.4.0" })).toBe(
+      "fastagent needs Bun 1.4.4 or later; this is 1.4.0",
+    );
     expect(unsupportedRuntime({ node: "24.15.0", bun: "1.3.13" })).toBe(
-      "fastagent needs Bun 1.4.0 or later; this is 1.3.13",
+      "fastagent needs Bun 1.4.4 or later; this is 1.3.13",
     );
   });
 
@@ -59,6 +62,14 @@ describe("the runtime the CLI runs on", () => {
       expect(detectRuntime(dir, { packageManager: "bun@1.4.4" })).toEqual({
         runtime: "bun",
         bunVersion: "1.4.4",
+        hasLockfile: true,
+      });
+      expect(detectRuntime(dir, { packageManager: "bun@^1.4.4" })).toEqual({
+        runtime: "bun",
+        hasLockfile: true,
+      });
+      expect(detectRuntime(dir, { packageManager: "bun@1.4.4\nRUN evil" })).toEqual({
+        runtime: "bun",
         hasLockfile: true,
       });
     } finally {

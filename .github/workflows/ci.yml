@@ -146,7 +146,7 @@ jobs:
         run: node test/smoke/e2e/examples.ts "$RUNNER_TEMP"/tarballs/*.tgz
 
   bun-smoke:
-    name: Bun 1.4 smoke
+    name: Bun 1.4.4 smoke
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -163,14 +163,14 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          # The floor: the instance's storage is node:sqlite, which Bun ships from 1.4.0.
-          bun-version: '1.4.0'
+          # The floor: Bun 1.4.4 reliably releases EXCLUSIVE node:sqlite locks on DatabaseSync.close().
+          bun-version: '1.4.4'
 
       - name: Install and build
         run: npm ci && npm run build
 
       - name: Run Bun runtime and CLI smoke checks
-        run: bun test/smoke/bun/runtime.ts
+        run: bun --conditions=@fastagent-sh/source test/smoke/bun/runtime.ts
 
       - name: Pack, install with Bun, and verify published surface
         run: |

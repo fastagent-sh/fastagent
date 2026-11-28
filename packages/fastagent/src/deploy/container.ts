@@ -84,6 +84,7 @@ function aptLayer(packages?: readonly string[]): string {
  * (`docker build --pull`): a copy cached before the floor's release would start a Node the CLI refuses.
  */
 const NODE_IMAGE = `node:${RUNTIME_FLOOR.node.split(".")[0]}-slim`;
+const SAFE_DOCKER_TAG = /^\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?$/;
 
 /** Why the image builds `dist/` itself: a build context that follows `.gitignore` drops it, and `start` needs it. */
 const BUILD_STEP_NOTE =
@@ -107,6 +108,9 @@ function dockerfile(input: ContainerInput): string {
   const cacheEnv = isBun
     ? "ENV BUN_INSTALL_CACHE_DIR=/tmp/fastagent/bun\n"
     : "ENV npm_config_cache=/tmp/fastagent/npm\n";
+  if (input.bunVersion !== undefined && !SAFE_DOCKER_TAG.test(input.bunVersion)) {
+    throw new Error(`invalid Bun Docker tag: ${JSON.stringify(input.bunVersion)}`);
+  }
   const base = isBun ? `oven/bun:${input.bunVersion ?? "1"}` : NODE_IMAGE;
   const note = isBun
     ? "# Bun-based (packageManager: bun / bun lockfile detected). fastagent runs under Bun."

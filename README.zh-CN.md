@@ -53,7 +53,7 @@
 
 ## 5 分钟快速上手
 
-环境要求：服务端与 CLI 需要 **Node ≥ 24.15**（推荐 Node 26 LTS）或 **Bun ≥ 1.4**；客户端 SDK（`@fastagent-sh/client`、`@fastagent-sh/client-agentcore`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
+环境要求：服务端与 CLI 需要 **Node ≥ 24.15**（推荐 Node 26 LTS）或 **Bun ≥ 1.4.4**；客户端 SDK（`@fastagent-sh/client`、`@fastagent-sh/client-agentcore`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -250,12 +250,12 @@ Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastag
 
 | npm 包 | 职责 | 运行时要求 |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 核心运行时（`pi-durable`）、`openAgent`、`defineTool`、`openPostgresDatabase`、HTTP 服务、CLI | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4 |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 核心运行时（`pi-durable`）、`openAgent`、`defineTool`、`openPostgresDatabase`、HTTP 服务、CLI | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API 与远程认证客户端（`connectAgent`、`connectAuth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
 | [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore 客户端（`connectAgentCore`、`connectAgentCoreAuth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
-| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | AWS AgentCore 服务端运行时、Aurora DSQL 适配器、Secrets Manager 集成、CDK 构造 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4 |
-| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4 |
-| [`@fastagent-sh/pi-remote`](./packages/pi-remote/README.md) | Pi TUI 扩展（`/fa`），用于从终端交互式接入已部署的 HTTP 或 AgentCore 实例 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4 |
+| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | AWS AgentCore 服务端运行时、Aurora DSQL 适配器、Secrets Manager 集成、CDK 构造 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/pi-remote`](./packages/pi-remote/README.md) | Pi TUI 扩展（`/fa`），用于从终端交互式接入已部署的 HTTP 或 AgentCore 实例 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
 
 **完整中文文档（[docs/zh-CN/](./docs/zh-CN/README.md)）：**
 [产品概览](./docs/zh-CN/overview.md) · [快速上手](./docs/zh-CN/quickstart.md) · [打包与 CI](./docs/zh-CN/packaging-and-ci.md) · [AI 协作开发指南](./docs/zh-CN/ai-start.md) · [技术架构](./docs/zh-CN/architecture.md) · [Agent API](./docs/zh-CN/agent-api.md) · [配置指南](./docs/zh-CN/configuration.md) · [MCP 服务器](./docs/zh-CN/mcp.md) · [嵌入应用](./docs/zh-CN/embedding.md) · [部署指南](./docs/zh-CN/deploy.md) · [AWS AgentCore](./docs/zh-CN/agentcore.md) · [远程实例与客户端](./docs/zh-CN/remotes.md) · [CLI 参考](./docs/zh-CN/cli.md) · [API 参考](./docs/zh-CN/api-reference.md) · [故障排查](./docs/zh-CN/troubleshooting.md)

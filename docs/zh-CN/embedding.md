@@ -9,7 +9,7 @@ status: current
 当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 后端或桌面应用中。
 
 ```bash
-npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4
+npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
 ```
 
 先使用 `fastagent build` 将 Agent 编译为独立 npm 包（见[打包、分发与 CI/CD](packaging-and-ci.md)），再从宿主应用导入。

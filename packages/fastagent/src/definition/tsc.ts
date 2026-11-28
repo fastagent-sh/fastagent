@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { resolveFromProject } from "../runtime.ts";
+import { isBunRuntime, resolveFromProject } from "../runtime.ts";
 
 const MIN_TYPESCRIPT = 7;
 
@@ -43,9 +43,8 @@ export function projectCompiler(dir: string): ProjectCompiler {
 function projectTsc(dir: string): string {
   const manifest = resolveFromProject(dir, "typescript/package.json");
   if (manifest === undefined) {
-    throw new Error(
-      `fastagent build compiles with the project's TypeScript, and ${dir} has none: npm install --save-dev typescript`,
-    );
+    const installHint = isBunRuntime() ? "bun add -d typescript" : "npm install --save-dev typescript";
+    throw new Error(`fastagent build compiles with the project's TypeScript, and ${dir} has none: ${installHint}`);
   }
   const { bin, version } = JSON.parse(readFileSync(manifest, "utf8")) as { bin?: { tsc?: string }; version?: string };
   if (bin?.tsc === undefined) throw new Error(`${manifest} has no tsc`);

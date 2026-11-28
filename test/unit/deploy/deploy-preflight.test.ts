@@ -140,9 +140,23 @@ describe("deploy/preflight: what the container is checked for", () => {
       Dockerfile: "FROM oven/bun:1\nENV FASTAGENT_DEPLOYED=1\nENV FASTAGENT_NAME=old-bun-agent\nRUN bun run build\n",
     });
     const oldWarnings = await warnings(oldUnlockedBun);
-    expect(oldWarnings).toContainEqual(expect.stringMatching(/fastagent needs Bun 1\.4\.0 or later/));
+    expect(oldWarnings).toContainEqual(expect.stringMatching(/fastagent needs Bun 1\.4\.4 or later/));
     expect(oldWarnings).toContainEqual(expect.stringMatching(/no bun\.lock.*bun install/));
     expect(oldWarnings).toContainEqual(expect.stringMatching(/bun add @fastagent-sh\/harness-dsh/));
     expect(oldWarnings).not.toContainEqual(expect.stringMatching(/does not run `fastagent build`/));
+
+    const rangeBun = await agent({
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5" };\n',
+      "package.json": JSON.stringify({
+        type: "module",
+        name: "range-bun-agent",
+        packageManager: "bun@^1.4.4",
+        dependencies: { "@fastagent-sh/fastagent": "*" },
+      }),
+      "bun.lock": "{}\n",
+    });
+    expect(await warnings(rangeBun)).toContainEqual(
+      expect.stringMatching(/not a concrete Bun version tag.*oven\/bun:1/),
+    );
   });
 });

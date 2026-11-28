@@ -79,6 +79,16 @@ describe("deploy/container: the portable image", () => {
     expect(unlocked).toMatch(/^FROM oven\/bun:1$/m);
     expect(unlocked).toMatch(/^RUN bun install$/m);
     expect(unlocked).toMatch(/^CMD \["bun", "\.\/node_modules\/\.bin\/fastagent", "agentcore", "start"\]$/m);
+
+    expect(() =>
+      containerArtifacts({
+        target: DOCKER_TARGET,
+        name: "reviewer",
+        runtime: "bun",
+        bunVersion: "1.4.4\nRUN evil",
+        hasLockfile: true,
+      }),
+    ).toThrow(/invalid Bun Docker tag/);
   });
 });
 

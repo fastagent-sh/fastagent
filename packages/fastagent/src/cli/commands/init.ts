@@ -43,7 +43,7 @@ export async function runInit(dirArg = ".", opts: InitOptions = { install: true 
 
   // Initialize git for fresh standalone scaffolds before installing deps so a failed install still preserves the initial commit on retry.
   const repository = result.mode === "fresh" ? await initRepository(dir, { mode: "fresh" }) : undefined;
-  const pkg = await readPackageJson(dir).catch(() => ({}));
+  const pkg = await readPackageJson(dir).catch(failStartup);
   const pm: "npm" | "bun" = isBunRuntime() || detectRuntime(dir, pkg).runtime === "bun" ? "bun" : "npm";
   const installCmd = `${pm} install`;
 

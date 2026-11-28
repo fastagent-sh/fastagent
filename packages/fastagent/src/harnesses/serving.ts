@@ -4,7 +4,7 @@
  * selected harness (`pi-durable` or `dsh`).
  */
 import { realpathSync } from "node:fs";
-import { resolveFromProject } from "../runtime.ts";
+import { isBunRuntime, resolveFromProject } from "../runtime.ts";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import * as Deferred from "effect/Deferred";
@@ -291,7 +291,8 @@ export async function resolveHarnessProvider(
     if (firstCode !== "ERR_MODULE_NOT_FOUND" && firstCode !== "MODULE_NOT_FOUND") throw firstError;
     const resolved = resolveFromProject(projectDir, specifier);
     if (resolved === undefined) {
-      throw new Error(`harness "${harness}" requires ${pkgName}. Install it in your project: npm install ${pkgName}`, {
+      const installHint = isBunRuntime() ? `bun add ${pkgName}` : `npm install ${pkgName}`;
+      throw new Error(`harness "${harness}" requires ${pkgName}. Install it in your project: ${installHint}`, {
         cause: firstError,
       });
     }

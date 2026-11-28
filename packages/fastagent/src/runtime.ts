@@ -23,8 +23,8 @@ export function detectRuntime(dir: string, pkg: { readonly packageManager?: unkn
   const pm = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
   const bunLock = existsSync(join(dir, "bun.lock")) || existsSync(join(dir, "bun.lockb"));
   if (pm.startsWith("bun@") || bunLock) {
-    // corepack pins as `bun@1.4.4+sha256.<hash>`; the version (a Docker tag for oven/bun) is the part before `+`.
-    const bunVersion = /^bun@([^+]+)/.exec(pm)?.[1];
+    // corepack pins as `bun@1.4.4+sha256.<hash>`; accept only a concrete semver Docker tag before `+`.
+    const bunVersion = /^bun@(\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?)(?:\+|$)/.exec(pm)?.[1];
     return { runtime: "bun", ...(bunVersion === undefined ? {} : { bunVersion }), hasLockfile: bunLock };
   }
   return { runtime: "node", hasLockfile: existsSync(join(dir, "package-lock.json")) };
@@ -72,10 +72,11 @@ export function resolveFromProject(dir: string, specifier: string): string | und
 }
 
 /**
- * The oldest runtimes that run an agent, both set by the instance's storage, `node:sqlite`: Bun ships it from 1.4.0,
- * and Node stops calling it experimental, and printing so on every start, from 24.15.0.
+ * The oldest runtimes that run an agent, both set by the instance's storage, `node:sqlite`: Node drops its
+ * experimental warning from 24.15.0, and Bun 1.4.4 reliably releases `PRAGMA locking_mode = EXCLUSIVE` locks on
+ * `DatabaseSync.close()` when statements were prepared (1.4.0 leaves the file locked until GC).
  */
-export const RUNTIME_FLOOR = { node: "24.15.0", bun: "1.4.0" } as const;
+export const RUNTIME_FLOOR = { node: "24.15.0", bun: "1.4.4" } as const;
 
 /** Whether `version` (`1.3.13`, `24.4`) is older than `floor`; false for one that names no version (`canary`). */
 export function belowFloor(version: string, floor: string): boolean {

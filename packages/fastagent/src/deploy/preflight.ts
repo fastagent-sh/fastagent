@@ -133,11 +133,18 @@ async function gatherFacts(
   const pkg = await readPackageJson(agentDir);
   const { runtime, bunVersion, hasLockfile } = detectRuntime(agentDir, pkg);
   const kept = await keptDockerfile(agentDir);
-  if (runtime === "bun" && bunVersion !== undefined && belowFloor(bunVersion, RUNTIME_FLOOR.bun)) {
-    report.warn(
-      `package.json sets packageManager: "bun@${bunVersion}" — fastagent needs Bun ${RUNTIME_FLOOR.bun} or later ` +
-        `(for built-in node:sqlite). Upgrade packageManager before building the image.`,
-    );
+  if (runtime === "bun") {
+    if (typeof pkg.packageManager === "string" && pkg.packageManager.startsWith("bun@") && bunVersion === undefined) {
+      report.warn(
+        `package.json sets packageManager: ${JSON.stringify(pkg.packageManager)}, which is not a concrete Bun version tag — ` +
+          `the generated Dockerfile falls back to oven/bun:1.`,
+      );
+    } else if (bunVersion !== undefined && belowFloor(bunVersion, RUNTIME_FLOOR.bun)) {
+      report.warn(
+        `package.json sets packageManager: "bun@${bunVersion}" — fastagent needs Bun ${RUNTIME_FLOOR.bun} or later ` +
+          `(for built-in node:sqlite). Upgrade packageManager before building the image.`,
+      );
+    }
   }
   if (!hasLockfile) {
     if (runtime === "bun") {

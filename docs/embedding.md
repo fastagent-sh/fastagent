@@ -9,7 +9,7 @@ status: current
 Embed a compiled FastAgent directly in your Node backend or desktop application when you want your own auth, user model, database, and UI—while getting durable sessions, crash recovery, streaming, and tool execution out of the box.
 
 ```bash
-npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4
+npm i @fastagent-sh/fastagent       # Node ≥ 24.15 or Bun ≥ 1.4.4
 ```
 
 Compile your agent into a standalone npm package with `fastagent build` ([Packaging, Distribution & CI/CD](packaging-and-ci.md)), then import it from your application.

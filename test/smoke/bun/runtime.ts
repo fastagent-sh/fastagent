@@ -1,16 +1,18 @@
 /**
- * End-to-end Bun runtime smoke test verifying FastAgent's full server & CLI contract on Bun >= 1.4.0:
+ * End-to-end Bun runtime smoke test verifying FastAgent's full server & CLI contract on Bun >= 1.4.4:
  * - Public package imports across client, fastagent, agentcore, and harness-dsh
- * - Proxy setup (`installProxyFetch`) compatibility with Bun's native `undici` shim & loopback fetch
+ * - Proxy setup (`installProxyFetch`) compatibility with Bun's native `undici` shim, dynamic `HTTP_PROXY` routing, and loopback exemption
  * - `openAgent` + `serve` (HTTP + SSE streaming + client disconnect abort) + `connectAgent` on both `pi-durable` and `dsh`
  * - Durable `node:sqlite` persistence across reopen and exclusive lock contention (`SQLITE_BUSY`)
- * - `@fastagent-sh/agentcore` `serveAgentCore` HTTP envelope & `/ping`
+ * - `@fastagent-sh/agentcore` `agentCoreHandler` HTTP envelope & `/ping`
  * - CLI under Bun: `--version`, `init --no-install`, `invoke` (both harnesses), `build`, `deploy init/check`, and `dev` IPC
  *
- * Run after `npm run build`: `bun test/smoke/bun/runtime.ts`
+ * Run after `npm run build`: `bun --conditions=@fastagent-sh/source test/smoke/bun/runtime.ts`
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -89,9 +91,28 @@ await Promise.all([
 ]);
 console.error("[bun-smoke] 1/6 public imports ok");
 
-// 2. Proxy boundary + SSE abort propagation on Bun's NodeHttpServer layer
-installProxyFetch();
+// 2. Proxy boundary (dynamic HTTP_PROXY + loopback exemption) + SSE abort propagation on Bun's NodeHttpServer layer
 {
+  const proxiedUrls: string[] = [];
+  const proxyServer = createServer((req, res) => {
+    proxiedUrls.push(req.url ?? "");
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("via-proxy");
+  });
+  await new Promise<void>((resolveListen) => proxyServer.listen(0, "127.0.0.1", resolveListen));
+  const proxyPort = (proxyServer.address() as AddressInfo).port;
+  const savedProxyEnv = {
+    HTTP_PROXY: process.env.HTTP_PROXY,
+    http_proxy: process.env.http_proxy,
+    NO_PROXY: process.env.NO_PROXY,
+    no_proxy: process.env.no_proxy,
+  };
+  delete process.env.http_proxy;
+  delete process.env.NO_PROXY;
+  delete process.env.no_proxy;
+  process.env.HTTP_PROXY = `http://127.0.0.1:${proxyPort}`;
+  installProxyFetch();
+
   let aborted = false;
   const server = serveHandler(
     (req) => {
@@ -109,17 +130,29 @@ installProxyFetch();
   );
   const port = await server.listening;
   try {
+    // Non-loopback requests honor HTTP_PROXY set dynamically after startup.
+    const proxiedRes = await fetch("http://example.invalid/bun-proxy-check");
+    assertEqual("proxied response body", await proxiedRes.text(), "via-proxy");
+    assertEqual("proxied request count", proxiedUrls.length, 1);
+
+    // Loopback requests bypass HTTP_PROXY even when NO_PROXY is unset, and client abort propagates.
     const ac = new AbortController();
     const res = await fetch(`http://127.0.0.1:${port}`, { signal: ac.signal });
     const reader = res.body?.getReader();
     assert(reader !== undefined, "expected SSE response body");
     const first = await reader.read();
     assertEqual("SSE chunk", new TextDecoder().decode(first.value), "data: ping\n\n");
+    assertEqual("loopback bypassed proxy", proxiedUrls.length, 1);
     ac.abort();
     await new Promise((r) => setTimeout(r, 100));
     assert(aborted, "client abort must propagate to serveHandler request.signal on Bun");
   } finally {
+    for (const [k, v] of Object.entries(savedProxyEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     await server.close();
+    await new Promise<void>((resolveClose) => proxyServer.close(() => resolveClose()));
   }
 }
 console.error("[bun-smoke] 2/6 proxy + HTTP SSE abort ok");
