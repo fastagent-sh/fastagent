@@ -298,6 +298,7 @@ describe("public entries", () => {
     const dshRoot = readFileSync(resolve(srcOf("harness-dsh"), "index.ts"), "utf8");
     expect(dshRoot).not.toMatch(/\bDshPg\w+\b/);
     expect(dshRoot).not.toMatch(/\bFastAgentTool\w+\b/);
+    expect(Object.keys(manifestOf("harness-dsh").exports).toSorted()).toEqual([".", "./package.json", "./provider"]);
   });
 });
 

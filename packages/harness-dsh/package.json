@@ -32,9 +32,6 @@
     "*": {
       "provider": [
         "./dist/provider.d.ts"
-      ],
-      "internal": [
-        "./dist/internal.d.ts"
       ]
     }
   },
@@ -48,11 +45,6 @@
       "@fastagent-sh/source": "./src/provider.ts",
       "types": "./dist/provider.d.ts",
       "default": "./dist/provider.js"
-    },
-    "./internal": {
-      "@fastagent-sh/source": "./src/internal.ts",
-      "types": "./dist/internal.d.ts",
-      "default": "./dist/internal.js"
     },
     "./package.json": "./package.json"
   },

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineTool, sessionIdOf } from "@fastagent-sh/fastagent";
 import { InstanceHeld, classifyPiAiError, createEventChannel } from "@fastagent-sh/fastagent/harness";
 import { MemoryDshEventStore, openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
-import { openPostgresDshStore } from "@fastagent-sh/harness-dsh/internal";
+import { openPostgresDshStore } from "../../../packages/harness-dsh/src/postgres-store.ts";
 import { harnessProvider } from "@fastagent-sh/harness-dsh/provider";
 import {
   buildDshSandboxPolicy,
