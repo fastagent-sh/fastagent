@@ -1,13 +1,13 @@
 {
   "name": "@fastagent-sh/agentcore",
   "version": "0.38.0",
-  "description": "Run a FastAgent agent on Amazon Bedrock AgentCore: the runtime, Aurora DSQL, and Secrets Manager.",
+  "description": "Amazon Bedrock AgentCore MicroVM server runtime adapter for FastAgent backed by standard PostgreSQL.",
   "keywords": [
     "agent",
     "ai-agent",
     "agentcore",
     "aws",
-    "aurora-dsql",
+    "microvm",
     "fastagent"
   ],
   "license": "MIT",
@@ -24,42 +24,21 @@
   "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "typesVersions": {
-    "*": {
-      "cdk": [
-        "./dist/cdk.d.ts"
-      ],
-      "cli": [
-        "./dist/cli.d.ts"
-      ]
-    }
-  },
   "exports": {
     ".": {
       "@fastagent-sh/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./cli": {
-      "@fastagent-sh/source": "./src/cli.ts",
-      "types": "./dist/cli.d.ts",
-      "default": "./dist/cli.js"
-    },
-    "./cdk": {
-      "@fastagent-sh/source": "./src/cdk.ts",
-      "types": "./dist/cdk.d.ts",
-      "default": "./dist/cdk.js"
-    },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "templates",
     "LICENSE",
     "README.md"
   ],
   "engines": {
-    "node": ">=24.15.0",
+    "node": ">=22.22.0",
     "bun": ">=1.4.4"
   },
   "publishConfig": {
@@ -72,29 +51,10 @@
     "prepack": "node ../../scripts/prepack.mjs && npm run build"
   },
   "dependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.1175.0",
-    "@aws-sdk/dsql-signer": "^3.1175.0",
     "@fastagent-sh/client": "0.38.0",
     "effect": "^4.1.5"
   },
   "peerDependencies": {
-    "@fastagent-sh/client-agentcore": "0.38.0",
-    "@fastagent-sh/fastagent": "0.38.0",
-    "aws-cdk-lib": "^2.269.0",
-    "constructs": "^10.7.0"
-  },
-  "peerDependenciesMeta": {
-    "@fastagent-sh/client-agentcore": {
-      "optional": true
-    },
-    "@fastagent-sh/fastagent": {
-      "optional": true
-    },
-    "aws-cdk-lib": {
-      "optional": true
-    },
-    "constructs": {
-      "optional": true
-    }
+    "@fastagent-sh/fastagent": "0.38.0"
   }
 }

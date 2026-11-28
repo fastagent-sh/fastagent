@@ -31,9 +31,9 @@ const PASSING_SOCKET = new Set([
   "EAI_AGAIN",
   "EPIPE",
 ]);
-const PASSING_SQLSTATE = /^(08|53|57P0[1-3]$|40001$|40P01$|OC00[01]$)/;
+const PASSING_SQLSTATE = /^(08|53|57P0[1-3]$|40001$|40P01$)/;
 
-/** Whether `error` (or its `cause` chain) is a transient PostgreSQL / Aurora DSQL failure safe to treat as unavailable. */
+/** Whether `error` (or its `cause` chain) is a transient PostgreSQL failure safe to treat as unavailable. */
 export function isTransientPgError(error: unknown): boolean {
   for (let at: unknown = error; at instanceof Error; at = at.cause) {
     const code = (at as { code?: unknown }).code;
@@ -76,7 +76,7 @@ export interface PostgresPoolOptions {
 
 /**
  * A pool on `connectionString` (`postgres://user:password@host:port/database?sslmode=require`); `password`, when given,
- * makes the password of each new connection (a token that expires).
+ * makes the password of each new connection (for short-lived IAM / workload-identity tokens).
  */
 export function openPgDatabase(
   connectionString: string,
@@ -93,7 +93,6 @@ export function openPgDatabase(
       `Postgres pool idleTimeoutMillis must be a non-negative number, got ${String(options.idleTimeoutMillis)}`,
     );
   }
-  // A connection string's own password, even an empty one, would win over `password`: parsed here, it gives way.
   const connection =
     options.password === undefined
       ? { connectionString }
@@ -103,7 +102,6 @@ export function openPgDatabase(
     ...(options.max === undefined ? {} : { max: options.max }),
     ...(options.idleTimeoutMillis === undefined ? {} : { idleTimeoutMillis: options.idleTimeoutMillis }),
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    // Ids and seqs are below 2^53: as numbers, as pi-durable keeps them.
     types: {
       getTypeParser: ((oid: number, format?: "text" | "binary") =>
         oid === INT8
@@ -111,13 +109,11 @@ export function openPgDatabase(
           : pg.types.getTypeParser(oid, format)) as typeof pg.types.getTypeParser,
     },
   });
-  // An idle connection the server dropped: the pool replaces it, and the next query gets a new one.
   pool.on("error", (error) => log.warn(`[fastagent] a database connection failed: ${String(error)}`));
   return {
     query: (text, params) => retrying(async () => (await pool.query(text, params as unknown[])).rows),
     async transaction(work) {
       const client = await retrying(() => pool.connect());
-      // A connection whose rollback failed is broken: the pool discards it instead of handing it out again.
       let broken: Error | undefined;
       try {
         await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
@@ -149,40 +145,13 @@ export function describeDatabase(connectionString: string): string {
   }
 }
 
-/**
- * How an index is made: by default its statement as written. A database that builds one as a job (Aurora DSQL's
- * `ASYNC`) starts it and answers how to wait for it.
- */
-export type CreateIndex = (db: PgExecutor, statement: string) => Promise<(() => Promise<void>) | void>;
-
-/**
- * Per-transaction caps a managed PostgreSQL database imposes (such as Aurora DSQL's 3,000 rows and 10 MiB per
- * transaction). Unset means no cap.
- */
-export interface PostgresLimits {
-  rowsPerTransaction?: number;
-  bytesPerTransaction?: number;
-  bytesPerValue?: number;
-}
-
-/**
- * The longest message an agent takes into a storage of `limits`: a message is written once, in one batch, and four
- * fifths of a transaction leave the rest of its batch room. Unset with no transaction cap.
- */
-export function messageBytesFor(limits: PostgresLimits | undefined): number | undefined {
-  const bytes = limits?.bytesPerTransaction;
-  return bytes === undefined ? undefined : Math.floor(bytes * 0.8);
-}
-
-/** How the database is reached and what it allows, past its URL: what a platform's own database needs. */
+/** Connection options beyond `url`. */
 export interface PostgresOptions {
-  /** The password of each new connection, when the URL has none that lasts (a signed token). */
+  /** Dynamic password / token provider invoked for each new connection. */
   password?: () => Promise<string>;
-  limits?: PostgresLimits;
-  createIndex?: CreateIndex;
 }
 
-/** A PostgreSQL database an instance's storage is in: its URL (`postgres://…`), and how it is reached. */
+/** A PostgreSQL database an instance's storage lives in. */
 export interface PostgresDatabase extends PostgresOptions {
   url: string;
 }
@@ -217,7 +186,7 @@ export function isSharedPostgresDatabase(database: PostgresDatabase): database i
   return sharedHandleOf(database) !== undefined;
 }
 
-/** Borrow a shared `PgDatabase` pool or open a dedicated one for a caller-managed harness store. */
+/** Borrow a shared `PgDatabase` pool or open a dedicated one for a caller-managed store. */
 export function acquirePgDatabase(database: PostgresDatabase): { readonly db: PgDatabase; readonly owned: boolean } {
   const shared = sharedHandleOf(database);
   if (shared !== undefined) {
@@ -230,13 +199,12 @@ export function acquirePgDatabase(database: PostgresDatabase): { readonly db: Pg
 
 /**
  * Open a shared PostgreSQL connection pool for reuse across multiple `openAgent` instances in one process.
- * Accepts any {@link PostgresDatabase}, including `{ url }` or `dsqlDatabase({ endpoint })`.
  */
 export function openPostgresDatabase(
   database: PostgresDatabase,
   options: PostgresPoolOptions = {},
 ): SharedPostgresDatabase {
-  const { url, password, limits, createIndex } = database;
+  const { url, password } = database;
   const db = openPgDatabase(url, {
     ...options,
     ...(password === undefined ? {} : { password }),
@@ -262,7 +230,7 @@ export function openPostgresDatabase(
       assertOpen();
       let pending = migrations.get(key);
       if (pending === undefined) {
-        pending = run(db).catch((error) => {
+        pending = run(borrowed).catch((error) => {
           migrations.delete(key);
           throw error;
         });
@@ -286,8 +254,6 @@ export function openPostgresDatabase(
     [SHARED_DB]: handle,
     url,
     ...(password === undefined ? {} : { password }),
-    ...(limits === undefined ? {} : { limits }),
-    ...(createIndex === undefined ? {} : { createIndex }),
     close() {
       if (!closed) {
         closed = true;

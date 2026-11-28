@@ -6,7 +6,7 @@ status: current
 
 # Agent API
 
-无论 Agent 是嵌入在你的 Node 或 Bun 应用中（`openAgent`）、通过 HTTP 对外提供服务（`connectAgent`），还是运行在 Amazon Bedrock AgentCore 上（`connectAgentCore`），你对接的都是同一份契约：Agent API。
+无论 Agent 是嵌入在你的 Node 或 Bun 应用中（`openAgent`），还是通过 HTTP 对外提供服务（`connectAgent`），你对接的都是同一份契约：Agent API。
 
 ```ts
 import { connectAgent } from "@fastagent-sh/client";
@@ -151,7 +151,7 @@ const msg = await agent.invoke(
 
 ## 远程提供商认证（`/v1/auth/*`）
 
-CLI 启动的实例（`fastagent dev` / `start`）、AgentCore 运行时，以及通过 `agent.serve({ apiKeys, remoteAuth: true })` 显式开启的嵌入式实例均暴露 Auth API（`@fastagent-sh/client/auth` 的 `connectAuth`、`@fastagent-sh/client-agentcore/auth` 的 `connectAgentCoreAuth` 或 `fastagent login --remote`），让运维人员或云端终端用户无需把凭证打进镜像即可远程完成 OAuth 或 API Key 登录，凭证按需懒写入实例持久存储并跨重启保留。
+CLI 启动的实例（`fastagent dev` / `start`）以及通过 `agent.serve({ apiKeys, remoteAuth: true })` 显式开启的嵌入式实例均暴露 Auth API（`@fastagent-sh/client/auth` 的 `connectAuth` 或 `fastagent login --remote`），让运维人员或云端宿主无需把凭证打进镜像即可远程完成 OAuth 或 API Key 登录，凭证按需懒写入实例持久存储并跨重启保留。
 
 | 方法 | HTTP 路由 | 用途 |
 | --- | --- | --- |
@@ -206,7 +206,7 @@ CLI 启动的实例（`fastagent dev` / `start`）、AgentCore 运行时，以�
 
 `idempotencyKey` 通过 URL 编码后的 `Idempotency-Key` 请求头传递。SSE 流发送 `event: <type>`、JSON `data`，持久化 `entry` 事件携带 `id: <entry.id>`，并至少每 15 秒发送一次保活注释。拒绝响应统一返回 `{ "error": AgentErrorData }`。
 
-`connectAgent(url, { apiKey, fetch })` 与 `connectAuth(url, { apiKey, fetch })`（来自 `@fastagent-sh/client/auth`）支持传入自定义 `fetch` 传输层以对接签名云协议（如 [`@fastagent-sh/client-agentcore`](agentcore.md)）。
+`connectAgent(url, { apiKey, fetch })` 与 `connectAuth(url, { apiKey, fetch })`（来自 `@fastagent-sh/client/auth`）支持传入可选的自定义 `fetch` 函数以对接自定义代理或签名网关。
 
 ```bash
 # 单次命名对话调用（适用于定时任务、Webhook、空闲休眠托管）

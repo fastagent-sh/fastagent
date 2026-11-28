@@ -2,12 +2,7 @@
  * One `commit()` in a few statements whatever its number of batches, as pi-durable's SQLite storage does it (its
  * `commit.ts`, MIT, which this ports): the stored state every batch's checks need read up front (`CommitState`), each
  * batch checked in memory against what the batches before it left, and the accepted ones written per table
- * (`PendingWrites`), each table's rows as one typed array per column (`unnest`). Over a network every statement is a
- * round trip.
- *
- * Unlike upstream, a commit deletes nothing: the revisions a new base or a retirement makes unreadable are garbage the
- * storage collects after the commit (`PendingWrites.garbage`), so what a batch changes is known before it is written,
- * for a database that caps the rows of a transaction (`batchCost`).
+ * (`PendingWrites`), each table's rows as one typed array per column (`unnest`).
  */
 import type {
   DocumentContent,
@@ -18,7 +13,6 @@ import type {
   StorageWrite,
 } from "@earendil-works/pi-durable";
 import type { PgExecutor } from "../../../postgres.ts";
-import { type ValueKind, readTexts, splitText } from "./values.ts";
 
 type Cell = string | number | null;
 
@@ -137,13 +131,9 @@ export function prepareDocumentActions(writes: readonly StorageWrite[]): Map<num
  * read in a few statements when the call starts, then advanced in memory by each accepted batch.
  */
 export class CommitState {
-  /** The table of each claimed id; absent: unclaimed. */
   private readonly recordIds: Map<number, string>;
-  /** Each touched document's record; absent: no such document. */
   private readonly documents: Map<number, DocumentRecord>;
-  /** The version of each delta-changed document's latest revision; absent: no revision. */
   private readonly versions: Map<number, number>;
-  /** The current incarnation of each created address (`addressKey`); `undefined`: none. */
   private readonly current: Map<string, number | undefined>;
 
   private constructor(
@@ -195,18 +185,17 @@ export class CommitState {
     }
     const documents = new Map<number, DocumentRecord>();
     if (documentIds.size > 0) {
-      const rows = await tx.query<{ id: number; body: string; parts: number | null }>(
-        "SELECT id, record AS body, parts FROM durable_documents WHERE instance = $1 AND id = ANY($2::bigint[])",
+      const rows = await tx.query<{ record: string }>(
+        "SELECT record FROM durable_documents WHERE instance = $1 AND id = ANY($2::bigint[])",
         [instance, [...documentIds]],
       );
-      for (const text of await readTexts(tx, instance, "document", rows)) {
-        const record = parseJson<DocumentRecord>(text);
+      for (const row of rows) {
+        const record = parseJson<DocumentRecord>(row.record);
         documents.set(record.id, record);
       }
     }
     const versions = new Map<number, number>();
     if (deltaIds.size > 0) {
-      // Driven by the requested ids: each latest revision is one descending probe of the primary key.
       const rows = await tx.query<{ document_id: number; version: number | null }>(
         `SELECT requested.id AS document_id, (
           SELECT version FROM durable_document_revisions
@@ -250,13 +239,11 @@ export class CommitState {
     return new CommitState(recordIds, documents, versions, current);
   }
 
-  /** Durable's own checks of one batch that need no copy source: throws the refusal. */
   check(writes: readonly StorageWrite[], actions: Map<number, DocumentAction>): void {
     this.checkIds(writes);
     this.checkDocuments(actions);
   }
 
-  /** Advances the state past an accepted batch stored at `seq`, its copies resolved to their content. */
   apply(writes: readonly StorageWrite[], actions: Map<number, DocumentAction>, seq: Seq): void {
     for (const write of writes) {
       const claim = claimOf(write);
@@ -274,16 +261,13 @@ export class CommitState {
       } else if (action.retire) {
         const record = { ...(this.documents.get(id) as DocumentRecord), retiredAt: seq };
         this.documents.set(id, record);
-        // The batch may have created the address's next incarnation already: only this one leaves.
         const key = addressKey(record);
         if (this.current.get(key) === id) this.current.set(key, undefined);
       }
-      // A retired document's versions are never read again: every later action on it is refused first.
       if (action.content !== undefined) this.versions.set(id, action.content.version);
     }
   }
 
-  /** A document's record as the accepted batches left it. */
   document(id: number): DocumentRecord | undefined {
     return this.documents.get(id);
   }
@@ -322,10 +306,8 @@ export class CommitState {
         if (previous === undefined) throw new Error(`Document ${id} delta has no base`);
         if (previous !== action.content.version) throw new Error(`Document ${id} version transition requires a base`);
       }
-      // A plain change keeps its address's live count: only creations and retirements are counted.
       if (action.create === undefined && !action.retire) continue;
       const key = addressKey((action.create ?? existing) as DocumentRecord);
-      // Only created addresses were read: an address no batch creates only loses incarnations, never exceeds one.
       let live = liveCounts.get(key) ?? (this.current.get(key) === undefined ? 0 : 1);
       if (action.retire && existing !== undefined) live--;
       if (action.create !== undefined && !action.retire) live++;
@@ -335,61 +317,6 @@ export class CommitState {
       if (live > 1) throw new Error("Document address already has a current incarnation");
     }
   }
-}
-
-/** What one batch writes: rows (each counted once, however written) and bytes. */
-export interface BatchCost {
-  rows: number;
-  bytes: number;
-}
-
-/**
- * What writing `writes` costs, from above: two rows per record (its row and its id's), one per document record and per
- * revision, and the parts of values longer than `bytesPerValue`.
- */
-export function batchCost(
-  writes: readonly StorageWrite[],
-  actions: Map<number, DocumentAction>,
-  bytesPerValue: number | undefined,
-): BatchCost {
-  const bytes = Buffer.byteLength(JSON.stringify(writes));
-  let rows = 0;
-  for (const write of writes) if (claimOf(write) !== undefined) rows += 2;
-  for (const action of actions.values()) {
-    if (action.create !== undefined || action.retire) rows++;
-    if (action.content !== undefined || action.copy !== undefined) rows++;
-  }
-  // Each value's last part may be short: one more per write than the bytes alone need.
-  if (bytesPerValue !== undefined) rows += Math.ceil(bytes / bytesPerValue) + writes.length;
-  return { rows, bytes };
-}
-
-/** The column of a table's rows that holds its record or content, and how its rows are keyed in `durable_values`. */
-interface TextColumn {
-  kind: ValueKind;
-  /** The column of the text; the row's id is its first. */
-  index: number;
-  /** The column of a revision's seq. */
-  seqIndex?: number;
-}
-
-/**
- * `rows` with their `parts` column added, each text over `bytesPerValue` moved into parts: the rows to insert, and the
- * `durable_values` rows of their parts.
- */
-function partedRows(rows: readonly (readonly Cell[])[], text: TextColumn, bytesPerValue: number | undefined) {
-  const parts: Cell[][] = [];
-  const written = rows.map((row) => {
-    const parted = splitText(row[text.index] as string, bytesPerValue);
-    if (parted === undefined) return [...row, null];
-    const id = row[0] as number;
-    const seq = text.seqIndex === undefined ? 0 : (row[text.seqIndex] as number);
-    for (const [part, body] of parted.entries()) parts.push([text.kind, id, seq, part, body]);
-    const inline = [...row];
-    inline[text.index] = "";
-    return [...inline, parted.length];
-  });
-  return { rows: written, parts };
 }
 
 /** Inserts `rows` into `table` for `instance`: one typed array per column, through `unnest`. */
@@ -425,25 +352,16 @@ function documentRow(record: DocumentRecord): Cell[] {
   ];
 }
 
-/**
- * The writes of the accepted batches not yet written, per table, as their net effect: a task or submission written
- * twice is written once, as last written; a current-only document's revisions before its latest base or retirement
- * are dropped (and its stored ones deleted).
- */
 export class PendingWrites {
   private readonly recordIds = new Map<number, string>();
   private readonly conversations: Cell[][] = [];
   private readonly entries: Cell[][] = [];
   private readonly tasks = new Map<number, Cell[]>();
   private readonly submissions = new Map<number, Cell[]>();
-  /** Each created or retired document's record. */
   private readonly documents = new Map<number, DocumentRecord>();
-  /** Each document whose stored revisions below a seq are unreadable now: garbage once committed. */
   private readonly cleared = new Map<number, number>();
-  /** Each document's new revisions, in seq order. */
   private readonly revisions = new Map<number, Cell[][]>();
 
-  /** Adds a batch stored at `seq`, after `state` applied it. */
   add(writes: readonly StorageWrite[], actions: Map<number, DocumentAction>, seq: Seq, state: CommitState): void {
     for (const write of writes) this.addWrite(write, seq);
     for (const [id, action] of actions) this.addDocument(id, action, seq, state.document(id) as DocumentRecord);
@@ -513,46 +431,16 @@ export class PendingWrites {
     if (action.retire && isCurrentOnly(record)) this.clear(id, Number.MAX_SAFE_INTEGER);
   }
 
-  /** Drops a document's revisions below `seq`: the pending ones now, the stored ones as garbage once committed. */
   private clear(id: number, seq: number): void {
     this.cleared.set(id, Math.max(this.cleared.get(id) ?? 0, seq));
     this.revisions.delete(id);
   }
 
-  /** The revisions the written batches made unreadable: each document's, below a seq. */
   garbage(): ReadonlyMap<number, number> {
     return this.cleared;
   }
 
-  /**
-   * Writes everything pending, one statement per table (two for a table with long values), and forgets it but its
-   * garbage.
-   */
-  async flush(tx: PgExecutor, instance: string, bytesPerValue: number | undefined): Promise<void> {
-    const insertTexts = async (
-      table: string,
-      columns: readonly (readonly [string, string])[],
-      rows: readonly (readonly Cell[])[],
-      text: TextColumn,
-      conflict = "",
-    ) => {
-      const parted = partedRows(rows, text, bytesPerValue);
-      await insertRows(tx, instance, table, [...columns, ["parts", "integer"]], parted.rows, conflict);
-      await insertRows(
-        tx,
-        instance,
-        "durable_values",
-        [
-          ["kind", "text"],
-          ["id", "bigint"],
-          ["seq", "bigint"],
-          ["part", "integer"],
-          ["body", "text"],
-        ],
-        parted.parts,
-        "ON CONFLICT (instance, kind, id, seq, part) DO UPDATE SET body = excluded.body",
-      );
-    };
+  async flush(tx: PgExecutor, instance: string): Promise<void> {
     await insertRows(
       tx,
       instance,
@@ -564,7 +452,9 @@ export class PendingWrites {
       [...this.recordIds],
       "ON CONFLICT (instance, id) DO NOTHING",
     );
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_conversations",
       [
         ["id", "bigint"],
@@ -573,9 +463,10 @@ export class PendingWrites {
         ["record", "text"],
       ],
       this.conversations,
-      { kind: "conversation", index: 3 },
     );
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_entries",
       [
         ["id", "bigint"],
@@ -585,9 +476,10 @@ export class PendingWrites {
         ["record", "text"],
       ],
       this.entries,
-      { kind: "entry", index: 4 },
     );
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_tasks",
       [
         ["id", "bigint"],
@@ -599,12 +491,13 @@ export class PendingWrites {
         ["record", "text"],
       ],
       [...this.tasks.values()],
-      { kind: "task", index: 6 },
       `ON CONFLICT (instance, id) DO UPDATE SET conversation_id = excluded.conversation_id, kind = excluded.kind,
         status = excluded.status, abort_requested = excluded.abort_requested, background = excluded.background,
-        record = excluded.record, parts = excluded.parts`,
+        record = excluded.record`,
     );
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_submissions",
       [
         ["id", "bigint"],
@@ -614,12 +507,12 @@ export class PendingWrites {
         ["record", "text"],
       ],
       [...this.submissions.values()],
-      { kind: "submission", index: 4 },
       `ON CONFLICT (instance, id) DO UPDATE SET conversation_id = excluded.conversation_id,
-        request_id = excluded.request_id, status = excluded.status, record = excluded.record, parts = excluded.parts`,
+        request_id = excluded.request_id, status = excluded.status, record = excluded.record`,
     );
-    // A created document is inserted, a stored one retired: one upsert writes both.
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_documents",
       [
         ["id", "bigint"],
@@ -633,10 +526,11 @@ export class PendingWrites {
         ["record", "text"],
       ],
       [...this.documents.values()].map(documentRow),
-      { kind: "document", index: 8 },
-      "ON CONFLICT (instance, id) DO UPDATE SET retired_at = excluded.retired_at, record = excluded.record, parts = excluded.parts",
+      "ON CONFLICT (instance, id) DO UPDATE SET retired_at = excluded.retired_at, record = excluded.record",
     );
-    await insertTexts(
+    await insertRows(
+      tx,
+      instance,
       "durable_document_revisions",
       [
         ["document_id", "bigint"],
@@ -646,7 +540,6 @@ export class PendingWrites {
         ["content", "text"],
       ],
       [...this.revisions.values()].flat(),
-      { kind: "revision", index: 4, seqIndex: 1 },
     );
     this.recordIds.clear();
     this.conversations.length = 0;

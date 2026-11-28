@@ -69,9 +69,6 @@ describe("init: scaffoldAgent", () => {
     };
     expect(pkg.dependencies).toEqual({
       "@fastagent-sh/fastagent": `^${real.version}`,
-      "@earendil-works/pi-durable": real.dependencies["@earendil-works/pi-durable"],
-      "@earendil-works/pi-ai": real.dependencies["@earendil-works/pi-ai"],
-      "@earendil-works/pi-schema": real.dependencies["@earendil-works/pi-schema"],
     });
     expect(pkg.devDependencies).toEqual({ typescript: real.devDependencies.typescript });
     const standing = await readFile(join(dir, "SYSTEM.md"), "utf8");
@@ -222,9 +219,9 @@ describe("init: scaffoldAgent", () => {
     await writeFile(join(unbounded, "SYSTEM.md"), "Prompt.\n");
     await writeFile(
       join(unbounded, "package.json"),
-      JSON.stringify({ name: "host", type: "module", dependencies: { "@earendil-works/pi-durable": ">=1.6.0" } }),
+      JSON.stringify({ name: "host", type: "module", dependencies: { "@fastagent-sh/fastagent": ">=0.38.0" } }),
     );
-    await expect(scaffoldAgent(unbounded)).rejects.toThrow(/unrecognized version spec ">=1\.6\.0"/);
+    await expect(scaffoldAgent(unbounded)).rejects.toThrow(/unrecognized version spec ">=0\.38\.0"/);
     expect(await exists(join(unbounded, "fastagent.config.ts"))).toBe(false);
 
     const prerelease = await freshDir();
@@ -234,10 +231,10 @@ describe("init: scaffoldAgent", () => {
       JSON.stringify({
         name: "host",
         type: "module",
-        dependencies: { "@earendil-works/pi-durable": "1.6.0-alpha.1" },
+        dependencies: { "@fastagent-sh/fastagent": "0.38.0-alpha.1" },
       }),
     );
-    await expect(scaffoldAgent(prerelease)).rejects.toThrow(/incompatible prerelease version "1\.6\.0-alpha\.1"/);
+    await expect(scaffoldAgent(prerelease)).rejects.toThrow(/incompatible prerelease version "0\.38\.0-alpha\.1"/);
     expect(await exists(join(prerelease, "fastagent.config.ts"))).toBe(false);
 
     // 5) Unrelated dist/ (even with a dummy build.json) is refused; a FastAgent dist/ is accepted untouched.

@@ -197,8 +197,6 @@ export interface DshHarnessOptions {
   readonly sandboxNetwork?: boolean;
   /** What becomes of unsettled messages from an earlier process on startup. Default: `"resume"`. */
   readonly unfinished?: "resume" | "refuse";
-  /** Maximum serialized message size accepted by the backing storage. */
-  readonly maxMessageBytes?: number;
   /** Optional telemetry context for exporting content-free model and tool run spans. */
   readonly telemetry?: HarnessTelemetryContext;
   /** Event log + ledger storage backend. Defaults to in-memory storage when omitted. */

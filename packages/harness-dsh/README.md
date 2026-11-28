@@ -50,7 +50,7 @@ const agent = await openAgent(myAgent, {
 ## What stays the same (and what differs)
 
 - **Same Agent API:** Streaming, `steer` / `queue` / `reject`, idempotency, cancellation, forking, compaction, attachments, usage, OTLP traces, and crash recovery work identically.
-- **Same storage:** Shares your SQLite file, PostgreSQL, or Amazon Aurora DSQL database in its own table namespace (`dsh_*`) without touching `pi-durable` sessions, while sharing durable credentials and conversation mappings.
+- **Same storage:** Shares your SQLite file or PostgreSQL database in its own table namespace (`dsh_*`) without touching `pi-durable` sessions, while sharing durable credentials and conversation mappings.
 - **Same portable assets:** `SYSTEM.md`, `AGENTS.md`, `skills/`, `prompts/`, `src/tools/` (`defineTool` from `@fastagent-sh/fastagent`), and `mcpServers` run identically.
 - **`src/extensions/`:** `pi-durable`-specific extensions are skipped with a startup warning on `dsh`.
 

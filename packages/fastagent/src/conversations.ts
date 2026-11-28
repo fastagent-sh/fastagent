@@ -1,7 +1,7 @@
 /**
  * Harness-neutral caller-conversation mapping and single-call invoker (`POST /v1/invoke`, `agent.invoke`).
  * Keeps conversation-name and ephemeral idempotency-key session bindings outside every harness (SQLite via
- * `node:sqlite`, shared PostgreSQL / Aurora DSQL, or in-memory), delegating execution purely through the standard
+ * `node:sqlite`, shared PostgreSQL, or in-memory), delegating execution purely through the standard
  * `Agent` API.
  */
 import { existsSync } from "node:fs";

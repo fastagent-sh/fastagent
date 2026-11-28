@@ -17,8 +17,7 @@ import {
   getCurrentSystemPrompt,
 } from "@earendil-works/pi-ai";
 import * as EffectSchema from "effect/Schema";
-import { MemoryStorage, createRegistry, defineTask, defineTool, wrapTool } from "@earendil-works/pi-durable";
-import { obj, str } from "@earendil-works/pi-schema";
+import { MemoryStorage, type ToolRegistration, createRegistry, defineTask, wrapTool } from "@earendil-works/pi-durable";
 import {
   type ToolExecutionApi,
   defineTool as defineFastAgentTool,
@@ -173,12 +172,11 @@ describe("an agent definition on pi-durable", () => {
         "fastagent.config.ts": `import { faux } from "./model.ts";
 export default { model: "fixture/m", thinkingLevel: "low", codingTools: false, providers: [faux.provider] };
 `,
-        "src/tools/read.ts": `import { obj } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
+        "src/tools/read.ts": `import { defineTool } from "@fastagent-sh/fastagent";
 export default defineTool({
   name: "read",
   description: "Read a CRM record",
-  parameters: obj({}),
+  parameters: { type: "object", properties: {} } as const,
   execute: async () => ({ output: [{ type: "text", text: "record" }] }),
 });
 `,
@@ -372,10 +370,10 @@ describe("startup warnings when a new version removes a tool or task with work i
     const toolRunning = new Promise<void>((resolve) => {
       entered = resolve;
     });
-    const legacyTool = defineTool({
+    const legacyTool = defineFastAgentTool({
       name: "legacy_tool",
       description: "Removed in v2.",
-      parameters: obj({}),
+      parameters: { type: "object", properties: {} } as const,
       execute: async (_args, _api, ctx) => {
         entered();
         await new Promise<void>((resolve) => {
@@ -388,7 +386,7 @@ describe("startup warnings when a new version removes a tool or task with work i
     const v1Faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
     v1Faux.setResponses([fauxAssistantMessage([fauxToolCall("legacy_tool", {})], { stopReason: "toolUse" })]);
     const v1Registry = createRegistry();
-    v1Registry.install({ name: "v1", tools: [legacyTool] });
+    v1Registry.install({ name: "v1", tools: [legacyTool as ToolRegistration] });
     const models = (provider: ReturnType<typeof fauxProvider>["provider"]) =>
       modelsOver(new InMemoryCredentialStore(), [provider]);
     const v1 = await openDurableAgent({
@@ -509,8 +507,8 @@ describe("startup warnings when a new version removes a tool or task with work i
   });
 });
 
-describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON Schema, and pi-schema", () => {
-  it("adapts Standard JSON Schema v1 (Effect Schema and custom validate/transform), plain JSON Schema, and pi-schema in real tool turns", async () => {
+describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON Schema, and structural TypeBox schemas", () => {
+  it("adapts Standard JSON Schema v1 (Effect Schema and custom validate/transform), plain JSON Schema, and structural static schemas in real tool turns", async () => {
     const effectTool = defineFastAgentTool({
       name: "lookup_effect",
       description: "Lookup via Effect Standard JSON Schema v1",
@@ -581,10 +579,16 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
       }),
     });
 
+    const structuralStaticSchema = {
+      type: "object",
+      properties: { text: { type: "string" } },
+      required: ["text"],
+      static: undefined as unknown as { text: string },
+    };
     const piSchemaTool = defineFastAgentTool({
       name: "echo_pi",
-      description: "Echo with pi-schema",
-      parameters: obj({ text: str() }),
+      description: "Echo with structural static schema",
+      parameters: structuralStaticSchema,
       execute: async ({ text }) => `echo:${text}`,
     });
 
@@ -708,10 +712,10 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
   });
 
   it("binds sessionIdOf and preserves live api getters on direct openDurableAgent registries and wrapTool wrappers", async () => {
-    const inspectTool = defineTool({
+    const inspectTool = defineFastAgentTool({
       name: "inspect_direct",
       description: "Read sessionIdOf and live api.models on direct openDurableAgent",
-      parameters: obj({}),
+      parameters: { type: "object", properties: {} } as const,
       execute: async (_args, api, context) => {
         const desc = Object.getOwnPropertyDescriptor(api, "models");
         const sid = await sessionIdOf(api, context);
@@ -719,7 +723,7 @@ describe("defineTool: Standard JSON Schema v1 (Zod / Effect Schema), plain JSON 
           output: [{ type: "text", text: `${sid}:${typeof desc?.get === "function" ? "live-getter" : "snapshot"}` }],
         };
       },
-    });
+    }) as ToolRegistration;
     let wrapperSid: string | undefined;
     const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
     faux.setResponses([
@@ -766,7 +770,6 @@ describe("repository examples load and execute their tools end-to-end", () => {
       { dir: "examples/pr-review-agent", secrets: {}, tools: ["fetch_github_pr"] },
       { dir: "examples/incident-triage-agent", secrets: {}, tools: ["probe_endpoint", "recent_commits"] },
       { dir: "examples/saas-copilot/agent", secrets: { TENANT_ID: "acme" }, tools: ["get_workspace_metrics"] },
-      { dir: "examples/agentcore-per-user", secrets: {}, tools: ["format_brief"] },
       { dir: "examples/deep-research-agent", secrets: {}, tools: ["github_releases", "search_hacker_news"] },
     ];
     for (const spec of specs) {
@@ -776,7 +779,7 @@ describe("repository examples load and execute their tools end-to-end", () => {
     }
   });
 
-  it("executes saas-copilot, agentcore-per-user, and incident-triage SSRF guard through assembled agents", async () => {
+  it("executes saas-copilot and incident-triage SSRF guard through assembled agents", async () => {
     const runTool = async (
       relDir: string,
       secrets: Record<string, string>,
@@ -812,14 +815,6 @@ describe("repository examples load and execute their tools end-to-end", () => {
       windowDays: 14,
     });
     expect(JSON.parse(saas.text)).toMatchObject({ tenantId: "acme", sessionId: saas.sessionId, windowDays: 14 });
-
-    const brief = await runTool("examples/agentcore-per-user", {}, "format_brief", {
-      title: "Weekly Sync",
-      highlights: ["Shipped v0.34"],
-      actionItems: ["Deploy AgentCore"],
-    });
-    expect(brief.text).toContain("# Weekly Sync");
-    expect(brief.text).toContain(`_Session: ${brief.sessionId}_`);
 
     const blocked = await runTool("examples/incident-triage-agent", {}, "probe_endpoint", {
       url: "https://127.0.0.1/admin",

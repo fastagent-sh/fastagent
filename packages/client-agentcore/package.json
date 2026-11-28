@@ -1,7 +1,7 @@
 {
   "name": "@fastagent-sh/client-agentcore",
   "version": "0.38.0",
-  "description": "FastAgent Agent API client for Amazon Bedrock AgentCore: connectAgentCore, connectAgentCoreAuth, and remotes.json transport plugin. Zero server or Node-only dependencies.",
+  "description": "Zero-Node-dependency FastAgent Agent API client for Amazon Bedrock AgentCore (connectAgentCore & connectAgentCoreAuth).",
   "keywords": [
     "agent",
     "ai-agent",

@@ -7,8 +7,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HarnessProvider } from "@fastagent-sh/fastagent/harness";
 import { openAgent } from "../../../packages/fastagent/src/index.ts";
 import { loadSourceDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
+import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 import { openSource } from "../../harnesses/open-source.ts";
 
 afterEach(() => {
@@ -117,5 +119,68 @@ export default defineTool({
       await agentA.close();
       await agentB.close();
     }
+  });
+
+  it("accepts a pluggable HarnessProvider in openAgent() and enforces supportsSandbox capabilities", async () => {
+    const base = await mkdtemp(join(tmpdir(), "fa-custom-provider-"));
+    const dir = join(base, "agent");
+    await mkdir(dir);
+    await writeFile(join(dir, "fastagent.config.ts"), "export default {};\n");
+    const definition = await loadSourceDefinition(dir);
+    const root = join(base, "root");
+    await mkdir(root);
+
+    let storageClosed = false;
+    let runtimeClosed = false;
+    const customProvider: HarnessProvider = {
+      name: "custom-server",
+      supportsExtensions: false,
+      supportsSandbox: false,
+      openStorage: () => ({
+        close: () => {
+          storageClosed = true;
+        },
+      }),
+      openAgent: async () => {
+        const inner = scriptedAgent(() => []);
+        return {
+          ...inner,
+          busy: () => false,
+          close: async () => {
+            runtimeClosed = true;
+          },
+        };
+      },
+    };
+
+    await expect(
+      openAgent(definition, { root, harness: {} as unknown as HarnessProvider, sandbox: "read-only" }),
+    ).rejects.toThrow("harness option must be a harness name or a valid HarnessProvider");
+
+    await expect(openAgent(definition, { root, harness: customProvider, sandbox: "read-only" })).rejects.toThrow(
+      'sandbox ("read-only") is not supported by harness "custom-server"',
+    );
+
+    let observedSandbox: string | undefined;
+    const sandboxOverrideProvider: HarnessProvider = {
+      ...customProvider,
+      name: "pi-durable",
+      supportsSandbox: true,
+      openAgent: async (ctx) => {
+        observedSandbox = ctx.selection.sandbox;
+        return customProvider.openAgent(ctx);
+      },
+    };
+    const sandboxed = await openAgent(definition, { root, harness: sandboxOverrideProvider, sandbox: "read-only" });
+    expect(observedSandbox).toBe("read-only");
+    await sandboxed.close();
+
+    storageClosed = false;
+    runtimeClosed = false;
+    const opened = await openAgent(definition, { root, harness: customProvider });
+    const session = await opened.sessions.create();
+    expect(session.id).toBeTruthy();
+    await opened.close();
+    expect([runtimeClosed, storageClosed]).toEqual([true, true]);
   });
 });

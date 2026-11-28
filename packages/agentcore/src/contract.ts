@@ -3,16 +3,13 @@
  * non-streaming Agent API responses into base64 `EnvelopedResponse`. Paired with `@fastagent-sh/client-agentcore`.
  */
 
-/** An Agent API request, as an invocation carries it. A request's body is JSON text. */
 export interface EnvelopedRequest {
   method: string;
-  /** The path and query, as `/v1/sessions?limit=10`. */
   path: string;
   headers: Record<string, string>;
   body?: string;
 }
 
-/** An Agent API answer that is not an event stream. Its body is base64 (attachments carry raw bytes). */
 interface EnvelopedResponse {
   status: number;
   headers: Record<string, string>;

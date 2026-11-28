@@ -24,7 +24,7 @@ import {
   agentError,
   errorData,
 } from "@fastagent-sh/client/agent-api";
-import { parseApiKeys } from "@fastagent-sh/client/remotes";
+
 import { createInvoker, memoryConversationStore } from "../conversations.ts";
 import { type SecretInput, redactSecret, revealSecret } from "../declared-secrets.ts";
 import type { Handler } from "./serve.ts";
@@ -44,7 +44,11 @@ import {
 export const API_KEY_VARIABLE = "FASTAGENT_API_KEY";
 
 export function apiKeysFrom(raw: SecretInput | undefined): readonly Redacted.Redacted<string>[] {
-  return parseApiKeys(raw === undefined ? undefined : revealSecret(raw)).map((key) => Redacted.make(key));
+  return (raw === undefined ? "" : revealSecret(raw))
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => key !== "")
+    .map((key) => Redacted.make(key));
 }
 
 const MAX_BODY = ByteSize.mebibytes(32);

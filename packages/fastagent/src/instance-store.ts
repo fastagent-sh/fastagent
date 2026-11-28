@@ -4,10 +4,11 @@
  */
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { agentError } from "@fastagent-sh/client/agent-api";
 import { type PostgresDatabase, acquirePgDatabase, isTransientPgError } from "./postgres.ts";
 import { PG_CONCURRENT_DDL } from "./postgres-kit.ts";
+import { openDatabaseSync } from "./sqlite.ts";
 
 export interface SqliteStoreHandle {
   readonly db: DatabaseSync;
@@ -27,7 +28,7 @@ export function openSqliteStore(
     recursive: true,
     ...(options.mode === undefined ? {} : { mode: 0o700 }),
   });
-  const db = new DatabaseSync(filePath);
+  const db = openDatabaseSync(filePath);
   try {
     db.exec(`PRAGMA journal_mode = ${options.journalMode}; PRAGMA busy_timeout = 5000;`);
     db.exec(schema);

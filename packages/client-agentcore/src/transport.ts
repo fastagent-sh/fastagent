@@ -26,7 +26,7 @@ export interface AgentCoreConnection {
    * digits, `-` and `_`, starting with a letter or digit.
    */
   sessionId: string;
-  /** The runtime endpoint, which picks the version that answers: `prod`, a release's. Default: `DEFAULT`. */
+  /** The runtime endpoint qualifier (e.g. `prod`). Default: `DEFAULT`. */
   qualifier?: string;
 }
 
@@ -107,9 +107,7 @@ export function agentCoreTransport({ runtimeArn, sessionId, qualifier }: AgentCo
     }
     const answer = JSON.parse(await invoked.response.transformToString()) as { response?: EnvelopedResponse };
     if (answer.response === undefined) {
-      throw new Error(
-        "the runtime answered what is not an Agent API answer: does it serve `fastagent agentcore start`?",
-      );
+      throw new Error("the runtime answered what is not an Agent API envelope: does it run serveAgentCore()?");
     }
     return unwrapResponse(answer.response);
   };

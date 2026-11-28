@@ -46,14 +46,14 @@
 | --- | --- |
 | 专有图编排 DSL 难以被人类和 Coding Agent 维护 | **零 DSL**：纯 Markdown、强类型 TypeScript 工具、MCP 与 `--json` CLI |
 | 提示词和工具缺少规范 CI 门禁与回滚手段 | **版本化 npm 包**：`fastagent build` 运行 `tsc` 并产出 `dist/` |
-| 发布部署、进程崩溃或刷新页面导致长任务中断 | **持久化会话**（SQLite、PostgreSQL、Aurora DSQL）与 **断点续传 SSE** |
+| 发布部署、进程崩溃或刷新页面导致长任务中断 | **持久化会话**（SQLite、PostgreSQL）与 **断点续传 SSE** |
 | Webhook 重试导致重复执行或并发写坏活跃会话 | **幂等 `POST /v1/invoke`**、按会话串行控制与运行中实时 **`steer`** |
 | 现有业务应用已经拥有鉴权与数据库 | **原生 Node.js 嵌入**（`openAgent()` 或 Fetch Handler）共享原有鉴权与 DB |
-| 密钥泄漏到子 Shell 或镜像；工具需要执行隔离 | **声明式 `needs()` 密钥**、**`deploy check`**、**OS 沙箱**与 **AWS MicroVM** |
+| 密钥泄漏到子 Shell 或镜像；工具需要执行隔离 | **声明式 `needs()` 密钥**、**`deploy check`**、**OS 沙箱**与 **容器隔离** |
 
 ## 5 分钟快速上手
 
-环境要求：服务端与 CLI 需要 **Node ≥ 24.15**（推荐 Node 26 LTS）或 **Bun ≥ 1.4.4**；客户端 SDK（`@fastagent-sh/client`、`@fastagent-sh/client-agentcore`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
+环境要求：服务端与 CLI 需要 **Node ≥ 22.22**（推荐 Node 24/26 LTS）或 **Bun ≥ 1.4.4**；客户端 SDK（`@fastagent-sh/client`）支持 Node 22+、现代浏览器、边缘运行时与 Bun。
 
 ```bash
 npm i -g @fastagent-sh/fastagent
@@ -149,7 +149,7 @@ for await (const event of agent.messages.stream({ sessionId: session.id, content
 ### 使用 Docker 自托管或部署到云平台
 
 ```bash
-# 支持目标：docker | compose | fly | railway | agentcore
+# 支持目标：docker | compose | fly | railway
 fastagent deploy init fly
 fastagent deploy check
 
@@ -189,9 +189,9 @@ console.log(reply.status, reply.answer?.text);
 | --- | --- | --- | --- |
 | **1–20 个后台 Agent**<br>（PR 审查、AI SRE、每日简报） | 常驻容器 95% 以上时间空转 | **空闲休眠（Sleep when idle）**：Fly.io（`suspend`）或 Railway（App Sleeping）配合 `POST /v1/invoke` 按需唤醒 | 相比 24/7 常驻容器**减少约 98% 闲置算力消耗**（每天 20 次 × 1 分钟 ≈ 每月 10 活跃小时 vs 720 常驻小时） |
 | **100–1,000+ SaaS 租户**<br>（产品内嵌 Copilot） | 每租户独立微服务、1,000 个连接池或高频租约心跳压垮 Postgres | **嵌入现有后端**：`openAgent()` + 共享 `openPostgresDatabase({ url }, { max: 20 })`（`codingTools: false`） | **0 额外微服务**；**1 个固定 20 连接池**，**按每批最多 500 租户批量续约**，多副本滚动发版自动协作让渡空闲租户 |
-| **100–10,000+ 独立隔离用户**<br>（每用户可跑代码/命令的助手） | 维护上百台常驻 VM，闲置成本与运维失控 | **每用户独立 AWS MicroVM**（Bedrock AgentCore）+ **1 个共享的无服务器 Aurora DSQL 集群**（支持 `pi-durable` 与 `dsh`） | **0 常驻服务器运维**；按需分配独立 MicroVM、空闲自动回收并从同一个共享 DSQL 集群恢复（高吞吐时改 `FASTAGENT_DATABASE_URL` 即可零代码切至包月 PG） |
+| **每用户隔离的云端工作区**<br>（每用户可跑代码/命令的助手） | 常驻虚拟机空转烧钱，容器回收后历史丢失 | **按需休眠沙箱容器**（`--harness dsh`）+ **共享 PostgreSQL**（`FASTAGENT_DATABASE_URL`） | **0 常驻闲置算力费**；容器空闲自动休眠回收，持久化会话与租约安全保存在同一个共享 PostgreSQL 集群中 |
 
-<sub>单写者租约隔离确保同一实例同一时刻只有一个活跃写进程（默认上限：`inFlightPerProcess: 100`、`queuedPerSession: 20`）。通过多实例或 AgentCore 自动按用户分片实现水平扩展。</sub>
+<sub>单写者租约隔离确保同一实例同一时刻只有一个活跃写进程（默认上限：`inFlightPerProcess: 100`、`queuedPerSession: 20`）。通过多实例及多副本空闲协作让渡实现水平扩展。</sub>
 
 ## 生产级示例项目
 
@@ -202,8 +202,7 @@ console.log(reply.status, reply.answer?.text);
 | [**多租户 SaaS Copilot**](./examples/saas-copilot/README.md) | 嵌入式（Hono + PostgreSQL） | 共享数据库连接池、`codingTools: false`、断点续传 SSE |
 | [**沙箱化 PR 审查 Agent**](./examples/pr-review-agent/README.md) | 自托管 + GitHub Actions | 只读内核 OS 沙箱、按 PR 独立记忆、幂等 Webhook 重试 |
 | [**空闲休眠 AI SRE**](./examples/incident-triage-agent/README.md) | Fly.io + 告警 Webhook | 告警风暴去重、运行中 `steer` 纠偏、MCP 服务器 |
-| [**深度调研与每日简报**](./examples/deep-research-agent/README.md) | 自托管 + 外部 Cron | 崩溃可恢复长任务、通过 Pi 终端实时接入会话 |
-| [**每用户 AWS MicroVM Agent**](./examples/agentcore-per-user/README.md) | AWS Bedrock AgentCore | 每用户独立 MicroVM、Aurora DSQL、Secrets Manager、IAM 鉴权 |
+| [**深度调研与每日简报**](./examples/deep-research-agent/README.md) | 自托管 + 外部 Cron | 崩溃可恢复长任务、定时触发 `POST /v1/invoke` |
 
 ## 什么时候选择 FastAgent
 
@@ -212,7 +211,7 @@ console.log(reply.status, reply.answer?.text);
 | **编写方式** | 图编排 DSL 与链式抽象 | 应用代码手写工具循环 | 本机交互终端 | **Markdown、Skills、强类型 TS 工具、MCP（零 DSL）** |
 | **打包与 CI** | 与宿主代码强耦合 | 与宿主代码强耦合 | 无法打包分发 | **编译为 npm 制品、`tsc` 校验、`--json` CI 门禁** |
 | **嵌入 Node.js** | 独立服务或胶水包装 | 默认无状态 | 不可嵌入 | **原生 `openAgent()` + 共享 Postgres 连接池** |
-| **扩展与隔离** | 自建托管与沙箱 | 自建托管与沙箱 | 本机权限 | **Docker、空闲休眠云平台、AWS MicroVM、OS 沙箱** |
+| **扩展与隔离** | 自建托管与沙箱 | 自建托管与沙箱 | 本机权限 | **Docker、空闲休眠云平台、共享 Postgres、OS 沙箱** |
 
 <sub>对比参考：工作流编排框架（LangGraph、CrewAI）、裸调 LLM SDK（Vercel AI SDK、OpenAI SDK）、终端编码 CLI（Claude Code）。</sub>
 
@@ -227,37 +226,35 @@ console.log(reply.status, reply.answer?.text);
 所有调用方共享同一份契约：[Agent API](./docs/zh-CN/agent-api.md)。更换模型、存储后端、宿主机或执行 Harness，都无需改动 Agent 或业务代码：
 
 ```text
-Callers (CLI · openAgent · @fastagent-sh/client · client-agentcore · @fastagent-sh/pi-remote)
+Callers (CLI · openAgent · @fastagent-sh/client · Webhooks / Edge / UI Clients)
                                         │  Agent API (/v1)
 ┌───────────────────────────────────────▼───────────────────────────────────────┐
 │ Unified Runtime Layer (@fastagent-sh/fastagent)                               │
 │  Build · defineTool · needs() Secrets · Models & Durable Auth · MCP · OTLP    │
 └───────────────────┬───────────────────────────────────────┬───────────────────┘
-                    │                                       │ (optional, lazy)
+                    │ (lazy)                                │ (optional, lazy)
          ┌──────────▼──────────┐                 ┌──────────▼──────────┐
          │ pi-durable (default)│                 │ @fastagent-sh/      │
          │ SQLite / PostgreSQL │                 │ harness-dsh         │
-         │ / Aurora DSQL       │                 │ + Kernel OS Sandbox │
+         │ (fenced leases)     │                 │ + Kernel OS Sandbox │
          └─────────────────────┘                 └─────────────────────┘
 ```
 
 - **隐私安全的链路追踪**：通过 OpenTelemetry（`OTEL_EXPORTER_OTLP_ENDPOINT`）导出成本、Token 与工具调用 Span，绝不记录提示词或回复正文。
 - **远程 CLI 与 OAuth 认证**：管理线上实例（`fastagent remote add prod <url>`），并远程完成模型提供商 OAuth 登录（`fastagent login openai-codex --remote prod`）。
-- **终端实时接入**：使用 [`@fastagent-sh/pi-remote`](./docs/zh-CN/remotes.md) 从终端直接查看或介入正在运行的远程会话。
 
 ## 包清单与文档索引
 
 | npm 包 | 职责 | 运行时要求 |
 | --- | --- | --- |
-| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 核心运行时（`pi-durable`）、`openAgent`、`defineTool`、`openPostgresDatabase`、HTTP 服务、CLI | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/fastagent`](https://www.npmjs.com/package/@fastagent-sh/fastagent) | 云运行时、`openAgent`、`defineTool`、`openPostgresDatabase`、`HarnessProvider` SDK、HTTP 服务、CLI | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
 | [`@fastagent-sh/client`](./packages/client/README.md) | 零 Node 依赖的 HTTP Agent API（`connectAgent`）与远程认证（`./auth`）客户端 | Node 22+、浏览器、Edge、Bun（ES2024） |
-| [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore 客户端（`connectAgentCore`、`./auth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
-| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | AWS AgentCore 服务端运行时、Aurora DSQL 适配器、Secrets Manager 集成、CDK 构造 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
-| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
-| [`@fastagent-sh/pi-remote`](./packages/pi-remote/README.md) | Pi TUI 扩展（`/fa`），用于从终端交互式接入已部署的 HTTP 或 AgentCore 实例 | Node ≥ 24.15（推荐 26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/harness-dsh`](./packages/harness-dsh/README.md) | 可选的 DeepSeek Harness（`@deepseek-ai/dsh`）服务端适配器，提供内核级 OS 沙箱（实验性） | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/agentcore`](./packages/agentcore/README.md) | Amazon Bedrock AgentCore MicroVM 服务端运行时适配器（`serveAgentCore`、`agentCoreHandler`），对接标准 PostgreSQL | Node ≥ 22.22（推荐 24/26 LTS）或 Bun ≥ 1.4.4 |
+| [`@fastagent-sh/client-agentcore`](./packages/client-agentcore/README.md) | 零 Node 依赖的 Amazon Bedrock AgentCore SigV4 客户端（`connectAgentCore`、`./auth`） | Node 22+、浏览器、Edge、Bun（ES2024） |
 
 **完整中文文档（[docs/zh-CN/](./docs/zh-CN/README.md)）：**
-[产品概览](./docs/zh-CN/overview.md) · [快速上手](./docs/zh-CN/quickstart.md) · [打包与 CI](./docs/zh-CN/packaging-and-ci.md) · [AI 协作开发指南](./docs/zh-CN/ai-start.md) · [技术架构](./docs/zh-CN/architecture.md) · [Agent API](./docs/zh-CN/agent-api.md) · [配置指南](./docs/zh-CN/configuration.md) · [MCP 服务器](./docs/zh-CN/mcp.md) · [嵌入应用](./docs/zh-CN/embedding.md) · [部署指南](./docs/zh-CN/deploy.md) · [AWS AgentCore](./docs/zh-CN/agentcore.md) · [远程实例与客户端](./docs/zh-CN/remotes.md) · [CLI 参考](./docs/zh-CN/cli.md) · [API 参考](./docs/zh-CN/api-reference.md) · [故障排查](./docs/zh-CN/troubleshooting.md)
+[产品概览](./docs/zh-CN/overview.md) · [快速上手](./docs/zh-CN/quickstart.md) · [打包与 CI](./docs/zh-CN/packaging-and-ci.md) · [AI 协作开发指南](./docs/zh-CN/ai-start.md) · [技术架构](./docs/zh-CN/architecture.md) · [Agent API](./docs/zh-CN/agent-api.md) · [配置指南](./docs/zh-CN/configuration.md) · [MCP 服务器](./docs/zh-CN/mcp.md) · [嵌入应用](./docs/zh-CN/embedding.md) · [部署指南](./docs/zh-CN/deploy.md) · [远程实例与客户端](./docs/zh-CN/remotes.md) · [CLI 参考](./docs/zh-CN/cli.md) · [API 参考](./docs/zh-CN/api-reference.md) · [故障排查](./docs/zh-CN/troubleshooting.md)
 
 ## 社区与版本状态
 

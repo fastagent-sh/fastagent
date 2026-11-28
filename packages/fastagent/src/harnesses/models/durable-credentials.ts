@@ -1,5 +1,5 @@
 /**
- * Harness-neutral durable instance credential store (SQLite via `node:sqlite`, shared PostgreSQL / Aurora DSQL,
+ * Harness-neutral durable instance credential store (SQLite via `node:sqlite`, shared PostgreSQL,
  * or in-memory), so remote OAuth logins, refreshed tokens, and device IDs persist across restarts and across
  * harness switches (`pi-durable` <-> `dsh`) without per-harness store code.
  */

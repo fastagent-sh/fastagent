@@ -17,7 +17,7 @@ import {
 } from "../../harnesses/config.ts";
 import { definitionSecrets } from "../../definition/definition.ts";
 import { buildDefinition, loadSourceDefinition, modelSpecFor } from "../../harnesses/assembly.ts";
-import { describeInstanceStorage } from "../../harnesses/serving.ts";
+import { describeInstanceStorage, resolveHarnessProvider } from "../../harnesses/serving.ts";
 import { readCommands } from "../../harnesses/text.ts";
 import { declareMcp } from "../../mcp/config.ts";
 import * as Redacted from "effect/Redacted";
@@ -41,7 +41,7 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
   const workdir = resolveWorkdir(agentDir, configEnv);
   const definition = await loadSourceDefinition(agentDir).catch(failStartup);
   const { config } = definition;
-  const harnessSelection = (() => {
+  const rawSelection = (() => {
     try {
       return resolveHarnessSelection(
         config,
@@ -54,6 +54,25 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     } catch (error) {
       return failUsage(error instanceof Error ? error.message : String(error));
     }
+  })();
+  const resolvedProvider =
+    rawSelection.harness === "pi-durable"
+      ? undefined
+      : await resolveHarnessProvider(rawSelection.harness, agentDir).catch((error: unknown) =>
+          opts.harness !== undefined
+            ? failUsage(error instanceof Error ? error.message : String(error))
+            : failStartup(error),
+        );
+  const harnessSelection = (() => {
+    if (resolvedProvider === undefined) return rawSelection;
+    if (rawSelection.sandbox !== undefined && resolvedProvider.supportsSandbox !== true) {
+      const message = `sandbox (${JSON.stringify(rawSelection.sandbox)}) is not supported by harness "${resolvedProvider.name}"`;
+      return opts.sandbox !== undefined ? failUsage(message) : failStartup(new Error(message));
+    }
+    if (rawSelection.sandbox === undefined && resolvedProvider.supportsSandbox === true) {
+      return { harness: resolvedProvider.name, sandbox: "workspace" as const };
+    }
+    return rawSelection;
   })();
   const entered = instance.name ?? enteredInstanceName(configEnv);
   const name = instanceName(definition.name, entered);
@@ -101,11 +120,12 @@ export async function runInfo(dirArg: string, opts: InfoOptions): Promise<void> 
     ...(server.type === "http" ? { url: server.url } : {}),
   }));
   const warnings = [
-    ...diagnoseHarnessCompatibility(
-      definition,
-      harnessSelection,
-      code === undefined ? undefined : { extensions: code.extensions },
-    ),
+    ...diagnoseHarnessCompatibility(definition, harnessSelection, {
+      ...(code === undefined ? {} : { extensions: code.extensions }),
+      ...(resolvedProvider?.supportsExtensions === undefined
+        ? {}
+        : { supportsExtensions: resolvedProvider.supportsExtensions }),
+    }),
   ];
 
   if (opts.json) {

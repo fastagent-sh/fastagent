@@ -1,10 +1,23 @@
-import { rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildProject } from "../../../packages/fastagent/src/harnesses/build.ts";
 import { buildDefinition } from "../../../packages/fastagent/src/harnesses/assembly.ts";
 import { DEFINITION_FORMAT } from "../../../packages/fastagent/src/definition/definition.ts";
 import { made, project, FILES, listing } from "../../fixtures/build-fixtures.ts";
+
+const repoRoot = new URL("../../../", import.meta.url).pathname;
+
+beforeAll(() => {
+  const tscBin = join(repoRoot, "node_modules/typescript/bin/tsc");
+  for (const pkg of ["client", "fastagent"] as const) {
+    const pkgDir = join(repoRoot, "packages", pkg);
+    if (!existsSync(join(pkgDir, "dist/index.d.ts"))) {
+      execFileSync(process.execPath, [tscBin, "-p", "tsconfig.build.json"], { cwd: pkgDir, stdio: "inherit" });
+    }
+  }
+});
 
 afterAll(() => {
   for (const dir of made) rmSync(dir, { recursive: true, force: true });

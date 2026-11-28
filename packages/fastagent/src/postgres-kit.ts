@@ -1,10 +1,10 @@
 /**
- * Harness-neutral PostgreSQL and Aurora DSQL storage primitives shared across `pi-durable`, `@fastagent-sh/harness-dsh`,
- * and future harnesses: idempotent DDL + async index migration, OCC conflict detection, UTF-8 value chunking for
- * `bytesPerValue` caps, pooled batch lease renewal, and cooperative idle lease handoff.
+ * Harness-neutral PostgreSQL storage primitives shared across `pi-durable`, `@fastagent-sh/harness-dsh`, and future
+ * server harnesses: idempotent DDL migration, OCC conflict detection, pooled batch lease renewal, and cooperative idle
+ * lease handoff.
  */
 import { log } from "./log.ts";
-import type { CreateIndex, PgDatabase, PgExecutor, SharedPostgresHandle } from "./postgres.ts";
+import type { PgDatabase, PgExecutor, SharedPostgresHandle } from "./postgres.ts";
 import { Unavailable } from "./unavailable.ts";
 
 /**
@@ -13,45 +13,32 @@ import { Unavailable } from "./unavailable.ts";
  */
 export const PG_CONCURRENT_DDL = new Set(["42P07", "42710", "23505"]);
 
-/** OCC conflicts: PostgreSQL's serialization failure (`40001`) and Aurora DSQL's (`OC000`). */
-const PG_CONFLICT_CODES = new Set(["40001", "OC000"]);
-
-/** Whether `error` is an OCC serialization conflict (`40001` or Aurora DSQL `OC000`). */
+/** Whether `error` is a PostgreSQL serialization conflict (`40001`). */
 export function isPgConflict(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code;
-  return typeof code === "string" && PG_CONFLICT_CODES.has(code);
+  return code === "40001";
 }
 
 const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
-const INDEX_STATEMENT = /^CREATE (?:UNIQUE )?INDEX /;
-
-const createIndexAsWritten: CreateIndex = async (db, statement) => {
-  await db.query(statement);
-};
 
 export interface MigratePgSchemaOptions {
-  /** Index builder: defaults to executing the statement directly; Aurora DSQL runs `CREATE [UNIQUE] INDEX ASYNC`. */
-  readonly createIndex?: CreateIndex;
   /** Optional schema version table checked before DDL and recorded once all tables and indexes are ready. */
   readonly version?: {
     readonly table: string;
     readonly current: number;
+    readonly minimum?: number;
   };
 }
 
 /**
- * Apply idempotent table and index DDL statements to PostgreSQL or Aurora DSQL:
- * - Each statement runs in its own transaction (required by databases that allow one DDL statement per transaction).
- * - Concurrent `CREATE ... IF NOT EXISTS` races are ignored safely.
- * - `CREATE [UNIQUE] INDEX` statements run sequentially via `createIndex` (DSQL rejects concurrent schema jobs with
- *   `OC001`) and any async wait handles are awaited concurrently so first-time cluster migration stays fast.
+ * Apply idempotent table and index DDL statements to PostgreSQL, ignoring concurrent `CREATE ... IF NOT EXISTS` races.
  */
 export async function migratePgSchema(
   db: PgExecutor,
   statements: readonly string[],
   options: MigratePgSchemaOptions = {},
 ): Promise<void> {
-  const { createIndex = createIndexAsWritten, version } = options;
+  const { version } = options;
   if (version !== undefined) {
     if (!SAFE_IDENTIFIER.test(version.table)) {
       throw new Error(`Invalid PostgreSQL schema version table name: ${JSON.stringify(version.table)}`);
@@ -68,53 +55,26 @@ export async function migratePgSchema(
         `the database holds storage of version ${existing}, newer than this FastAgent's ${version.current}`,
       );
     }
+    const minimum = version.minimum ?? version.current;
+    if (existing > 0 && existing < minimum) {
+      throw new Error(
+        `the database holds incompatible storage of version ${existing} (this FastAgent requires version ${minimum})`,
+      );
+    }
     if (existing === version.current) return;
   }
 
-  const madeOrFound = <T>(made: Promise<T>): Promise<T | undefined> =>
-    made.catch((error: { code?: string }) => {
+  for (const statement of statements) {
+    await db.query(statement).catch((error: { code?: string }) => {
       if (!PG_CONCURRENT_DDL.has(error.code ?? "")) throw error;
-      return undefined;
     });
-
-  const nonIndexes = statements.filter((s) => !INDEX_STATEMENT.test(s));
-  const indexes = statements.filter((s) => INDEX_STATEMENT.test(s));
-
-  for (const statement of nonIndexes) await madeOrFound(db.query(statement));
-
-  const jobs: (() => Promise<void>)[] = [];
-  for (const statement of indexes) {
-    const job = await madeOrFound(createIndex(db, statement));
-    if (job !== undefined) jobs.push(job);
   }
-  const built = await Promise.allSettled(jobs.map((job) => job()));
-  const failed = built.find((result): result is PromiseRejectedResult => result.status === "rejected");
-  if (failed !== undefined) throw failed.reason;
 
   if (version !== undefined) {
     await db.query(`INSERT INTO ${version.table} (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, [
       version.current,
     ]);
   }
-}
-
-/**
- * Split `text` into parts of at most `bytesPerValue` UTF-8 bytes without splitting inside a multibyte character,
- * or return `undefined` when it fits inline (or `bytesPerValue` is unset).
- */
-export function splitPgText(text: string, bytesPerValue: number | undefined): string[] | undefined {
-  if (bytesPerValue === undefined) return undefined;
-  const bytes = Buffer.from(text, "utf8");
-  if (bytes.length <= bytesPerValue) return undefined;
-  const parts: string[] = [];
-  for (let start = 0; start < bytes.length; ) {
-    let end = Math.min(start + bytesPerValue, bytes.length);
-    while (end < bytes.length && end > start && ((bytes[end] as number) & 0xc0) === 0x80) end--;
-    if (end === start) throw new Error(`a value of ${bytesPerValue} bytes cannot hold one character`);
-    parts.push(bytes.toString("utf8", start, end));
-    start = end;
-  }
-  return parts;
 }
 
 /** The refusal of an opener of an instance another process holds: one that passes once that process lets it go. */
@@ -131,7 +91,7 @@ export const DEFAULT_LEASE_WAIT_MS = DEFAULT_LEASE_MS + 5_000;
  */
 const RENEW_EVERY = 1 / 4;
 const GIVE_UP_AFTER = 2 / 3;
-/** Maximum instances renewed in a single batch SQL statement (safely below Aurora DSQL's 3,000-row transaction cap). */
+/** Maximum instances renewed in a single batch SQL statement. */
 const RENEW_BATCH_SIZE = 500;
 
 export interface PgLeaseHandoff {
@@ -159,8 +119,8 @@ interface LeaseBucket {
 }
 
 /**
- * Renew a batch of leases in one SQL statement (compatible with PostgreSQL and Aurora DSQL), expire stale handoff
- * requests older than `leaseMs`, detect lost leases, and trigger cooperative handoff for idle instances.
+ * Renew a batch of leases in one SQL statement, expire stale handoff requests older than `leaseMs`, detect lost
+ * leases, and trigger cooperative handoff for idle instances.
  */
 async function renewLeaseBatch(
   db: Pick<PgDatabase, "query">,
@@ -332,8 +292,8 @@ export interface PgInstanceLease<TTake = void> {
 }
 
 /**
- * Acquire and maintain a single-writer instance lease in PostgreSQL or Aurora DSQL.
- * - Uses `timestamptz` and `now() + make_interval(...)` semantics verified on both PostgreSQL and Aurora DSQL.
+ * Acquire and maintain a single-writer instance lease in PostgreSQL.
+ * - Uses `timestamptz` and `now() + make_interval(...)` semantics in PostgreSQL.
  * - When `pool` is provided, coalesces renewals across all instances sharing that pool into one batched query per tick.
  * - When waiting (`waitMs > 0`), writes `handoff_requested_at` so an idle holder yields cleanly instead of blocking until expiry.
  */

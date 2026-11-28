@@ -52,6 +52,7 @@ function openSqliteHandle(filePath: string): DshStorageHandle {
 export const harnessProvider: HarnessProvider<DshStorageHandle> = {
   name: "dsh",
   supportsExtensions: false,
+  supportsSandbox: true,
 
   async openStorage(ctx: HarnessStorageOpenContext): Promise<DshStorageHandle> {
     if (ctx.chosen === "memory") {
@@ -78,8 +79,6 @@ export const harnessProvider: HarnessProvider<DshStorageHandle> = {
           holders: NAMED_INSTANCE_HOLDERS,
           handoff: ctx.handoff,
           onLost: ctx.onLost,
-          ...(ctx.database.createIndex === undefined ? {} : { createIndex: ctx.database.createIndex }),
-          ...(ctx.database.limits === undefined ? {} : { limits: ctx.database.limits }),
         });
         if (shared.isClosed()) {
           await store.close().catch(() => {});
@@ -117,7 +116,6 @@ export const harnessProvider: HarnessProvider<DshStorageHandle> = {
       commands: ctx.commands,
       sandbox: ctx.selection.sandbox ?? "workspace",
       ...(ctx.unfinished === undefined ? {} : { unfinished: ctx.unfinished }),
-      ...(ctx.maxMessageBytes === undefined ? {} : { maxMessageBytes: ctx.maxMessageBytes }),
       ...(ctx.telemetry === undefined ? {} : { telemetry: ctx.telemetry }),
       storage: ctx.storage.store,
     });

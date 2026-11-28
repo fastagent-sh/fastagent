@@ -12,7 +12,6 @@ const WORKSPACES = [
 	"packages/client-agentcore",
 	"packages/fastagent",
 	"packages/agentcore",
-	"packages/pi-remote",
 	"packages/harness-dsh",
 ];
 const BUMP_TYPES = new Set(["major", "minor", "patch"]);

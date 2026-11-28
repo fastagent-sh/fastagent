@@ -72,11 +72,11 @@ export function resolveFromProject(dir: string, specifier: string): string | und
 }
 
 /**
- * The oldest runtimes that run an agent, both set by the instance's storage, `node:sqlite`: Node drops its
- * experimental warning from 24.15.0, and Bun 1.4.4 reliably releases `PRAGMA locking_mode = EXCLUSIVE` locks on
- * `DatabaseSync.close()` when statements were prepared (1.4.0 leaves the file locked until GC).
+ * Minimum supported server runtimes: Node 22.22.0 LTS (satisfies chokidar 6 / pi-* / undici engine floors, ES2024 +
+ * Set/Iterator helpers, unflagged TS execution, and lazy built-in `node:sqlite`) and Bun 1.4.4 (which reliably releases
+ * `PRAGMA locking_mode = EXCLUSIVE` SQLite locks on `DatabaseSync.close()`).
  */
-export const RUNTIME_FLOOR = { node: "24.15.0", bun: "1.4.4" } as const;
+export const RUNTIME_FLOOR = { node: "22.22.0", bun: "1.4.4" } as const;
 
 /** Whether `version` (`1.3.13`, `24.4`) is older than `floor`; false for one that names no version (`canary`). */
 export function belowFloor(version: string, floor: string): boolean {

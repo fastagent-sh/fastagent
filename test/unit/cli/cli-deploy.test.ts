@@ -85,29 +85,13 @@ describe("cli: deploy init", () => {
     expect(written.stdout).toMatch(/^docker run -d --name _Support .* -v _Support-data:\/data .* support$/m);
   });
 
-  it("delegates extension targets when installed and exits 2 naming the package (never auto-installing) when missing", async () => {
-    const dir = await agentWorkspace("fa-deploy-ext-");
-    const missing = await runInProcess(["-C", dir, "deploy", "init", "cloudflare"]);
-    expect([missing.code, missing.stdout]).toEqual([2, ""]);
-    expect(missing.stderr).toContain("@fastagent-sh/cloudflare");
-    expect(missing.stderr).toContain("fastagent deploy init cloudflare");
-
-    const invalid = await runInProcess(["-C", dir, "deploy", "init", "../evil"]);
-    expect([invalid.code, invalid.stdout]).toEqual([2, ""]);
-    expect(invalid.stderr).toContain('unknown deploy target "../evil"');
-
-    const extDir = join(dir, "node_modules", "@fastagent-sh", "demo");
-    await mkdir(extDir, { recursive: true });
-    await writeFile(
-      join(extDir, "package.json"),
-      JSON.stringify({ name: "@fastagent-sh/demo", type: "module", exports: { "./cli": "./cli.js" } }),
-    );
-    await writeFile(join(extDir, "cli.js"), "export async function run(args) { console.log(JSON.stringify(args)); }\n");
-    const delegated = await runInProcess(["-C", dir, "deploy", "init", "demo", "--force", "--no-install"]);
-    expect([delegated.code, JSON.parse(delegated.stdout)], delegated.stderr).toEqual([
-      0,
-      ["init", "--force", "--no-install"],
-    ]);
+  it("exits 2 naming built-in targets when given an unknown deploy target", async () => {
+    const dir = await agentWorkspace("fa-deploy-unknown-");
+    for (const bad of ["cloudflare", "../evil"]) {
+      const res = await runInProcess(["-C", dir, "deploy", "init", bad]);
+      expect([bad, res.code, res.stdout]).toEqual([bad, 2, ""]);
+      expect(res.stderr).toContain(`unknown deploy target "${bad}" (targets: docker, compose, fly, railway)`);
+    }
   });
 
   it("a container the image marks as deployed refuses to start without the agent its storage belongs to", async () => {

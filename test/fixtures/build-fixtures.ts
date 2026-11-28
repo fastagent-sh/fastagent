@@ -26,15 +26,14 @@ export function project(files: Record<string, string>): string {
 }
 
 const TOOL = `import { readFileSync } from "node:fs";
-import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
+import { defineTool } from "@fastagent-sh/fastagent";
 import { shout } from "../../lib/shout.ts";
 import data from "./lookup/data.json" with { type: "json" };
 const note = readFileSync(new URL("./lookup/note.txt", import.meta.url), "utf8").trim();
 export default defineTool({
   name: "lookup",
   description: "Look something up.",
-  parameters: obj({ text: str() }),
+  parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } as const,
   execute: async ({ text }) => ({ output: [{ type: "text", text: [shout(text), data.unit, note].join(" ") }] }),
 });
 `;

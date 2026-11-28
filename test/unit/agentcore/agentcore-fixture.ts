@@ -1,13 +1,12 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, vi } from "vitest";
-import { SESSION_HEADER } from "../../../packages/agentcore/src/runtime.ts";
+import { SESSION_HEADER } from "@fastagent-sh/agentcore";
 
 type Refused = { error: { code: string; message: string; retryable: boolean } };
 
 export const RUNTIME = "arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/support-a1b2c3d4e5";
 
-/** An invocation as AgentCore delivers it to the container: `body` under the session `session` names. */
 export const invocation = (session: string | undefined, body: unknown) =>
   new Request("http://runtime/invocations", {
     method: "POST",
@@ -15,7 +14,6 @@ export const invocation = (session: string | undefined, body: unknown) =>
     body: JSON.stringify(body),
   });
 
-/** What the runtime answers an enveloped request with, unwrapped. */
 export async function answered(response: Response) {
   const { response: inner } = (await response.json()) as {
     response: { status: number; headers: Record<string, string>; body: string };
@@ -27,12 +25,6 @@ export async function answered(response: Response) {
   };
 }
 
-/**
- * AgentCore as far as a Caller meets it, on loopback: `InvokeAgentRuntime` delivers to the runtime's handler (`serving`),
- * and an answer that is not a 2xx comes back as AgentCore's own 424, as it does. `refuse` makes it refuse the next
- * invocation itself, before delivering it. One per test file: `connectAgentCore` keeps one AWS client per region, which
- * reads its endpoint once.
- */
 export function installFakeAgentCore() {
   const fake = {
     serving: undefined as { fetch(request: Request): Promise<Response> } | undefined,

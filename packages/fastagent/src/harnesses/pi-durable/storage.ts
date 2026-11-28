@@ -7,10 +7,10 @@
  */
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
 import { NodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
+import { openDatabaseSync } from "../../sqlite.ts";
 
 /** How long an opener waits for a lock: long enough for a restart's old process to finish closing. */
 const BUSY_TIMEOUT_MS = 5_000;
@@ -26,7 +26,7 @@ export async function openLockedStorage(
   busyTimeoutMs = BUSY_TIMEOUT_MS,
 ): Promise<Storage> {
   mkdirSync(dirname(path), { recursive: true });
-  const database = new DatabaseSync(path, { timeout: busyTimeoutMs });
+  const database = openDatabaseSync(path, { timeout: busyTimeoutMs });
   const adapter = new NodeSqliteDatabase(database);
   try {
     // In this order: an exclusive lock keeps WAL's index in this process's memory, so no shared memory is needed.

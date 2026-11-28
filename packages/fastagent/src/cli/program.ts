@@ -8,7 +8,6 @@ import { buildProgram, type CommandSpec, type FlagSpec, type ProgramOptions } fr
 import { unsupportedRuntime } from "../runtime.ts";
 import { failStartup, failUsage } from "./fail.ts";
 import { ENV_FILE_FLAG, INSTANCE_FLAGS, instanceFlags } from "./instance.ts";
-import { extensionEntry, extensionPackage, runExtension } from "./extension.ts";
 
 const MODEL: FlagSpec = {
   flags: "--model <provider/modelId>",
@@ -17,9 +16,9 @@ const MODEL: FlagSpec = {
 const HARNESS_FLAGS: FlagSpec[] = [
   {
     flags: "--harness <name>",
-    description: "runtime harness: pi-durable or dsh (--harness > FASTAGENT_HARNESS > config)",
+    description: "runtime harness (default: pi-durable; e.g. dsh or @fastagent-sh/harness-<name>)",
   },
-  { flags: "--sandbox <mode>", description: "OS sandbox for harness dsh: workspace, read-only, or off" },
+  { flags: "--sandbox <mode>", description: "OS sandbox on sandbox-capable harnesses: workspace, read-only, or off" },
 ];
 const harnessOptions = (f: Record<string, unknown>) => ({
   ...(typeof f.harness === "string" ? { harness: f.harness } : {}),
@@ -204,7 +203,7 @@ const deploy: CommandSpec = {
   subcommands: [
     {
       name: "init",
-      summary: "write container and platform files for a target (docker, compose, fly, railway, or an extension)",
+      summary: "write container and platform files for a target (docker, compose, fly, railway)",
       description:
         "Writes Dockerfile and .dockerignore plus the target's declarative config (never overwrites user-owned " +
         "files), and prints the platform's own deploy commands. Never runs a remote deploy or installs packages " +
@@ -212,28 +211,19 @@ const deploy: CommandSpec = {
       args: [
         {
           name: "<target>",
-          description:
-            "docker, compose, fly, railway, or an installed @fastagent-sh/<target> extension (e.g. agentcore)",
+          description: "docker, compose, fly, or railway",
         },
       ],
-      flags: [
-        { flags: "--force", description: "regenerate the container files fastagent generated" },
-        {
-          flags: "--no-install",
-          description: "skip dependency installation in generated subprojects (e.g. agentcore/cdk)",
-        },
-      ],
+      flags: [{ flags: "--force", description: "regenerate the container files fastagent generated" }],
       examples: [
         { cmd: "fastagent deploy init docker", note: "Dockerfile + .dockerignore for any host" },
         { cmd: "fastagent deploy init compose", note: "Dockerfile + compose.yml" },
         { cmd: "fastagent deploy init fly", note: "Dockerfile + fly.toml (scale-to-zero suspend, /data, /health)" },
         { cmd: "fastagent deploy init railway", note: "Dockerfile + Railway volume and deploy commands" },
-        { cmd: "fastagent deploy init agentcore", note: "AWS AgentCore (requires @fastagent-sh/agentcore)" },
       ],
       run: async (args, f) =>
         (await import("./commands/deploy.ts")).runDeployInit(args[0] as string, {
           force: f.force === true,
-          install: f.install !== false,
         }),
     },
     {
@@ -324,7 +314,7 @@ const remote: CommandSpec = {
   subcommands: [
     {
       name: "list",
-      summary: "list saved remotes (shared with --remote and @fastagent-sh/pi-remote)",
+      summary: "list saved HTTP remotes",
       flags: [JSON_FLAG],
       examples: [{ cmd: "fastagent remote list" }, { cmd: "fastagent remote list --json" }],
       run: async (_args, f) => (await import("./commands/remote.ts")).runRemoteList({ json: f.json === true }),
@@ -378,28 +368,17 @@ export function buildCliProgram(overrides: ProgramOptions = {}) {
       { cmd: "fastagent dev", note: "serve locally and iterate" },
       { cmd: "fastagent deploy init docker", note: "prepare a container for any host" },
     ],
-    notes:
-      "Platform extensions add targets to `fastagent deploy init <target>` and runtime commands once installed " +
-      "(e.g. `npm i @fastagent-sh/agentcore`).\nDocs: https://github.com/fastagent-sh/fastagent",
+    notes: "Docs: https://github.com/fastagent-sh/fastagent",
     ...overrides,
   });
 }
 
-/** Parse and run one CLI invocation (`argv` = process.argv): a command of its own, or an installed extension's. */
+/** Parse and run one CLI invocation (`argv` = process.argv). */
 export async function runCli(argv: readonly string[]): Promise<void> {
   const unsupported = unsupportedRuntime();
   if (unsupported !== undefined) failStartup(new Error(unsupported));
   const stripped = applyChdir(argv);
-  const [name, ...rest] = stripped.slice(2);
-  if (name !== undefined && !specs.some((spec) => spec.name === name)) {
-    const entry = extensionEntry(process.cwd(), name);
-    if (entry !== undefined) return runExtension(entry, rest).catch(failStartup);
-  }
   await buildCliProgram({
     version: await fastagentVersion(),
-    unknownCommandNote: (unknown) =>
-      unknown === name && /^[a-z][a-z0-9-]*$/.test(unknown)
-        ? `(an extension adds it: install ${extensionPackage(unknown)} in the agent, with npm i ${extensionPackage(unknown)})`
-        : undefined,
   }).parseAsync(stripped);
 }

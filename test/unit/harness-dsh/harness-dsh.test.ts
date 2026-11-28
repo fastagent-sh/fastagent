@@ -515,7 +515,9 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         waitMs: 0,
         owner: "holder-2",
       });
-      await expect(hA.append([{ seq: 1, type: "turn/end", data: { turn: 1 } }])).rejects.toThrow(/lease.*lost/);
+      await expect(hA.append([{ seq: 1, type: "turn/end", data: { turn: 1 } }])).rejects.toThrow(
+        /was taken over by another process/,
+      );
       await expect(
         held.putMessage?.({
           id: "fenced-msg",
@@ -527,7 +529,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           createdAt: 1,
           updatedAt: 1,
         }),
-      ).rejects.toThrow(/lease.*lost/);
+      ).rejects.toThrow(/was taken over by another process/);
 
       await successor.close();
 
@@ -553,7 +555,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         .create({ version: 4, id: "lost-id", createdAt: 1, isSeeded: false })
         .catch(() => undefined);
       expect(hWatched).toBeUndefined();
-      expect(lostReason?.message).toMatch(/lease.*lost/);
+      expect(lostReason?.message).toMatch(/was taken over by another process/);
       await takeover.close();
       await watchedHolder.close();
       await hA.close();
@@ -667,7 +669,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           waitMs: 0,
           owner: "thief",
         });
-        await expect(openedPg.sessions.create()).rejects.toThrow(/lease.*lost/);
+        await expect(openedPg.sessions.create()).rejects.toThrow(/was taken over by another process/);
         await thief.close();
         await vi.waitFor(() => {
           expect(closedResolved).toBe(true);
@@ -681,82 +683,54 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
     }
   });
 
-  it("supports Aurora DSQL async unique indexes, UTF-8 value chunking, multi-tx batching, and shared-pool single-flight migration", async () => {
+  it("supports shared-pool single-flight migration, fenced PostgreSQL writes without lease-table conflicts, and lease handoff", async () => {
     const fresh = await servedPostgres();
-    const indexStatements: string[] = [];
-    const createIndex = async (
-      exec: {
-        query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
-      },
-      statement: string,
-    ) => {
-      indexStatements.push(statement);
-      await exec.query(statement);
-      return async () => {};
-    };
-    const tightLimits = { rowsPerTransaction: 25, bytesPerTransaction: 16 * 1024, bytesPerValue: 128 };
-    const shared = openPostgresDatabase({ url: fresh.url, createIndex, limits: tightLimits }, { max: 4 });
-    const dir = mkdtempSync(join(tmpdir(), "fa-dsh-dsql-"));
+    const shared = openPostgresDatabase({ url: fresh.url }, { max: 4 });
+    const dir = mkdtempSync(join(tmpdir(), "fa-dsh-pg-shared-"));
     try {
-      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "dsh-dsql", type: "module" }));
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "dsh-pg-shared", type: "module" }));
       writeFileSync(join(dir, "fastagent.config.ts"), "export default {};\n");
       const def = await loadSourceDefinition(dir);
 
-      // Concurrent opens on a SharedPostgresDatabase run DSH migration once and route CREATE UNIQUE INDEX via createIndex.
       const [a, b] = await Promise.all([
-        openAgent(def, { root: dir, name: "dsql-tenant-a", harness: "dsh", sandbox: "off", database: shared }),
-        openAgent(def, { root: dir, name: "dsql-tenant-b", harness: "dsh", sandbox: "off", database: shared }),
-      ]);
-      expect(indexStatements).toEqual([
-        expect.stringMatching(/^CREATE UNIQUE INDEX IF NOT EXISTS dsh_messages_by_idempotency\b/),
+        openAgent(def, { root: dir, name: "pg-tenant-a", harness: "dsh", sandbox: "off", database: shared }),
+        openAgent(def, { root: dir, name: "pg-tenant-b", harness: "dsh", sandbox: "off", database: shared }),
       ]);
       await a.close();
       await b.close();
 
-      // Direct store test under tight limits using the shared postgres-kit: chunked header/meta/message/attachment/events + multi-tx append.
       const db = openPgDatabase(fresh.url);
       try {
         const instance = freshInstance();
         const txQueries: string[] = [];
-        let readTxCount = 0;
         const instrumentedDb = {
           query: db.query.bind(db),
-          transaction: async <T>(work: Parameters<typeof db.transaction<T>>[0]) => {
-            let sawWrite = false;
-            const result = await db.transaction(async (tx) =>
+          close: () => db.close(),
+          transaction: async <T>(work: Parameters<typeof db.transaction<T>>[0]) =>
+            db.transaction(async (tx) =>
               work({
                 query: async <U extends object>(text: string, params?: readonly unknown[]) => {
                   txQueries.push(text);
-                  if (/^\s*(?:INSERT|UPDATE|DELETE)\b/i.test(text)) sawWrite = true;
                   return tx.query<U>(text, params);
                 },
               }),
-            );
-            if (!sawWrite) readTxCount += 1;
-            return result;
-          },
+            ),
         };
         let unexpectedLost: Error | undefined;
         const store = await openPostgresDshStore(instrumentedDb, instance, {
-          createIndex,
-          limits: tightLimits,
           onLost: (err) => {
             unexpectedLost = err;
           },
         });
         txQueries.length = 0;
-        readTxCount = 0;
-        const longHeaderNote = "头信息🚀".repeat(60);
         const header = {
           version: 4,
           id: "s-chunked",
           createdAt: 1_700_000_000_000,
           isSeeded: false,
-          note: longHeaderNote,
-        } as unknown as { version: number; id: string; createdAt: number; isSeeded: boolean };
+        };
         const handle = await store.create(header);
 
-        // Updating metadata on an existing session preserves the chunked header in dsh_values.
         const longTitle = "标题✨".repeat(50);
         await store.putSessionMeta?.({
           id: "s-chunked",
@@ -774,21 +748,18 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
         expect((await store.stat("s-chunked"))?.header).toEqual(header);
         expect((await store.getSessionMeta?.("s-chunked"))?.title).toBe(longTitle);
 
-        // Append more events than rowsPerTransaction with payloads exceeding bytesPerValue (forces multi-tx + chunking).
         const events = Array.from({ length: 15 }, (_, seq) => ({
           seq,
           type: "chunk/event",
           data: { seq, body: `片段-${seq}-中文😀`.repeat(20) },
         }));
         await handle.append(events);
-        const readBack = await handle.read(0);
-        expect(readBack.events).toEqual(events);
+        expect((await handle.read(0)).events).toEqual(events);
 
-        // Oversized message + attachment round-trip via dsh_values and idempotency key lookup.
         const bigMessage = {
           id: "m-big",
           sessionId: "s-chunked",
-          idempotencyKey: "idem-dsql-1",
+          idempotencyKey: "idem-pg-1",
           status: "completed" as const,
           whenBusy: "queue" as const,
           displayContent: [{ type: "text" as const, text: "消息体🎉".repeat(80) }],
@@ -797,7 +768,7 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           updatedAt: 2,
         };
         await store.putMessage?.(bigMessage);
-        expect(await store.getMessageByKey?.("s-chunked", "idem-dsql-1")).toEqual(bigMessage);
+        expect(await store.getMessageByKey?.("s-chunked", "idem-pg-1")).toEqual(bigMessage);
         expect(await store.getMessage?.("s-chunked", "m-big")).toEqual(bigMessage);
 
         const rawBytes = new Uint8Array(600);
@@ -808,26 +779,11 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
           mimeType: "application/octet-stream",
           data: rawBytes,
         });
-        const fetchedAttachment = await store.getAttachment?.("s-chunked", "att-big");
-        expect(fetchedAttachment?.data).toEqual(rawBytes);
+        expect((await store.getAttachment?.("s-chunked", "att-big"))?.data).toEqual(rawBytes);
 
-        // Single event exceeding bytesPerTransaction fails visibly.
-        await expect(handle.append([{ seq: 15, type: "huge", data: { text: "z".repeat(20 * 1024) } }])).rejects.toThrow(
-          /exceeds the database transaction limit/,
-        );
-
-        const partRows = await db.query<{ count: string | number }>(
-          "SELECT COUNT(*) AS count FROM dsh_values WHERE instance = $1",
-          [instance],
-        );
-        expect(Number(partRows[0]?.count ?? 0)).toBeGreaterThan(0);
-
-        // P0 regression: write transactions fence via dsh_metadata and never UPDATE dsh_leases, and concurrent writes
-        // alongside lease renewal never self-conflict or trigger onLost.
+        // Write transactions fence via dsh_metadata and never UPDATE dsh_leases.
         expect(txQueries.some((sql) => sql.includes("UPDATE dsh_leases"))).toBe(false);
         expect(txQueries.some((sql) => sql.includes("UPDATE dsh_metadata"))).toBe(true);
-        // P1 regression: chunked reads run inside a single REPEATABLE READ transaction snapshot to prevent torn reads.
-        expect(readTxCount).toBeGreaterThan(0);
 
         await Promise.all([
           ...Array.from({ length: 6 }, (_, idx) =>
@@ -1067,31 +1023,28 @@ export default defineTool({
       expect(dshConv2.sessionId).toBe(dshConv1.sessionId);
       await dshAgent2.close();
 
-      // 5) Enforce maxMessageBytes (including expanded commands) and unusableDefault on openDshAgent parity.
-      const limited = await openDshAgent({
-        name: "limited",
+      // 5) Report unusableDefault on openDshAgent parity and support direct HarnessProvider injection in openAgent.
+      const retired = await openDshAgent({
+        name: "retired",
         workdir: dir,
         unusableDefault: { spec: "sw/retired", reason: 'no provider "sw" offers "retired"' },
-        commands: () => [{ name: "big", description: "Expands large", expand: () => "x".repeat(64) }],
-        maxMessageBytes: 48,
         sandbox: "off",
       });
       try {
-        expect((await limited.info()).unusableDefault).toEqual({
+        expect((await retired.info()).unusableDefault).toEqual({
           spec: "sw/retired",
           reason: 'no provider "sw" offers "retired"',
         });
-        const ls = await limited.sessions.create();
-        await expect(limited.messages.send({ sessionId: ls.id, content: "x".repeat(64) })).rejects.toMatchObject({
-          code: "invalid_request",
-          details: { reason: "too_large" },
-        });
-        await expect(limited.messages.send({ sessionId: ls.id, content: "/big" })).rejects.toMatchObject({
-          code: "invalid_request",
-          details: { reason: "too_large" },
-        });
       } finally {
-        await limited.close();
+        await retired.close();
+      }
+
+      const injected = await openAgent(definition, { root, harness: harnessProvider, sandbox: "off" });
+      try {
+        const injectedReply = await injected.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
+        expect(injectedReply.sessionId).toBe(dshConv1.sessionId);
+      } finally {
+        await injected.close();
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

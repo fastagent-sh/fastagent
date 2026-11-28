@@ -9,7 +9,7 @@ status: current
 当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 或 Bun 后端服务中。
 
 ```bash
-npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
+npm i @fastagent-sh/fastagent       # 需要 Node ≥ 22.22 或 Bun ≥ 1.4.4
 ```
 
 先使用 `fastagent build` 将 Agent 编译为独立 npm 包（见[打包、分发与 CI/CD](packaging-and-ci.md)），再从宿主应用导入。
@@ -50,7 +50,7 @@ await agent.close();
 - **`env`：** Agent 派生子进程（`bash`、技能脚本、stdio MCP 服务器）的基础环境变量。默认为空；传入 `baseEnv(process.env)` 以透传标准 `PATH`、`HOME`、locale 与代理设置。请把 `OTEL_*` 放在 `secrets` 而非 `env`，防止子进程读到收集端凭证。
 - **`model`：** 可选的 `provider/modelId`，覆盖 `fastagent.config.ts`。
 - **`harness` / `sandbox`：** 可选 `"pi-durable"`（默认）或 `"dsh"`（需安装 `@fastagent-sh/harness-dsh`），`dsh` 下支持 `sandbox: "workspace" | "read-only" | "off"`。
-- **`database`：** PostgreSQL 描述符（`{ url }`、`openPostgresDatabase(...)` 或 `@fastagent-sh/agentcore` 提供的 `dsqlDatabase({ endpoint })`）。
+- **`database`：** PostgreSQL 描述符（`{ url }` 或 `openPostgresDatabase(...)`）。
 
 ### 在单进程中通过一个 PostgreSQL 连接池托管多租户实例
 
@@ -61,7 +61,7 @@ await agent.close();
 | **共享密钥 SaaS 助手（单进程 1 个 `openAgent()` 实例）** | 所有租户共用统一的模型 API Key、MCP 服务器与工具定义（`codingTools: false`） | 每个进程仅打开 **1 个** `openAgent()`，在后端路由校验 `sessionId` 归属，自定义工具内通过 `sessionIdOf(api, context)` 反查所属租户；无需维护多实例缓存与驱逐逻辑。 |
 | **BYOK / 实例级隔离 SaaS（每活跃租户 1 个 `openAgent()` 实例）** | 租户自带模型密钥（`secrets`）、独立 MCP 服务器，或需要 PostgreSQL 按实例名分区隔离 | 共享一个 `openPostgresDatabase()` 连接池并传入每个 `openAgent({ name, database })`。 |
 
-当单个 Node 进程需要在 PostgreSQL（或 Aurora DSQL）上运行大量隔离实例时，用 `openPostgresDatabase` 共享一个连接池：
+当单个 Node 进程需要在 PostgreSQL 上运行大量隔离实例时，用 `openPostgresDatabase` 共享一个连接池：
 
 ```ts
 import { baseEnv, openAgent, openPostgresDatabase } from "@fastagent-sh/fastagent";

@@ -1,10 +1,9 @@
 /**
  * Harness-neutral tool authoring: `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect
- * `Schema.toStandardJSONSchemaV1`), plain JSON Schema objects (with `as const` inference), or `pi-schema` / TypeBox
- * schemas, converting to JSON Schema once at definition time and running Standard Schema validation/transforms before
+ * `Schema.toStandardJSONSchemaV1`) or plain JSON Schema objects (with `as const` or structural `static` inference),
+ * converting to JSON Schema once at definition time and running Standard Schema validation/transforms before
  * `execute()`, and `sessionIdOf` resolves the active session id across harnesses without global state.
  */
-import type { Static } from "@earendil-works/pi-schema";
 import { type Json, SessionId } from "@fastagent-sh/client/agent-api";
 
 /** Per-invocation session-id resolver attached onto `api` by harness tool adapters. */
@@ -41,7 +40,7 @@ export interface StandardJSONSchemaV1<TInput = unknown, TOutput = TInput> {
   };
 }
 
-/** Parameter schema accepted by {@link defineTool}: Standard JSON Schema v1, plain JSON Schema, or pi-schema/TypeBox. */
+/** Parameter schema accepted by {@link defineTool}: Standard JSON Schema v1 or plain JSON Schema object. */
 export type ToolParameters = StandardJSONSchemaV1 | Record<string, unknown>;
 
 type JsonSchemaScalar<S> = S extends { readonly enum: ReadonlyArray<infer E> }
@@ -75,7 +74,7 @@ type Simplify<T> = { [K in keyof T]: T[K] } & {};
 /**
  * Inferred argument type for `execute(args)`:
  * - Standard JSON Schema v1 (Zod v4, Effect Schema, Valibot, ArkType) -> `~standard.types.output`
- * - `pi-schema` / TypeBox -> `Static<T>`
+ * - Structural `{ static: T }` JSON Schema builders (TypeBox-compatible) -> `T`
  * - `as const` plain JSON Schema object -> inferred property shape
  * - non-literal plain JSON Schema object -> `Record<string, unknown>`
  */
@@ -83,13 +82,19 @@ export type InferToolArgs<TParameters> = TParameters extends {
   readonly "~standard": { readonly types?: { readonly output: infer TOutput } };
 }
   ? TOutput
-  : unknown extends Static<TParameters>
-    ? TParameters extends { readonly properties: infer P extends Record<string, unknown> }
+  : TParameters extends { readonly static: infer TStatic }
+    ? unknown extends TStatic
+      ? TParameters extends { readonly properties: infer P extends Record<string, unknown> }
+        ? string extends keyof P
+          ? Record<string, unknown>
+          : Simplify<JsonSchemaObject<TParameters, P>>
+        : Record<string, unknown>
+      : TStatic
+    : TParameters extends { readonly properties: infer P extends Record<string, unknown> }
       ? string extends keyof P
         ? Record<string, unknown>
         : Simplify<JsonSchemaObject<TParameters, P>>
-      : Record<string, unknown>
-    : Static<TParameters>;
+      : Record<string, unknown>;
 
 /** Text content block returned in a portable tool result. */
 export interface ToolOutputPart {
@@ -241,8 +246,8 @@ function resolveParameters(
 }
 
 /**
- * Define a portable tool for `src/tools/` using Zod v4 (or any Standard JSON Schema v1 library), plain JSON Schema, or
- * `pi-schema`. Works identically across `pi-durable` and `dsh`.
+ * Define a portable tool for `src/tools/` using Zod v4 (or any Standard JSON Schema v1 library) or plain JSON Schema.
+ * Works identically across `pi-durable` and `dsh`.
  * @public
  */
 export function defineTool<TParameters extends ToolParameters, TDetails extends ToolDetails = ToolDetails>(

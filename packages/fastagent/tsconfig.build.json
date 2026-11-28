@@ -9,6 +9,9 @@
     "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "paths": {},
+    // Node 22 LTS (V8 12.4) supports ES2024 plus Set methods and Iterator helpers.
+    "target": "ES2024",
+    "lib": ["ES2024", "ES2025.Collection", "ES2025.Iterator"],
     "outDir": "dist",
     "rootDir": "src"
   },

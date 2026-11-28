@@ -56,7 +56,6 @@ export interface AssembleAgentOptions {
   unfinished?: Unfinished;
   processEnv: Readonly<Record<string, string>>;
   telemetry?: TelemetryContext;
-  maxMessageBytes?: number;
   work?: WorkTracker;
 }
 
@@ -117,7 +116,6 @@ export async function assembleAgent(definition: AgentDefinition, options: Assemb
     ...(options.settings === undefined ? {} : { settings: options.settings }),
     ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
     ...(options.telemetry === undefined ? {} : { telemetry: options.telemetry }),
-    ...(options.maxMessageBytes === undefined ? {} : { maxMessageBytes: options.maxMessageBytes }),
     ...(options.work === undefined ? {} : { work: options.work }),
     env: ({ cwd }) => new InstanceExecutionEnv({ cwd: cwd ?? options.workdir ?? dir, processEnv: options.processEnv }),
     commands: () => readCommands(dir),

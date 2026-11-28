@@ -100,21 +100,6 @@ describe.runIf(SERVER !== undefined)("PostgreSQL, the double against a real serv
     }
   });
 
-  registerStorageConformance(
-    { describe, expect, it },
-    "pi-durable's storage contract, on the server, capping transactions and values",
-    async (use) => {
-      const storage = await openPostgresStorage(database.url, freshInstance(), {
-        limits: { rowsPerTransaction: 600, bytesPerTransaction: 64 * 1024, bytesPerValue: 256 },
-      });
-      try {
-        await use(storage);
-      } finally {
-        await storage.close(BACKGROUND_CONTEXT);
-      }
-    },
-  );
-
   it("signs each new connection in with the password it is given when the URL has none", async () => {
     const url = new URL(database.url);
     const password = decodeURIComponent(url.password);

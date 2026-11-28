@@ -1,6 +1,6 @@
 /**
  * Remote provider Auth API (`/v1/auth/*`) over Amazon Bedrock AgentCore (`connectAgentCoreAuth`), kept off the root
- * entry so Agent API callers see a minimal surface. Zero server, database, CDK, or Node-only dependencies.
+ * entry so Agent API callers see a minimal surface. Zero server, database, or Node-only dependencies.
  */
 import type { AuthApi } from "@fastagent-sh/client/auth";
 import { connectAuth } from "@fastagent-sh/client/auth";

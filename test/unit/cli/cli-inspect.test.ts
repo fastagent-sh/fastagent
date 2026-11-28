@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stat, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentWorkspace, runInProcess } from "../../doubles/cli-run.ts";
 
@@ -98,9 +98,53 @@ describe("cli: info's MCP servers", () => {
     expect(sandboxOnPi.code).toBe(2);
     expect(sandboxOnPi.stderr).toMatch(/requires harness: "dsh"/);
 
-    const unknownHarness = await runInProcess(["-C", dir, "info", "--harness", "bogus"]);
-    expect(unknownHarness.code).toBe(2);
-    expect(unknownHarness.stderr).toMatch(/unknown harness/);
+    const invalidHarness = await runInProcess(["-C", dir, "info", "--harness", "../bad"]);
+    expect(invalidHarness.code).toBe(2);
+    expect(invalidHarness.stderr).toMatch(/invalid harness name/);
+
+    const missingHarness = await runInProcess(["-C", dir, "info", "--harness", "bogus"]);
+    expect(missingHarness.code).toBe(2);
+    expect(missingHarness.stderr).toContain('harness "bogus" requires @fastagent-sh/harness-bogus');
+
+    // Installed third-party harness with supportsSandbox: false: --sandbox exits 2 (usage), config sandbox exits 1 (startup).
+    const customPkgDir = join(dir, "node_modules", "@fastagent-sh", "harness-nosb");
+    await mkdir(customPkgDir, { recursive: true });
+    await writeFile(
+      join(customPkgDir, "package.json"),
+      JSON.stringify({
+        name: "@fastagent-sh/harness-nosb",
+        type: "module",
+        exports: { "./provider": "./provider.js" },
+      }),
+    );
+    await writeFile(
+      join(customPkgDir, "provider.js"),
+      'export const harnessProvider = { name: "nosb", supportsSandbox: false, openStorage: () => ({ close() {} }), openAgent: async () => { throw new Error("unused"); } };\n',
+    );
+    const flagSandbox = await runInProcess(["-C", dir, "info", "--harness", "nosb", "--sandbox", "read-only"]);
+    expect(flagSandbox.code).toBe(2);
+    expect(flagSandbox.stderr).toContain('sandbox ("read-only") is not supported by harness "nosb"');
+
+    const cfgDir = await agentWorkspace("fa-info-nosb-cfg-", {
+      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "nosb", sandbox: "read-only" };\n',
+    });
+    const cfgPkgDir = join(cfgDir, "node_modules", "@fastagent-sh", "harness-nosb");
+    await mkdir(cfgPkgDir, { recursive: true });
+    await writeFile(
+      join(cfgPkgDir, "package.json"),
+      JSON.stringify({
+        name: "@fastagent-sh/harness-nosb",
+        type: "module",
+        exports: { "./provider": "./provider.js" },
+      }),
+    );
+    await writeFile(
+      join(cfgPkgDir, "provider.js"),
+      'export const harnessProvider = { name: "nosb", supportsSandbox: false, openStorage: () => ({ close() {} }), openAgent: async () => { throw new Error("unused"); } };\n',
+    );
+    const cfgSandbox = await runInProcess(["-C", cfgDir, "info"]);
+    expect(cfgSandbox.code).toBe(1);
+    expect(cfgSandbox.stderr).toContain('sandbox ("read-only") is not supported by harness "nosb"');
 
     const configured = await agentWorkspace("fa-info-dsh-cfg-", {
       "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh", sandbox: "off" };\n',

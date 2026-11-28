@@ -1,26 +1,21 @@
 # @fastagent-sh/agentcore
 
-Deploy your [FastAgent](https://github.com/fastagent-sh/fastagent) on Amazon Bedrock AgentCore with per-user microVM isolation, Amazon Aurora DSQL persistence, and AWS Secrets Manager values.
+Run a compiled [FastAgent](https://github.com/fastagent-sh/fastagent) artifact inside Amazon Bedrock AgentCore MicroVMs backed by standard PostgreSQL (Aurora Serverless v2, RDS, Neon, or Supabase). Zero AWS SDK or CDK dependencies on the server.
 
 ```bash
-npm i @fastagent-sh/agentcore        # adds `fastagent deploy init agentcore` and `fastagent agentcore`
-fastagent deploy init agentcore      # writes Dockerfile, .dockerignore, and agentcore/ CDK project
-npx -y @aws/agentcore@1.0.3 deploy   # builds remotely and deploys (locally or in CI)
+npm install @fastagent-sh/agentcore @fastagent-sh/fastagent
 ```
-
-Smoke-test from your terminal (`npm i @fastagent-sh/client-agentcore` on the calling machine):
-
-```bash
-fastagent agentcore invoke "hello" --arn <runtimeArn>
-```
-
-Call from your backend with [`@fastagent-sh/client-agentcore`](https://www.npmjs.com/package/@fastagent-sh/client-agentcore):
 
 ```ts
-import { connectAgentCore } from "@fastagent-sh/client-agentcore";
+import { serveAgentCore } from "@fastagent-sh/agentcore";
+import { baseEnv } from "@fastagent-sh/fastagent";
+import myAgent from "./dist/index.js";
 
-const agent = connectAgentCore({ runtimeArn, sessionId: sessionOf(user) });
-const message = await agent.invoke({ conversation: "main", content: "hi" }, { wait: 120 });
+await serveAgentCore(myAgent, {
+  database: { url: process.env.FASTAGENT_DATABASE_URL! },
+  secrets: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY },
+  env: baseEnv(process.env),
+});
 ```
 
-See [Amazon Bedrock AgentCore](https://github.com/fastagent-sh/fastagent/blob/main/docs/agentcore.md) and [Technical architecture](https://github.com/fastagent-sh/fastagent/blob/main/docs/architecture.md).
+Each AgentCore session maps to its own isolated MicroVM and FastAgent instance in PostgreSQL, answering `GET /ping` (`Healthy` / `HealthyBusy`) and `POST /invocations`. Pair callers with [`@fastagent-sh/client-agentcore`](../client-agentcore/README.md).

@@ -1,17 +1,12 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  // A package's entries are its package.json "exports", read through their `@fastagent-sh/source` condition, and its
-  // bin's source.
   "workspaces": {
     ".": {
       "entry": ["test/**/*.test.ts", "test/smoke/*/*.ts", "scripts/*.mjs"],
       "project": ["test/**/*.ts", "scripts/*.mjs"],
-      // The tests exercise the packages through these, the packages' own dependencies and optional peers, installed at
-      // the root.
       "ignoreDependencies": [
         "@aws-sdk/client-bedrock-agentcore",
         "@earendil-works/.+",
-        // Plugin name in tsconfig.json, provided by @effect/tsgo.
         "@effect/language-service",
         "ignore"
       ]
@@ -24,25 +19,14 @@
       "project": ["src/**/*.ts"],
       "includeEntryExports": true
     },
-    "packages/agentcore": {
-      "project": ["src/**/*.ts"],
-      "ignoreDependencies": ["@fastagent-sh/client-agentcore", "@fastagent-sh/fastagent", "aws-cdk-lib", "constructs"]
-    },
     "packages/fastagent": {
       "entry": ["src/cli.ts"],
       "project": ["src/**/*.ts"],
-      // Scaffold templates are copied as files at scaffold time, never imported.
       "ignore": ["src/scaffold/templates/**"]
     },
-    "packages/pi-remote": {
+    "packages/agentcore": {
       "project": ["src/**/*.ts"],
-      "includeEntryExports": true,
-      // Host-provided Pi packages are declared as peerDependencies.
-      "ignoreDependencies": [
-        "@earendil-works/pi-ai",
-        "@earendil-works/pi-coding-agent",
-        "@earendil-works/pi-tui"
-      ]
+      "includeEntryExports": true
     },
     "packages/harness-dsh": {
       "project": ["src/**/*.ts"],
@@ -50,7 +34,5 @@
       "ignoreDependencies": ["@fastagent-sh/fastagent"]
     }
   },
-  // `tsc` is the fastagent package's devDependency, the TypeScript `fastagent build` gives an agent, installed at the
-  // root for every package's build and the typecheck.
-  "ignoreBinaries": ["cmux", "fastagent", "flock", "tsc"]
+  "ignoreBinaries": ["fastagent", "flock", "tsc"]
 }

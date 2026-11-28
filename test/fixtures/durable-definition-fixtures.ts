@@ -41,8 +41,7 @@ Ask for the order number, then read references/codes.md.
 `,
   "skills/Not_Valid/SKILL.md": "---\nname: Not_Valid\ndescription: broken\n---\nbody\n",
   "prompts/review.md": "---\ndescription: Review something\n---\nReview $1 carefully. Everything: $@\n",
-  "src/tools/weather.ts": `import { obj, str } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
+  "src/tools/weather.ts": `import { defineTool } from "${TOOL}";
 import { needs } from "${NEEDS}";
 export default needs(
   [
@@ -54,7 +53,7 @@ export default needs(
     defineTool({
       name: "weather",
       description: "Tells the weather",
-      parameters: obj({ city: str() }),
+      parameters: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } as const,
       execute: async (args) => ({
         output: [{ type: "text", text: \`\${args.city}: sunny (key \${WEATHER_KEY}, region \${WEATHER_REGION ?? "none"})\` }],
       }),
@@ -72,13 +71,11 @@ export const ENV = { WEATHER_KEY: "k-123", GH_TOKEN: "gh" };
 /** A tool that asks which session it runs in (`sessionIdOf`), beside the rest. */
 export const WITH_SESSION_TOOL: Record<string, string> = {
   ...FILES,
-  "src/tools/whoami.ts": `import { obj } from "@earendil-works/pi-schema";
-import { defineTool } from "@earendil-works/pi-durable";
-import { sessionIdOf } from "${TOOL}";
+  "src/tools/whoami.ts": `import { defineTool, sessionIdOf } from "${TOOL}";
 export default defineTool({
   name: "whoami",
   description: "Say where the call runs",
-  parameters: obj({}),
+  parameters: { type: "object", properties: {} } as const,
   execute: async (_args, api, context) => ({
     output: [{ type: "text", text: \`session \${await sessionIdOf(api, context)}\` }],
   }),

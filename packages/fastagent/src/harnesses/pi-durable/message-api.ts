@@ -100,7 +100,6 @@ export interface MessageApiDeps {
   readonly registry: RegistryReader;
   readonly defaults: Defaults;
   readonly unusableDefault: NonNullable<AgentInfo["unusableDefault"]> | undefined;
-  readonly maxMessageBytes: number | undefined;
   readonly commands: () => readonly AgentCommand[];
   readonly conversationOf: (sessionId: string) => Effect.Effect<Conversation, AgentError | PromiseFailure>;
   readonly failureOf: (error: unknown) => AgentError;
@@ -121,7 +120,6 @@ export function createPiDurableMessages(deps: MessageApiDeps): Agent["messages"]
     registry,
     defaults,
     unusableDefault,
-    maxMessageBytes,
     commands,
     conversationOf,
     failureOf,
@@ -191,14 +189,6 @@ export function createPiDurableMessages(deps: MessageApiDeps): Agent["messages"]
         const requestId = requestIdFor(request.idempotencyKey);
         // Before anything is written: reading or expanding a command reads the definition's files, and may throw.
         const { content, sent } = expandPromptCommand(request.content, commands());
-        const bytes = maxMessageBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(content));
-        if (maxMessageBytes !== undefined && bytes > maxMessageBytes) {
-          return yield* agentError(
-            "invalid_request",
-            `The message is ${bytes} bytes, over the ${maxMessageBytes} this agent's storage takes`,
-            { reason: "too_large" },
-          );
-        }
         const conversation = yield* conversationOf(request.sessionId);
         // Read before the commit, which cannot read the harness, and applied after the key: a key the session has
         // seen answers with its message whatever the process holds.

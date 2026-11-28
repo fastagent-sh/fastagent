@@ -67,8 +67,8 @@ describe("deploy/container: the portable image", () => {
 
     const unlocked = containerArtifacts({
       target: {
-        writtenBy: "fastagent deploy init agentcore",
-        command: ["./node_modules/.bin/fastagent", "agentcore", "start"],
+        writtenBy: "fastagent deploy init docker",
+        command: ["./node_modules/.bin/fastagent", "start"],
         storage: "database",
         port: 8080,
       },
@@ -78,7 +78,7 @@ describe("deploy/container: the portable image", () => {
     }).find((artifact) => artifact.path === "Dockerfile")!.content;
     expect(unlocked).toMatch(/^FROM oven\/bun:1$/m);
     expect(unlocked).toMatch(/^RUN bun install$/m);
-    expect(unlocked).toMatch(/^CMD \["bun", "\.\/node_modules\/\.bin\/fastagent", "agentcore", "start"\]$/m);
+    expect(unlocked).toMatch(/^CMD \["bun", "\.\/node_modules\/\.bin\/fastagent", "start"\]$/m);
 
     expect(() =>
       containerArtifacts({

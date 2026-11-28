@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai/session-resources";
-import { obj } from "@earendil-works/pi-schema";
 import { afterAll, describe, expect, it } from "vitest";
 import { serveService } from "../../../packages/fastagent/src/cli/serve.ts";
 import { DEFINITION_FORMAT, defineDefinition } from "../../../packages/fastagent/src/definition/definition.ts";
@@ -135,7 +134,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     const holdTool = defineTool({
       name: "hold_cleanup",
       description: "Holds an invocation open until the test releases cleanup.",
-      parameters: obj({}),
+      parameters: { type: "object", properties: {} } as const,
       execute: async () => {
         markStarted();
         // Deliberately ignore abort so harness.close() blocks in beforeClose() until releaseCleanup() runs.
@@ -225,7 +224,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     const localHoldTool = defineTool({
       name: "hold_cleanup",
       description: "Holds cleanup open on LocalAgent.",
-      parameters: obj({}),
+      parameters: { type: "object", properties: {} } as const,
       execute: async () => {
         markLocalStarted();
         await holdLocalCleanup;
@@ -299,7 +298,7 @@ describe("openAgent: an agent directory opened in an app", () => {
     const holdTool = defineTool({
       name: "hold_reopen",
       description: "Holds close open until released.",
-      parameters: obj({}),
+      parameters: { type: "object", properties: {} } as const,
       execute: async () => {
         markStarted();
         await holdCleanup;

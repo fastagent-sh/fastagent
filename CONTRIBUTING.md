@@ -98,7 +98,7 @@ A PR is mergeable only when:
 - `npm run lint` is clean (Biome format/lint plus local Markdown links; run `npm run format` to auto-fix code),
 - `npm run typecheck` is clean (TypeScript with `noUnusedLocals`/`noUnusedParameters`),
 - `npm test` passes, and `npm run test:integration` when the change touches what it tests,
-- CI (`Core checks`: unit on Node 24.15 / 26, integration and the artifact smoke on 24.15, Bun 1.4.4 smoke; and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
+- CI (`Core checks`: unit on Node 22.22 / 26, integration and the artifact smoke on 24.15, Bun 1.4.4 smoke; and `CodeQL`) is green. Branch protection enforces this: a PR whose required checks have not passed cannot merge.
 
 Add the spec cases a change makes or changes ([AGENTS.md](AGENTS.md#tests)). One-off scenario scripts are run and deleted, not committed.
 

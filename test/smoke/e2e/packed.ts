@@ -1,11 +1,9 @@
 /**
  * The packages as a user gets them, end to end (AGENTS.md, "Tests"): the packed tarballs installed, an agent made
- * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, an extension's command
- * run through it (`fastagent agentcore`), and the build opened by an app through the package's own entry. The model is pi-ai's faux provider, so only npm's install leaves the machine.
- * Nothing here is aliased to src/. CI's packed-package job runs it: `node test/smoke/e2e/packed.ts <tarball>...`, every
- * package's, since one package depends on another's version before it is published.
+ * with `fastagent init`, asked a question with `fastagent invoke`, built with `fastagent build`, and the build opened
+ * by an app through the package's own entry across both `pi-durable` and `dsh`.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,7 +12,6 @@ const tarballs = process.argv.slice(2).map((path) => resolve(path));
 if (tarballs.length === 0) throw new Error("usage: node test/smoke/e2e/packed.ts <each tarball npm pack wrote>...");
 
 const work = mkdtempSync(join(tmpdir(), "fa-e2e-"));
-// A machine of its own: no credentials.
 const env = { ...process.env, HOME: join(work, "home") };
 const sh = (command: string, args: string[], cwd: string): string => {
   console.error(`$ ${command} ${args.join(" ")}`);
@@ -34,7 +31,6 @@ sh("npm", ["install", "--no-audit", "--no-fund", ...tarballs], tools);
 const serverTarballs = tarballs.filter((t) => !t.includes("fastagent-sh-client-agentcore-"));
 const agent = join(work, "agent");
 sh(join(tools, "node_modules", ".bin", "fastagent"), ["init", agent, "--no-install"], work);
-// Production agent installs omit @fastagent-sh/client-agentcore (server image stays free of client SDK).
 sh("npm", ["install", "--no-audit", "--no-fund", ...serverTarballs], agent);
 writeFileSync(
   join(agent, "fastagent.config.ts"),
@@ -57,24 +53,7 @@ expectEqual(
 );
 
 sh(fastagent, ["build"], agent);
-// An installed extension's command, through the agent's own CLI (resolved from `-C` outside the agent dir).
-expectEqual(
-  "fastagent agentcore's usage",
-  sh(join(tools, "node_modules", ".bin", "fastagent"), ["-C", agent, "agentcore", "--help"], work).split("\n")[0],
-  "Usage: fastagent [-C <dir>] agentcore <command>",
-);
-// Production installs of `@fastagent-sh/agentcore` omit `@fastagent-sh/client-agentcore`; invoking without it exits 2 naming it.
-const missingSdk = spawnSync(
-  fastagent,
-  ["agentcore", "invoke", "ping", "--arn", "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/demo"],
-  { cwd: agent, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-);
-expectEqual("agentcore invoke without client-agentcore exits 2", missingSdk.status, 2);
-if (!missingSdk.stderr.includes("npm install @fastagent-sh/client-agentcore")) {
-  throw new Error(`expected install hint in stderr, got: ${missingSdk.stderr}`);
-}
 
-// In the agent directory, where `@fastagent-sh/fastagent` is installed, as in an app that depends on it.
 const app = join(agent, "app.mjs");
 writeFileSync(
   app,

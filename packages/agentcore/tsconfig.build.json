@@ -1,11 +1,13 @@
 {
-  // Publish build only, as packages/fastagent/tsconfig.build.json: @fastagent-sh/fastagent is read from its build.
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
     "rewriteRelativeImportExtensions": true,
     "declaration": true,
     "paths": {},
+    "target": "ES2024",
+    "lib": ["ES2024", "ES2025.Collection", "ES2025.Iterator"],
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src"
   },

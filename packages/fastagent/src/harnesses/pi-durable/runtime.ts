@@ -58,6 +58,7 @@ function openInstanceStorage(
 export const piDurableProvider: HarnessProvider<PiDurableStorageHandle> = {
   name: "pi-durable",
   supportsExtensions: true,
+  supportsSandbox: false,
 
   async openStorage(ctx: HarnessStorageOpenContext): Promise<PiDurableStorageHandle> {
     const raw: Storage =
@@ -88,7 +89,6 @@ export const piDurableProvider: HarnessProvider<PiDurableStorageHandle> = {
       },
       ...(ctx.unfinished === undefined ? {} : { unfinished: ctx.unfinished }),
       ...(ctx.telemetry === undefined ? {} : { telemetry: ctx.telemetry as TelemetryContext }),
-      ...(ctx.maxMessageBytes === undefined ? {} : { maxMessageBytes: ctx.maxMessageBytes }),
       work: ctx.work,
     });
 

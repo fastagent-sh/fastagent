@@ -7,16 +7,13 @@
 /** AgentCore's rule for `runtimeSessionId`: 33 to 256 letters, digits, hyphens and underscores, starting alphanumeric. */
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{32,255}$/;
 
-/** An Agent API request, as an invocation carries it. A request's body is JSON text. */
 interface EnvelopedRequest {
   method: string;
-  /** The path and query, as `/v1/sessions?limit=10`. */
   path: string;
   headers: Record<string, string>;
   body?: string;
 }
 
-/** An Agent API answer that is not an event stream. Its body is base64 (attachments carry raw bytes). */
 export interface EnvelopedResponse {
   status: number;
   headers: Record<string, string>;
@@ -45,6 +42,5 @@ export async function envelopeRequest(request: Request): Promise<EnvelopedReques
 
 export function unwrapResponse({ status, headers, body }: EnvelopedResponse): Response {
   const bytes = fromBase64(body);
-  // A Response with a null-body status (204, 304) takes no body, not even an empty one.
   return new Response([101, 204, 205, 304].includes(status) ? null : bytes, { status, headers });
 }

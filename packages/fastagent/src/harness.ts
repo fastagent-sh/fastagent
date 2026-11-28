@@ -1,8 +1,8 @@
 /**
- * SDK entry (`@fastagent-sh/fastagent/harness`) for runtime harness plugins (`@fastagent-sh/harness-<name>`).
- * Centralizes the two-phase `HarnessProvider` contract, portable tool/command/telemetry types, PostgreSQL & Aurora DSQL
- * single-writer storage primitives, `pi-ai` error classification, and async event channel helpers without pulling in
- * `@earendil-works/pi-durable`, `@earendil-works/chord`, or any `@deepseek-ai/*` package.
+ * SDK entry (`@fastagent-sh/fastagent/harness`) for server-grade runtime harness and cloud serving adapters.
+ * Centralizes the two-phase `HarnessProvider` contract, portable tool/command/telemetry types, PostgreSQL single-writer
+ * storage primitives, Fetch HTTP server helper (`serveHandler`), `pi-ai` error classification, and async event channel
+ * helpers without pulling in `@earendil-works/pi-durable`, `@earendil-works/chord`, or any `@deepseek-ai/*` package.
  */
 import type { Models } from "@earendil-works/pi-ai";
 import type { Agent, AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
@@ -18,6 +18,7 @@ import type { PgLeaseHandoff } from "./postgres-kit.ts";
 import type { RunsAs } from "./serving-command.ts";
 
 export { INSTANCE_NAME_ENV } from "./instance-name.ts";
+export { type Handler, serveHandler } from "./http/serve.ts";
 export { Unavailable } from "./unavailable.ts";
 export {
   DEFAULT_LEASE_MS,
@@ -26,7 +27,6 @@ export {
   acquirePgInstanceLease,
   isPgConflict,
   migratePgSchema,
-  splitPgText,
   type MigratePgSchemaOptions,
   type PgInstanceLease,
   type PgLeaseHandoff,
@@ -35,11 +35,9 @@ export {
   describeDatabase,
   isTransientPgError,
   sharedHandleOf,
-  type CreateIndex,
   type PgDatabase,
   type PgExecutor,
   type PostgresDatabase,
-  type PostgresLimits,
   type SharedPostgresDatabase,
   type SharedPostgresHandle,
 } from "./postgres.ts";
@@ -161,7 +159,6 @@ export interface HarnessAgentOpenContext<S extends HarnessStorageHandle = Harnes
   readonly unusableDefault?: NonNullable<AgentInfo["unusableDefault"]>;
   readonly runsAs: RunsAs;
   readonly unfinished?: Unfinished;
-  readonly maxMessageBytes?: number;
   readonly telemetry?: HarnessTelemetryContext;
   readonly work: WorkTracker;
   readonly commands: () => readonly AgentCommand[];
@@ -173,6 +170,8 @@ export interface HarnessProvider<S extends HarnessStorageHandle = HarnessStorage
   readonly name: string;
   /** Whether this harness installs `src/extensions/*` (`pi-durable` only; `false` logs a skip warning). */
   readonly supportsExtensions?: boolean;
+  /** Whether this harness enforces OS sandboxing (`workspace` / `read-only` / `off`). */
+  readonly supportsSandbox?: boolean;
   openStorage(ctx: HarnessStorageOpenContext): Promise<S> | S;
   openAgent(ctx: HarnessAgentOpenContext<S>): Promise<HarnessRuntimeAgent>;
 }

@@ -12,11 +12,10 @@ export type CodingToolName = (typeof CODING_TOOL_NAMES)[number];
 /** Built-in coding tools to install: `true` (default) for all four, `false` for none, or an explicit subset. */
 export type CodingToolsConfig = boolean | readonly CodingToolName[];
 
-/** Supported runtime harnesses. */
-export const HARNESS_NAMES = ["pi-durable", "dsh"] as const;
-export type HarnessName = (typeof HARNESS_NAMES)[number];
+/** First-party runtime harnesses; third-party `@fastagent-sh/harness-<name>` plugins are also accepted. */
+export type HarnessName = "pi-durable" | "dsh" | (string & {});
 
-/** OS sandbox posture (applicable when `harness: "dsh"`). */
+/** OS sandbox posture (applicable on sandbox-capable harnesses such as `"dsh"`). */
 export const SANDBOX_MODES = ["workspace", "read-only", "off"] as const;
 export type SandboxMode = (typeof SANDBOX_MODES)[number];
 
@@ -25,9 +24,9 @@ export interface AgentConfig {
   /** `"provider/modelId"`: what a session that names none answers with; `--model` or `FASTAGENT_MODEL` may override it. */
   model?: string;
   thinkingLevel?: ModelThinkingLevel;
-  /** Runtime harness. Default `"pi-durable"`; pass `"dsh"` to run on `@fastagent-sh/harness-dsh`. */
+  /** Runtime harness. Default `"pi-durable"`; pass `"dsh"` or another `@fastagent-sh/harness-<name>` plugin name. */
   harness?: HarnessName;
-  /** OS sandbox mode for `harness: "dsh"`: `"workspace"` (default), `"read-only"`, or `"off"`. */
+  /** OS sandbox mode on sandbox-capable harnesses (`"workspace"` default, `"read-only"`, or `"off"`). */
   sandbox?: SandboxMode;
   /** Built-in coding tools (`read`, `write`, `edit`, `bash`). Default `true`; pass `false` or a subset to restrict. */
   codingTools?: CodingToolsConfig;

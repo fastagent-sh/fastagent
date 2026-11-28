@@ -1,12 +1,6 @@
 /**
- * An agent as an AgentCore runtime. AgentCore gives each session a microVM of its own, and a session is one instance:
- * named by the session id AgentCore puts on every invocation, and kept in the database, so a microVM holds nothing that
- * must survive. The first invocation opens the instance; one naming another session is refused, since this microVM is
- * that one's.
- *
- * The Agent API is served as it is everywhere, behind a key this process makes and adds to each request it unwraps:
- * what reaches the container came through AgentCore, which authenticated it (IAM or JWT), so a second credential would
- * only be one more for a Caller to hold.
+ * Amazon Bedrock AgentCore MicroVM runtime adapter: each AgentCore session gets its own MicroVM and maps to one
+ * FastAgent instance backed by PostgreSQL, exposing `GET /ping` (`Healthy` / `HealthyBusy`) and `POST /invocations`.
  */
 import { randomBytes } from "node:crypto";
 import * as Cause from "effect/Cause";
@@ -26,28 +20,27 @@ import {
   type Service,
   openAgent,
 } from "@fastagent-sh/fastagent";
-import { Unavailable, serveHandler } from "@fastagent-sh/fastagent/platform";
+import { Unavailable, serveHandler } from "@fastagent-sh/fastagent/harness";
 import { type EnvelopedRequest, envelopeResponse, isEventStream } from "./contract.ts";
 
 /** The header AgentCore names an invocation's session in. */
 export const SESSION_HEADER = "x-amzn-bedrock-agentcore-runtime-session-id";
 
-/** AgentCore's HTTP protocol: the port its invocations and `/ping` reach. */
+/** AgentCore's HTTP protocol port (`GET /ping` and `POST /invocations`). */
 const PORT = 8080;
 
 export interface AgentCoreOptions extends Pick<OpenAgentOptions, "secrets" | "env" | "model" | "harness" | "sandbox"> {
-  /**
-   * Where the instances are: on AWS, `dsqlDatabase(...)`. Or how to find it as an instance opens, so a runtime without
-   * one says so to every invocation rather than exiting where only its log tells.
-   */
+  /** PostgreSQL database descriptor (or lazy factory) storing session state across MicroVM recycles. */
   database: PostgresDatabase | (() => PostgresDatabase);
-  /** The agent's working directory, on the microVM's disk: gone with it. Default `/tmp/fastagent`. */
+  /** Working directory on the MicroVM's ephemeral disk. Default `/tmp/fastagent`. */
   root?: string;
-  /**
-   * The agent's values read where they are kept (its Secrets Manager secret), over `secrets`: read as the instance
-   * opens, so one that cannot be read is said to the invocation, and one fixed after the deploy is read at the next.
-   */
+  /** Optional async secret loader invoked when opening the instance (e.g. AWS Secrets Manager / Parameter Store). */
   values?: () => Promise<Readonly<Record<string, string | Redacted.Redacted<string>>>>;
+}
+
+export interface AgentCoreHandler {
+  fetch(request: Request): Promise<Response>;
+  close(): Promise<void>;
 }
 
 interface Opened {
@@ -79,7 +72,6 @@ class WrongSessionFailure {
   }
 }
 
-/** A refusal as the Agent API answers it, inside the envelope AgentCore delivers whole. */
 function refused(code: ErrorCode, message: string): Promise<Response> {
   const error = errorData(agentError(code, message));
   const answer = Response.json(
@@ -90,7 +82,6 @@ function refused(code: ErrorCode, message: string): Promise<Response> {
 }
 
 async function enveloped(response: Response): Promise<Response> {
-  // An event stream goes out as it is written: AgentCore passes a 200 with its body through.
   if (response.status === 200 && isEventStream(response.headers.get("content-type"))) return response;
   return Response.json({ response: await envelopeResponse(response) });
 }
@@ -110,7 +101,6 @@ function parseRequest(body: unknown): EnvelopedRequest | undefined {
   };
 }
 
-/** Close a scope quietly so a finalizer failure never masks the caller's error. */
 function closeScopeQuietly(scope: Scope.Closeable, label: string): Effect.Effect<void> {
   return Scope.close(scope, Exit.void).pipe(
     Effect.catchCause((cause) =>
@@ -119,8 +109,8 @@ function closeScopeQuietly(scope: Scope.Closeable, label: string): Effect.Effect
   );
 }
 
-/** What the container answers, as a Fetch handler: `/ping` and `POST /invocations`. */
-export function agentCoreHandler(definition: AgentDefinition, options: AgentCoreOptions) {
+/** Build the Fetch handler answering AgentCore's `GET /ping` and `POST /invocations`. */
+export function agentCoreHandler(definition: AgentDefinition, options: AgentCoreOptions): AgentCoreHandler {
   const { database, root = "/tmp/fastagent", values, ...given } = options;
   const slot = Ref.makeUnsafe<SlotState>({ _tag: "empty" });
 
@@ -152,8 +142,6 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
         catch: (cause) => new OpenFailure(cause),
       });
       const opened: Opened = { agent, service, key, scope };
-      // Its runs stopped under it (the lease went to another process, or went unrenewed): clear the slot and close
-      // the instance scope so the next invocation opens the instance cleanly.
       const reopen = () => {
         void runPromise(
           Ref.modify(slot, (current) =>
@@ -214,8 +202,6 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
     if (decision._tag === "ready") return decision.opened;
     if (decision._tag === "wrong") return yield* Effect.fail(new WrongSessionFailure(decision.active));
     if (decision._tag === "wait") return yield* Deferred.await(decision.ready);
-    // Single-flight leader runs uninterruptibly so concurrent callers awaiting `decision.ready` always observe a
-    // settled outcome and failed opens cleanly reset the slot to `empty`.
     const outcome = yield* Effect.uninterruptible(
       openInstance(name).pipe(
         Effect.exit,
@@ -319,7 +305,6 @@ export function agentCoreHandler(definition: AgentDefinition, options: AgentCore
       if (path === "/invocations" && request.method === "POST") return Effect.runPromise(invocation(request));
       return new Response("not found\n", { status: 404 });
     },
-    /** Stop serving, then release the instance. */
     close(): Promise<void> {
       return Effect.runPromise(closeSlot());
     },
@@ -334,7 +319,7 @@ class ServeFailure {
   }
 }
 
-/** Serve `definition` as an AgentCore runtime, on AgentCore's port. Answers how to stop it. */
+/** Serve `definition` as an Amazon Bedrock AgentCore runtime on port 8080. */
 export async function serveAgentCore(
   definition: AgentDefinition,
   options: AgentCoreOptions,
@@ -343,7 +328,6 @@ export async function serveAgentCore(
   const handler = agentCoreHandler(definition, options);
   const exit = await Effect.runPromiseExit(
     Effect.gen(function* () {
-      // Registered before the server so LIFO scope close stops HTTP first, then releases the instance.
       yield* Scope.addFinalizer(
         scope,
         Effect.promise(() =>

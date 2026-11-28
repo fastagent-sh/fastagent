@@ -22,8 +22,6 @@ export default defineConfig({
       { find: /^@fastagent-sh\/fastagent$/, replacement: `${source("fastagent")}/index.ts` },
       { find: /^@fastagent-sh\/agentcore\/(.+)$/, replacement: `${source("agentcore")}/$1.ts` },
       { find: /^@fastagent-sh\/agentcore$/, replacement: `${source("agentcore")}/index.ts` },
-      { find: /^@fastagent-sh\/pi-remote\/(.+)$/, replacement: `${source("pi-remote")}/$1.ts` },
-      { find: /^@fastagent-sh\/pi-remote$/, replacement: `${source("pi-remote")}/index.ts` },
       { find: /^@fastagent-sh\/harness-dsh\/(.+)$/, replacement: `${source("harness-dsh")}/$1.ts` },
       { find: /^@fastagent-sh\/harness-dsh$/, replacement: `${source("harness-dsh")}/index.ts` },
     ],
@@ -33,7 +31,7 @@ export default defineConfig({
     // Cap worker forks so concurrent PGlite WASM boots do not contend for CPU/memory on high-core hosts.
     maxWorkers: 2,
     // A module a test imports natively (a built package's, outside Vite) reads the packages' source too.
-    execArgv: ["--conditions=@fastagent-sh/source"],
+    execArgv: ["--conditions=@fastagent-sh/source", "--disable-warning=ExperimentalWarning"],
     projects: [
       {
         extends: true,

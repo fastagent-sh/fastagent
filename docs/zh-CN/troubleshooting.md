@@ -37,7 +37,7 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # Shell 或容器环境
 ### `Invalid schema for function '...'`
 
 **原因：** 部分模型提供商（尤其是 OpenAI）仅支持有限的 JSON Schema `format` 值（`date-time`、`date`、`email`、`uuid` 等），会拒绝 `format: "uri"` 等其他格式。
-**解决：** 将不被支持的 `format` 替换为正则 `pattern`（JSON Schema 用 `pattern: "^https?://\\S+$"`，Zod 用 `z.string().regex(/^https?:\/\/\S+$/)`，`pi-schema` 用 `str({ pattern: "^https?://\\S+$" })`）。
+**解决：** 将不被支持的 `format` 替换为正则 `pattern`（JSON Schema 用 `pattern: "^https?://\\S+$"`，或 Zod 用 `z.string().regex(/^https?:\/\/\S+$/)`）。
 
 ### 端口已被占用
 
@@ -88,14 +88,9 @@ npm install @fastagent-sh/harness-dsh
 
 ## 远程端点与远程认证
 
-### `Remote "..." uses transport "agentcore"; install @fastagent-sh/client-agentcore`
-
-**原因：** `~/.config/fastagent/remotes.json` 中的非 HTTP 条目会动态加载 `@fastagent-sh/client-<type>`。
-**解决：** 在运行 `fastagent` 或 Pi 的环境中安装 `@fastagent-sh/client-agentcore`。
-
 ### 远程调用报错 `unauthorized` 与 `auth_required` 的区别
 
-- **`unauthorized`（HTTP 401）：** 你传给 FastAgent 服务的 **API Key**（`FASTAGENT_API_KEY`、`--key` 或 `remotes.json` 中的 `apiKey`）缺失或错误（或在 AgentCore 上被 AWS IAM 拒绝）。
+- **`unauthorized`（HTTP 401）：** 你传给 FastAgent 服务的 **API Key**（`FASTAGENT_API_KEY`、`--key` 或 `remotes.json` 中的 `apiKey`）缺失或错误。
 - **`auth_required`（位于 `message.error`）：** FastAgent 服务已接收请求，但实例内的**模型提供商**缺少有效凭证。请在宿主机注入模型 API Key，或运行 `fastagent login <provider> --remote <name>`。
 
 ## 部署问题
@@ -103,7 +98,7 @@ npm install @fastagent-sh/harness-dsh
 ### 重新部署后历史会话丢失
 
 **原因：** 实例状态被写入了容器的临时文件系统。
-**解决：** 在 `/data`（生成容器的默认 `FASTAGENT_ROOT`）挂载持久化卷，或设置 `FASTAGENT_DATABASE_URL` 指向 PostgreSQL / Aurora DSQL。
+**解决：** 在 `/data`（生成容器的默认 `FASTAGENT_ROOT`）挂载持久化卷，或设置 `FASTAGENT_DATABASE_URL` 指向 PostgreSQL。
 
 ### `deploy init` / `deploy check` 失败，或容器启动即退出
 

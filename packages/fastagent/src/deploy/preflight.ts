@@ -183,6 +183,8 @@ async function gatherFacts(
     }
     if (
       kept === undefined &&
+      harnessSelection.harness === "dsh" &&
+      harnessSelection.sandbox !== undefined &&
       harnessSelection.sandbox !== "off" &&
       resolveCodingTools(config.codingTools).includes("bash")
     ) {

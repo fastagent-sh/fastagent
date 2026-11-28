@@ -92,20 +92,6 @@ export async function admitMessage(
   const metadata = request.metadata;
   const whenBusy = request.whenBusy ?? "queue";
   const { rawParts, expandedParts } = normalizeSendContent(request.content, commands);
-  const maxMessageBytes = state.options.maxMessageBytes;
-  if (maxMessageBytes !== undefined) {
-    const bytes = Math.max(
-      Buffer.byteLength(JSON.stringify(rawParts)),
-      Buffer.byteLength(JSON.stringify(expandedParts)),
-    );
-    if (bytes > maxMessageBytes) {
-      throw agentError(
-        "invalid_request",
-        `The message is ${bytes} bytes, over the ${maxMessageBytes} this agent's storage takes`,
-        { reason: "too_large" },
-      );
-    }
-  }
 
   let releaseAdmit!: () => void;
   const prevChain = live.admitChain;

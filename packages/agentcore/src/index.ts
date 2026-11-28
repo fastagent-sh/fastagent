@@ -1,6 +1,10 @@
 /**
- * What running on Amazon Bedrock AgentCore needs: the runtime a container serves and Aurora DSQL as its database.
- * A Caller connects through `@fastagent-sh/client-agentcore`.
+ * Amazon Bedrock AgentCore MicroVM server runtime adapter for FastAgent.
  */
-export { type DsqlOptions, dsqlDatabase } from "./dsql.ts";
-export { type AgentCoreOptions, serveAgentCore } from "./runtime.ts";
+export {
+  SESSION_HEADER,
+  agentCoreHandler,
+  serveAgentCore,
+  type AgentCoreHandler,
+  type AgentCoreOptions,
+} from "./runtime.ts";

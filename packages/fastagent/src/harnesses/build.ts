@@ -11,10 +11,9 @@ import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "../defin
 import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
 import { readPackageJson } from "../runtime.ts";
-import { HARNESS_PACKAGES } from "../version.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
 import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
-import { OPTIONAL_HARNESS_PACKAGES, diagnoseHarnessCompatibility, resolveHarnessSelection } from "./config.ts";
+import { diagnoseHarnessCompatibility, resolveHarnessSelection } from "./config.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
@@ -177,11 +176,12 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
     license?: string;
     dependencies?: Record<string, string>;
   };
-  const peers = new Set([FASTAGENT_PACKAGE, ...HARNESS_PACKAGES, ...Object.values(OPTIONAL_HARNESS_PACKAGES)]);
+  const isSharedPeer = (name: string): boolean =>
+    name === FASTAGENT_PACKAGE || name.startsWith("@fastagent-sh/harness-") || name.startsWith("@earendil-works/");
   const dependencies: Record<string, string> = {};
   const peerDependencies: Record<string, string> = {};
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
-    (peers.has(name) ? peerDependencies : dependencies)[name] = range;
+    (isSharedPeer(name) ? peerDependencies : dependencies)[name] = range;
   }
   const out = {
     name: pkg.name ?? basename(dir),

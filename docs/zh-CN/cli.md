@@ -37,12 +37,8 @@ fastagent <command> --help     # 由源码生成的权威参数与示例
 
 | 命令 | 说明 |
 | --- | --- |
-| `deploy init <target>` | 生成容器与平台声明文件（`docker`、`compose`、`fly`、`railway` 或已安装扩展如 `agentcore`；`--force`、`--no-install`）（见[部署指南](deploy.md)） |
+| `deploy init <target>` | 生成容器与平台声明文件（`docker`、`compose`、`fly` 或 `railway`；`--force`）（见[部署指南](deploy.md)） |
 | `deploy check` | 只读 CI 门禁，验证 Agent 可正常加载且构建上下文不泄漏本地密钥或状态（`--json`） |
-
-### 平台扩展命令
-
-安装 `@fastagent-sh/<name>` 平台扩展包后，会自动注册 `fastagent deploy init <name>` 与 `fastagent <name> ...`（例如 `npm i @fastagent-sh/agentcore` 会增加 `fastagent deploy init agentcore` 和 `fastagent agentcore init|start|invoke`）。运行 `fastagent <name> --help` 查看扩展参数。调用未安装的扩展会返回退出码 `2` 并提示所需安装的包名。
 
 ## 常用参数
 
@@ -50,7 +46,7 @@ fastagent <command> --help     # 由源码生成的权威参数与示例
 
 | 参数 | 适用命令 | 用途 |
 | --- | --- | --- |
-| `-C <dir>` | 任意命令之前 | 切换到 `<dir>` 运行（包含版本委托与扩展查找） |
+| `-C <dir>` | 任意命令之前 | 切换到 `<dir>` 运行（包含项目本地 CLI 版本委托） |
 | `--model <provider/modelId>` | `dev`、`start`、`invoke`、`info` | 覆盖模型（`--model` > `FASTAGENT_MODEL` > 配置文件） |
 | `--harness <pi-durable\|dsh>` | `dev`、`start`、`invoke`、`info` | 覆盖运行时 Harness（`--harness` > `FASTAGENT_HARNESS` > 配置 > `pi-durable`） |
 | `--sandbox <workspace\|read-only\|off>` | `dev`、`start`、`invoke`、`info` | `harness: "dsh"` 下的 OS 沙箱模式 |

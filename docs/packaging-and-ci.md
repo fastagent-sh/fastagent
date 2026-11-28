@@ -42,7 +42,7 @@ Every build enforces strict artifact boundaries before anything is written to `d
 - **No out-of-tree imports:** Refuses source imports from outside the agent directory that `dist/` cannot carry.
 - **No machine state or secrets:** Never copies `.secrets/`, `.env*`, `.state/`, `node_modules/`, `.git/`, or anything from `~/.pi/agent`.
 - **MCP & harness compatibility checks:** Verifies relative stdio MCP commands exist inside `dist/`, warns if `mcpServers` contains literal credentials instead of `${VAR}` references, and warns when `fastagent.config.ts` selects a harness (such as `dsh`) that skips `pi-durable`-only `src/extensions/*` modules.
-- **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent` and the built-in `pi-*` packages (`@earendil-works/pi-durable`, `@earendil-works/pi-ai`, `@earendil-works/pi-schema`) into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
+- **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent`, `@fastagent-sh/harness-*`, and `@earendil-works/*` packages into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
 
 ## 2. Distribute & version as an npm package
 
@@ -196,5 +196,4 @@ Because an agent contains only Markdown prompts/skills and typed TypeScript modu
 
 - Embed a built agent package in your backend: [Embedding](embedding.md)
 - Ship containers or sleep-when-idle cloud services: [Deploy](deploy.md)
-- Run isolated per-user microVMs on AWS: [Amazon Bedrock AgentCore](agentcore.md)
 - Full CLI flags and exit codes: [CLI reference](cli.md)

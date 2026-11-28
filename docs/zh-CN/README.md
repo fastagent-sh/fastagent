@@ -8,7 +8,7 @@ status: current
 
 [English](../README.md) · **简体中文**
 
-FastAgent 是面向生产级 AI Agent 的开源 TypeScript & Node.js 运行时。用 Markdown（`SYSTEM.md`、`AGENTS.md`、`skills/`）、强类型 TypeScript 工具与 MCP 编写 Agent——打包为版本化 npm 制品、直接嵌入你的应用、使用 Docker 自托管，或部署到 Fly.io、Railway 与 AWS AgentCore。
+FastAgent 是面向生产级 AI Agent 的开源 TypeScript 云运行时。用 Markdown（`SYSTEM.md`、`AGENTS.md`、`skills/`）、强类型 TypeScript 工具与 MCP 编写 Agent——打包为版本化 npm 制品、直接嵌入你的后端应用、使用 Docker 自托管，或部署到 Fly.io、Railway 与任意云平台。
 
 ## 从这里开始
 
@@ -16,7 +16,7 @@ FastAgent 是面向生产级 AI Agent 的开源 TypeScript & Node.js 运行时�
 | --- | --- |
 | 了解 FastAgent 的定位、解决的问题与边界 | [产品概览](overview.md) |
 | 5 分钟搭建并运行你的第一个 Agent | [快速上手](quickstart.md) |
-| 浏览生产级示例（`pr-review-agent`、`incident-triage-agent`、`saas-copilot`、`agentcore-per-user`、`deep-research-agent`） | [示例项目](../../examples/README.md) |
+| 浏览生产级示例（`pr-review-agent`、`incident-triage-agent`、`saas-copilot`、`deep-research-agent`） | [示例项目](../../examples/README.md) |
 | 将 Agent 打包为版本化 npm 制品并在 CI 中设置门禁 | [打包、分发与 CI/CD](packaging-and-ci.md) |
 | 端到端构建与验证流程（适合人类开发者与 Coding Agent） | [Agent 开发指南](ai-start.md) |
 
@@ -38,7 +38,7 @@ FastAgent 是面向生产级 AI Agent 的开源 TypeScript & Node.js 运行时�
 
 | 目标 | 指南 |
 | --- | --- |
-| 管理远程端点、调用线上部署、远程登录以及使用 `@fastagent-sh/pi-remote` | [远程实例与客户端](remotes.md) |
+| 管理远程端点、调用线上部署与远程登录 | [远程实例与客户端](remotes.md) |
 | 查询全部 `fastagent` 命令、参数与退出码 | [CLI 参考](cli.md) |
 
 ## 嵌入与部署
@@ -47,7 +47,6 @@ FastAgent 是面向生产级 AI Agent 的开源 TypeScript & Node.js 运行时�
 | --- | --- |
 | 将 Agent 嵌入现有 Node 或 Bun 后端 | [嵌入应用](embedding.md) |
 | 部署到 Docker、Compose、Fly.io、Railway 或任意容器宿主机 | [部署指南](deploy.md) |
-| 在 Amazon Bedrock AgentCore + Aurora DSQL 上运行每用户隔离 MicroVM | [AWS AgentCore](agentcore.md) |
 
 ## 参考与排错
 

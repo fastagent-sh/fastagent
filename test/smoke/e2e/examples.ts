@@ -183,8 +183,8 @@ try {
   const tscBin = join(work, "node_modules", ".bin", "tsc");
 
   const agentDirs = packageDirs.filter((dir) => existsSync(join(dir, "fastagent.config.ts")));
-  if (agentDirs.length < 5) {
-    throw new Error(`expected at least 5 example agents, found ${agentDirs.length}: ${agentDirs.join(", ")}`);
+  if (agentDirs.length < 4) {
+    throw new Error(`expected at least 4 example agents, found ${agentDirs.length}: ${agentDirs.join(", ")}`);
   }
 
   for (const agentDir of agentDirs) {
