@@ -24,10 +24,10 @@ const MODULE = /^([^.][^/]*)\.(ts|mts|js|mjs)$/;
 const NOT_A_MODULE = /\.(d|test|spec)\.[a-z]+$/;
 
 /** The module files of one directory of `src/`, sorted so the registry is the same wherever it is generated. */
-async function modulesIn(dir: string, subDir: string): Promise<{ file: string; name: string }[]> {
+async function modulesIn(dir: string, kind: RegistryKind): Promise<{ file: string; name: string }[]> {
   let names: string[];
   try {
-    names = await readdir(join(dir, "src", subDir));
+    names = await readdir(join(dir, "src", kind));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
@@ -36,17 +36,8 @@ async function modulesIn(dir: string, subDir: string): Promise<{ file: string; n
     const match = MODULE.exec(entry);
     return match === null || NOT_A_MODULE.test(entry)
       ? []
-      : [{ file: `src/${subDir}/${entry}`, name: match[1] as string }];
+      : [{ file: `src/${kind}/${entry}`, name: match[1] as string }];
   });
-}
-
-async function assertNoRemovedExtensionsDir(dir: string): Promise<void> {
-  const legacy = await modulesIn(dir, "extensions");
-  if (legacy.length > 0) {
-    throw new Error(
-      `src/extensions/ is removed (${legacy.map(({ file }) => file).join(", ")}): move portable tools to src/tools/ with defineTool() and prompt instructions to SYSTEM.md or AGENTS.md`,
-    );
-  }
 }
 
 /** The module files of the source project in `dir`, project-relative, in the order the registry imports them. */
@@ -58,7 +49,6 @@ export async function registryFiles(dir: string): Promise<string[]> {
 
 /** Import every module of the source project in `dir`, in the order the files sort, so each opens the same way. */
 export async function importRegistry(dir: string): Promise<Registry> {
-  await assertNoRemovedExtensionsDir(dir);
   const registry = {} as Record<RegistryKind, RegisteredModule[]>;
   for (const kind of REGISTRY_KINDS) {
     registry[kind] = [];

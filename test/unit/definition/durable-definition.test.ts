@@ -302,15 +302,6 @@ export default { model: "fixture/m", thinkingLevel: "low", codingTools: ["read",
         "fastagent.config.ts": 'export default { codingTools: "none" };\n',
       });
       await expect(loadSourceDefinition(wrongType)).rejects.toThrow(/"codingTools" must be a boolean or an array/);
-
-      // Removed src/extensions/ modules fail visibly at loadSourceDefinition naming the migration path.
-      const legacyExtDir = agentPackage({
-        ...FILES,
-        "src/extensions/shadow.ts": 'export default { name: "coding-tools" };\n',
-      });
-      await expect(loadSourceDefinition(legacyExtDir)).rejects.toThrow(
-        /src\/extensions\/ is removed \(src\/extensions\/shadow\.ts\): move portable tools to src\/tools\//,
-      );
     });
   });
 });

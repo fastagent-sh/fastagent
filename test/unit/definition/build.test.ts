@@ -88,13 +88,7 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
     }
   });
 
-  it("refuses removed src/extensions/ modules and invalid static provider exports before writing dist/", async () => {
-    const legacyExt = project({ "src/extensions/broken.ts": "export default 42;\n" });
-    await expect(buildProject(legacyExt)).rejects.toThrow(
-      /src\/extensions\/ is removed \(src\/extensions\/broken\.ts\): move portable tools to src\/tools\//,
-    );
-    expect(readdirSync(legacyExt)).not.toContain("dist");
-
+  it("refuses invalid static provider exports before writing dist/", async () => {
     const badProvider = project({ "fastagent.config.ts": "export default { providers: [42] };\n" });
     await expect(buildProject(badProvider)).rejects.toThrow(
       /fastagent\.config\.ts providers\[0\]:.*must be a pi-ai provider/,
