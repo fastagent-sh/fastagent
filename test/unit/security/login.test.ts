@@ -26,6 +26,8 @@ import {
   postgresDurableCredentialStore,
   sqliteDurableCredentialStore,
 } from "../../../packages/fastagent/src/harnesses/models/durable-credentials.ts";
+import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
+import { servedPostgres } from "../../doubles/postgres-double.ts";
 import { scriptedAgent } from "../../doubles/scripted-agent.ts";
 import { KEY, served } from "../../harnesses/http-subject.ts";
 import { openSource } from "../../harnesses/open-source.ts";
@@ -649,6 +651,31 @@ export default { model: "remote-keyed/m1", providers: [provider] };
     } finally {
       spy.mockRestore();
       await reopened.close();
+    }
+
+    // PostgreSQL credential store also skips DDL on read/list/delete until the first write.
+    const pg = await servedPostgres();
+    const pgDb = openPgDatabase(pg.url);
+    const pgStore = postgresDurableCredentialStore({ url: pg.url }, "lazy-pg");
+    try {
+      expect(await pgStore.read("openai")).toBeUndefined();
+      expect(await pgStore.list()).toEqual([]);
+      await pgStore.delete("openai");
+      const before = await pgDb.query<{ reg: string | null }>(
+        "SELECT to_regclass('public.fastagent_credentials') AS reg",
+      );
+      expect(before[0]?.reg).toBeNull();
+
+      await pgStore.modify("openai", async () => ({ type: "api_key", key: "sk-pg" }));
+      const after = await pgDb.query<{ reg: string | null }>(
+        "SELECT to_regclass('public.fastagent_credentials') AS reg",
+      );
+      expect(after[0]?.reg).toBe("fastagent_credentials");
+      expect(await pgStore.read("openai")).toEqual({ type: "api_key", key: "sk-pg" });
+    } finally {
+      await pgStore.close();
+      await pgDb.close();
+      await pg.close();
     }
   });
 

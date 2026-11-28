@@ -57,8 +57,15 @@ export function openSqliteStore(
   };
 }
 
+const PG_UNDEFINED_TABLE = "42P01";
+
 export interface PostgresStoreHandle {
   query<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]): Promise<T[]>;
+  /** Query without running DDL first; returns `undefined` when the table does not exist yet (PG SQLSTATE `42P01`). */
+  queryIfExists<T extends object = Record<string, unknown>>(
+    text: string,
+    params?: readonly unknown[],
+  ): Promise<T[] | undefined>;
   close(): Promise<void>;
 }
 
@@ -95,6 +102,14 @@ export function openPostgresStore(database: PostgresDatabase, schema: string, la
       try {
         return await db.query<T>(text, params);
       } catch (error) {
+        throw mapError(error);
+      }
+    },
+    async queryIfExists<T extends object = Record<string, unknown>>(text: string, params?: readonly unknown[]) {
+      try {
+        return await db.query<T>(text, params);
+      } catch (error) {
+        if ((error as { code?: string } | null)?.code === PG_UNDEFINED_TABLE) return undefined;
         throw mapError(error);
       }
     },

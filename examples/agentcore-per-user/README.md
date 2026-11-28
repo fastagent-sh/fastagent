@@ -3,7 +3,7 @@
 Deploy one agent and serve every end user inside an isolated Amazon Bedrock AgentCore microVM backed by **Amazon Aurora DSQL** and **AWS Secrets Manager**:
 
 - **Zero servers to maintain:** AgentCore recycles idle microVMs automatically; Aurora DSQL preserves every session, conversation mapping, and remote OAuth credential across cold starts.
-- **Zero-server backend client:** `backend-caller.ts` uses `@fastagent-sh/client-agentcore` (`connectAgentCore`, `connectAgentCoreAuth`) over AWS IAM—no `FASTAGENT_API_KEY` required.
+- **Zero-server backend client:** `backend-caller.ts` uses `@fastagent-sh/client-agentcore` (`connectAgentCore`) and `@fastagent-sh/client-agentcore/auth` (`connectAgentCoreAuth`) over AWS IAM—no `FASTAGENT_API_KEY` required.
 - **Live remote control from your terminal:** Add the runtime to `~/.config/fastagent/remotes.json` (see [`remotes.example.json`](./remotes.example.json)) to operate any user's instance with `fastagent invoke --remote`, `fastagent login --remote`, or `@fastagent-sh/pi-remote` (`/fa`).
 
 ## 1. Initialize & deploy to AWS

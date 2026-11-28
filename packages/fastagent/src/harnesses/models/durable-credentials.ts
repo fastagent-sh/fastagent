@@ -225,11 +225,11 @@ export function postgresDurableCredentialStore(
   const store = openPostgresStore(database, PG_SCHEMA, "credential store");
   return credentialStoreOver({
     async get(key) {
-      const rows = await store.query<{ value_json: string }>(
+      const rows = await store.queryIfExists<{ value_json: string }>(
         "SELECT value_json FROM fastagent_credentials WHERE instance = $1 AND key = $2",
         [instance, key],
       );
-      return rows[0]?.value_json;
+      return rows?.[0]?.value_json;
     },
     async put(key, valueJson) {
       await store.query(
@@ -240,14 +240,14 @@ export function postgresDurableCredentialStore(
       );
     },
     async del(key) {
-      await store.query("DELETE FROM fastagent_credentials WHERE instance = $1 AND key = $2", [instance, key]);
+      await store.queryIfExists("DELETE FROM fastagent_credentials WHERE instance = $1 AND key = $2", [instance, key]);
     },
     async listPrefix(prefix) {
-      const rows = await store.query<{ key: string; value_json: string }>(
+      const rows = await store.queryIfExists<{ key: string; value_json: string }>(
         "SELECT key, value_json FROM fastagent_credentials WHERE instance = $1 AND key LIKE $2 ORDER BY key ASC",
         [instance, `${prefix}%`],
       );
-      return rows.map((row) => ({ key: row.key, valueJson: row.value_json }));
+      return (rows ?? []).map((row) => ({ key: row.key, valueJson: row.value_json }));
     },
     close: () => store.close(),
   });
