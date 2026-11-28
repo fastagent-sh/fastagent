@@ -30,6 +30,7 @@ export default defineAgent({
 });
 ```
 
+- 在任意 stdio 或 HTTP 服务器声明中设置 `requiresApproval: true`（拦截该服务全部工具）或 `requiresApproval: ["merge_pr", "delete_issue"]`（拦截指定工具），即可在调用前自动进入持久化人工审批挂起，等待 `messages.resolve` 放行。
 - 在实例工作目录直接启动，不经过 Shell。FastAgent 不会自动安装二进制：请使用 `npx -y`、将包加入 `package.json` 或在容器 `Dockerfile` 中预装。
 - 仅接收最小基础环境（`PATH`、`HOME`、临时目录、locale）与显式声明的 `env`，绝不继承宿主机环境密钥。
 - 若使用相对路径指向本地可执行文件，必须将其放在 `assets/` 下，以便 `fastagent build` 一并打包进 `dist/`。

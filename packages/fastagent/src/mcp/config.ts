@@ -13,24 +13,41 @@ import { AGENT_CONFIG_FILE, MCP_CONFIG_FILES } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 
 const Strings = Schema.Record(Schema.String, Schema.String);
+const ApprovalRule = Schema.Union([Schema.Boolean, Schema.Array(Schema.String)]);
 const Stdio = Schema.Struct({
   type: Schema.optional(Schema.Literal("stdio")),
   command: Schema.NonEmptyString,
   args: Schema.optional(Schema.Array(Schema.String)),
   env: Schema.optional(Strings),
+  requiresApproval: Schema.optional(ApprovalRule),
 });
 const Http = Schema.Struct({
   type: Schema.Literal("http"),
   url: Schema.String,
   headers: Schema.optional(Strings),
+  requiresApproval: Schema.optional(ApprovalRule),
 });
 const Declaration = Schema.Union([Stdio, Http]);
 const Servers = Schema.Record(Schema.String, Declaration);
 /** One server as an `mcpServers` map holds it. */
 export type McpServerDeclaration = typeof Declaration.Type;
 export type McpServer =
-  | { name: string; type: "stdio"; command: string; args: string[]; env: Record<string, string>; cwd: string }
-  | { name: string; type: "http"; url: string; headers: Record<string, string> };
+  | {
+      name: string;
+      type: "stdio";
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+      cwd: string;
+      requiresApproval?: boolean | readonly string[];
+    }
+  | {
+      name: string;
+      type: "http";
+      url: string;
+      headers: Record<string, string>;
+      requiresApproval?: boolean | readonly string[];
+    };
 
 /** A server and where it was declared: what its refusals name, and what a relative command is relative to. */
 export interface McpDeclaration {
@@ -282,7 +299,13 @@ export function resolveMcpServers(
         } catch {
           throw new McpError("configuration", `${file}: invalid HTTP headers for ${name}`, name);
         }
-        return { name, type: "http", url: checkMcpUrl(server.url, name, file).href, headers };
+        return {
+          name,
+          type: "http",
+          url: checkMcpUrl(server.url, name, file).href,
+          headers,
+          ...(server.requiresApproval === undefined ? {} : { requiresApproval: server.requiresApproval }),
+        };
       }
       const expandedCommand = expand(server.command);
       const command =
@@ -299,6 +322,7 @@ export function resolveMcpServers(
           ...processEnv,
           ...Object.fromEntries(Object.entries(server.env ?? {}).map(([key, value]) => [key, expand(value)])),
         },
+        ...(server.requiresApproval === undefined ? {} : { requiresApproval: server.requiresApproval }),
       };
     });
 }

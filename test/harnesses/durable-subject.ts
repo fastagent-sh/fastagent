@@ -18,8 +18,14 @@ import {
 } from "@earendil-works/pi-ai";
 import { type Storage, type ToolRegistration, createRegistry, defineExtension } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { createWorkTracker } from "../../packages/fastagent/src/busy.ts";
 import { type DurableAgent, openDurableAgent } from "../../packages/fastagent/src/harnesses/pi-durable/agent.ts";
 import { type ToolResult, defineTool } from "../../packages/fastagent/src/harnesses/tool.ts";
+import {
+  type InterruptStore,
+  createInterruptCoordinator,
+  sqliteInterruptStore,
+} from "../../packages/fastagent/src/interrupts.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
 
 const PROVIDER = "subject";
@@ -69,6 +75,13 @@ function responder() {
       flaked = true;
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 the model is overloaded" });
     }
+    if (text.startsWith("[fastagent:interrupt-resume]")) {
+      const toolMatch = /^toolName:\s*(.+)$/m.exec(text)?.[1] ?? "tool";
+      const statusMatch = /^status:\s*(.+)$/m.exec(text)?.[1] ?? "ok";
+      const outIdx = text.indexOf("\noutput:\n");
+      const out = outIdx === -1 ? "" : text.slice(outIdx + "\noutput:\n".length).trim();
+      return fauxAssistantMessage(`answer: ${toolMatch}:${statusMatch}:${out}`);
+    }
     if (text === "instructions") return fauxAssistantMessage(`instructions: ${systemText(context.messages)}`);
     return respond(text);
   };
@@ -83,7 +96,10 @@ function respond(text: string) {
     case "finish":
     case "stream":
     case "nested":
+    case "ask_input":
       return fauxAssistantMessage([fauxToolCall(text, {})], { stopReason: "toolUse" });
+    case "approve_hold":
+      return fauxAssistantMessage([fauxToolCall("approve_hold", { target: "prod" })], { stopReason: "toolUse" });
     case "fail":
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "The model refused the request" });
     case "long":
@@ -148,6 +164,7 @@ const sqliteIn: SubjectStorage = (directory) => openNodeSqliteStorage(join(direc
 export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApiSubject {
   let directory = "";
   let current: DurableAgent | undefined;
+  let currentInterruptStore: InterruptStore | undefined;
   let fail: () => void = () => {};
   let held: (() => void)[] = [];
   let effects = 0;
@@ -178,10 +195,10 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       },
     });
 
-  const tools = (without: readonly string[]) =>
+  const tools = (wrappedTools: readonly ToolRegistration[]) =>
     defineExtension({
       name: "subject",
-      tools: allTools.filter((tool) => !without.includes(tool.name)) as ToolRegistration[],
+      tools: [...wrappedTools],
     });
   const allTools = [
     holdTool("hold", "Waits until the test lets it go; stops when aborted", () => {}),
@@ -244,15 +261,60 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       parameters: emptyParams,
       execute: async () => ({ output: [{ type: "text", text: "finished" }], control: { terminate: true } }),
     }),
+    defineTool({
+      name: "approve_hold",
+      description: "Gated tool requiring human approval before running and holding",
+      parameters: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } as const,
+      requiresApproval: (args) => ({ summary: `Approve deploy to ${args.target}`, includeArgs: true }),
+      execute: (args, _api, context) => {
+        effects++;
+        const n = effects;
+        return new Promise<ToolResult>((resolve, reject) => {
+          const release = () => resolve({ output: [{ type: "text", text: `deployed:${args.target}:${n}` }] });
+          held.push(release);
+          context.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              signalled++;
+              held = held.filter((other) => other !== release);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+    defineTool({
+      name: "ask_input",
+      description: "Requests structured target region input from the caller",
+      parameters: emptyParams,
+      execute: async (_args, api) => {
+        const input = (await api.requestInput?.({
+          prompt: "Choose deployment region",
+          schema: {
+            type: "object",
+            properties: { region: { type: "string", enum: ["us-east-1", "eu-west-1"] } },
+            required: ["region"],
+            additionalProperties: false,
+          } as const,
+        })) as { region: string };
+        effects++;
+        return { output: [{ type: "text", text: `region:${input.region}:${effects}` }] };
+      },
+    }),
   ];
 
   const open = async (without: readonly string[] = []): Promise<DurableAgent> => {
     const { models, model } = subjectModels(signedOut);
+    const work = createWorkTracker();
+    currentInterruptStore = sqliteInterruptStore(join(directory, "interrupts.sqlite"));
+    const coordinator = await createInterruptCoordinator({ store: currentInterruptStore, work });
+    const filtered = allTools.filter((tool) => !without.includes(tool.name));
     const registry = createRegistry();
-    registry.install(tools(without));
+    registry.install(tools(coordinator.wrapTools(filtered) as ToolRegistration[]));
     const storage = failable(await openStorage(directory));
     fail = storage.fail;
-    current = await openDurableAgent({
+    const inner = await openDurableAgent({
       storage: storage.storage,
       models,
       registry,
@@ -260,6 +322,7 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
       agent: { name: "Subject Program", description: "A subject." },
       starters: ["Say hello", "What can you do?"],
       model,
+      work,
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       // A manual compaction of the suite's short sessions finds something to summarize only when little is kept.
       settings: {
@@ -268,12 +331,15 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
         progress: { partialIntervalMs: 25, outputIntervalMs: 15 },
       },
     });
+    current = coordinator.wrapAgent(inner);
     return current;
   };
 
   return {
     async start(options) {
       await current?.close();
+      await currentInterruptStore?.close().catch(() => undefined);
+      currentInterruptStore = undefined;
       directory = mkdtempSync(join(tmpdir(), "fastagent-durable-"));
       held = [];
       effects = 0;
@@ -283,16 +349,20 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     },
     async restart(options) {
       const previous = current;
+      const previousInterrupts = currentInterruptStore;
       current = undefined;
+      currentInterruptStore = undefined;
       // Closing interrupts running work without settling it, as a process that stops does.
       const closing = previous?.close();
       for (const release of held.splice(0)) release();
       await closing;
+      await previousInterrupts?.close().catch(() => undefined);
       return open(options?.removeTools);
     },
     release() {
       for (const release of held.splice(0)) release();
     },
+    busy: () => current?.busy() ?? false,
     held: () => held.length,
     signalled: () => signalled,
     effects: () => effects,
@@ -300,7 +370,9 @@ export function durableSubject(openStorage: SubjectStorage = sqliteIn): AgentApi
     async stop() {
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);
+      await currentInterruptStore?.close().catch(() => undefined);
       current = undefined;
+      currentInterruptStore = undefined;
     },
   };
 }

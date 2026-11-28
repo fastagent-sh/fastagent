@@ -9,6 +9,12 @@ import { type Json, SessionId } from "@fastagent-sh/client/agent-api";
 /** Per-invocation session-id resolver attached onto `api` by harness tool adapters. */
 export const RESOLVE_SESSION_ID: unique symbol = Symbol.for("@fastagent-sh/fastagent/resolveSessionId");
 
+/** Per-invocation tool-call-id resolver attached onto `api` by harness tool adapters. */
+export const RESOLVE_TOOL_CALL_ID: unique symbol = Symbol.for("@fastagent-sh/fastagent/resolveToolCallId");
+
+/** Serving-layer hook attached onto `api` to park or resolve `api.requestInput(...)`. */
+export const REQUEST_TOOL_INPUT: unique symbol = Symbol.for("@fastagent-sh/fastagent/requestToolInput");
+
 const PORTABLE_TOOL: unique symbol = Symbol.for("@fastagent-sh/fastagent/portableTool");
 
 interface StandardIssue {
@@ -123,10 +129,32 @@ export interface ToolResult<TDetails extends ToolDetails = ToolDetails> {
   readonly kind?: never;
 }
 
+/** Decision returned by a tool's `requiresApproval` policy. */
+export type ToolApprovalDecision =
+  | boolean
+  | string
+  | {
+      readonly summary?: string;
+      /** Include validated `args` on `PendingInterrupt.args` for UI display. Default: false (safe by default). */
+      readonly includeArgs?: boolean;
+    };
+
+/** Declarative or argument-dependent approval policy evaluated in the serving layer before `execute()`. */
+export type ToolApprovalPolicy<TArgs = unknown> =
+  | ToolApprovalDecision
+  | ((args: TArgs) => ToolApprovalDecision | Promise<ToolApprovalDecision>);
+
+/** Options passed to `api.requestInput(...)` to durably pause for structured human input. */
+export interface ToolInputRequestOptions<TSchema extends ToolParameters = Record<string, unknown>> {
+  readonly prompt: string;
+  readonly schema?: TSchema;
+}
+
 /** Invocation context passed as the third parameter of `execute(args, api, context)`. */
 export interface ToolExecutionContext {
   readonly abortSignal?: AbortSignal | undefined;
   readonly sessionId?: string | undefined;
+  readonly toolCallId?: string | undefined;
 }
 
 /** Harness-neutral runtime operations passed as the second parameter of `execute(args, api, context)`. */
@@ -139,6 +167,10 @@ export interface ToolExecutionApi {
     args: { [key: string]: Json },
     context: ToolExecutionContext,
   ): Promise<{ readonly isError?: boolean | undefined }>;
+  /** Durably park the current turn until a caller supplies structured input via `messages.resolve`. */
+  requestInput?<TSchema extends ToolParameters = Record<string, unknown>>(
+    options: ToolInputRequestOptions<TSchema>,
+  ): Promise<InferToolArgs<TSchema>>;
 }
 
 /** Compiled, harness-neutral tool registration returned by {@link defineTool}. */
@@ -148,6 +180,8 @@ export interface PortableTool<TDetails extends ToolDetails = ToolDetails> {
   readonly parameters: Record<string, unknown>;
   readonly outputLimits?: ToolOutputLimits;
   readonly replay?: "safe" | "unsafe";
+  readonly requiresApproval?: ToolApprovalPolicy<unknown>;
+  validateArguments?(rawArgs: unknown): Promise<{ ok: true; value: unknown } | { ok: false; message: string }>;
   prepareArguments?(args: unknown): unknown;
   execute(args: unknown, api: ToolExecutionApi, context: ToolExecutionContext): Promise<ToolResult<TDetails>>;
 }
@@ -162,6 +196,7 @@ export interface ToolDefinition<
   readonly parameters: TParameters;
   readonly outputLimits?: ToolOutputLimits;
   readonly replay?: "safe" | "unsafe";
+  readonly requiresApproval?: ToolApprovalPolicy<InferToolArgs<TParameters>>;
   prepareArguments?(args: unknown): unknown;
   execute(
     args: InferToolArgs<TParameters>,
@@ -252,31 +287,82 @@ function resolveParameters(
  * Works identically across `pi-durable` and `dsh`.
  * @public
  */
+/** Compile a Standard JSON Schema v1 or plain JSON Schema object into a JSON Schema + optional validator. */
+export function compileToolSchema(
+  label: string,
+  parameters: unknown,
+): {
+  readonly jsonSchema: Record<string, unknown>;
+  readonly validate?: (
+    value: unknown,
+  ) => Promise<{ readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly message: string }>;
+} {
+  const { jsonSchema, validate } = resolveParameters(label, parameters);
+  return {
+    jsonSchema,
+    ...(validate === undefined
+      ? {}
+      : {
+          validate: async (value: unknown) => {
+            const result = await validate(value);
+            if (result.issues !== undefined) {
+              return { ok: false as const, message: formatStandardIssues(result.issues) };
+            }
+            return { ok: true as const, value: result.value };
+          },
+        }),
+  };
+}
+
+type RequestToolInputHook = (options: { readonly prompt: string; readonly schema?: unknown }) => Promise<unknown>;
+
 export function defineTool<TParameters extends ToolParameters, TDetails extends ToolDetails = ToolDetails>(
   tool: ToolDefinition<TParameters, TDetails>,
 ): PortableTool<TDetails> {
-  const { parameters, execute, outputLimits, replay, prepareArguments } = tool;
-  const { jsonSchema, validate } = resolveParameters(tool.name, parameters);
+  const { parameters, execute, outputLimits, replay, requiresApproval, prepareArguments } = tool;
+  const { jsonSchema, validate } = compileToolSchema(tool.name, parameters);
   const compiled: PortableTool<TDetails> = {
     name: tool.name,
     description: tool.description,
     parameters: jsonSchema,
     ...(outputLimits === undefined ? {} : { outputLimits }),
     ...(replay === undefined ? {} : { replay }),
+    ...(requiresApproval === undefined ? {} : { requiresApproval: requiresApproval as ToolApprovalPolicy<unknown> }),
+    ...(validate === undefined ? {} : { validateArguments: validate }),
     ...(prepareArguments === undefined ? {} : { prepareArguments }),
     execute: async (rawArgs, api, context) => {
       let parsedArgs: unknown = rawArgs;
       if (validate !== undefined) {
         const result = await validate(rawArgs);
-        if (result.issues !== undefined) {
+        if (!result.ok) {
           return {
-            output: [{ type: "text", text: `Invalid arguments: ${formatStandardIssues(result.issues)}` }],
+            output: [{ type: "text", text: `Invalid arguments: ${result.message}` }],
             isError: true,
           };
         }
         parsedArgs = result.value;
       }
-      const outcome = await execute(parsedArgs as InferToolArgs<TParameters>, api, context);
+      const boundApi: ToolExecutionApi =
+        typeof api?.requestInput === "function"
+          ? api
+          : Object.defineProperties(Object.create(Object.getPrototypeOf(api ?? {})), {
+              ...Object.getOwnPropertyDescriptors(api ?? {}),
+              requestInput: {
+                enumerable: true,
+                value: async (options: ToolInputRequestOptions<ToolParameters>) => {
+                  const hook = (api as { readonly [REQUEST_TOOL_INPUT]?: RequestToolInputHook } | undefined)?.[
+                    REQUEST_TOOL_INPUT
+                  ];
+                  if (typeof hook !== "function") {
+                    throw new Error(
+                      `tool "${tool.name}" called api.requestInput() outside an interrupt-enabled Agent session`,
+                    );
+                  }
+                  return hook(options);
+                },
+              },
+            });
+      const outcome = await execute(parsedArgs as InferToolArgs<TParameters>, boundApi, context);
       if (typeof outcome === "string") return { output: [{ type: "text", text: outcome }] };
       if (outcome !== null && typeof outcome === "object" && ("sleep" in outcome || "wait" in outcome)) {
         throw new Error(
@@ -349,12 +435,23 @@ interface SessionToolApi {
   readonly output?: unknown;
   readonly commit?: unknown;
   readonly conversationId?: unknown;
+  readonly callId?: unknown;
   readonly [RESOLVE_SESSION_ID]?: (() => Promise<SessionId | undefined>) | undefined;
+  readonly [RESOLVE_TOOL_CALL_ID]?: (() => string | undefined) | undefined;
 }
 
 interface SessionToolContext {
   readonly abortSignal?: AbortSignal | undefined;
   readonly sessionId?: string | undefined;
+  readonly toolCallId?: string | undefined;
+}
+
+/** Resolve the current tool-call id across harnesses when available. */
+export function toolCallIdOf(api?: SessionToolApi, context?: SessionToolContext): string | undefined {
+  if (typeof api?.[RESOLVE_TOOL_CALL_ID] === "function") return api[RESOLVE_TOOL_CALL_ID]();
+  if (typeof context?.toolCallId === "string" && context.toolCallId.length > 0) return context.toolCallId;
+  if (typeof api?.callId === "string" && api.callId.length > 0) return api.callId;
+  return undefined;
 }
 
 /**

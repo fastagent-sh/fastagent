@@ -138,6 +138,7 @@ export default defineAgent({
 
 - **灵活的参数 Schema：** `defineTool` 支持 Standard JSON Schema v1（Zod v4、Valibot、ArkType、Effect `Schema.toStandardJSONSchemaV1`）或原生 JSON Schema 对象（带 `as const` 自动类型推导）。
 - **简洁的返回值：** `execute` 可直接返回纯字符串 `string`，或返回完整的 `ToolExecutionResult`（`{ output, details?, isError? }`）。
+- **人工审批与结构化输入挂起：** 在 `defineTool` 上配置 `requiresApproval: true`（或 `(args) => ({ summary, includeArgs })`），或在 `execute` 内调用 `await api.requestInput({ prompt, schema })`，即可将当前轮次持久化休眠（`agent.busy() === false`，支持零算力缩容与跨实例恢复），直至调用方通过 `agent.messages.resolve()` 唤醒。
 - **查询当前会话 ID：** 调用 `@fastagent-sh/fastagent` 导出的 `await sessionIdOf(api, context)`，在两种 Harness 上均可获取当前 Agent API 会话 ID。
 - **内置编码工具：** 默认启用 `read`、`write`、`edit` 和 `bash`。纯工具模式或多租户嵌入场景请设 `codingTools: false`（同时会从系统提示词中移除文件系统指引），或传入子集如 `codingTools: ["read"]`。即使禁用 `read`，技能仍可通过 `/skill:<name>` 正常访问。
 

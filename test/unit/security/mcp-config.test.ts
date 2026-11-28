@@ -175,5 +175,17 @@ describe("the servers of the project, from .mcp.json / mcp.json and fastagent.co
     } finally {
       await rm(dirWithFolderMcp, { recursive: true, force: true });
     }
+
+    // MCP requiresApproval accepts boolean or tool-name array in .mcp.json and fastagent.config.ts.
+    const gated = declareMcp(
+      {
+        duang_all: { type: "http", url: "https://duang.example.com/mcp", requiresApproval: true },
+        github_write: { command: "npx", args: ["-y", "mcp-gh"], requiresApproval: ["merge_pr", "delete_branch"] },
+      },
+      "/tmp/nonexistent-agent",
+    );
+    const resolvedGated = resolveMcpServers(gated, {}, undefined, "/workspace", { PATH: "/bin" });
+    expect(resolvedGated[0]?.requiresApproval).toBe(true);
+    expect(resolvedGated[1]?.requiresApproval).toEqual(["merge_pr", "delete_branch"]);
   });
 });

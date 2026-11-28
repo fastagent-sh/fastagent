@@ -17,7 +17,13 @@ import {
   fauxThinking,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
-import type { PortableTool } from "@fastagent-sh/fastagent/harness";
+import { defineTool } from "@fastagent-sh/fastagent";
+import {
+  type InterruptStore,
+  type PortableTool,
+  createInterruptCoordinator,
+  sqliteInterruptStore,
+} from "@fastagent-sh/fastagent/harness";
 import { openDshAgent, openSqliteDshStore } from "@fastagent-sh/harness-dsh";
 import type { DshAgent, DshEventStoreBackend, FastAgentToolApi } from "../../packages/harness-dsh/src/types.ts";
 import type { AgentApiSubject } from "./agent-api-conformance.ts";
@@ -56,6 +62,13 @@ function responder() {
       flaked = true;
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "503 the model is overloaded" });
     }
+    if (text.startsWith("[fastagent:interrupt-resume]")) {
+      const toolMatch = /^toolName:\s*(.+)$/m.exec(text)?.[1] ?? "tool";
+      const statusMatch = /^status:\s*(.+)$/m.exec(text)?.[1] ?? "ok";
+      const outIdx = text.indexOf("\noutput:\n");
+      const out = outIdx === -1 ? "" : text.slice(outIdx + "\noutput:\n".length).trim();
+      return fauxAssistantMessage(`answer: ${toolMatch}:${statusMatch}:${out}`);
+    }
     if (text === "instructions") return fauxAssistantMessage(`instructions: ${systemText(context.messages)}`);
     return respond(text);
   };
@@ -70,7 +83,10 @@ function respond(text: string) {
     case "finish":
     case "stream":
     case "nested":
+    case "ask_input":
       return fauxAssistantMessage([fauxToolCall(text, {})], { stopReason: "toolUse" });
+    case "approve_hold":
+      return fauxAssistantMessage([fauxToolCall("approve_hold", { target: "prod" })], { stopReason: "toolUse" });
     case "fail":
       return fauxAssistantMessage("", { stopReason: "error", errorMessage: "The model refused the request" });
     case "long":
@@ -204,6 +220,7 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
   let directory = "";
   let current: DshAgent | undefined;
   let currentBackend: (DshEventStoreBackend & { close(): Promise<void> }) | undefined;
+  let currentInterruptStore: InterruptStore | undefined;
   let fail: () => void = () => {};
   let held: (() => void)[] = [];
   let effects = 0;
@@ -300,26 +317,70 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
         control: { terminate: true },
       })) as PortableTool["execute"],
     },
+    defineTool({
+      name: "approve_hold",
+      description: "Gated tool requiring human approval before running and holding",
+      parameters: { type: "object", properties: { target: { type: "string" } }, required: ["target"] } as const,
+      requiresApproval: (args) => ({ summary: `Approve deploy to ${args.target}`, includeArgs: true }),
+      execute: (args, _api, context) => {
+        effects++;
+        const n = effects;
+        return new Promise((resolve, reject) => {
+          const release = () => resolve({ output: [{ type: "text", text: `deployed:${args.target}:${n}` }] });
+          held.push(release);
+          context.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              signalled++;
+              held = held.filter((other) => other !== release);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    }),
+    defineTool({
+      name: "ask_input",
+      description: "Requests structured target region input from the caller",
+      parameters: { type: "object", properties: {} } as const,
+      execute: async (_args, api) => {
+        const input = (await api.requestInput?.({
+          prompt: "Choose deployment region",
+          schema: {
+            type: "object",
+            properties: { region: { type: "string", enum: ["us-east-1", "eu-west-1"] } },
+            required: ["region"],
+            additionalProperties: false,
+          } as const,
+        })) as { region: string };
+        effects++;
+        return { output: [{ type: "text", text: `region:${input.region}:${effects}` }] };
+      },
+    }),
   ];
 
   const open = async (without: readonly string[] = []): Promise<DshAgent> => {
     const { models, model } = subjectModels(signedOut);
     currentBackend = await openStore(directory);
+    currentInterruptStore = sqliteInterruptStore(join(directory, "interrupts.sqlite"));
+    const coordinator = await createInterruptCoordinator({ store: currentInterruptStore });
     const wrapped = failableBackend(currentBackend);
     fail = wrapped.fail;
-    current = await openDshAgent({
+    const inner = await openDshAgent({
       name: "subject",
       agent: { name: "Subject Program", description: "A subject." },
       starters: ["Say hello", "What can you do?"],
       workdir: directory,
       models,
       model,
-      tools: allTools.filter((tool) => !without.includes(tool.name)),
+      tools: coordinator.wrapTools(allTools.filter((tool) => !without.includes(tool.name))),
       commands: () => [{ name: "greet", description: "Greets someone", expand: (args) => `hello ${args}` }],
       retry: { maxRetries: 1, baseDelayMs: 1 },
       sandbox: "off",
       storage: wrapped.backend,
     });
+    current = coordinator.wrapAgent(inner);
     return current;
   };
 
@@ -327,7 +388,9 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
     async start(options) {
       await current?.close();
       await currentBackend?.close().catch(() => undefined);
+      await currentInterruptStore?.close().catch(() => undefined);
       currentBackend = undefined;
+      currentInterruptStore = undefined;
       if (directory) rmSync(directory, { recursive: true, force: true });
       directory = mkdtempSync(join(tmpdir(), "fastagent-dsh-"));
       held = [];
@@ -339,17 +402,21 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
     async restart(options) {
       const previous = current;
       const previousBackend = currentBackend;
+      const previousInterrupts = currentInterruptStore;
       current = undefined;
       currentBackend = undefined;
+      currentInterruptStore = undefined;
       const closing = previous?.close();
       for (const release of held.splice(0)) release();
       await closing;
       await previousBackend?.close().catch(() => undefined);
+      await previousInterrupts?.close().catch(() => undefined);
       return open(options?.removeTools);
     },
     release() {
       for (const release of held.splice(0)) release();
     },
+    busy: () => current?.busy() ?? false,
     held: () => held.length,
     signalled: () => signalled,
     effects: () => effects,
@@ -358,10 +425,12 @@ export function dshSubject(openStore: DshSubjectStore = sqliteIn): AgentApiSubje
       for (const release of held.splice(0)) release();
       await current?.close().catch(() => undefined);
       await currentBackend?.close().catch(() => undefined);
+      await currentInterruptStore?.close().catch(() => undefined);
       if (directory) rmSync(directory, { recursive: true, force: true });
       directory = "";
       current = undefined;
       currentBackend = undefined;
+      currentInterruptStore = undefined;
     },
   };
 }

@@ -21,6 +21,9 @@ export type {
   Entry,
   ErrorCode,
   IdempotencyKey,
+  InterruptId,
+  InterruptKind,
+  InterruptResolution,
   InvokeApi,
   InvokeRequest,
   Json,
@@ -33,8 +36,10 @@ export type {
   Metadata,
   ModelRef,
   Page,
+  PendingInterrupt,
   QueuedMessage,
   RemoteAgent,
+  ResolveInterruptRequest,
   SendRequest,
   Session,
   SessionChanges,
@@ -48,7 +53,7 @@ export type {
   WaitOptions,
 } from "@fastagent-sh/client/agent-api";
 /** @public */
-export { AgentError, LIMITS, hasEnded } from "@fastagent-sh/client/agent-api";
+export { AgentError, LIMITS, hasEnded, isAwaitingAction } from "@fastagent-sh/client/agent-api";
 /** @public */
 export { type ConnectOptions, connectAgent } from "@fastagent-sh/client";
 /** @public */

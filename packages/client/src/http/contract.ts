@@ -30,6 +30,7 @@ import {
   Entry,
   EntriesOptions,
   IdempotencyKey,
+  InterruptId,
   InvokeRequestFields,
   ListOptions,
   Message,
@@ -60,6 +61,7 @@ export function statusOf(error: AgentErrorData): number {
       return 404;
     case "busy":
       return reason === "queue_full" ? 429 : reason === "capacity" ? 503 : 409;
+    case "conflict":
     case "missing_model":
     case "missing_tool":
       return 409;
@@ -186,6 +188,24 @@ const InvokeBody = Schema.Struct({
   stream: Schema.optional(Schema.Boolean),
 }).check(invokeTargetingFilter);
 
+/** `POST /v1/sessions/:sessionId/interrupts/:interruptId/resolve`: resolve a parked approval or input interrupt. */
+const ResolveInterruptBody = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("approve"),
+    wait: Schema.optional(Wait),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("deny"),
+    reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
+    wait: Schema.optional(Wait),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("submit"),
+    input: Schema.Record(Schema.String, Schema.Json),
+    wait: Schema.optional(Wait),
+  }),
+]);
+
 /**
  * A key as a header carries it: percent-encoded, as in the `by-key` path, since a header holds only Latin-1 and loses
  * the spaces around a value, while a key may be any 1 to 256 characters.
@@ -272,6 +292,13 @@ const AgentGroup = HttpApiGroup.make("agent")
     HttpApiEndpoint.get("getMessageByKey", "/sessions/:sessionId/messages/by-key/:idempotencyKey", {
       params: { ...sessionPath, idempotencyKey: IdempotencyKey },
       query: WaitQuery,
+      success: Message,
+      error: Refused,
+    }),
+    HttpApiEndpoint.post("resolveInterrupt", "/sessions/:sessionId/interrupts/:interruptId/resolve", {
+      params: { ...sessionPath, interruptId: InterruptId },
+      headers: { "idempotency-key": Schema.optional(KeyHeader) },
+      payload: ResolveInterruptBody,
       success: Message,
       error: Refused,
     }),

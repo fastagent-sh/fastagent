@@ -28,6 +28,7 @@ import {
   type MessageStreamEvent,
   type Page,
   type RemoteAgent,
+  ResolveInterruptRequest,
   SendRequest,
   type SessionEvent,
   SessionChanges,
@@ -37,6 +38,7 @@ import {
   agentError,
   errorData,
   hasEnded,
+  isAwaitingAction,
 } from "../agent-api.ts";
 import { AgentHttpApi, MESSAGE_STREAM_EVENT_TYPES, Refusal, SESSION_EVENT_TYPES } from "./contract.ts";
 
@@ -202,7 +204,7 @@ function createTransport(url: string, options: ConnectOptions) {
     const remaining = () => (deadline === undefined ? 0 : Math.max(0, deadline - Date.now()) / 1000);
     const capped = () => Math.min(remaining(), LIMITS.httpWaitSeconds);
     let message = await first(wait === undefined ? undefined : capped());
-    while (!hasEnded(message) && remaining() > 0) {
+    while (!hasEnded(message) && !isAwaitingAction(message) && remaining() > 0) {
       const { sessionId, id: messageId } = message;
       message = await request(
         api.agent.getMessage({ params: { sessionId, messageId }, query: { wait: capped() } }),
@@ -285,6 +287,20 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
   const keyed = (sendRequest: SendRequest, what: string) => {
     const { sessionId, idempotencyKey, ...body } = checked(SendRequest, sendRequest, what);
     return { stage: { sessionId, key: idempotencyKey ?? IdempotencyKey.make(crypto.randomUUID()) }, body };
+  };
+
+  const keyedResolve = (resolveRequest: ResolveInterruptRequest, what: string) => {
+    const { sessionId, interruptId, idempotencyKey, resolution } = checked(
+      ResolveInterruptRequest,
+      resolveRequest,
+      what,
+    );
+    return {
+      sessionId,
+      interruptId,
+      key: idempotencyKey ?? IdempotencyKey.make(crypto.randomUUID()),
+      resolution,
+    };
   };
 
   const keyedInvoke = (invokeRequest: InvokeRequest, what: string) => {
@@ -433,6 +449,21 @@ export function connectAgent(url: string, options: ConnectOptions): RemoteAgent 
               getOptions?.signal,
             ),
           getOptions,
+        );
+      },
+      resolve: async (resolveRequest, resolveOptions) => {
+        const { sessionId, interruptId, key, resolution } = keyedResolve(resolveRequest, "messages.resolve");
+        return waited(
+          (wait) =>
+            request(
+              client.resolveInterrupt({
+                params: { sessionId, interruptId },
+                headers: { "idempotency-key": key },
+                payload: { ...resolution, ...(wait === undefined ? {} : { wait }) },
+              }),
+              resolveOptions?.signal,
+            ),
+          resolveOptions,
         );
       },
     },

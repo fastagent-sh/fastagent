@@ -30,6 +30,7 @@ export default defineAgent({
 });
 ```
 
+- Pass `requiresApproval: true` (all tools on that server) or `requiresApproval: ["merge_pr", "delete_issue"]` (specific tool names) on any stdio or HTTP server declaration to require human approval via `messages.resolve` before execution.
 - Starts in the instance's working directory without invoking a shell. FastAgent does not auto-install binaries: use `npx -y`, add the package to `package.json`, or install it in your container's `Dockerfile`.
 - Receives only a minimal base environment (`PATH`, `HOME`, temp, locale) plus its declared `env`—never ambient host secrets.
 - A relative or local executable path must live under `assets/` so `fastagent build` bundles it into `dist/`.

@@ -10,6 +10,7 @@ export function mcpTools(tools: readonly McpTool[]): PortableTool[] {
       description: tool.definition.description ?? `MCP tool ${tool.definition.name} from ${tool.server}`,
       parameters: tool.definition.inputSchema as Record<string, unknown>,
       replay: "unsafe",
+      ...(tool.requiresApproval ? { requiresApproval: true } : {}),
       execute: async (args, api, context) => {
         try {
           const result = await tool.call(args, context.abortSignal, (text) => api.output(text));

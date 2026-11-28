@@ -276,6 +276,21 @@ export function apiHandler(agent: Agent, options: ApiOptions): ApiHandler {
           agent.messages.get(params, { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal }),
         );
       })
+      .handle("resolveInterrupt", ({ params, headers, payload }) => {
+        const { wait, ...resolution } = payload;
+        const waitSeconds = capped(wait);
+        return call("messages.resolve", (signal) =>
+          agent.messages.resolve(
+            {
+              sessionId: params.sessionId,
+              interruptId: params.interruptId,
+              resolution,
+              ...(headers["idempotency-key"] === undefined ? {} : { idempotencyKey: headers["idempotency-key"] }),
+            },
+            { ...(waitSeconds === undefined ? {} : { wait: waitSeconds }), signal },
+          ),
+        );
+      })
       .handle("invoke", ({ headers, payload }) => {
         const { wait, stream, ...rest } = payload;
         const request = { ...rest, idempotencyKey: headers["idempotency-key"] };

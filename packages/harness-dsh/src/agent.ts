@@ -36,6 +36,7 @@ import {
   MessageKey,
   type MessageStreamEvent,
   type Page,
+  ResolveInterruptRequest,
   type SendRequest,
   type Session,
   SessionChanges,
@@ -710,6 +711,12 @@ export async function openDshAgent(options: DshHarnessOptions): Promise<DshAgent
           throw agentError("not_found", "message not found");
         }
         return waitForMessage(state, live, messageId, wait, getOptions?.signal);
+      },
+
+      async resolve(rawRequest): Promise<Message> {
+        const decoded = decodeRequest(ResolveInterruptRequest, rawRequest, "messages.resolve");
+        requireSession(state, decoded.sessionId);
+        throw agentError("not_found", `interrupt "${decoded.interruptId}" not found`);
       },
     },
 

@@ -15,6 +15,9 @@ export type {
   Entry,
   ErrorCode,
   IdempotencyKey,
+  InterruptId,
+  InterruptKind,
+  InterruptResolution,
   InvokeApi,
   InvokeRequest,
   Json,
@@ -27,8 +30,10 @@ export type {
   Metadata,
   ModelRef,
   Page,
+  PendingInterrupt,
   QueuedMessage,
   RemoteAgent,
+  ResolveInterruptRequest,
   SendRequest,
   Session,
   SessionChanges,
@@ -41,7 +46,7 @@ export type {
   Usage,
   WaitOptions,
 } from "@fastagent-sh/client/agent-api";
-export { AgentError, LIMITS, hasEnded } from "@fastagent-sh/client/agent-api";
+export { AgentError, LIMITS, hasEnded, isAwaitingAction } from "@fastagent-sh/client/agent-api";
 
 export {
   openAgent,
@@ -73,10 +78,13 @@ export {
   type InferToolArgs,
   type PortableTool,
   type StandardJSONSchemaV1,
+  type ToolApprovalDecision,
+  type ToolApprovalPolicy,
   type ToolDefinition,
   type ToolDetails,
   type ToolExecutionApi,
   type ToolExecutionContext,
+  type ToolInputRequestOptions,
   type ToolOutputLimits,
   type ToolOutputPart,
   type ToolParameters,

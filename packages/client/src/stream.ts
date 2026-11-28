@@ -14,6 +14,7 @@ import {
   agentError,
   errorData,
   hasEnded,
+  isAwaitingAction,
 } from "./agent-api.ts";
 
 export interface StreamSource {
@@ -168,7 +169,11 @@ export function messageStream(
       if (hasEnded(message)) {
         leave();
         yield* ended(message);
-      } else if (replayed && message.status === "running" && message.entryId !== undefined) {
+      } else if (
+        replayed &&
+        (message.status === "running" || isAwaitingAction(message)) &&
+        message.entryId !== undefined
+      ) {
         yield* running({ ...message, entryId: message.entryId });
       } else yield* live(watching, message.id);
     } finally {

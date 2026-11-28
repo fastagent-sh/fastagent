@@ -138,6 +138,7 @@ Every file placed directly in `src/tools/` is auto-loaded by default export—no
 
 - **Flexible parameter schemas:** `defineTool` accepts Standard JSON Schema v1 (Zod v4, Valibot, ArkType, Effect `Schema.toStandardJSONSchemaV1`) or plain JSON Schema objects (with `as const` type inference).
 - **Simple return values:** `execute` can return a plain `string` or a full `ToolExecutionResult` (`{ output, details?, isError? }`).
+- **Human-in-the-loop approvals & structured input:** Set `requiresApproval: true` (or `(args) => ({ summary, includeArgs })`) on `defineTool`, or call `await api.requestInput({ prompt, schema })` inside `execute` to durably hibernate the turn (`agent.busy() === false`) across restarts until resolved via `agent.messages.resolve()`.
 - **Session id lookup:** Call `await sessionIdOf(api, context)` from `@fastagent-sh/fastagent` to read the active Agent API session id on either harness.
 - **Built-in coding tools:** `read`, `write`, `edit`, and `bash` are enabled by default. Set `codingTools: false` for tool-only or multi-user embedded agents (this also omits workspace filesystem guidance from the system prompt), or pass a subset like `codingTools: ["read"]`. Even with `read` disabled, skills remain accessible via `/skill:<name>`.
 

@@ -28,6 +28,7 @@ import {
   LIMITS,
   type Message,
   MessageKey,
+  ResolveInterruptRequest,
   SendRequest,
   type SessionEvent,
   Wait,
@@ -368,5 +369,14 @@ export function createPiDurableMessages(deps: MessageApiDeps): Agent["messages"]
     );
   };
 
-  return { send, stream, get };
+  const resolve: Agent["messages"]["resolve"] = (request) =>
+    settle(
+      Effect.gen(function* () {
+        const decoded = yield* decodeInput(ResolveInterruptRequest, request, "messages.resolve");
+        yield* conversationOf(decoded.sessionId);
+        return yield* agentError("not_found", `No interrupt ${decoded.interruptId} in session ${decoded.sessionId}`);
+      }),
+    );
+
+  return { send, stream, get, resolve };
 }
