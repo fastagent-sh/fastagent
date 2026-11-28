@@ -1,12 +1,12 @@
 ---
 title: 嵌入应用
-description: "将 FastAgent 直接嵌入你的 Node 后端或桌面应用，保留原有的认证、数据库与路由。"
+description: "将 FastAgent 直接嵌入你的 Node 或 Bun 后端或桌面应用，保留原有的认证、数据库与路由。"
 status: current
 ---
 
 # 嵌入应用
 
-当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 后端或桌面应用中。
+当你希望保留自己的用户认证、租户模型、业务数据库和前端界面，同时开箱获得持久化会话、崩溃恢复、流式输出与工具执行能力时，可以直接将编译后的 FastAgent 嵌入到你的 Node 或 Bun 后端或桌面应用中。
 
 ```bash
 npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
@@ -19,8 +19,8 @@ npm i @fastagent-sh/fastagent       # 需要 Node ≥ 24.15 或 Bun ≥ 1.4.4
 | 场景 | 推荐方式 |
 | --- | --- |
 | **在自有鉴权后端中编写自定义路由 / UI** | 调用 `openAgent()`，在你的路由处理器中直接调用 `agent.messages.stream`、`agent.messages.send` 或 `agent.invoke`。 |
-| **单 Node 进程托管多租户实例** | 使用 `openPostgresDatabase()` 创建共享连接池，传给每个 `openAgent({ name, database })`。 |
-| **在现有 Web 服务中暴露标准 `/v1` Agent API** | 调用 `const service = await agent.serve({ apiKeys })`，将 `service.fetch` 挂载到 Next.js、Hono、Express 或 Fastify。 |
+| **单 Node/Bun 进程托管多租户实例** | 使用 `openPostgresDatabase()` 创建共享连接池，传给每个 `openAgent({ name, database })`。 |
+| **在现有 Web 服务中暴露标准 `/v1` Agent API** | 调用 `const service = await agent.serve({ apiKeys })`（需挂载 `/v1/auth/*` 时传入 `remoteAuth: true`），将 `service.fetch` 挂载到 Next.js、Hono、Express 或 Fastify。 |
 | **本地桌面应用** | 传入应用独占的 `root`，用 `agent.info().models` 渲染模型选择器，并妥善处理 `info().unusableDefault`。 |
 
 ## 1. 打开 Agent

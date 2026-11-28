@@ -10,18 +10,12 @@ interface ArgSpec {
   name: string;
   description: string;
   default?: string;
-  /** Passed on as given, an empty value included: another program's arguments (`env exec`). */
-  verbatim?: boolean;
 }
 
 /** One flag, in the flag DSL: `--json`, or `--bind <addr>` for a value-taking flag. */
 export interface FlagSpec {
   flags: string;
   description: string;
-  /** Parsed but left out of help: an internal seam between two fastagent processes, not a user-facing flag. */
-  hidden?: boolean;
-  /** May be given more than once; the command receives every value, in order, as an array. */
-  repeatable?: boolean;
 }
 
 interface ExampleSpec {
@@ -133,7 +127,7 @@ function register(parent: Command, spec: CommandSpec): void {
     const arg = new Argument(a.name, a.description);
     if (a.default !== undefined) arg.default(a.default);
     // A required argument means a non-empty VALUE, not just a present token.
-    if (a.name.startsWith("<") && !a.verbatim) {
+    if (a.name.startsWith("<")) {
       const nonEmpty = (value: string): string => {
         if (value.trim() === "") throw new InvalidArgumentError("must not be empty.");
         return value;
@@ -146,9 +140,7 @@ function register(parent: Command, spec: CommandSpec): void {
     cmd.addArgument(arg);
   }
   for (const f of spec.flags ?? []) {
-    const option = new Option(f.flags, f.description).hideHelp(f.hidden === true);
-    if (f.repeatable) option.argParser((value: string, previous: string[] = []) => [...previous, value]);
-    cmd.addOption(option);
+    cmd.addOption(new Option(f.flags, f.description));
   }
   for (const sub of spec.subcommands ?? []) register(cmd, sub);
   const run = spec.run;

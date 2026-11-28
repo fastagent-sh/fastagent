@@ -119,7 +119,7 @@ fastagent login openai-codex --remote prod
 
 ## 容器细节与文件归属
 
-生成的 `Dockerfile` 会安装依赖、执行 `fastagent build`、暴露 `8787` 端口、设置 `FASTAGENT_DEPLOYED=1`、`FASTAGENT_NAME=<agent>` 与 `FASTAGENT_ROOT=/data`，并以 `fastagent start` 启动。如需在容器内启用 OS 沙箱，请先将 `@fastagent-sh/harness-dsh` 安装到 `package.json`，再设置 `harness: "dsh"`（或 `FASTAGENT_HARNESS=dsh` 及 `FASTAGENT_SANDBOX`）。当启用 `bash` 且开启沙箱时，`harness: "dsh"` 会在启动阶段主动校验 OS 沙箱可用性并在不可用时快速失败；生成的 `node:24-slim` Linux 镜像默认通过内置 Landlock 启动器生效（需宿主机 Linux 内核支持 Landlock），如需 `bwrap` 挂载与 PID 命名空间隔离，请在自定义 Dockerfile 中安装 `bubblewrap` 并开启容器 user namespace 权限。
+生成的 `Dockerfile` 会安装依赖、执行 `fastagent build`、暴露 `8787` 端口、设置 `FASTAGENT_DEPLOYED=1`、`FASTAGENT_NAME=<agent>` 与 `FASTAGENT_ROOT=/data`，并以 `fastagent start` 启动。如需在容器内启用 OS 沙箱，请先将 `@fastagent-sh/harness-dsh` 安装到 `package.json`，再设置 `harness: "dsh"`（或 `FASTAGENT_HARNESS=dsh` 及 `FASTAGENT_SANDBOX`）。当启用 `bash` 且开启沙箱时，`harness: "dsh"` 会在启动阶段主动校验 OS 沙箱可用性并在不可用时快速失败；生成的 Linux 镜像（`node:24-slim` 或 `oven/bun`）默认通过内置 Landlock 启动器生效（需宿主机 Linux 内核支持 Landlock），如需 `bwrap` 挂载与 PID 命名空间隔离，请在自定义 Dockerfile 中安装 `bubblewrap` 并开启容器 user namespace 权限。
 
 生成的 `.dockerignore` 默认排除 `.secrets/`、`.env`、`*.env`、`.state/`、`.fastagent/` 与 `node_modules`。
 
