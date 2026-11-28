@@ -9,8 +9,8 @@
     "start": "fastagent build && fastagent start"
   },
   "dependencies": {
-    "@fastagent-sh/fastagent": "^0.37.0",
-    "@fastagent-sh/harness-dsh": "^0.37.0"
+    "@fastagent-sh/fastagent": "^0.38.0",
+    "@fastagent-sh/harness-dsh": "^0.38.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
