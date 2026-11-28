@@ -48,6 +48,7 @@ interface RemoteTransportModule {
 }
 
 const EXTENSION_TYPE = /^[a-z][a-z0-9-]*$/;
+const ENV_REF = /^\$[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function isHttpUrl(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
@@ -87,14 +88,30 @@ function remoteTransportSpecifier(type: string): string {
   return `@fastagent-sh/client-${type}`;
 }
 
+/** Whether `value` is an environment-variable reference of the form `$ENV_VAR`. */
+export function isRemoteEnvRef(value: string): boolean {
+  return ENV_REF.test(value);
+}
+
+/** Return a display-safe copy of a remote entry: preserve `$ENV_VAR` references, redact literal HTTP API keys. */
+export function redactRemoteConfig(remote: RemoteConfig): Record<string, unknown> {
+  if (!isHttpRemote(remote)) return { ...remote };
+  const apiKey = remote.apiKey === undefined ? undefined : isRemoteEnvRef(remote.apiKey) ? remote.apiKey : "***";
+  return {
+    type: "http",
+    url: remote.url,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(remote.sessionId === undefined ? {} : { sessionId: remote.sessionId }),
+  };
+}
+
 export function expandRemoteEnvRef(
   value: string,
   field: string,
   env: Readonly<Record<string, string | undefined>>,
 ): string {
-  if (!value.startsWith("$")) return value;
+  if (!isRemoteEnvRef(value)) return value;
   const name = value.slice(1);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return value;
   const resolved = env[name]?.trim();
   if (!resolved) {
     throw new Error(`Environment variable ${name} (referenced by ${field}) is not set`);
@@ -102,7 +119,7 @@ export function expandRemoteEnvRef(
   return resolved;
 }
 
-export function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
+function parseRemoteEntry(name: string, raw: unknown): RemoteConfig {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`Remote "${name}" must be an object`);
   }

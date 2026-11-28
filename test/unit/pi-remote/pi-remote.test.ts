@@ -23,7 +23,9 @@ import {
   type SessionEvent,
 } from "@fastagent-sh/client";
 import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
+import { isRemoteEnvRef, redactRemoteConfig } from "@fastagent-sh/client/remotes";
 import { RemoteController, buildSendContent } from "@fastagent-sh/pi-remote/controller";
+import { EMPTY_VIEW_STATE, reduceSessionEvent } from "@fastagent-sh/pi-remote/view-state";
 import { RemoteEditor, parseInterceptedRemoteBuiltin } from "@fastagent-sh/pi-remote/editor";
 import { REMOTE_ENTRY_TYPE, registerFastAgentRemoteExtension } from "@fastagent-sh/pi-remote/extension";
 import { connectRemote, loadRemotes, removeRemote, saveRemote } from "@fastagent-sh/pi-remote/remotes";
@@ -1395,5 +1397,102 @@ describe("RemoteEditor followUp autocomplete (Pi 1.7.0)", () => {
     } finally {
       setKeybindings(prevKb);
     }
+  });
+});
+
+describe("pure view-state reducer & shared remote redaction", () => {
+  it("reduces SessionEvents purely into RemoteViewState and declarative outputs", () => {
+    const baseSession: Session = {
+      id: SessionId.make("s-1"),
+      status: "idle",
+      usage: { models: {}, tools: {} },
+    };
+    const s1 = reduceSessionEvent(
+      { ...EMPTY_VIEW_STATE, status: "connected", session: baseSession },
+      { type: "delta", channel: "text", text: "hello world" },
+      { replayed: false },
+    );
+    expect(s1.state.session?.status).toBe("running");
+    expect(s1.state.liveReply).toEqual({ text: "hello world", thinking: "" });
+
+    // Stale shorter snapshot preserves the already-streamed prefix.
+    const s2 = reduceSessionEvent(
+      s1.state,
+      { type: "state", session: { ...baseSession, status: "running", reply: { text: "hello" } } },
+      { replayed: false },
+    );
+    expect(s2.state.liveReply?.text).toBe("hello world");
+
+    // Tool lifecycle: start -> progress -> assistant entry args -> tool_result removes active tool.
+    const s3 = reduceSessionEvent(
+      s2.state,
+      { type: "tool_started", toolCallId: "tc-1", name: "bash", args: { cmd: "ls" } },
+      { replayed: false },
+    );
+    const s4 = reduceSessionEvent(
+      s3.state,
+      { type: "tool_progress", toolCallId: "tc-1", text: "running", output: "a\n" },
+      { replayed: false },
+    );
+    expect(s4.state.activeTools).toEqual([
+      { toolCallId: "tc-1", name: "bash", args: { cmd: "ls" }, progress: "running", output: "a\n" },
+    ]);
+
+    const s5 = reduceSessionEvent(
+      s4.state,
+      {
+        type: "entry",
+        entry: {
+          id: "e-1",
+          timestamp: 1,
+          kind: "assistant",
+          data: { text: "done", toolCalls: [{ id: "tc-1", name: "bash", args: { cmd: "ls" } }] },
+        },
+      },
+      { replayed: false },
+    );
+    expect(s5.lastAssistantText).toBe("done");
+    expect(s5.toolCallArgs).toEqual([["tc-1", { cmd: "ls" }]]);
+    expect(s5.state.liveReply).toBeUndefined();
+
+    const s6 = reduceSessionEvent(
+      s5.state,
+      {
+        type: "entry",
+        entry: { id: "e-2", timestamp: 2, kind: "tool_result", data: { toolCallId: "tc-1" } },
+      },
+      { replayed: false },
+    );
+    expect(s6.state.activeTools).toEqual([]);
+
+    const s7 = reduceSessionEvent(
+      s6.state,
+      { type: "compaction_failed", error: "context too small" },
+      { replayed: false },
+    );
+    expect(s7.state.compacting).toBe(false);
+    expect(s7.errorMessage).toBe("Compaction failed: context too small");
+  });
+
+  it("classifies $ENV_VAR references and redacts literal HTTP API keys in shared @fastagent-sh/client/remotes", () => {
+    expect(isRemoteEnvRef("$PROD_KEY")).toBe(true);
+    expect(isRemoteEnvRef("$_KEY_2")).toBe(true);
+    expect(isRemoteEnvRef("$not-valid")).toBe(false);
+    expect(isRemoteEnvRef("sk-literal")).toBe(false);
+
+    expect(redactRemoteConfig({ type: "http", url: "https://a.example", apiKey: "$PROD_KEY" })).toEqual({
+      type: "http",
+      url: "https://a.example",
+      apiKey: "$PROD_KEY",
+    });
+    expect(redactRemoteConfig({ type: "http", url: "https://a.example", apiKey: "sk-secret" })).toEqual({
+      type: "http",
+      url: "https://a.example",
+      apiKey: "***",
+    });
+    expect(redactRemoteConfig({ type: "agentcore", runtimeArn: "arn:aws:demo" })).toEqual({
+      type: "agentcore",
+      runtimeArn: "arn:aws:demo",
+    });
   });
 });
