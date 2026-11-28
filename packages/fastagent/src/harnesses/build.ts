@@ -6,14 +6,14 @@
  */
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BUILD_FILE, DIST_DIR, buildRecord, copyFiles, copyPlan } from "../definition/built.ts";
 import { declareMcp, literalCredentialAdvice, literalCredentials, relativeCommands } from "../mcp/config.ts";
 import { AGENT_CONFIG_FILE, exists, isUnderDir } from "../paths.ts";
 import { readPackageJson } from "../runtime.ts";
+import { toPackageName } from "../scaffold/templates.ts";
 import { type AgentDefinition, DEFINITION_FORMAT } from "../definition/definition.ts";
 import { loadSourceDefinition, validateDefinitionStatic } from "./assembly.ts";
-import { diagnoseHarnessCompatibility, resolveHarnessSelection } from "./config.ts";
 import { REGISTRY_KINDS } from "../definition/registry.ts";
 import { type ProjectCompiler, projectCompiler } from "../definition/tsc.ts";
 
@@ -35,19 +35,27 @@ export interface BuildResult {
   warnings: string[];
 }
 
+async function sourceRoots(dir: string, definition: AgentDefinition): Promise<string[]> {
+  return [
+    ...((await exists(join(dir, AGENT_CONFIG_FILE))) ? [AGENT_CONFIG_FILE] : []),
+    ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
+  ];
+}
+
 export async function buildProject(directory: string, options: BuildOptions = {}): Promise<BuildResult> {
   // The same refusals `dev` makes, before anything is written: a build of a definition that does not open is no build.
   const definition = await loadSourceDefinition(directory);
   validateDefinitionStatic(definition);
   const { dir } = definition;
-  await requireModulePackage(dir);
+  const roots = await sourceRoots(dir, definition);
+  await requireModulePackage(dir, roots.length > 0);
   const dist = join(dir, DIST_DIR);
   // Built apart and moved into place whole: a build that fails leaves the `dist/` before it as it was.
   const staging = join(dir, STAGING_DIR);
   await rm(staging, { recursive: true, force: true });
   try {
     await mkdir(staging, { recursive: true });
-    const code = await compile(dir, staging, definition, options.check !== false);
+    const code = await compile(dir, staging, roots, options.check !== false);
     await copyFiles(dir, staging, await copyPlan(dir, code));
     requireShippedCommands(dir, staging, definition.config.mcpServers);
     await writeEntry(staging, definition);
@@ -59,17 +67,21 @@ export async function buildProject(directory: string, options: BuildOptions = {}
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
-  const warnings = [
-    ...literalMcpCredentials(dir, definition.config.mcpServers),
-    ...diagnoseHarnessCompatibility(definition, resolveHarnessSelection(definition.config, {}, {})),
-  ];
+  const warnings = literalMcpCredentials(dir, definition.config.mcpServers);
   return { dist, definition, warnings };
 }
 
-/** The compiler reads a `.ts` file as CommonJS without a package that says otherwise, and refuses its `import`s. */
-async function requireModulePackage(dir: string): Promise<void> {
-  if (!(await exists(join(dir, "package.json")))) {
-    throw new Error(`fastagent build needs ${join(dir, "package.json")}, with "type": "module"`);
+/**
+ * Code compilation (`fastagent.config.ts` or `src/tools/*`) requires `package.json` with `"type": "module"`; a bare
+ * open-standard directory (`AGENTS.md`, `skills/`, `.mcp.json`) compiles directly into `dist/` without a root manifest.
+ */
+async function requireModulePackage(dir: string, hasCodeRoots: boolean): Promise<void> {
+  const hasManifest = await exists(join(dir, "package.json"));
+  if (!hasManifest) {
+    if (hasCodeRoots) {
+      throw new Error(`fastagent build needs ${join(dir, "package.json")}, with "type": "module"`);
+    }
+    return;
   }
   if (((await readPackageJson(dir)) as { type?: unknown }).type !== "module") {
     throw new Error(`fastagent build compiles ES modules: set "type": "module" in ${join(dir, "package.json")}`);
@@ -105,11 +117,7 @@ async function programFiles(
  * The configuration and every registered module, compiled with what they import; a type error fails the build.
  * Answers the project's source files the compiler read.
  */
-async function compile(dir: string, outDir: string, definition: AgentDefinition, check: boolean): Promise<string[]> {
-  const roots = [
-    ...((await exists(join(dir, AGENT_CONFIG_FILE))) ? [AGENT_CONFIG_FILE] : []),
-    ...REGISTRY_KINDS.flatMap((kind) => definition.registry[kind].map(({ file }) => file)),
-  ];
+async function compile(dir: string, outDir: string, roots: readonly string[], check: boolean): Promise<string[]> {
   if (roots.length === 0) return [];
   const compiler = projectCompiler(dir);
   const { inside, outside } = await programFiles(compiler, dir, roots);
@@ -170,6 +178,7 @@ ${kinds.map((kind) => `  ${kind}`).join("\n")}
  * code imports as peers, so an app that installs several agents holds one copy of each.
  */
 async function distPackageJson(dir: string, definition: AgentDefinition): Promise<string> {
+  const hasManifest = await exists(join(dir, "package.json"));
   const pkg = (await readPackageJson(dir)) as {
     name?: string;
     description?: string;
@@ -183,8 +192,11 @@ async function distPackageJson(dir: string, definition: AgentDefinition): Promis
   for (const [name, range] of Object.entries(pkg.dependencies ?? {})) {
     (isSharedPeer(name) ? peerDependencies : dependencies)[name] = range;
   }
+  if (!hasManifest && Object.keys(peerDependencies).length === 0) {
+    peerDependencies[FASTAGENT_PACKAGE] = `^${definition.builtWith}`;
+  }
   const out = {
-    name: pkg.name ?? basename(dir),
+    name: pkg.name ?? toPackageName(dir),
     version: definition.version,
     ...(pkg.description === undefined ? {} : { description: pkg.description }),
     ...(pkg.license === undefined ? {} : { license: pkg.license }),

@@ -19,19 +19,18 @@ FastAgent 是面向嵌入式、后台运行和自托管 AI Agent 的开源 TypeS
 
 ## Agent 项目目录结构
 
-每个 Agent 位于由 `fastagent.config.ts` 标识的独立目录中：
+任何包含开放标准 `AGENTS.md`、`skills/<name>/SKILL.md` 或 `.mcp.json` 的目录均可零配置直接运行与构建；需要强类型默认配置或自定义 TypeScript 工具时，再按需添加 `fastagent.config.ts` 与 `src/tools/`：
 
 ```text
 my-agent/
-├── fastagent.config.ts   # defineAgent({ model, harness, sandbox, codingTools, providers, mcpServers, starters })
-├── package.json          # Agent 名称、描述、依赖与 dev/build/start 脚本
-├── SYSTEM.md             # 系统提示词（每条消息自动重新读取）
-├── AGENTS.md             # 可选的项目约定，自动附加到提示词
+├── AGENTS.md             # 常驻指令 / AAIF 开放标准提示词（每条消息自动重新读取）
+├── SYSTEM.md             # 可选的独立系统提示词（每条消息自动重新读取）
+├── .mcp.json             # 可选的开放标准 MCP 服务器声明（支持 ${VAR} 密钥占位符）
+├── fastagent.config.ts   # 可选的 defineAgent({ model, harness, sandbox, codingTools, providers, mcpServers, starters })
+├── package.json          # 纯 Markdown/MCP Agent 可省略；包含 TypeScript 代码时必填
 ├── skills/               # 可选的 Agent Skills（skills/<name>/SKILL.md），可通过 /skill:<name> 调用
 ├── prompts/              # 可选的提示词模板（prompts/<name>.md），可通过 /<name> 调用
-├── src/
-│   ├── tools/            # 可选的可移植 TypeScript 工具（defineTool）
-│   └── extensions/       # 可选的 pi-durable 扩展（defineExtension）
+├── src/tools/            # 可选的 100% 跨 Harness 可移植 TypeScript 工具（defineTool 或 Standard JSON Schema v1）
 ├── .secrets/             # 已加入 .gitignore 的本地密钥（.env、auth.json），绝不进入构建产物或镜像
 └── .fastagent/           # 已加入 .gitignore 的本地运行时实例（dev/、start/）
 ```

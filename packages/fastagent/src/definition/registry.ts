@@ -1,13 +1,12 @@
 /**
- * The registry: every module in `src/tools/` and `src/extensions/` with what it default-exports, so
- * nothing is imported by hand. A file directly in the directory is a module, and anything else a module imports (a
- * helper) lives outside these directories.
+ * The registry: every module in `src/tools/` with what it default-exports, so nothing is imported by hand.
+ * A file directly in `src/tools/` is a portable tool module, and shared helpers live outside `src/tools/`.
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const REGISTRY_KINDS = ["tools", "extensions"] as const;
+export const REGISTRY_KINDS = ["tools"] as const;
 type RegistryKind = (typeof REGISTRY_KINDS)[number];
 
 /** One module of the definition: where it is, and what it default-exports. */
@@ -33,7 +32,7 @@ async function modulesIn(dir: string, kind: RegistryKind): Promise<{ file: strin
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
-  return names.sort().flatMap((entry) => {
+  return names.toSorted().flatMap((entry) => {
     const match = MODULE.exec(entry);
     return match === null || NOT_A_MODULE.test(entry)
       ? []

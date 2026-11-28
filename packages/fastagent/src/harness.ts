@@ -8,7 +8,7 @@ import type { Models } from "@earendil-works/pi-ai";
 import type { Agent, AgentInfo, ModelRef } from "@fastagent-sh/client/agent-api";
 import type { WorkTracker } from "./busy.ts";
 import type { AgentDefinition } from "./definition/definition.ts";
-import type { AuthoredTool, BuiltDefinition, Unfinished } from "./harnesses/assembly.ts";
+import type { BuiltDefinition, Unfinished } from "./harnesses/assembly.ts";
 import type { HarnessSelection } from "./harnesses/config.ts";
 import type { CodingToolName } from "./harnesses/define.ts";
 import type { AgentCommand } from "./harnesses/text.ts";
@@ -52,7 +52,7 @@ export {
   type ToolOutputPart,
   type ToolResult,
 } from "./harnesses/tool.ts";
-export type { AuthoredTool, BuiltDefinition, Unfinished } from "./harnesses/assembly.ts";
+export type { BuiltDefinition, Unfinished } from "./harnesses/assembly.ts";
 export type { HarnessSelection } from "./harnesses/config.ts";
 export type { CodingToolName, HarnessName, SandboxMode } from "./harnesses/define.ts";
 export type { AgentCommand } from "./harnesses/text.ts";
@@ -168,28 +168,10 @@ export interface HarnessAgentOpenContext<S extends HarnessStorageHandle = Harnes
 /** Two-phase runtime harness plugin contract exported as `harnessProvider` from `@fastagent-sh/harness-<name>/provider`. */
 export interface HarnessProvider<S extends HarnessStorageHandle = HarnessStorageHandle> {
   readonly name: string;
-  /** Whether this harness installs `src/extensions/*` (`pi-durable` only; `false` logs a skip warning). */
-  readonly supportsExtensions?: boolean;
   /** Whether this harness enforces OS sandboxing (`workspace` / `read-only` / `off`). */
   readonly supportsSandbox?: boolean;
   openStorage(ctx: HarnessStorageOpenContext): Promise<S> | S;
   openAgent(ctx: HarnessAgentOpenContext<S>): Promise<HarnessRuntimeAgent>;
-}
-
-/** Wrap an authored tool to fail visibly if it returns a `pi-durable`-only park (`sleep` / `wait`) on another harness. */
-export function adaptToolRejectingPark(tool: AuthoredTool): AuthoredTool {
-  return {
-    ...tool,
-    execute: async (args, api, context) => {
-      const result = await tool.execute(args, api, context);
-      if (result !== null && typeof result === "object" && ("sleep" in result || "wait" in result)) {
-        throw new Error(
-          `tool "${tool.name}" returned a park response (sleep/wait), which requires harness: "pi-durable"`,
-        );
-      }
-      return result;
-    },
-  };
 }
 
 /** Closable single-consumer async queue used to bridge live session events into `AsyncIterable` streams. */

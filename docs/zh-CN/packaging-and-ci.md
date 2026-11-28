@@ -30,18 +30,19 @@ dist/
 ├── skills/               # 拷贝的 Agent Skills
 ├── prompts/              # 拷贝的提示词模板
 ├── assets/               # 拷贝的静态资源
-├── fastagent.config.js   # 编译后的配置
-└── src/                  # 编译后的工具与扩展（不含测试文件）
+├── .mcp.json             # 拷贝的开放标准 MCP 声明（若存在）
+├── fastagent.config.js   # 编译后的配置（若存在）
+└── src/tools/            # 编译后的可移植工具（不含测试文件）
 ```
 
 ### 内置安全与工程卫生检查
 
 在写入 `dist/` 之前，每次构建都会强制执行严格的制品边界校验：
 
-- **完整 TypeScript 类型检查：** 使用项目自身的 `tsc` 编译 `fastagent.config.ts` 以及 `src/tools/` 和 `src/extensions/` 下的所有模块（仅当你已单独运行过 `tsc --noEmit` 时才传 `--no-check`）。
+- **零配置打包或完整 TypeScript 类型检查：** 仅含开放标准文件（`AGENTS.md`、`skills/`、`.mcp.json`）的裸目录即使没有 `package.json` 也能直接编译为标准 ESM `dist/` 包；当存在 `fastagent.config.ts` 或 `src/tools/` 时，使用项目自身的 `tsc` 完成类型检查与编译（仅当你已单独运行过 `tsc --noEmit` 时才传 `--no-check`）。
 - **禁止跨目录越界导入：** 拒绝引用 Agent 目录之外的源码文件，防止产出的 `dist/` 缺失依赖。
 - **绝不夹带本机状态或密钥：** 永不拷贝 `.secrets/`、`.env*`、`.state/`、`node_modules/`、`.git/`，也不会读取本机 `~/.pi/agent` 中的任何内容。
-- **MCP 与 Harness 兼容性检查：** 验证相对路径的本地 stdio MCP 命令确实存在于 `dist/` 中；若 `mcpServers` 出现明文硬编码凭证（而非 `${VAR}` 占位符），或 `fastagent.config.ts` 选择了跳过 `pi-durable` 专有 `src/extensions/*` 的 Harness（如 `dsh`），会发出构建警告。
+- **MCP 安全与打包校验：** 验证相对路径的本地 stdio MCP 命令确实存在于 `dist/` 中；若 `.mcp.json` 或 `mcpServers` 出现明文硬编码凭证（而非 `${VAR}` 占位符），会发出构建警告。
 - **通过 `peerDependencies` 共享运行时：** `dist/package.json` 会将 `@fastagent-sh/fastagent`、`@fastagent-sh/harness-*` 与 `@earendil-works/*` 包移入 `peerDependencies`。当宿主应用同时嵌入多个 Agent 包时，Node 只会安装一份共享运行时，不会重复膨胀。
 
 ## 2. 作为标准 npm 包分发与版本管理

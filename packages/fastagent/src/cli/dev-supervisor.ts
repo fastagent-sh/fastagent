@@ -5,15 +5,15 @@
 import { spawn } from "node:child_process";
 import { relative, sep } from "node:path";
 import { watch as watchTree } from "chokidar";
-import { AGENT_CONFIG_FILE, isUnderDir } from "../paths.ts";
+import { AGENT_CONFIG_FILE, MCP_CONFIG_FILES, isUnderDir } from "../paths.ts";
 import { dotEnvPath } from "../value-file.ts";
 import { log } from "../log.ts";
 import { readProcessEnv } from "../process-env.ts";
 
-/** The agent's code (its tools and extensions), loaded ONCE per worker: a restart is its only re-read. */
+/** The agent's code (`src/tools/`), loaded ONCE per worker: a restart is its only re-read. */
 const CODE_DIR = "src";
 
-const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, .secrets/.env`;
+const WATCHED_HINT = `${CODE_DIR}/, package.json, fastagent.config.ts, .mcp.json, .secrets/.env`;
 
 /** chokidar `ignored` matcher for the narrow watch scope (true = ignore), rooted at the AGENT DIR. */
 function devWatchIgnored(root: string, envFile: string): (path: string) => boolean {
@@ -22,9 +22,9 @@ function devWatchIgnored(root: string, envFile: string): (path: string) => boole
   return (path: string): boolean => {
     if (path === root) return false; // the root itself must not be pruned
     const rel = relative(root, path);
-    // Code inputs at the agent dir root: config, package.json, and the code loaded once per worker (a restart is
-    // their only re-read).
+    // Code and MCP inputs at the agent dir root: config, MCP declarations, package.json, and `src/`.
     if (rel === AGENT_CONFIG_FILE) return false;
+    if ((MCP_CONFIG_FILES as readonly string[]).includes(rel)) return false;
     if (rel === "package.json") return false;
     const segments = rel.split(sep);
     if (segments[0] === CODE_DIR) return false;

@@ -57,7 +57,6 @@ function openInstanceStorage(
 
 export const piDurableProvider: HarnessProvider<PiDurableStorageHandle> = {
   name: "pi-durable",
-  supportsExtensions: true,
   supportsSandbox: false,
 
   async openStorage(ctx: HarnessStorageOpenContext): Promise<PiDurableStorageHandle> {

@@ -1,14 +1,15 @@
 /**
- * The MCP servers an agent opens: `mcpServers` in `fastagent.config.ts`. One list, read once, that every reader (the
- * open, `info`, the build's warning) is given.
+ * The MCP servers an agent opens: project-root `.mcp.json` / `mcp.json` and `mcpServers` in `fastagent.config.ts`.
+ * One list, read through one function, shared by runtime startup, `definitionSecrets`, `info`, `build`, and `deploy check`.
  */
-import { isAbsolute, resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import type { DeclaredSecret } from "../declared-secrets.ts";
 import { isEnvName } from "../needs.ts";
 import { McpError } from "../mcp-api.ts";
-import { AGENT_CONFIG_FILE } from "../paths.ts";
+import { AGENT_CONFIG_FILE, MCP_CONFIG_FILES } from "../paths.ts";
 import { loadRawProgramConfig } from "../program-config.ts";
 
 const Strings = Schema.Record(Schema.String, Schema.String);
@@ -75,14 +76,82 @@ export function declareServers(raw: unknown, file: string): Record<string, McpSe
   return servers;
 }
 
-/** The servers of the program in `dir` (`fastagent.config.ts`). */
-export function declareMcp(programServers: unknown, dir: string, programFile = AGENT_CONFIG_FILE): McpDeclaration[] {
-  return Object.entries(declareServers(programServers, programFile)).map(
-    ([name, server]): McpDeclaration => ({ name, server, file: programFile, base: resolve(dir) }),
+function isPresentMcpFile(path: string, file: string): boolean {
+  try {
+    const st = statSync(path);
+    if (!st.isFile()) {
+      throw new McpError("configuration", `${file}: expected a JSON file, found a directory`);
+    }
+    return true;
+  } catch (error) {
+    if (error instanceof McpError) throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+function readMcpConfigFile(dir: string): McpDeclaration[] {
+  const root = resolve(dir);
+  const present = MCP_CONFIG_FILES.filter((file) => isPresentMcpFile(join(root, file), file));
+  if (present.length === 0) return [];
+  if (present.length > 1) {
+    throw new McpError("configuration", `both .mcp.json and mcp.json exist in ${root}; keep only one`);
+  }
+  const file = present[0] as string;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(root, file), "utf8"));
+  } catch (error) {
+    throw new McpError(
+      "configuration",
+      `${file}: invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new McpError("configuration", `${file}: expected a JSON object with "mcpServers"`);
+  }
+  const obj = parsed as Record<string, unknown>;
+  const unknownKeys = Object.keys(obj).filter((key) => key !== "mcpServers" && key !== "$schema");
+  if (unknownKeys.length > 0) {
+    throw new McpError(
+      "configuration",
+      `${file}: unknown top-level key(s) ${unknownKeys.map((k) => JSON.stringify(k)).join(", ")}; expected "mcpServers"`,
+    );
+  }
+  if (obj.$schema !== undefined && typeof obj.$schema !== "string") {
+    throw new McpError("configuration", `${file}: "$schema" must be a string`);
+  }
+  return Object.entries(declareServers(obj.mcpServers, file)).map(
+    ([name, server]): McpDeclaration => ({ name, server, file, base: root }),
   );
 }
 
-/** Load `mcpServers` from the agent directory's `fastagent.config.ts` (or compiled `fastagent.config.js`). */
+/** The servers of the project in `dir` (`.mcp.json` / `mcp.json` and `fastagent.config.ts`). */
+export function declareMcp(programServers: unknown, dir: string, programFile = AGENT_CONFIG_FILE): McpDeclaration[] {
+  const root = resolve(dir);
+  const fromFile = readMcpConfigFile(root);
+  const fromProgram = Object.entries(declareServers(programServers, programFile)).map(
+    ([name, server]): McpDeclaration => ({ name, server, file: programFile, base: root }),
+  );
+  const seen = new Map<string, string>();
+  const combined: McpDeclaration[] = [];
+  for (const entry of [...fromFile, ...fromProgram]) {
+    const earlier = seen.get(entry.name);
+    if (earlier !== undefined) {
+      throw new McpError(
+        "configuration",
+        `${earlier} and ${entry.file} both define MCP server "${entry.name}"`,
+        entry.name,
+      );
+    }
+    seen.set(entry.name, entry.file);
+    combined.push(entry);
+  }
+  return combined;
+}
+
+/** Load MCP declarations from `.mcp.json` / `mcp.json` and `fastagent.config.ts` (or compiled `fastagent.config.js`). */
 export async function loadMcp(dir: string): Promise<McpDeclaration[]> {
   const { value, file } = await loadRawProgramConfig(dir);
   return declareMcp(value?.mcpServers, dir, file);

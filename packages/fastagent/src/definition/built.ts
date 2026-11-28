@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exists } from "../paths.ts";
+import { AGENT_CONFIG_FILE, exists } from "../paths.ts";
 import { type AgentDefinition, assertDefinition } from "./definition.ts";
 import { registryFiles } from "./registry.ts";
 
@@ -20,7 +20,7 @@ const TEST = /\.(test|spec)\.[a-z]+$/;
 /** What never leaves the project, wherever it is: secrets, dependencies, history, the build's own output. */
 const NEVER_COPIED = /^(\.env(\..*)?|\.secrets|node_modules|\.git|\.DS_Store)$/;
 /** The program's text and data at the project root. */
-const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", "README.md"];
+const ROOT_FILES = ["SYSTEM.md", "AGENTS.md", "README.md", ".mcp.json", "mcp.json"];
 const ROOT_DIRS = ["skills", "prompts", "assets"];
 const LICENSE = /^LICEN[CS]E(\..*)?$/i;
 
@@ -96,7 +96,13 @@ async function digest(path: string): Promise<string> {
  * these, so running an agent never makes its build stale.
  */
 async function fingerprintOf(dir: string, code: readonly string[]): Promise<string> {
-  const files = new Set([...code, ...(await registryFiles(dir)), ...(await copyPlan(dir, code)), "package.json"]);
+  const files = new Set([
+    ...code,
+    ...(await registryFiles(dir)),
+    ...(await copyPlan(dir, code)),
+    AGENT_CONFIG_FILE,
+    "package.json",
+  ]);
   const hash = createHash("sha256");
   for (const file of [...files].sort()) hash.update(`${file}\0${await digest(join(dir, file))}\n`);
   return hash.digest("hex");

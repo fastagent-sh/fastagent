@@ -3,7 +3,7 @@
  * `@deepseek-ai/dsh-tools` registration contract (`output: { schema, render, presentationMeta }`).
  */
 import type { ToolDefinition as DshRuntimeToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
-import { retainToolOutput, type AuthoredTool, type HarnessTelemetryContext } from "@fastagent-sh/fastagent/harness";
+import { retainToolOutput, type HarnessTelemetryContext, type PortableTool } from "@fastagent-sh/fastagent/harness";
 import type { FastAgentToolApi } from "./types.ts";
 
 type DshPresentationMeta = ReturnType<NonNullable<DshRuntimeToolDefinition["output"]["presentationMeta"]>>;
@@ -26,7 +26,7 @@ interface ToolProgressEvent {
 }
 
 export interface ToolBridgeRuntime {
-  readonly toolsByName: ReadonlyMap<string, AuthoredTool>;
+  readonly toolsByName: ReadonlyMap<string, PortableTool>;
   readonly onProgress: (event: ToolProgressEvent) => void;
   readonly telemetry?: HarnessTelemetryContext;
 }
@@ -39,7 +39,7 @@ function formatNestedCall(name: string, args: unknown): string {
   return name;
 }
 
-export function validateFastAgentTool(tool: AuthoredTool): void {
+export function validateFastAgentTool(tool: PortableTool): void {
   if (!tool.name || typeof tool.name !== "string") {
     throw new Error("DSH tool bridge requires a non-empty tool name");
   }
@@ -81,7 +81,7 @@ function extractResultText(
  * nested `api.executeTool()` attribution on the outer `toolCallId`, `details` persistence,
  * and `control.terminate` -> `exec.concludeTurn()`.
  */
-export function bridgeDshRuntimeTool(tool: AuthoredTool, runtime: ToolBridgeRuntime): DshRuntimeToolDefinition {
+export function bridgeDshRuntimeTool(tool: PortableTool, runtime: ToolBridgeRuntime): DshRuntimeToolDefinition {
   validateFastAgentTool(tool);
   return {
     name: tool.name,

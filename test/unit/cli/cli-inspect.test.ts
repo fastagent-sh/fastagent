@@ -74,14 +74,16 @@ describe("cli: info", () => {
 });
 
 describe("cli: info's MCP servers", () => {
-  it("are the program's, and nothing a tool's own file declares", async () => {
+  it("discovers project-root .mcp.json alongside fastagent.config.ts while ignoring editor dotfiles", async () => {
     const dir = await agentWorkspace("fa-cli-mcp-list-", {
       "fastagent.config.ts": `export default ${JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://docs.example.com/mcp" } } })};\n`,
       ".mcp.json": JSON.stringify({ mcpServers: { tooling: { command: "npx" } } }),
+      ".cursor/mcp.json": JSON.stringify({ mcpServers: { ignored_editor: { command: "npx" } } }),
     });
     const info = await runInProcess(["info", "--json"], dir);
     expect(info.code, info.stderr).toBe(0);
     expect(JSON.parse(info.stdout).mcp).toEqual([
+      { name: "tooling", transport: "stdio" },
       { name: "docs", transport: "http", url: "https://docs.example.com/mcp" },
     ]);
   });
@@ -151,45 +153,42 @@ describe("cli: info's MCP servers", () => {
     });
     const fromCfg = await runInProcess(["-C", configured, "info", "--json"]);
     expect(fromCfg.code, fromCfg.stderr).toBe(0);
-    expect(JSON.parse(fromCfg.stdout)).toMatchObject({ harness: "dsh", sandbox: "off", warnings: [] });
+    expect(JSON.parse(fromCfg.stdout)).toMatchObject({ harness: "dsh", sandbox: "off" });
   });
 
-  it("info surfaces pi-durable extension compatibility warnings on harness: dsh (with and without secrets)", async () => {
-    const dir = await agentWorkspace("fa-info-ext-compat-", {
-      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
-      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
-      "src/extensions/secret-ext.ts":
-        'import { needs } from "@fastagent-sh/fastagent";\nexport default needs(["AUDIT_KEY"], () => ({ name: "audit-ext", tools: [] }));\n',
-    });
-
-    // Without AUDIT_KEY, info cannot build factories yet still warns statically (runtime name for plain, file path for needs()).
-    const envWithoutSecret = withoutModel();
-    delete envWithoutSecret.AUDIT_KEY;
-    const unbuiltJson = await runInProcess(["-C", dir, "info", "--json"], undefined, envWithoutSecret);
-    expect(unbuiltJson.code, unbuiltJson.stderr).toBe(0);
-    expect(JSON.parse(unbuiltJson.stdout).warnings).toEqual([
-      'skipping pi-durable extensions on harness "dsh": legacy-ext, src/extensions/secret-ext.ts (portable tools belong in src/tools/)',
+  it("inspects a bare zero-ceremony AAIF directory (AGENTS.md + .mcp.json, no fastagent.config.ts) and tracks .mcp.json secrets", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const bareDir = await mkdtemp(join(tmpdir(), "fa-info-bare-"));
+    await writeFile(join(bareDir, "AGENTS.md"), "# Cloud Triage Agent\n");
+    await writeFile(
+      join(bareDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          duang: {
+            type: "http",
+            url: "https://duang.example.com/mcp",
+            headers: { Authorization: `Bearer \${DUANG_API_TOKEN}` },
+          },
+        },
+      }),
+    );
+    const env = withoutModel();
+    delete env.DUANG_API_TOKEN;
+    const res = await runInProcess(["-C", bareDir, "info", "--json"], undefined, env);
+    expect(res.code, res.stderr).toBe(0);
+    const parsed = JSON.parse(res.stdout);
+    expect(parsed.mcp).toEqual([{ name: "duang", transport: "http", url: "https://duang.example.com/mcp" }]);
+    expect(parsed.secrets).toEqual([
+      { name: "DUANG_API_TOKEN", optional: false, declaredIn: [".mcp.json mcpServers.duang"] },
     ]);
+    expect(parsed.unsetSecrets).toEqual(["DUANG_API_TOKEN"]);
 
-    const unbuiltText = await runInProcess(["-C", dir, "info"], undefined, envWithoutSecret);
-    expect(unbuiltText.code, unbuiltText.stderr).toBe(0);
-    expect(unbuiltText.stdout).toMatch(/⚠ skipping pi-durable extensions on harness "dsh": legacy-ext/);
-
-    // With AUDIT_KEY set, info reports exact built extension names; switching to pi-durable clears warnings.
-    const builtJson = await runInProcess(["-C", dir, "info", "--json"], undefined, {
-      ...envWithoutSecret,
-      AUDIT_KEY: "secret",
-    });
-    expect(builtJson.code, builtJson.stderr).toBe(0);
-    expect(JSON.parse(builtJson.stdout).warnings).toEqual([
-      'skipping pi-durable extensions on harness "dsh": legacy-ext, audit-ext (portable tools belong in src/tools/)',
-    ]);
-
-    const onPi = await runInProcess(["-C", dir, "info", "--harness", "pi-durable", "--json"], undefined, {
-      ...envWithoutSecret,
-      AUDIT_KEY: "secret",
-    });
-    expect(onPi.code, onPi.stderr).toBe(0);
-    expect(JSON.parse(onPi.stdout).warnings).toEqual([]);
+    // Malformed .mcp.json prints a clean one-line startup error without leaking a raw McpError stack trace.
+    await writeFile(join(bareDir, ".mcp.json"), "{ invalid json");
+    const badMcp = await runInProcess(["-C", bareDir, "info"], undefined, env);
+    expect(badMcp.code).toBe(1);
+    expect(badMcp.stderr).toMatch(/^Error: \.mcp\.json: invalid JSON:/);
+    expect(badMcp.stderr).not.toMatch(/\n\s+at /);
   });
 });

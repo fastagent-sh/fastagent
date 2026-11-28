@@ -134,7 +134,6 @@ export default defineTool({
     let runtimeClosed = false;
     const customProvider: HarnessProvider = {
       name: "custom-server",
-      supportsExtensions: false,
       supportsSandbox: false,
       openStorage: () => ({
         close: () => {

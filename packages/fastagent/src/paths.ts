@@ -26,9 +26,12 @@ export const STATE_DIRNAME = ".state";
 /**
  * THE config filename. One spelling, not a family: fastagent generates this file, so a choice of extension buys
  * an author nothing and costs a precedence order plus a "you have two of them" failure path. Everything else an
- * author writes (`src/tools/`, `src/extensions/`) still accepts `.ts`/`.js`/`.mjs` — that is THEIR code.
+ * author writes (`src/tools/`) accepts `.ts`/`.mts`/`.js`/`.mjs`.
  */
 export const AGENT_CONFIG_FILE = "fastagent.config.ts";
+
+/** Open-standard project-root MCP configuration filenames discovered alongside `fastagent.config.ts`. */
+export const MCP_CONFIG_FILES = [".mcp.json", "mcp.json"] as const;
 
 /**
  * "Not there" and "could not look" are different answers, and only the first may read as an absence: an agent
@@ -45,12 +48,30 @@ function statOrAbsent(p: string): Stats | undefined {
   }
 }
 
-/** THE marker: a directory that declares itself an agent with a {@link AGENT_CONFIG_FILE}. */
+/** Explicit FastAgent project marker used when checking enclosing parent directories. */
 function hasConfig(p: string): boolean {
-  return statOrAbsent(p)?.isDirectory() === true && statOrAbsent(join(p, AGENT_CONFIG_FILE)) !== undefined;
+  return statOrAbsent(p)?.isDirectory() === true && statOrAbsent(join(p, AGENT_CONFIG_FILE))?.isFile() === true;
 }
 
-/** The agent `dir` sits INSIDE (the nearest proper ancestor that IS an agent dir), or undefined. */
+const AGENT_FILE_MARKERS = [
+  AGENT_CONFIG_FILE,
+  "SYSTEM.md",
+  "AGENTS.md",
+  ...MCP_CONFIG_FILES,
+  join("dist", "build.json"),
+] as const;
+const AGENT_DIR_MARKERS = ["skills", "prompts", join("src", "tools")] as const;
+
+/** Whether `p` itself holds `fastagent.config.ts` or open-standard agent files (`AGENTS.md`, `SYSTEM.md`, `skills/`, `.mcp.json`). */
+function isAgentDir(p: string): boolean {
+  if (statOrAbsent(p)?.isDirectory() !== true) return false;
+  return (
+    AGENT_FILE_MARKERS.some((rel) => statOrAbsent(join(p, rel))?.isFile() === true) ||
+    AGENT_DIR_MARKERS.some((rel) => statOrAbsent(join(p, rel))?.isDirectory() === true)
+  );
+}
+
+/** The agent `dir` sits INSIDE (the nearest proper ancestor with `fastagent.config.ts`), or undefined. */
 export function enclosingAgentDir(dir: string): string | undefined {
   let candidate = dirname(resolve(dir));
   for (let prev = ""; candidate !== prev; prev = candidate, candidate = dirname(candidate)) {
@@ -61,9 +82,7 @@ export function enclosingAgentDir(dir: string): string | undefined {
 
 /**
  * The agent directory `dir` names, for a command that also works without one (`login`, `models`): `dir` itself when it
- * holds the config, undefined when it is no agent and inside none. Inside an agent is refused, naming its root —
- * answering for the enclosing agent would act on a directory the caller did not name, and answering "no agent" would
- * send a login to the machine's store.
+ * holds agent files, undefined when it is no agent and inside none. Inside a configured agent is refused, naming its root.
  */
 export function findAgentDir(dir: string): string | undefined {
   const base = resolve(dir);
@@ -72,6 +91,7 @@ export function findAgentDir(dir: string): string | undefined {
   if (enclosing) {
     throw new Error(`${base} is inside the agent ${enclosing} — run from ${enclosing}, or pass it as the agent`);
   }
+  if (isAgentDir(base)) return base;
   return undefined;
 }
 
@@ -80,7 +100,7 @@ export function resolveAgentDir(dir: string): string {
   const agentDir = findAgentDir(dir);
   if (agentDir === undefined) {
     throw new Error(
-      `${resolve(dir)} is not a fastagent agent — it holds no ${AGENT_CONFIG_FILE}; pass the agent's directory, ` +
+      `${resolve(dir)} is not a fastagent agent — it holds no ${AGENT_CONFIG_FILE}, AGENTS.md, SYSTEM.md, skills/, or .mcp.json; pass the agent's directory, ` +
         "or initialize one with `fastagent init` (or `fastagent init <dir>`)",
     );
   }

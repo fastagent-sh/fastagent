@@ -31,13 +31,13 @@ function makeDefinition(dir: string, name: string, config: Parameters<typeof def
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SYSTEM.md"), "Be concise.\n");
   return defineDefinition({
-    format: 2,
+    format: 3,
     builtWith: "0.0.0-bun-smoke",
     name,
     version: "0.0.0",
     dir,
     config,
-    registry: { tools: [], extensions: [] },
+    registry: { tools: [] },
   });
 }
 

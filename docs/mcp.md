@@ -6,9 +6,9 @@ status: current
 
 # MCP Servers
 
-Connect external tools from any local **stdio** or remote **Streamable HTTP** Model Context Protocol (MCP) server by declaring it under `mcpServers` in `fastagent.config.ts`. Each discovered tool is exposed to the model as `mcp__<server>__<tool>` on both `pi-durable` and `dsh`.
+Connect external tools from any local **stdio** or remote **Streamable HTTP** Model Context Protocol (MCP) server by declaring it in a project-root `.mcp.json` (or `mcp.json`) file or under `mcpServers` in `fastagent.config.ts`. Each discovered tool is exposed to the model as `mcp__<server>__<tool>` on both `pi-durable` and `dsh`.
 
-FastAgent ignores `.mcp.json`, editor settings, and home-directory configs so your agent's tool set is always explicit, portable, and reproducible across machines and containers.
+Project-root `.mcp.json` / `mcp.json` is bundled into `dist/` by `fastagent build` and checked by `fastagent deploy check` identically to `fastagent.config.ts`. Editor dotfiles (`.cursor/mcp.json`, `.vscode/mcp.json`) and home-directory configs remain ignored so your agent's tool set is always self-contained and reproducible across containers.
 
 **Supported:** MCP protocol `2026-07-28`, tools returning text or JSON results, over **stdio** or **Streamable HTTP** with custom headers.
 **Not supported:** MCP OAuth flows, resources, prompts, sampling, elicitation, legacy HTTP+SSE, older protocol versions, or live tool-list hot reload (reopen the agent to pick up newly added tools).

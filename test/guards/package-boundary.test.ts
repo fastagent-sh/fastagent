@@ -284,6 +284,15 @@ describe("public entries", () => {
     }
   });
 
+  it("HarnessProvider and BuiltDefinition carry zero single-harness extension or park shims", () => {
+    const harnessText = readFileSync(resolve(srcOf("fastagent"), "harness.ts"), "utf8");
+    const assemblyText = readFileSync(resolve(srcOf("fastagent"), "harnesses/assembly.ts"), "utf8");
+    for (const removed of ["supportsExtensions", "adaptToolRejectingPark", "AuthoredExtension", "AuthoredTool"]) {
+      expect(harnessText).not.toMatch(new RegExp(`\\b${removed}\\b`));
+      expect(assemblyText).not.toMatch(new RegExp(`\\b${removed}\\b`));
+    }
+  });
+
   it("HarnessProvider, PgExecutor, and build-only defineDefinition stay off the fastagent root entry", () => {
     const rootEntry = readFileSync(resolve(srcOf("fastagent"), "index.ts"), "utf8");
     for (const symbol of ["PgExecutor", "defineDefinition", "HarnessProvider"]) {

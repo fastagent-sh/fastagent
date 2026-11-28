@@ -594,7 +594,7 @@ describe("postgres-kit shared storage primitives", () => {
       version: "0.0.0",
       dir,
       config: { model: "gw/m1", providers: [faux.provider] },
-      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }], extensions: [] },
+      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }] },
     });
 
     const name = freshInstance();

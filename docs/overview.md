@@ -19,19 +19,18 @@ FastAgent is an open-source TypeScript & Node.js runtime for embedded, backgroun
 
 ## How an agent is structured
 
-Each agent lives in a clean standalone directory marked by `fastagent.config.ts`:
+Any directory with open-standard `AGENTS.md`, `skills/<name>/SKILL.md`, or `.mcp.json` runs and builds out of the box—or add `fastagent.config.ts` and `src/tools/` when you want typed defaults and custom TypeScript tools:
 
 ```text
 my-agent/
-├── fastagent.config.ts   # defineAgent({ model, harness, sandbox, codingTools, providers, mcpServers, starters })
-├── package.json          # agent name, description, dependencies, and dev/build/start scripts
-├── SYSTEM.md             # standing system prompt (re-read on every message)
-├── AGENTS.md             # optional project conventions appended to the prompt
+├── AGENTS.md             # standing instructions / AAIF open-standard prompt (re-read on every message)
+├── SYSTEM.md             # optional dedicated system prompt (re-read on every message)
+├── .mcp.json             # optional open-standard MCP server declarations (supports ${VAR} secrets)
+├── fastagent.config.ts   # optional defineAgent({ model, harness, sandbox, codingTools, providers, mcpServers, starters })
+├── package.json          # optional for markdown/MCP-only agents; required when compiling TypeScript in src/tools/
 ├── skills/               # optional Agent Skills (skills/<name>/SKILL.md), callable via /skill:<name>
 ├── prompts/              # optional prompt templates (prompts/<name>.md), callable via /<name>
-├── src/
-│   ├── tools/            # optional portable TypeScript tools (defineTool)
-│   └── extensions/       # optional pi-durable extensions (defineExtension)
+├── src/tools/            # optional 100% harness-portable TypeScript tools (defineTool or Standard JSON Schema v1)
 ├── .secrets/             # git-ignored local secrets (.env, auth.json) — never shipped in builds or images
 └── .fastagent/           # git-ignored local runtime instances (dev/, start/)
 ```

@@ -88,11 +88,7 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
     }
   });
 
-  it("refuses invalid static extension and provider exports before writing dist/", async () => {
-    const badExt = project({ "src/extensions/broken.ts": "export default 42;\n" });
-    await expect(buildProject(badExt)).rejects.toThrow(/src\/extensions\/broken\.ts:.*must be an extension/);
-    expect(readdirSync(badExt)).not.toContain("dist");
-
+  it("refuses invalid static provider exports before writing dist/", async () => {
     const badProvider = project({ "fastagent.config.ts": "export default { providers: [42] };\n" });
     await expect(buildProject(badProvider)).rejects.toThrow(
       /fastagent\.config\.ts providers\[0\]:.*must be a pi-ai provider/,
@@ -137,15 +133,66 @@ export default needs(["BILLING_API_KEY"], ({ BILLING_API_KEY }) => {
     });
   });
 
-  it("warns on build when fastagent.config.ts selects harness: dsh alongside src/extensions/*", async () => {
-    const dir = project({
-      ...FILES,
-      "fastagent.config.ts": 'export default { model: "openai/gpt-5.5", harness: "dsh" };\n',
-      "src/extensions/legacy.ts": 'export default { name: "legacy-ext", tools: [] };\n',
+  it("compiles a bare AAIF open-standard directory (AGENTS.md + skills/ + .mcp.json, no fastagent.config.ts or package.json) into a valid ESM dist/", async () => {
+    const { mkdirSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { loadProjectBuild } = await import("../../../packages/fastagent/src/definition/built.ts");
+    const parentDir = mkdtempSync(join(tmpdir(), "fa-bare-pkg-"));
+    made.push(parentDir);
+    const bareDir = join(parentDir, "_Incident_Responder");
+    mkdirSync(bareDir, { recursive: true });
+    writeFileSync(join(bareDir, "AGENTS.md"), "# Incident Responder\nAlways cite runbooks.\n");
+    const skillDir = join(bareDir, "skills", "triage");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "---\nname: triage\ndescription: Triage production alerts.\n---\nCheck metrics first.\n",
+    );
+    writeFileSync(
+      join(bareDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          duang: {
+            type: "http",
+            url: "https://duang.example.com/mcp",
+            headers: { Authorization: `Bearer \${DUANG_TOKEN}` },
+          },
+        },
+      }),
+    );
+
+    const { dist, definition, warnings } = await buildProject(bareDir);
+    expect(warnings).toEqual([]);
+    expect(listing(dist)).toEqual([
+      ".mcp.json",
+      "AGENTS.md",
+      "build.json",
+      "index.d.ts",
+      "index.js",
+      "package.json",
+      "skills/triage/SKILL.md",
+    ]);
+    expect(definition.inputs.secrets).toEqual([
+      {
+        name: "DUANG_TOKEN",
+        optional: false,
+        declaredIn: [".mcp.json mcpServers.duang"],
+      },
+    ]);
+    const distPkg = JSON.parse(readFileSync(join(dist, "package.json"), "utf8"));
+    expect(distPkg).toMatchObject({
+      name: "incident_responder",
+      type: "module",
+      version: "0.0.0",
+      exports: { ".": { types: "./index.d.ts", default: "./index.js" } },
+      peerDependencies: { "@fastagent-sh/fastagent": expect.stringMatching(/^\^/) },
     });
-    const { warnings } = await buildProject(dir);
-    expect(warnings).toContain(
-      'skipping pi-durable extensions on harness "dsh": legacy-ext (portable tools belong in src/tools/)',
+
+    // Adding fastagent.config.ts after building a bare directory invalidates the build fingerprint.
+    expect((await loadProjectBuild(bareDir, { checkSources: true })).name).toBe("_Incident_Responder");
+    writeFileSync(join(bareDir, "fastagent.config.ts"), "export default { codingTools: false };\n");
+    await expect(loadProjectBuild(bareDir, { checkSources: true })).rejects.toThrow(
+      /was built from other sources.*run `fastagent build`/,
     );
   });
 });

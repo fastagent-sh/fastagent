@@ -63,14 +63,16 @@ describe("cli: process contracts", () => {
     expect(stdout).toBe(""); // a failure never pollutes stdout
   });
 
-  it("a directory that is not an agent fails as a one-line startup error, not a raw stack", async () => {
-    // resolvePlacement throws SYNCHRONOUSLY, before any .catch(failStartup) chain exists — without
-    // placementOrExit the refusal surfaced as an uncaught stack trace (found in acceptance).
+  it("a directory that is not an agent fails as a one-line startup error, while a bare AGENTS.md directory runs zero-ceremony", async () => {
     const dir = await mkdtemp(join(tmpdir(), "fa-not-an-agent-"));
-    await writeFile(join(dir, "AGENTS.md"), "# just a project\n"); // context, not a definition
+    await writeFile(join(dir, "README.md"), "# ordinary repo\n");
     const { code, stderr } = await run(["-C", dir, "info"]);
     expect(code).toBe(1); // runtime failure, not a crash
     expect(stderr).toMatch(/^Error: .*not a fastagent agent.*fastagent init/); // the one-line failStartup presentation
     expect(stderr).not.toMatch(/\n\s+at /); // no stack frames — this is a user-fixable refusal, not a bug
+
+    await writeFile(join(dir, "AGENTS.md"), "# Zero-ceremony agent\n");
+    const bare = await run(["-C", dir, "info"]);
+    expect(bare.code, bare.stderr).toBe(0);
   });
 });

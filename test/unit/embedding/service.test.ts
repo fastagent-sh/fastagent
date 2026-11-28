@@ -156,7 +156,6 @@ describe("openAgent: an agent directory opened in an app", () => {
       config: { model: "gw/m1", providers: [faux.provider] },
       registry: {
         tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }],
-        extensions: [],
       },
     });
     const served = await openServing(definition, {
@@ -244,7 +243,7 @@ describe("openAgent: an agent directory opened in an app", () => {
         version: "0.0.0",
         dir,
         config: { model: "gw/m1", providers: [localFaux.provider] },
-        registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: localHoldTool }], extensions: [] },
+        registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: localHoldTool }] },
       }),
       { root: localRoot },
     );
@@ -318,7 +317,7 @@ describe("openAgent: an agent directory opened in an app", () => {
       version: "0.0.0",
       dir,
       config: { model: "gw/m1", providers: [faux.provider] },
-      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }], extensions: [] },
+      registry: { tools: [{ file: "src/tools/hold.ts", name: "hold", value: holdTool }] },
     });
 
     const first = await openAgent(definition, { root });
@@ -388,7 +387,7 @@ describe("openAgent: an agent directory opened in an app", () => {
       version: "0.0.0",
       dir,
       config: { model: "gw/m1", providers: [faux.provider] },
-      registry: { tools: [], extensions: [] },
+      registry: { tools: [] },
     });
 
     let agentA: Awaited<ReturnType<typeof openAgent>> | undefined;
@@ -513,7 +512,7 @@ describe("standalone serveService lifecycle", () => {
       version: "0.0.0",
       dir,
       config: { model: "gw/m1", providers: [faux.provider] },
-      registry: { tools: [], extensions: [] },
+      registry: { tools: [] },
     });
     const served = await openServing(definition, {
       secrets: {},

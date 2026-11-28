@@ -148,7 +148,6 @@ export async function reportAssembly(opened: OpenedServing, modelSpec: string): 
   await reportAuth(models, modelSpec, agentDir);
   const names = (list: readonly { name: string }[]) => list.map(({ name }) => name).join(", ") || "(none)";
   reportLine("tools", names(code.tools));
-  if (code.extensions.length > 0) reportLine("extensions", names(code.extensions));
   reportLine("commands", (await opened.agent.info()).commands.map(({ name }) => `/${name}`).join(", ") || "(none)");
   reportLine("state", stateRoot);
 }

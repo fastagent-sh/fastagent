@@ -6,9 +6,9 @@ status: current
 
 # MCP 服务器
 
-在 `fastagent.config.ts` 的 `mcpServers` 中声明任意本地 **stdio** 或远程 **Streamable HTTP** Model Context Protocol（MCP）服务器即可接入外部工具。发现的每个工具在 `pi-durable` 和 `dsh` 上都会以 `mcp__<server>__<tool>` 暴露给模型。
+在项目根目录的 `.mcp.json`（或 `mcp.json`）文件，或 `fastagent.config.ts` 的 `mcpServers` 中声明任意本地 **stdio** 或远程 **Streamable HTTP** Model Context Protocol（MCP）服务器即可接入外部工具。发现的每个工具在 `pi-durable` 和 `dsh` 上都会以 `mcp__<server>__<tool>` 暴露给模型。
 
-FastAgent 会刻意忽略 `.mcp.json`、编辑器配置和用户主目录配置，确保 Agent 的工具集合在每台开发机与容器中始终显式、可移植、可复现。
+项目根目录的 `.mcp.json` / `mcp.json` 会由 `fastagent build` 自动打入 `dist/`，并以与 `fastagent.config.ts` 完全一致的规则接受 `fastagent deploy check` 密钥门禁校验。编辑器配置（`.cursor/mcp.json`、`.vscode/mcp.json`）和用户主目录配置仍会被忽略，确保 Agent 工具集在容器间自包含、可复现。
 
 **支持范围：** MCP 协议 `2026-07-28`，返回文本或 JSON 结果的工具，基于 **stdio** 或带自定义请求头的 **Streamable HTTP**。
 **暂不支持：** MCP OAuth 流程、resources、prompts、sampling、elicitation、旧版 HTTP+SSE、更早协议版本，以及工具列表热重载（新增工具需重新打开实例）。

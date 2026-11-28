@@ -30,18 +30,19 @@ dist/
 ├── skills/               # copied Agent Skills
 ├── prompts/              # copied prompt templates
 ├── assets/               # copied static assets
-├── fastagent.config.js   # compiled configuration
-└── src/                  # compiled tools and extensions (tests excluded)
+├── .mcp.json             # copied MCP declarations (when present)
+├── fastagent.config.js   # compiled configuration (when present)
+└── src/tools/            # compiled portable tools (tests excluded)
 ```
 
 ### Built-in safety & hygiene checks
 
 Every build enforces strict artifact boundaries before anything is written to `dist/`:
 
-- **Full TypeScript verification:** Compiles `fastagent.config.ts` and every module in `src/tools/` and `src/extensions/` with the project's `tsc` (pass `--no-check` only when you already ran `tsc --noEmit`).
+- **Zero-ceremony or full TypeScript verification:** Bare open-standard directories (`AGENTS.md`, `skills/`, `.mcp.json`) compile directly into an ESM `dist/` package even without `package.json`; when `fastagent.config.ts` or `src/tools/` exists, `tsc` type-checks and compiles every module (pass `--no-check` only when you already ran `tsc --noEmit`).
 - **No out-of-tree imports:** Refuses source imports from outside the agent directory that `dist/` cannot carry.
 - **No machine state or secrets:** Never copies `.secrets/`, `.env*`, `.state/`, `node_modules/`, `.git/`, or anything from `~/.pi/agent`.
-- **MCP & harness compatibility checks:** Verifies relative stdio MCP commands exist inside `dist/`, warns if `mcpServers` contains literal credentials instead of `${VAR}` references, and warns when `fastagent.config.ts` selects a harness (such as `dsh`) that skips `pi-durable`-only `src/extensions/*` modules.
+- **MCP hygiene checks:** Verifies relative stdio MCP commands exist inside `dist/` and warns if `.mcp.json` / `mcpServers` contains literal credentials instead of `${VAR}` references.
 - **Shared runtime via `peerDependencies`:** `dist/package.json` moves `@fastagent-sh/fastagent`, `@fastagent-sh/harness-*`, and `@earendil-works/*` packages into `peerDependencies`. When a host application embeds several agents at once, Node installs one shared runtime instead of duplicating it per agent.
 
 ## 2. Distribute & version as an npm package

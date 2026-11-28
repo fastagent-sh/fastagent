@@ -12,7 +12,7 @@ import type {
   ThinkingLevel,
   Usage,
 } from "@fastagent-sh/client/agent-api";
-import type { AgentCommand, AuthoredTool, HarnessTelemetryContext } from "@fastagent-sh/fastagent/harness";
+import type { AgentCommand, HarnessTelemetryContext, PortableTool } from "@fastagent-sh/fastagent/harness";
 
 /** OS sandbox posture for DSH filesystem and shell tools. */
 export type DshSandboxMode = "off" | "workspace" | "read-only";
@@ -180,7 +180,7 @@ export interface DshHarnessOptions {
   /** Default maximum model steps (tool rounds) per message turn when a session names none. */
   readonly maxSteps?: number;
   /** Portable FastAgent tools to bridge into DSH's `ToolsService`. */
-  readonly tools?: readonly AuthoredTool[];
+  readonly tools?: readonly PortableTool[];
   /** Built-in sandboxed coding tools (`read`, `write`, `edit`, `bash`). Default: `false`. */
   readonly codingTools?: boolean | readonly DshCodingToolName[];
   /** Absolute paths inside `workdir` that `write` and `edit` must never modify (e.g. `.fastagent`). */

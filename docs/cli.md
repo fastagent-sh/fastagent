@@ -1,6 +1,6 @@
 ---
 title: CLI Reference
-description: "Complete fastagent CLI reference: commands grouped by workflow, flags, exit codes, platform extensions, and scripting/coding-agent behavior."
+description: "Complete fastagent CLI reference: commands grouped by workflow, flags, exit codes, and scripting/coding-agent behavior."
 status: current
 ---
 
@@ -21,7 +21,7 @@ fastagent <command> --help     # authoritative flags and examples generated from
 | `dev` | Serve the agent locally with live reload (`--no-watch` disables file watching) |
 | `build` | Type-check and compile the agent into `dist/` (`--no-check`, `--json`) |
 | `start` | Serve the compiled `dist/` build in production posture; refuses missing or stale builds |
-| `info` | Inspect resolved harness, sandbox, model, tools, MCP servers, extensions, commands, secrets, and storage read-only (`--json`) |
+| `info` | Inspect resolved harness, sandbox, model, tools, MCP servers, commands, secrets, and storage read-only (`--json`) |
 | `models [search]` | List available `provider/modelId` specs (`-g` built-ins only; `--json`) |
 
 ### Invoke, authenticate & manage remotes

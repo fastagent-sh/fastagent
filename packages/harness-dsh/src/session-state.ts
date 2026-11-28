@@ -15,7 +15,7 @@ import {
   SessionId,
   agentError,
 } from "@fastagent-sh/client/agent-api";
-import type { AuthoredTool, EventChannelWatcher } from "@fastagent-sh/fastagent/harness";
+import type { EventChannelWatcher, PortableTool } from "@fastagent-sh/fastagent/harness";
 import { deriveContextUsage } from "./projection.ts";
 import type { DshEventStoreBackend, DshHarnessOptions, DshStoredMessage, DshStoredSession } from "./types.ts";
 
@@ -64,7 +64,7 @@ export interface DshRuntimeState {
   readonly options: DshHarnessOptions;
   readonly ctx: Context;
   readonly store: DshEventStoreBackend;
-  readonly toolsByName: Map<string, AuthoredTool>;
+  readonly toolsByName: Map<string, PortableTool>;
   readonly maxRetries: number;
   readonly baseDelayMs: number;
   readonly liveSessions: Map<string, LiveSession>;

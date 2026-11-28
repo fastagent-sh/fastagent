@@ -152,7 +152,7 @@ describe("@fastagent-sh/harness-dsh skeleton contracts", () => {
 
   it("openDshAgent validates options up front and boots a live Cordis agent", async () => {
     expect(harnessProvider.name).toBe("dsh");
-    expect(harnessProvider.supportsExtensions).toBe(false);
+    expect(harnessProvider.supportsSandbox).toBe(true);
     await expect(openDshAgent({ name: "", workdir: "/srv/agent" })).rejects.toMatchObject({
       code: "invalid_request",
     });
@@ -892,12 +892,11 @@ describe("@fastagent-sh/harness-dsh PostgreSQL persistence", () => {
 });
 
 describe("openAgent harness switching and shared agent.sqlite coexistence", () => {
-  it("switches between pi-durable and dsh on the same agent.sqlite, warns/skips pi-durable extensions, and preserves both harnesses' sessions", async () => {
+  it("switches between pi-durable and dsh on the same agent.sqlite, rejects non-portable park returns on all harnesses, and preserves both harnesses' sessions", async () => {
     const dir = mkdtempSync(join(tmpdir(), "fa-switch-harness-"));
     const root = mkdtempSync(join(tmpdir(), "fa-switch-root-"));
     try {
       mkdirSync(join(dir, "src", "tools"), { recursive: true });
-      mkdirSync(join(dir, "src", "extensions"), { recursive: true });
       writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "switch-agent", type: "module" }));
       writeFileSync(join(dir, "SYSTEM.md"), "You are a portable agent.\n");
       writeFileSync(
@@ -955,19 +954,12 @@ export default defineTool({
       );
       writeFileSync(
         join(dir, "src", "tools", "park.ts"),
-        `import { defineTool } from "@earendil-works/pi-durable";
-export default defineTool({
+        `export default {
   name: "park",
-  description: "Returns a pi-durable-only park result",
+  description: "Returns a non-portable park result",
   parameters: { type: "object", properties: {} },
   execute: async () => ({ sleep: { until: Date.now() + 1000 } }),
-});
-`,
-      );
-      // A pi-durable-only extension: runs on pi-durable, warns and is skipped on dsh without blocking startup.
-      writeFileSync(
-        join(dir, "src", "extensions", "legacy.ts"),
-        `export default { name: "legacy-ext", tools: [] };
+};
 `,
       );
 
@@ -978,20 +970,19 @@ export default defineTool({
       const piSession = await piAgent1.sessions.create({ title: "pi-session" });
       const piMsg = await piAgent1.messages.send({ sessionId: piSession.id, content: "from-pi" }, { wait: 15 });
       expect(piMsg.answer?.text).toBe("reply:from-pi");
+      const piParkMsg = await piAgent1.messages.send({ sessionId: piSession.id, content: "use-park" }, { wait: 15 });
+      expect(piParkMsg.answer?.text).toMatch(/returned a non-portable park response \(sleep\/wait\)/);
       await piAgent1.close();
 
-      // 2) Switch to dsh on the EXACT SAME <root>/.state/agent.sqlite — skips legacy-ext, runs defineTool, serves HTTP.
+      // 2) Switch to dsh on the EXACT SAME <root>/.state/agent.sqlite — runs identical portable tools and serves HTTP.
       const dshAgent1 = await openAgent(definition, { root, harness: "dsh", sandbox: "workspace" });
       const dshInfo = await dshAgent1.info();
       expect(dshInfo.tools.map((t) => t.name)).toEqual(["read", "park", "ping"]);
       const dshSession = await dshAgent1.sessions.create({ title: "dsh-session" });
       const dshMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-ping" }, { wait: 15 });
       expect(dshMsg.answer?.text).toBe(`tool-ok:pong:hi:${dshSession.id}`);
-      // A pi-durable-only park return fails only that tool call cleanly; the harness and other tools stay unaffected.
       const dshParkMsg = await dshAgent1.messages.send({ sessionId: dshSession.id, content: "use-park" }, { wait: 15 });
-      expect(dshParkMsg.answer?.text).toMatch(
-        /returned a park response \(sleep\/wait\), which requires harness: "pi-durable"/,
-      );
+      expect(dshParkMsg.answer?.text).toMatch(/returned a non-portable park response \(sleep\/wait\)/);
       const dshConv1 = await dshAgent1.invoke({ conversation: "ops", content: "use-ping" }, { wait: 15 });
       expect(dshConv1.answer?.text).toBe(`tool-ok:pong:hi:${dshConv1.sessionId}`);
       // Live SYSTEM.md updates take effect on the next DSH message without restarting.
@@ -1045,6 +1036,38 @@ export default defineTool({
         expect(injectedReply.sessionId).toBe(dshConv1.sessionId);
       } finally {
         await injected.close();
+      }
+
+      // 6) Bare zero-ceremony AAIF directory (AGENTS.md + skills/ only) builds into dist/ and opens on both harnesses.
+      const bareDir = mkdtempSync(join(tmpdir(), "fa-bare-open-"));
+      const bareRoot = mkdtempSync(join(tmpdir(), "fa-bare-root-"));
+      try {
+        writeFileSync(join(bareDir, "AGENTS.md"), "You are a zero-ceremony cloud agent.\n");
+        mkdirSync(join(bareDir, "skills", "runbook"), { recursive: true });
+        writeFileSync(
+          join(bareDir, "skills", "runbook", "SKILL.md"),
+          "---\nname: runbook\ndescription: Follow incident runbook.\n---\nStep 1.\n",
+        );
+        const { buildProject } = await import("../../../packages/fastagent/src/harnesses/build.ts");
+        const { loadBuiltDefinition } = await import("../../../packages/fastagent/src/definition/built.ts");
+        const { dist } = await buildProject(bareDir);
+        const builtBare = await loadBuiltDefinition(dist);
+        for (const h of ["pi-durable", "dsh"] as const) {
+          const openedBare = await openAgent(builtBare, {
+            root: bareRoot,
+            harness: h,
+            ...(h === "dsh" ? { sandbox: "off" as const } : {}),
+          });
+          try {
+            const info = await openedBare.info();
+            expect(info.commands.map((c) => c.name)).toEqual(["skill:runbook"]);
+          } finally {
+            await openedBare.close();
+          }
+        }
+      } finally {
+        rmSync(bareDir, { recursive: true, force: true });
+        rmSync(bareRoot, { recursive: true, force: true });
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });

@@ -26,12 +26,12 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # shell or container
 **Why:** The selected provider has no credentials for this agent. Local credentials are stored per agent in `.secrets/auth.json` (plus `~/.fastagent/.secrets/auth.json` for `fastagent login -g`).
 **Fix:** Run `fastagent login` in the agent directory, or add the provider's API key (such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) to `.secrets/.env`.
 
-### A tool or extension fails to load
+### A tool fails to load
 
-**Why:** `Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file under `src/`.
+**Why:** `Cannot find package`, `Unexpected token 'export'`, or a refusal naming a file under `src/tools/`.
 **Fix:**
 - Run `npm install` and verify `package.json` has `"type": "module"`.
-- Put only tool/extension modules with default exports directly inside `src/tools/` or `src/extensions/`. Move helper modules outside `src/` (for example into `lib/`).
+- Put only portable tool modules with default exports directly inside `src/tools/`. Move helper modules outside `src/tools/` (for example into `lib/`).
 - Use `.ts` extensions on relative imports (`../lib/helper.ts`) and `import type` for type-only imports.
 
 ### `Invalid schema for function '...'`
@@ -53,7 +53,7 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # shell or container
 ### `dev` does not pick up a change
 
 - Edits to `SYSTEM.md`, `AGENTS.md`, `skills/`, and `prompts/` apply automatically on the next message.
-- Edits to `src/`, `fastagent.config.ts`, `package.json`, and `.secrets/.env` restart the worker cleanly once active turns finish.
+- Edits to `src/`, `fastagent.config.ts`, `.mcp.json`, `package.json`, and `.secrets/.env` restart the worker cleanly once active turns finish.
 - Files outside `src/` (such as `lib/`) are not watched—restart `fastagent dev` manually after editing them.
 
 ### `busy` error on send
@@ -80,11 +80,6 @@ npm install @fastagent-sh/harness-dsh
 
 **Why:** With `harness: "dsh"` and `sandbox: "workspace"` or `"read-only"`, `bash` fails closed if the host OS cannot enforce confinement (for example inside a restricted container without user namespaces for `bwrap` or Landlock support).
 **Fix:** Grant the required sandbox capability, rely on container isolation with `--sandbox off`, or disable `bash` via `codingTools: ["read"]` or `codingTools: false`.
-
-### Extensions are skipped on `dsh`
-
-**Why:** Modules in `src/extensions/` use `pi-durable`'s extension API and are skipped with a startup warning on `harness: "dsh"`.
-**Fix:** Move portable tool logic into `src/tools/` using `defineTool` from `@fastagent-sh/fastagent`, or use `mcpServers`—both run identically on `pi-durable` and `dsh`.
 
 ## Remotes & remote auth
 

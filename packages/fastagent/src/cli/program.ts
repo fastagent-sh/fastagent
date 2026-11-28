@@ -99,7 +99,7 @@ const info: CommandSpec = {
   name: "info",
   summary: "print what the directory builds into, without serving",
   description:
-    "Inspect model, tools, extensions, commands and secrets read-only, from the directory: never the " +
+    "Inspect model, tools, MCP servers, commands and secrets read-only, from the directory: never the " +
     "instance's storage, so it answers beside a running serve.",
   flags: [JSON_FLAG, MODEL, ...HARNESS_FLAGS, ...INSTANCE_FLAGS, ENV_FILE_FLAG],
   examples: [{ cmd: "fastagent info" }, { cmd: "fastagent info --json", note: "for CI" }],

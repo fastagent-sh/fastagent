@@ -26,12 +26,12 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # Shell 或容器环境
 **原因：** 所选模型提供商在当前 Agent 下没有可用凭证。本地凭证按 Agent 保存在 `.secrets/auth.json`（`fastagent login -g` 写入 `~/.fastagent/.secrets/auth.json`）。
 **解决：** 在 Agent 目录内运行 `fastagent login`，或在 `.secrets/.env` 中写入对应提供商的 API Key（如 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`）。
 
-### 工具或扩展加载失败
+### 工具加载失败
 
-**原因：** 出现 `Cannot find package`、`Unexpected token 'export'`，或报错指向 `src/` 下的某个文件。
+**原因：** 出现 `Cannot find package`、`Unexpected token 'export'`，或报错指向 `src/tools/` 下的某个文件。
 **解决：**
 - 运行 `npm install` 并确认 `package.json` 中已设置 `"type": "module"`。
-- `src/tools/` 与 `src/extensions/` 下只放带有默认导出的工具/扩展模块；辅助模块请移到 `src/` 之外（例如 `lib/`）。
+- `src/tools/` 下只放带有默认导出的可移植工具模块；辅助模块请移到 `src/tools/` 之外（例如 `lib/`）。
 - 相对导入务必带 `.ts` 扩展名（`../lib/helper.ts`），纯类型导入使用 `import type`。
 
 ### `Invalid schema for function '...'`
@@ -53,7 +53,7 @@ FASTAGENT_MODEL=provider/modelId fastagent dev   # Shell 或容器环境
 ### `dev` 未检测到文件修改
 
 - 修改 `SYSTEM.md`、`AGENTS.md`、`skills/` 与 `prompts/` 会在下一条消息自动生效。
-- 修改 `src/`、`fastagent.config.ts`、`package.json` 与 `.secrets/.env` 会在活跃轮次结束后优雅重启。
+- 修改 `src/`、`fastagent.config.ts`、`.mcp.json`、`package.json` 与 `.secrets/.env` 会在活跃轮次结束后优雅重启。
 - `src/` 之外的文件（如 `lib/`）不在监听范围内，修改后需手动重启 `fastagent dev`。
 
 ### 发送消息时报 `busy`
@@ -80,11 +80,6 @@ npm install @fastagent-sh/harness-dsh
 
 **原因：** 在 `harness: "dsh"` 且 `sandbox: "workspace"` 或 `"read-only"` 下，若宿主机系统无法提供内核隔离（例如受限容器未开启 `bwrap` 所需的 user namespaces 或不支持 Landlock），`bash` 会按 fail-closed 原则拒绝启动。
 **解决：** 为容器授予所需沙箱权限、在已隔离容器中使用 `--sandbox off`，或通过 `codingTools: ["read"]` / `codingTools: false` 关闭 `bash`。
-
-### 在 `dsh` 上扩展模块被跳过
-
-**原因：** `src/extensions/` 中的模块依赖 `pi-durable` 专属扩展 API，在 `harness: "dsh"` 下会跳过并打印启动警告。
-**解决：** 将可移植的工具逻辑迁入 `src/tools/` 并使用 `@fastagent-sh/fastagent` 的 `defineTool`，或接入 `mcpServers`——两者在 `pi-durable` 与 `dsh` 上行为完全一致。
 
 ## 远程端点与远程认证
 
