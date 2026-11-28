@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "@effect/vitest";
@@ -39,6 +39,8 @@ import {
   postgresConversationStore,
   sqliteConversationStoreEffect,
 } from "../../../packages/fastagent/src/conversations.ts";
+import { openPgDatabase } from "../../../packages/fastagent/src/postgres.ts";
+import { servedPostgres } from "../../doubles/postgres-double.ts";
 import { connectAgent } from "@fastagent-sh/client";
 import { connectAuth } from "@fastagent-sh/client/auth";
 import {
@@ -249,6 +251,29 @@ describe("the Agent API over HTTP", () => {
       const brokenPg = postgresConversationStore({ url: "postgres://127.0.0.1:1/unreachable" }, "inst-1");
       await expect(brokenPg.get(convKey("ops"))).rejects.toMatchObject({ code: "unavailable", retryable: true });
       await brokenPg.close();
+
+      // PostgreSQL conversation store stays lazy on reads (skips DDL on 42P01) until first write.
+      const pg = await servedPostgres();
+      const pgDb = openPgDatabase(pg.url);
+      const pgStore = postgresConversationStore({ url: pg.url }, "lazy-conv");
+      try {
+        expect(await pgStore.get(convKey("ops"))).toBeUndefined();
+        const before = await pgDb.query<{ reg: string | null }>(
+          "SELECT to_regclass('public.fastagent_conversations') AS reg",
+        );
+        expect(before[0]?.reg).toBeNull();
+
+        await pgStore.set(convKey("ops"), SessionId.make("s-1"));
+        const after = await pgDb.query<{ reg: string | null }>(
+          "SELECT to_regclass('public.fastagent_conversations') AS reg",
+        );
+        expect(after[0]?.reg).toBe("fastagent_conversations");
+        expect(await pgStore.get(convKey("ops"))).toBe("s-1");
+      } finally {
+        await pgStore.close();
+        await pgDb.close();
+        await pg.close();
+      }
     });
 
     it("keeps SessionId, ConversationId, ConversationKey, MessageId, and IdempotencyKey nominally distinct", () => {
@@ -352,11 +377,20 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
           Effect.sync(() => mkdtempSync(join(tmpdir(), "fa-conv-ttl-"))),
           (path) => Effect.sync(() => rmSync(path, { recursive: true, force: true })),
         );
+        const convPath = join(dir, "conversations.sqlite");
         const sql = yield* Effect.acquireRelease(
-          Effect.sync(() => sqliteConversationStoreEffect(join(dir, "conversations.sqlite"), { ephemeralTtlMs: 100 })),
+          Effect.sync(() => sqliteConversationStoreEffect(convPath, { ephemeralTtlMs: 100 })),
           (store) => Effect.ignore(store.close),
         );
+        // Lazy open: reads stay zero-disk until first set(), while corrupt pre-existing files fail fast.
+        expect(yield* sql.get(convKey("ops"))).toBeUndefined();
+        expect(existsSync(convPath)).toBe(false);
+        const badPath = join(dir, "corrupt.sqlite");
+        writeFileSync(badPath, "not a sqlite file\n");
+        expect(() => sqliteConversationStoreEffect(badPath)).toThrow(/not a database/);
+
         yield* sql.set(convKey("ops"), sid("s-ops"), { ephemeral: false });
+        expect(existsSync(convPath)).toBe(true);
         yield* sql.set(idemKey("old"), sid("s-old"), { ephemeral: true });
         yield* TestClock.adjust("200 millis");
         yield* sql.set(idemKey("new"), sid("s-new"), { ephemeral: true });
