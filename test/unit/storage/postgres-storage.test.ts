@@ -647,4 +647,91 @@ describe("postgres-kit shared storage primitives", () => {
       await shared.close();
     }
   });
+
+  it("hibernates awaiting_approval with busy() === false on PostgreSQL and resumes cleanly on a new replica across pi-durable and dsh", async () => {
+    const shared = openPostgresDatabase({ url: postgres.url });
+    try {
+      for (const harnessName of ["pi-durable", "dsh"] as const) {
+        const dir = await mkdtemp(join(tmpdir(), `fa-pg-int-${harnessName}-`));
+        const root1 = await mkdtemp(join(tmpdir(), `fa-pg-int-r1-${harnessName}-`));
+        const root2 = await mkdtemp(join(tmpdir(), `fa-pg-int-r2-${harnessName}-`));
+        let executedCount = 0;
+        const gateTool = defineTool({
+          name: "merge_pr",
+          description: "Merge pull request",
+          parameters: { type: "object", properties: { pr: { type: "integer" } }, required: ["pr"] } as const,
+          requiresApproval: (args) => `Merge PR #${args.pr}`,
+          execute: async (args) => {
+            executedCount++;
+            return `merged:#${args.pr}:${executedCount}`;
+          },
+        });
+        const faux = fauxProvider({ provider: "gw", models: [{ id: "m1" }] });
+        faux.setResponses([
+          () => fauxAssistantMessage([fauxToolCall("merge_pr", { pr: 42 })], { stopReason: "toolUse" }),
+          () => fauxAssistantMessage("PR #42 merged after approval"),
+        ]);
+        const definition = defineDefinition({
+          format: DEFINITION_FORMAT,
+          builtWith: "0.0.0",
+          name: `pg-int-${harnessName}`,
+          version: "0.0.0",
+          dir,
+          config: {
+            model: "gw/m1",
+            harness: harnessName,
+            ...(harnessName === "dsh" ? { sandbox: "off" as const } : {}),
+            providers: [faux.provider],
+          },
+          registry: { tools: [{ file: "src/tools/merge_pr.ts", name: "merge_pr", value: gateTool }] },
+        });
+
+        const instance = freshInstance();
+        const replica1 = await openAgent(definition, { root: root1, name: instance, database: shared });
+        let sessionId!: string;
+        let interruptId!: string;
+        let messageId!: string;
+        try {
+          const session = await replica1.sessions.create();
+          sessionId = session.id;
+          const parked = await replica1.messages.send({ sessionId, content: "merge 42" }, { wait: 15 });
+          expect(parked.status).toBe("awaiting_approval");
+          expect(executedCount).toBe(0);
+          await vi.waitFor(() => expect(replica1.busy()).toBe(false), { interval: 5 });
+          const firstInt = parked.interrupts?.[0];
+          if (!firstInt) throw new Error("expected interrupt on parked message");
+          interruptId = firstInt.id;
+          messageId = parked.id;
+        } finally {
+          await replica1.close();
+        }
+
+        // Replica 2 wakes on a fresh root against the shared PostgreSQL pool and resolves the parked approval!
+        const replica2 = await openAgent(definition, { root: root2, name: instance, database: shared });
+        try {
+          expect(replica2.busy()).toBe(false);
+          expect((await replica2.sessions.get(sessionId)).status).toBe("awaiting_approval");
+          const settled = await replica2.messages.resolve(
+            {
+              sessionId,
+              interruptId,
+              resolution: { action: "approve" },
+              idempotencyKey: "pg-approve-42",
+            },
+            { wait: 15 },
+          );
+          expect(settled).toMatchObject({
+            id: messageId,
+            status: "completed",
+            answer: { text: "PR #42 merged after approval" },
+          });
+          expect(executedCount).toBe(1);
+        } finally {
+          await replica2.close();
+        }
+      }
+    } finally {
+      await shared.close();
+    }
+  });
 });

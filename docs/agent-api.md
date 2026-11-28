@@ -47,8 +47,8 @@ Full TypeScript types ship in `@fastagent-sh/client` and `@fastagent-sh/fastagen
 | Object | What it represents |
 | --- | --- |
 | **Agent** | One running instance (one trust domain). `info()` lists available models, tools, commands, and starters; `usage()` reports cumulative spend. |
-| **Session** | A durable conversation with history entries, `status` (`idle` / `running`), `title`, timestamps, settings (`model`, `thinkingLevel`, `instructions`, `tools`, `maxSteps`), active `contextUsage`, cumulative `usage`, and live activity (`reply`, `activeTools`, `queuedMessages`, `compacting`). |
-| **Message** | One submission into a session, tracking its `status`, `entryId`, `answer`, `error`, `idempotencyKey`, and caller `metadata`. |
+| **Session** | A durable conversation with history entries, `status` (`idle` / `running` / `awaiting_approval` / `input_required`), `title`, timestamps, settings (`model`, `thinkingLevel`, `instructions`, `tools`, `maxSteps`), active `contextUsage`, cumulative `usage`, and live activity (`reply`, `activeTools`, `interrupts`, `queuedMessages`, `compacting`). |
+| **Message** | One submission into a session, tracking its `status`, `entryId`, `interrupts`, `answer`, `error`, `idempotencyKey`, and caller `metadata`. |
 | **Entry** | One immutable history record: `user`, `assistant`, `tool_result`, or `compaction`. Forked sessions share entries (with original ids) up to the fork point. |
 
 ```text
@@ -96,9 +96,10 @@ const msg = await agent.invoke(
 | `sessions.cancel` | Stop active and queued work; resolves with `{ stopped: string[] }` once recorded |
 | `sessions.compact` | Compact older context (`instructions?`); emits a `compaction` entry |
 | `sessions.attachment` | Download binary bytes and `mimeType` for an image `ref` in an entry |
-| `messages.send` | Admit a message; returns immediately or waits up to `wait` seconds |
+| `messages.send` | Admit a message; returns immediately or waits up to `wait` seconds (or until it parks on an interrupt) |
 | `messages.stream` | Admit a message and stream its events through `done` |
 | `messages.get` | Look up a message by `{ sessionId, messageId }` or `{ sessionId, idempotencyKey }`, with optional `wait` |
+| `messages.resolve` | Approve, deny, or submit structured input for a parked `PendingInterrupt`, deduplicated by `idempotencyKey` |
 
 Passing an `AbortSignal` (`signal`) stops your client wait or stream without canceling the agent's work—only `sessions.cancel` stops execution. `wait` is an upper bound in seconds, so always check `message.status` (or `hasEnded(message)`) when it returns.
 
@@ -116,6 +117,8 @@ Passing an `AbortSignal` (`signal`) stops your client wait or stream without can
 | --- | --- | --- | --- |
 | `queued` | No | — | Accepted and waiting its turn |
 | `running` | No | — | Executing now |
+| `awaiting_approval` | No | — | Durably parked awaiting human tool approval (`message.interrupts`); `busy()` is `false` |
+| `input_required` | No | — | Durably parked awaiting structured human input (`message.interrupts`); `busy()` is `false` |
 | `completed` | Yes | Final `assistant` entry | Answered normally |
 | `incomplete` | Yes | Partial `assistant` entry (token limit) or absent (`maxSteps`) | Hit model output token limit or `maxSteps` turn-step cap |
 | `failed` | Yes | — | Failed; `message.error` explains why (`missing_model`, `auth_required`, `model_error`, `internal`) |
@@ -136,6 +139,8 @@ Passing an `AbortSignal` (`signal`) stops your client wait or stream without can
 | `delta` | Live text chunk (`channel: "text"` for answer, `"thinking"` for reasoning) |
 | `tool_started` | Tool invocation (`toolCallId`, `name`, `args`) |
 | `tool_progress` | Tool status line (`text`) and optional multi-line `output` tail |
+| `interrupt_requested` | Durable `PendingInterrupt` (`id`, `kind`, `toolName`, `summary`, optional `args` / `inputSchema`) |
+| `interrupt_resolved` | Resolution receipt (`interruptId`, `messageId`, `resolution: "approved" \| "denied" \| "submitted" \| "canceled"`) |
 | `retrying` | Backoff notice (`attempt`, `maxAttempts`, `delayMs`, `reason`) |
 | `compaction_started`, `compaction_failed` | Compaction trigger (`manual` / `threshold` / `overflow`) or failure `error` |
 | `done` | Terminal `Message` |
@@ -166,8 +171,9 @@ Refused operations reject with `AgentError` (`{ code, message, retryable, detail
 | --- | --- | --- | --- |
 | `invalid_request` | Malformed input or size limit exceeded (`details.reason: "too_large"`) | No | 400, 413 |
 | `unauthorized` | Missing or invalid bearer key / AWS IAM credentials | No | 401 |
-| `not_found` | Unknown session, message, auth flow, fork source, or cursor | No | 404 |
-| `busy` | `details.reason`: `"running"`, `"queue_full"`, or `"capacity"` | Yes | 409, 429, 503 (`Retry-After`) |
+| `not_found` | Unknown session, message, interrupt, auth flow, fork source, or cursor | No | 404 |
+| `conflict` | Interrupt was already resolved or canceled under a different `idempotencyKey` | No | 409 |
+| `busy` | `details.reason`: `"running"`, `"awaiting_approval"`, `"input_required"`, `"queue_full"`, or `"capacity"` | Yes | 409, 429, 503 (`Retry-After`) |
 | `missing_model` | No valid model selected and no usable default (`info().unusableDefault` explains why) | No | 409 |
 | `missing_tool` | Session enables a tool the instance does not have | No | 409 |
 | `auth_required` | Model provider lacks a valid credential (in `message.error`) | No | — |
@@ -195,6 +201,7 @@ All API routes live under `/v1` and require `Authorization: Bearer <key>` (confi
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`; `messages.stream` with `"stream": true` |
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | `messages.get` by id |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | `messages.get` by key |
+| `POST /v1/sessions/{sessionId}/interrupts/{interruptId}/resolve` | `messages.resolve` (`approve` / `deny` / `submit`, optional `wait`, `Idempotency-Key`) |
 | `POST /v1/invoke` | `invoke` (`wait` up to 600 s); `invokeStream` with `"stream": true` |
 | `GET /v1/auth/providers`, `DELETE /v1/auth/providers/{provider}` | `auth.providers`, `auth.logout` |
 | `POST /v1/auth/login`, `GET /v1/auth/login/{flowId}?wait` | `auth.startLogin`, `auth.getLogin` |
@@ -230,4 +237,4 @@ curl -s https://support.example.com/v1/sessions/$SESSION/messages \
 
 ## Out of scope by design
 
-Per-message token billing (batched/concurrent turns share model calls); structured JSON answer schemas (define a typed tool and read its `tool_result` entry); interactive mid-turn user prompts; outbound completion webhooks (use `POST /v1/invoke`, `messages.get` with `wait`, or `sessions.events`); binary attachments other than images; A2A/MCP server bindings.
+Per-message token billing (batched/concurrent turns share model calls); structured JSON answer schemas (define a typed tool and read its `tool_result` entry); outbound completion webhooks (use `POST /v1/invoke`, `messages.get` with `wait`, or `sessions.events`); binary attachments other than images.

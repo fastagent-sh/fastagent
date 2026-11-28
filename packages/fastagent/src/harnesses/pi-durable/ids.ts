@@ -15,7 +15,7 @@ import {
   defineDoc,
 } from "@earendil-works/pi-durable";
 import { MessageId, SessionId } from "@fastagent-sh/client/agent-api";
-import { RESOLVE_SESSION_ID } from "../tool.ts";
+import { RESOLVE_SESSION_ID, RESOLVE_TOOL_CALL_ID } from "../tool.ts";
 import { isSession } from "./sessions.ts";
 
 const StorageDoc = defineDoc<{ incarnation: string }>({
@@ -66,6 +66,7 @@ function withSessionResolver<T extends ToolExecutionApi>(api: T, context: Contex
   return Object.defineProperties(Object.create(Object.getPrototypeOf(api)), {
     ...Object.getOwnPropertyDescriptors(api),
     [RESOLVE_SESSION_ID]: { value: () => sessionIdOf(api, context), enumerable: false },
+    [RESOLVE_TOOL_CALL_ID]: { value: () => String(api.callId), enumerable: false },
   }) as T;
 }
 

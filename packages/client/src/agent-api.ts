@@ -15,6 +15,10 @@ export type SessionId = typeof SessionId.Type;
 export const MessageId = Schema.String.pipe(Schema.brand("MessageId"));
 export type MessageId = typeof MessageId.Type;
 
+/** Agent-owned identifier for a durable human-in-the-loop approval or input interrupt. */
+export const InterruptId = Schema.String.pipe(Schema.brand("InterruptId"));
+export type InterruptId = typeof InterruptId.Type;
+
 /** Caller-owned name for a persistent conversation resolved by `POST /v1/invoke`. */
 export const ConversationId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200)).pipe(
   Schema.brand("ConversationId"),
@@ -156,8 +160,30 @@ const open = <S extends Schema.Top>(known: S) =>
   // As a type, the known values and any string, so an editor still offers them (`string & {}` does not absorb them).
   Schema.Union([known, Schema.String]) as unknown as Schema.Codec<S["Type"] | (string & {}), string>;
 
-export const SessionStatus = Schema.Literals(["idle", "running"]);
+export const SessionStatus = Schema.Literals(["idle", "running", "awaiting_approval", "input_required"]);
 export type SessionStatus = typeof SessionStatus.Type;
+
+export const InterruptKind = Schema.Literals(["approval", "input"]);
+export type InterruptKind = typeof InterruptKind.Type;
+
+/** A durable human-in-the-loop approval or structured-input interrupt parked on a session and message. */
+export class PendingInterrupt extends Schema.Opaque<PendingInterrupt>()(
+  Schema.Struct({
+    id: InterruptId,
+    sessionId: SessionId,
+    messageId: MessageId,
+    kind: InterruptKind,
+    toolCallId: Schema.String,
+    toolName: Schema.String,
+    /** Safe human-readable summary or prompt explaining what approval or input is requested. */
+    summary: Schema.String,
+    /** Safe argument preview when included by the tool's approval policy. */
+    args: Schema.optionalKey(Schema.Json),
+    /** JSON Schema (`type: "object"`) describing expected structured `input` when `kind === "input"`. */
+    inputSchema: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+    createdAt: Schema.Finite,
+  }),
+) {}
 
 const SessionTitle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
 
@@ -196,6 +222,8 @@ export class Session extends Schema.Opaque<Session>()(
     reply: Schema.optionalKey(Schema.Struct({ text: Schema.String, thinking: Schema.optionalKey(Schema.String) })),
     /** Tool calls currently pending or running in the active round; absent when none. */
     activeTools: Schema.optionalKey(Schema.Array(ActiveTool)),
+    /** Durable human-in-the-loop interrupts awaiting resolution on this session; absent when none. */
+    interrupts: Schema.optionalKey(Schema.Array(PendingInterrupt)),
     /** Messages queued behind the current work; absent when none. */
     queuedMessages: Schema.optionalKey(Schema.Array(QueuedMessage)),
     /** Present and true while a compaction task is running for this session. */
@@ -222,7 +250,16 @@ export const Metadata = Schema.Record(Schema.String, Schema.String.check(Schema.
 );
 export type Metadata = typeof Metadata.Type;
 
-export const MessageStatus = Schema.Literals(["queued", "running", "completed", "incomplete", "failed", "canceled"]);
+export const MessageStatus = Schema.Literals([
+  "queued",
+  "running",
+  "awaiting_approval",
+  "input_required",
+  "completed",
+  "incomplete",
+  "failed",
+  "canceled",
+]);
 export type MessageStatus = typeof MessageStatus.Type;
 
 export class Message extends Schema.Opaque<Message>()(
@@ -234,6 +271,8 @@ export class Message extends Schema.Opaque<Message>()(
     status: open(MessageStatus),
     /** Its `user` entry, once the agent took it. */
     entryId: Schema.optionalKey(Schema.String),
+    /** Durable human-in-the-loop interrupts currently parked on this message; absent once resolved. */
+    interrupts: Schema.optionalKey(Schema.Array(PendingInterrupt)),
     /** The `assistant` entry the agent stopped on for it: when `completed`, and when `incomplete` on token limit. */
     answer: Schema.optionalKey(Schema.Struct({ entryId: Schema.String, text: Schema.String })),
     /** Why it `failed`. */
@@ -242,9 +281,13 @@ export class Message extends Schema.Opaque<Message>()(
 ) {}
 
 const ENDS: ReadonlySet<string> = new Set<MessageStatus>(["completed", "incomplete", "failed", "canceled"]);
+const AWAITING_ACTION: ReadonlySet<string> = new Set<MessageStatus>(["awaiting_approval", "input_required"]);
 
 /** Whether a message has ended: its ends are a closed set, so any other status, known or not, has not. */
 export const hasEnded = (message: Pick<Message, "status">): boolean => ENDS.has(message.status);
+
+/** Whether a session or message is durably parked awaiting external human approval or input. */
+export const isAwaitingAction = (item: { readonly status: string }): boolean => AWAITING_ACTION.has(item.status);
 
 /**
  * One durable record of a session's history. Its `data` by `kind`:
@@ -279,6 +322,16 @@ export const SessionEvent = Schema.Union([
     toolCallId: Schema.String,
     text: Schema.String,
     output: Schema.optionalKey(Schema.String),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("interrupt_requested"),
+    interrupt: PendingInterrupt,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("interrupt_resolved"),
+    interruptId: InterruptId,
+    messageId: MessageId,
+    resolution: Schema.Literals(["approved", "denied", "submitted", "canceled"]),
   }),
   Schema.Struct({
     type: Schema.Literal("retrying"),
@@ -369,6 +422,30 @@ export const MessageKey = Schema.Union([
 export type MessageKey = typeof MessageKey.Encoded;
 export type DecodedMessageKey = typeof MessageKey.Type;
 
+export const InterruptResolution = Schema.Union([
+  Schema.Struct({
+    action: Schema.Literal("approve"),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("deny"),
+    reason: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("submit"),
+    input: Schema.Record(Schema.String, Schema.Json),
+  }),
+]);
+export type InterruptResolution = typeof InterruptResolution.Encoded;
+export type DecodedInterruptResolution = typeof InterruptResolution.Type;
+
+export const ResolveInterruptRequest = Schema.Struct({
+  sessionId: SessionId,
+  interruptId: InterruptId,
+  resolution: InterruptResolution,
+  idempotencyKey: Schema.optional(IdempotencyKey),
+});
+export type ResolveInterruptRequest = typeof ResolveInterruptRequest.Encoded;
+
 /**
  * Cross-field invariants shared by `InvokeRequest` and HTTP `InvokeBody`.
  * @internal
@@ -436,6 +513,7 @@ export interface Agent {
     send(request: SendRequest, options?: WaitOptions): Promise<Message>;
     stream(request: SendRequest, options?: { signal?: AbortSignal }): AsyncIterable<MessageStreamEvent>;
     get(key: MessageKey, options?: WaitOptions): Promise<Message>;
+    resolve(request: ResolveInterruptRequest, options?: WaitOptions): Promise<Message>;
   };
 }
 
@@ -542,6 +620,7 @@ export type ErrorCode =
   | "invalid_request"
   | "unauthorized"
   | "not_found"
+  | "conflict"
   | "busy"
   | "missing_model"
   | "missing_tool"

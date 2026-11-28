@@ -32,6 +32,8 @@ export interface AgentApiSubject {
   restart(options?: { removeTools?: string[] }): Promise<Agent>;
   /** Lets every `hold` and `stubborn` call of the current process go on. */
   release(): void;
+  /** Whether the instance currently reports active work in flight (`false` while durably parked). */
+  busy?(): boolean;
   /** How many `hold` and `stubborn` calls are running now. */
   held(): number;
   /** How many `hold` and `stubborn` calls were told to stop: a cancel's stop is recorded before it signals them. */
@@ -1165,6 +1167,223 @@ export function agentApiConformance(name: string, subject: AgentApiSubject): voi
         await agent.sessions.delete(sessionId);
         const tail = await watching.rest();
         expect(tail.at(-1)).toMatchObject({ type: "stream_error", error: { code: "not_found" } });
+      });
+    });
+
+    describe("Interrupts and human-in-the-loop approvals", () => {
+      it("parks for tool approval with busy() === false, survives process restart, deduplicates Idempotency-Key, flips busy() === true while running, and projects clean tool_result entries", async () => {
+        const sessionId = await newSession(agent);
+        const initialWatching = attach(agent, sessionId);
+        await initialWatching.until(isState);
+
+        const parked = await send({ sessionId, content: "approve_hold", idempotencyKey: "k-park-1" }, { wait: WAIT });
+        expect(parked.status).toBe("awaiting_approval");
+        expect(hasEnded(parked)).toBe(false);
+        expect(parked.interrupts).toHaveLength(1);
+        const interrupt = parked.interrupts?.[0];
+        if (!interrupt) throw new Error("expected pending interrupt");
+        expect(interrupt).toMatchObject({
+          sessionId,
+          messageId: parked.id,
+          kind: "approval",
+          toolName: "approve_hold",
+          summary: "Approve deploy to prod",
+          args: { target: "prod" },
+        });
+        expect(subject.effects()).toBe(0);
+        if (subject.busy !== undefined) {
+          await vi.waitFor(() => expect(subject.busy?.()).toBe(false), { interval: 5 });
+        }
+
+        const requestedFrames = await initialWatching.until(
+          (ev) => ev.type === "state" && ev.session.status === "awaiting_approval",
+        );
+        expect(requestedFrames).toContainEqual({ type: "interrupt_requested", interrupt });
+        await initialWatching.close();
+
+        const beforeRestartEntries = await history(agent, sessionId);
+        expect(beforeRestartEntries.map((e) => e.kind)).toEqual(["user", "assistant"]);
+        const cursorBeforeRestart = beforeRestartEntries.at(-1)?.id;
+        if (!cursorBeforeRestart) throw new Error("expected entry cursor before restart");
+
+        // Simulate scale-to-zero hibernation + replica restart on the same durable storage.
+        agent = await subject.restart();
+        if (subject.busy !== undefined) expect(subject.busy()).toBe(false);
+
+        const restoredSession = await agent.sessions.get(sessionId);
+        expect(restoredSession.status).toBe("awaiting_approval");
+        expect(restoredSession.interrupts).toEqual([interrupt]);
+        expect((await agent.messages.get({ sessionId, idempotencyKey: "k-park-1" })).status).toBe("awaiting_approval");
+
+        // Reconnect SSE with Last-Event-ID cursor from before hibernation.
+        const resumedWatching = attach(agent, sessionId, { after: cursorBeforeRestart });
+        const reconnectSnap = await resumedWatching.until(isState);
+        expect(reconnectSnap[0]).toMatchObject({
+          type: "state",
+          session: { id: sessionId, status: "awaiting_approval" },
+        });
+
+        // Wrong action kind for an approval interrupt fails fast (400 invalid_request) without mutating state.
+        await expect(
+          agent.messages.resolve({
+            sessionId,
+            interruptId: interrupt.id,
+            resolution: { action: "submit", input: { region: "us-east-1" } },
+          }),
+        ).rejects.toMatchObject({ code: "invalid_request" });
+
+        // Resolve without wait so we deterministically observe busy() === true while the approved tool holds.
+        const runningMsg = await agent.messages.resolve({
+          sessionId,
+          interruptId: interrupt.id,
+          resolution: { action: "approve" },
+          idempotencyKey: "k-res-approve",
+        });
+        expect(runningMsg.id).toBe(parked.id);
+        await holding();
+        if (subject.busy !== undefined) expect(subject.busy()).toBe(true);
+        expect(subject.effects()).toBe(1);
+
+        // Duplicate submission with the SAME Idempotency-Key is safely deduplicated without re-running the tool.
+        const dupMsg = await agent.messages.resolve({
+          sessionId,
+          interruptId: interrupt.id,
+          resolution: { action: "approve" },
+          idempotencyKey: "k-res-approve",
+        });
+        expect(dupMsg.id).toBe(parked.id);
+        expect(subject.effects()).toBe(1);
+
+        // Conflicting resolution with a DIFFERENT Idempotency-Key rejects with conflict (409).
+        await expect(
+          agent.messages.resolve({
+            sessionId,
+            interruptId: interrupt.id,
+            resolution: { action: "deny" },
+            idempotencyKey: "k-res-conflict",
+          }),
+        ).rejects.toMatchObject({ code: "conflict" });
+
+        // Release the held approved tool and verify end-to-end completion & entry transcript.
+        subject.release();
+        const streamRest = await resumedWatching.until(doneOf(parked));
+        await resumedWatching.close();
+        expect(streamRest).toContainEqual({
+          type: "interrupt_resolved",
+          interruptId: interrupt.id,
+          messageId: parked.id,
+          resolution: "approved",
+        });
+
+        const completed = await agent.messages.get(byId(parked));
+        expect(completed.status).toBe("completed");
+        expect(completed.interrupts).toBeUndefined();
+        expect(completed.answer?.text).toBe("answer: approve_hold:ok:deployed:prod:1");
+        if (subject.busy !== undefined) {
+          await vi.waitFor(() => expect(subject.busy?.()).toBe(false), { interval: 5 });
+        }
+
+        // Retrying the same Idempotency-Key AFTER completion still returns the settled Message idempotently.
+        const dupAfterDone = await agent.messages.resolve(
+          {
+            sessionId,
+            interruptId: interrupt.id,
+            resolution: { action: "approve" },
+            idempotencyKey: "k-res-approve",
+          },
+          { wait: WAIT },
+        );
+        expect(dupAfterDone).toMatchObject({ id: parked.id, status: "completed" });
+        expect(subject.effects()).toBe(1);
+
+        const finalEntries = await history(agent, sessionId);
+        expect(finalEntries.map((e) => e.kind)).toEqual(["user", "assistant", "tool_result", "assistant"]);
+        expect(finalEntries[2]?.data).toMatchObject({
+          toolCallId: interrupt.toolCallId,
+          toolName: "approve_hold",
+          isError: false,
+          content: [{ type: "text", text: "deployed:prod:1" }],
+        });
+      });
+
+      it("supports deny, queued/rejected sends while parked, structured input_required across restart, and sessions.cancel while parked", async () => {
+        // 1) Deny + whenBusy queue/reject while parked
+        const s1 = await newSession(agent);
+        const p1 = await send({ sessionId: s1, content: "approve_hold" }, { wait: WAIT });
+        expect(p1.status).toBe("awaiting_approval");
+        const int1 = p1.interrupts?.[0];
+        if (!int1) throw new Error("expected interrupt on p1");
+
+        await expect(send({ sessionId: s1, content: "intrude", whenBusy: "reject" })).rejects.toMatchObject({
+          code: "busy",
+        });
+        const queuedBehind = await send({ sessionId: s1, content: "after-deny", whenBusy: "queue" });
+        expect(queuedBehind.status).toBe("queued");
+        expect((await agent.sessions.get(s1)).queuedMessages).toContainEqual({
+          id: queuedBehind.id,
+          mode: "queue",
+        });
+
+        const denied = await agent.messages.resolve(
+          {
+            sessionId: s1,
+            interruptId: int1.id,
+            resolution: { action: "deny", reason: "change freeze" },
+          },
+          { wait: WAIT },
+        );
+        expect(denied.status).toBe("completed");
+        expect(denied.answer?.text).toContain('Tool "approve_hold" was denied by the user: change freeze');
+        expect(subject.effects()).toBe(0);
+
+        const settledBehind = await ended(agent, queuedBehind);
+        expect(settledBehind.status).toBe("completed");
+        expect(settledBehind.answer?.text).toBe("answer: after-deny");
+
+        // 2) Structured input_required (api.requestInput) across restart + schema validation
+        const s2 = await newSession(agent);
+        const p2 = await send({ sessionId: s2, content: "ask_input" }, { wait: WAIT });
+        expect(p2.status).toBe("input_required");
+        expect((await agent.sessions.get(s2)).status).toBe("input_required");
+        const int2 = p2.interrupts?.[0];
+        if (!int2) throw new Error("expected interrupt on p2");
+        expect(int2.kind).toBe("input");
+        expect(int2.summary).toBe("Choose deployment region");
+        expect(int2.inputSchema).toMatchObject({
+          type: "object",
+          required: ["region"],
+        });
+
+        // Schema validation rejects invalid enum value before mutating state
+        await expect(
+          agent.messages.resolve({
+            sessionId: s2,
+            interruptId: int2.id,
+            resolution: { action: "submit", input: { region: "ap-south-1" } },
+          }),
+        ).rejects.toMatchObject({ code: "invalid_request" });
+
+        agent = await subject.restart();
+        const submitted = await agent.messages.resolve(
+          {
+            sessionId: s2,
+            interruptId: int2.id,
+            resolution: { action: "submit", input: { region: "eu-west-1" } },
+            idempotencyKey: "k-submit-region",
+          },
+          { wait: WAIT },
+        );
+        expect(submitted.status).toBe("completed");
+        expect(submitted.answer?.text).toBe("answer: ask_input:ok:region:eu-west-1:1");
+
+        // 3) sessions.cancel while parked cancels the parked message cleanly
+        const s3 = await newSession(agent);
+        const p3 = await send({ sessionId: s3, content: "approve_hold" }, { wait: WAIT });
+        expect(p3.status).toBe("awaiting_approval");
+        const canceledRes = await agent.sessions.cancel(s3);
+        expect(canceledRes.stopped).toContain(p3.id);
+        expect((await agent.messages.get(byId(p3))).status).toBe("canceled");
+        expect((await agent.sessions.get(s3)).status).toBe("idle");
       });
     });
 

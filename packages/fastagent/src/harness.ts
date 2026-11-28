@@ -43,6 +43,14 @@ export {
 } from "./postgres.ts";
 export { classifyPiAiError, toPiThinkingLevel, type PiAiErrorCode } from "./harnesses/models/pi-ai-bridge.ts";
 export {
+  createInterruptCoordinator,
+  memoryInterruptStore,
+  postgresInterruptStore,
+  sqliteInterruptStore,
+  type InterruptRuntimeHandle,
+  type InterruptStore,
+} from "./interrupts.ts";
+export {
   retainToolOutput,
   type PortableTool,
   type ToolDetails,

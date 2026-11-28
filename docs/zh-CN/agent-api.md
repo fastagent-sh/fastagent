@@ -51,8 +51,8 @@ console.log(reply.status, reply.answer?.text);
 | 对象 | 含义 |
 | --- | --- |
 | **Agent** | 一个运行中的实例（一个信任域）。`info()` 返回可用模型、工具、命令与示例开场白；`usage()` 返回累计用量。 |
-| **Session** | 一段持久化对话，包含历史条目、`status`（`idle` / `running`）、`title`、时间戳、会话配置（`model`、`thinkingLevel`、`instructions`、`tools`、`maxSteps`）、当前 `contextUsage`、累计 `usage` 与实时活动状态（`reply`、`activeTools`、`queuedMessages`、`compacting`）。 |
-| **Message** | 提交到会话的一条请求，追踪其 `status`、`entryId`、`answer`、`error`、`idempotencyKey` 与调用方 `metadata`。 |
+| **Session** | 一段持久化对话，包含历史条目、`status`（`idle` / `running` / `awaiting_approval` / `input_required`）、`title`、时间戳、会话配置（`model`、`thinkingLevel`、`instructions`、`tools`、`maxSteps`）、当前 `contextUsage`、累计 `usage` 与实时活动状态（`reply`、`activeTools`、`interrupts`、`queuedMessages`、`compacting`）。 |
+| **Message** | 提交到会话的一条请求，追踪其 `status`、`entryId`、`interrupts`、`answer`、`error`、`idempotencyKey` 与调用方 `metadata`。 |
 | **Entry** | 会话历史中的一条不可变记录：`user`、`assistant`、`tool_result` 或 `compaction`。分叉会话共享分叉点之前的历史条目（保留原 ID）。 |
 
 ```text
@@ -100,9 +100,10 @@ const msg = await agent.invoke(
 | `sessions.cancel` | 停止活跃与排队中的任务；落盘后返回 `{ stopped: string[] }` |
 | `sessions.compact` | 压缩较早的上下文（支持 `instructions?`），产生一条 `compaction` 条目 |
 | `sessions.attachment` | 按条目中的图片 `ref` 下载二进制字节与 `mimeType` |
-| `messages.send` | 提交消息；立即返回或最长等待 `wait` 秒 |
+| `messages.send` | 提交消息；立即返回或最长等待 `wait` 秒（遇到人工审批/输入挂起时立即返回） |
 | `messages.stream` | 提交消息并流式接收该消息直至 `done` 的全部事件 |
 | `messages.get` | 按 `{ sessionId, messageId }` 或 `{ sessionId, idempotencyKey }` 查询消息，支持 `wait` |
+| `messages.resolve` | 对挂起的 `PendingInterrupt` 执行批准（`approve`）、拒绝（`deny`）或提交结构化输入（`submit`），按 `idempotencyKey` 幂等去重 |
 
 传入 `AbortSignal`（`signal`）仅停止客户端的等待或订阅，不会取消 Agent 的后台执行——只有 `sessions.cancel` 会停止任务。`wait` 是最长等待秒数，返回后务必检查 `message.status`（或 `hasEnded(message)`）。
 
@@ -120,6 +121,8 @@ const msg = await agent.invoke(
 | --- | --- | --- | --- |
 | `queued` | 否 | — | 已接收，排队等待执行 |
 | `running` | 否 | — | 正在执行 |
+| `awaiting_approval` | 否 | — | 持久化挂起等待人工工具审批（见 `message.interrupts`）；挂起期间 `busy()` 为 `false` |
+| `input_required` | 否 | — | 持久化挂起等待人工结构化输入（见 `message.interrupts`）；挂起期间 `busy()` 为 `false` |
 | `completed` | 是 | 最终 `assistant` 条目 | 正常回答完成 |
 | `incomplete` | 是 | 部分 `assistant` 条目（Token 上限）或缺失（`maxSteps`） | 触及模型输出 Token 上限或 `maxSteps` 单轮步数上限 |
 | `failed` | 是 | — | 执行失败；`message.error` 说明原因（`missing_model`、`auth_required`、`model_error`、`internal`） |
@@ -140,6 +143,8 @@ const msg = await agent.invoke(
 | `delta` | 实时文本片段（`channel: "text"` 为回答正文，`"thinking"` 为思考过程） |
 | `tool_started` | 工具调用启动（`toolCallId`、`name`、`args`） |
 | `tool_progress` | 工具进度状态行（`text`）与可选多行尾部输出（`output`） |
+| `interrupt_requested` | 持久化挂起请求 `PendingInterrupt`（`id`、`kind`、`toolName`、`summary` 及可选 `args` / `inputSchema`） |
+| `interrupt_resolved` | 挂起处理回执（`interruptId`、`messageId`、`resolution: "approved" \| "denied" \| "submitted" \| "canceled"`） |
 | `retrying` | 退避重试通知（`attempt`、`maxAttempts`、`delayMs`、`reason`） |
 | `compaction_started`、`compaction_failed` | 上下文压缩触发原因（`manual` / `threshold` / `overflow`）或失败 `error` |
 | `done` | 终态 `Message` |
@@ -170,8 +175,9 @@ CLI 启动的实例（`fastagent dev` / `start`）以及通过 `agent.serve({ ap
 | --- | --- | --- | --- |
 | `invalid_request` | 参数格式错误或超出大小限制（`details.reason: "too_large"`） | 否 | 400、413 |
 | `unauthorized` | 缺少或无效的 Bearer Key / AWS IAM 凭证 | 否 | 401 |
-| `not_found` | 会话、消息、认证流程、分叉源或游标不存在 | 否 | 404 |
-| `busy` | `details.reason`：`"running"`、`"queue_full"` 或 `"capacity"` | 是 | 409、429、503（带 `Retry-After`） |
+| `not_found` | 会话、消息、挂起中断、认证流程、分叉源或游标不存在 | 否 | 404 |
+| `conflict` | 挂起中断已被其他 `idempotencyKey` 处理或取消 | 否 | 409 |
+| `busy` | `details.reason`：`"running"`、`"awaiting_approval"`、`"input_required"`、`"queue_full"` 或 `"capacity"` | 是 | 409、429、503（带 `Retry-After`） |
 | `missing_model` | 未指定有效模型且无可用默认模型（`info().unusableDefault` 说明原因） | 否 | 409 |
 | `missing_tool` | 会话启用了实例中不存在的工具 | 否 | 409 |
 | `auth_required` | 模型提供商缺少有效凭证（位于 `message.error`） | 否 | — |
@@ -199,6 +205,7 @@ CLI 启动的实例（`fastagent dev` / `start`）以及通过 `agent.serve({ ap
 | `POST /v1/sessions/{sessionId}/messages` | `messages.send`；传入 `"stream": true` 即为 `messages.stream` |
 | `GET /v1/sessions/{sessionId}/messages/{messageId}?wait` | 按 ID 查询 `messages.get` |
 | `GET /v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}?wait` | 按幂等键查询 `messages.get` |
+| `POST /v1/sessions/{sessionId}/interrupts/{interruptId}/resolve` | `messages.resolve`（`approve` / `deny` / `submit`，支持 `wait` 与 `Idempotency-Key`） |
 | `POST /v1/invoke` | `invoke`（`wait` 最长 600s）；传入 `"stream": true` 即为 `invokeStream` |
 | `GET /v1/auth/providers`、`DELETE /v1/auth/providers/{provider}` | `auth.providers`、`auth.logout` |
 | `POST /v1/auth/login`、`GET /v1/auth/login/{flowId}?wait` | `auth.startLogin`、`auth.getLogin` |
@@ -234,4 +241,4 @@ curl -s https://agent.example.com/v1/sessions/$SESSION/messages \
 
 ## 设计上有意不涵盖的范围
 
-按单条消息精确拆分 Token 计费（并发/合并轮次共享模型调用）；强制结构化 JSON 回复 Schema（请定义强类型工具并读取其 `tool_result` 条目）；轮次中途交互式用户提问；出站完成 Webhook 回调（请使用 `POST /v1/invoke`、`messages.get` 带 `wait` 或 `sessions.events`）；图片以外的二进制附件；A2A/MCP 服务端绑定。
+按单条消息精确拆分 Token 计费（并发/合并轮次共享模型调用）；强制结构化 JSON 回复 Schema（请定义强类型工具并读取其 `tool_result` 条目）；出站完成 Webhook 回调（请使用 `POST /v1/invoke`、`messages.get` 带 `wait` 或 `sessions.events`）；图片以外的二进制附件。

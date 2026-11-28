@@ -117,6 +117,7 @@ describe("the Agent API over HTTP", () => {
       "/v1/sessions/{sessionId}/compact",
       "/v1/sessions/{sessionId}/entries",
       "/v1/sessions/{sessionId}/events",
+      "/v1/sessions/{sessionId}/interrupts/{interruptId}/resolve",
       "/v1/sessions/{sessionId}/messages",
       "/v1/sessions/{sessionId}/messages/by-key/{idempotencyKey}",
       "/v1/sessions/{sessionId}/messages/{messageId}",
@@ -492,6 +493,59 @@ describe("deterministic Effect TestClock & Schema Arbitrary invariants", () => {
     },
     { arbitrary: { runs: 25 } },
   );
+
+  it("streams interrupt_requested and interrupt_resolved over HTTP SSE messages.stream and deduplicates Idempotency-Key on POST .../resolve", async () => {
+    const localSubj = durableSubject();
+    const localAgent = await localSubj.start();
+    const localServer = await served(localAgent, { keys: [KEY] });
+    try {
+      const client = connectAgent(localServer.url, { apiKey: KEY });
+      const session = await client.sessions.create({ title: "http-approval" });
+      const events: MessageStreamEvent[] = [];
+
+      let resolvedOnce = false;
+      const streaming = (async () => {
+        for await (const ev of client.messages.stream({ sessionId: session.id, content: "approve_hold" })) {
+          events.push(ev);
+          if (!resolvedOnce && ev.type === "interrupt_requested") {
+            resolvedOnce = true;
+            const { interrupt } = ev;
+            const rawRes = await fetch(
+              `${localServer.url}/v1/sessions/${encodeURIComponent(session.id)}/interrupts/${encodeURIComponent(interrupt.id)}/resolve`,
+              {
+                method: "POST",
+                headers: { ...auth(), "idempotency-key": "http-res-key-1" },
+                body: JSON.stringify({ action: "approve" }),
+              },
+            );
+            expect(rawRes.status).toBe(200);
+            const dupRes = await fetch(
+              `${localServer.url}/v1/sessions/${encodeURIComponent(session.id)}/interrupts/${encodeURIComponent(interrupt.id)}/resolve`,
+              {
+                method: "POST",
+                headers: { ...auth(), "idempotency-key": "http-res-key-1" },
+                body: JSON.stringify({ action: "approve" }),
+              },
+            );
+            expect(dupRes.status).toBe(200);
+            await vi.waitFor(() => expect(localSubj.held()).toBe(1), { interval: 5 });
+            localSubj.release();
+          }
+        }
+      })();
+
+      await streaming;
+      expect(events.some((e) => e.type === "interrupt_requested")).toBe(true);
+      expect(events).toContainEqual(expect.objectContaining({ type: "interrupt_resolved", resolution: "approved" }));
+      expect(events.at(-1)).toMatchObject({
+        type: "done",
+        message: { status: "completed", answer: { text: "answer: approve_hold:ok:deployed:prod:1" } },
+      });
+    } finally {
+      await localServer.close();
+      await localSubj.stop();
+    }
+  });
 
   it.effect.prop(
     "preserves named conversation bindings across TTL expiry while expiring ephemeral idempotency bindings",

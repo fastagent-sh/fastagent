@@ -162,14 +162,18 @@ export function bridgeDshRuntimeTool(tool: PortableTool, runtime: ToolBridgeRunt
           tool.execute as (
             args: Record<string, unknown>,
             api: FastAgentToolApi,
-            context: { abortSignal: AbortSignal; sessionId?: string },
+            context: { abortSignal: AbortSignal; sessionId?: string; toolCallId?: string },
           ) => Promise<{
             readonly output?: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
             readonly details?: unknown;
             readonly isError?: boolean;
             readonly control?: { readonly terminate?: boolean };
           }>
-        )(input, api, { abortSignal: exec.signal, ...(sessionId !== undefined ? { sessionId } : {}) });
+        )(input, api, {
+          abortSignal: exec.signal,
+          toolCallId,
+          ...(sessionId !== undefined ? { sessionId } : {}),
+        });
 
         if (result?.control?.terminate === true) exec.concludeTurn();
         const explicitText = extractResultText(result);

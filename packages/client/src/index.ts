@@ -18,6 +18,9 @@ export type {
   Entry,
   ErrorCode,
   IdempotencyKey,
+  InterruptId,
+  InterruptKind,
+  InterruptResolution,
   InvokeApi,
   InvokeRequest,
   Json,
@@ -30,8 +33,10 @@ export type {
   Metadata,
   ModelRef,
   Page,
+  PendingInterrupt,
   QueuedMessage,
   RemoteAgent,
+  ResolveInterruptRequest,
   SendRequest,
   Session,
   SessionChanges,
@@ -45,7 +50,7 @@ export type {
   WaitOptions,
 } from "./agent-api.ts";
 /** @public */
-export { AgentError, LIMITS, hasEnded } from "./agent-api.ts";
+export { AgentError, LIMITS, hasEnded, isAwaitingAction } from "./agent-api.ts";
 
 /** @public */
 export { connectAgent, type ConnectOptions } from "./http/client.ts";

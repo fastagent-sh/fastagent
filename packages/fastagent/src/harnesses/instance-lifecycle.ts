@@ -20,6 +20,12 @@ import {
   postgresConversationStore,
   sqliteConversationStore,
 } from "../conversations.ts";
+import {
+  createInterruptCoordinator,
+  memoryInterruptStore,
+  postgresInterruptStore,
+  sqliteInterruptStore,
+} from "../interrupts.ts";
 import { type RedactedSecrets, type SecretValuesInput, redactValues, revealValues } from "../declared-secrets.ts";
 import type { AgentDefinition } from "../definition/definition.ts";
 import type {
@@ -431,6 +437,20 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       }),
       (store) => release(() => store.close()),
     );
+    const interrupts = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () =>
+          chosen === "memory"
+            ? memoryInterruptStore()
+            : chosen !== "instance"
+              ? sqliteInterruptStore(`${chosen.file}.interrupts.sqlite`)
+              : database !== undefined
+                ? postgresInterruptStore(database, place.name as string)
+                : sqliteInterruptStore(join(stateRoot, "interrupts.sqlite")),
+        catch: (cause) => new PromiseFailure(cause),
+      }),
+      (store) => release(() => store.close()),
+    );
     const durableCreds: ManagedDurableCredentialStore | undefined =
       chosen === "instance"
         ? yield* Effect.acquireRelease(
@@ -513,13 +533,24 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
       catch: (cause) => new PromiseFailure(cause),
     });
 
+    const interruptCoordinator = yield* fromPromise(() =>
+      createInterruptCoordinator({
+        store: interrupts,
+        work,
+        ...(options.unfinished === undefined ? {} : { unfinished: options.unfinished }),
+      }),
+    );
+
     const runtimeAgent = yield* Effect.acquireRelease(
-      fromPromise(() =>
-        provider.openAgent({
+      fromPromise(async () => {
+        const inner = await provider.openAgent({
           storage,
           definition,
-          code,
-          mcpTools: bridgedMcpTools,
+          code: {
+            ...code,
+            tools: interruptCoordinator.wrapTools(code.tools),
+          },
+          mcpTools: interruptCoordinator.wrapTools(bridgedMcpTools),
           codingTools,
           presentation,
           name,
@@ -542,8 +573,9 @@ const openServingEffect = Effect.fn("serving.openServing")(function* (
               runsAs: options.runsAs,
               codingTools,
             }),
-        }),
-      ),
+        });
+        return interruptCoordinator.wrapAgent(inner);
+      }),
       (agent) => release(() => agent.close()),
     );
     const auth: AuthManager | undefined =

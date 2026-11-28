@@ -25,6 +25,7 @@ export interface McpTool {
   name: string;
   server: string;
   definition: Tool;
+  requiresApproval?: boolean;
   call(args: Record<string, unknown>, signal?: AbortSignal, progress?: (text: string) => void): Promise<CallToolResult>;
 }
 export interface McpClients {
@@ -197,10 +198,15 @@ const openMcpClientsEffect = Effect.fn("mcp.openClients")(function* (
           );
         }
         names.add(name);
+        const requiresApproval =
+          server.requiresApproval === true ||
+          (Array.isArray(server.requiresApproval) &&
+            (server.requiresApproval.includes(definition.name) || server.requiresApproval.includes(name)));
         tools.push({
           name,
           server: server.name,
           definition,
+          ...(requiresApproval ? { requiresApproval: true } : {}),
           async call(args, signal, progress) {
             if (Ref.getUnsafe(disconnected))
               throw new McpError("connection", "MCP server disconnected; reopen the agent to reconnect", server.name);

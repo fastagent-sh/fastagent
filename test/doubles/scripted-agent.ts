@@ -339,6 +339,10 @@ export function scriptedAgent(
         });
         return Promise.race([endingOf(kept, found.id).promise, timeout]);
       },
+      async resolve(request) {
+        existing(request.sessionId);
+        throw agentError("not_found", `No interrupt ${request.interruptId} in session ${request.sessionId}`);
+      },
     },
     forks,
     canceled,
